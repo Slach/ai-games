@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest
+    container_name: comfyui
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./comfyui-data:/workspace
+      - ~/.cache/huggingface:/root/.cache/huggingface  # Mount HuggingFace cache
+      - ./comfyui/provisioning:/provisioning  # Scripts for plugin installation
+    environment:
+      - COMFYUI_PORT=8188
+      - HF_HOME=/root/.cache/huggingface
+    restart: unless-stopped
+    # Enable GPU acceleration if available
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      bash -c "
+        # Run provisioning script to install plugins
+        python -m pip install --upgrade pip &&
+        bash /provisioning/install_plugins.sh &&
+        python main.py --listen 0.0.0.0 --port 8188
+      "
