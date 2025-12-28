@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   comfyui:
     image: ghcr.io/ai-dock/comfyui:latest
