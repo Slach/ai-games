@@ -1,29 +1,29 @@
+# Compose file build variables set in .env
 services:
   comfyui:
-    image: ghcr.io/ai-dock/comfyui:latest
-    container_name: comfyui
-    ports:
-      - "8188:8188"
+    build:
+      context: .
+      dockerfile: ./comfyui/Dockerfile.spark
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+        COMFYUI_BUILD_REF: ${COMFYUI_BUILD_REF:-}
+
     volumes:
-      - ./comfyui-data:/workspace
-      - ~/.cache/huggingface:/root/.cache/huggingface  # Mount HuggingFace cache
-      - ./comfyui/provisioning:/provisioning  # Scripts for plugin installation
-    environment:
-      - COMFYUI_PORT=8188
-      - HF_HOME=/root/.cache/huggingface
-    restart: unless-stopped
-    # Enable GPU acceleration if available
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: >
-      bash -c "
-        # Run provisioning script to install plugins
-        python -m pip install --upgrade pip &&
-        bash /provisioning/install_plugins.sh &&
-        python main.py --listen 0.0.0.0 --port 8188
-      "
+      ## Workspace
+      - ./workspace:${WORKSPACE:-/workspace/}:rshared
+
+      # Will echo to root-owned authorized_keys file;
+      # Avoids changing local file owner
+      - ./config/authorized_keys:/root/.ssh/authorized_keys_mount
+    ports:
+        # SSH available on host machine port 2222 to avoid conflict. Change to suit
+        - ${SSH_PORT_HOST:-2222}:22
+        # Caddy port for service portal
+        - ${SERVICEPORTAL_PORT_HOST:-1111}:${SERVICEPORTAL_PORT_HOST:-1111}
+        # ComfyUI web interface
+        - ${COMFYUI_PORT_HOST:-8188}:${COMFYUI_PORT_HOST:-8188}
+        # Jupyter server
+        - ${JUPYTER_PORT_HOST:-8888}:${JUPYTER_PORT_HOST:-8888}
+
+    env_file:
+      - .env.comfyui

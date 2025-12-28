@@ -1,0 +1,92 @@
+# For build automation - Allows building from any ai-dock base image
+# Use a *cuda*base* image as default because pytorch brings the libs
+# For ARM64 compatibility, we'll use a generic Ubuntu base and install ARM64-compatible PyTorch
+FROM ubuntu:24.04
+
+LABEL org.opencontainers.image.source https://github.com/ai-dock/comfyui
+LABEL org.opencontainers.image.description "ComfyUI Stable Diffusion backend and GUI (ARM64)"
+LABEL maintainer="Eugene Klimov <bloodjazman@gmail.com>"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    git \
+    wget \
+    curl \
+    build-essential \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgtk-3-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    openssh-server \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip3 install uv
+
+# Set environment variables similar to ai-dock
+ENV VENV_DIR=/opt/venv
+ENV COMFYUI_VENV=$VENV_DIR/comfyui
+ENV COMFYUI_VENV_PYTHON=$COMFYUI_VENV/bin/python
+ENV COMFYUI_VENV_PIP=$COMFYUI_VENV/bin/pip
+
+ENV API_VENV=$VENV_DIR/api
+ENV API_VENV_PYTHON=$API_VENV/bin/python
+ENV API_VENV_PIP=$API_VENV/bin/pip
+
+ENV IMAGE_SLUG="comfyui"
+ENV OPT_SYNC=ComfyUI
+
+# Prepare environment
+ARG PYTHON_VERSION="3.12"
+ENV PYTHON_VERSION=${PYTHON_VERSION}
+
+# Create virtual environments
+RUN python3 -m venv $VENV_DIR/comfyui && \
+    python3 -m venv $VENV_DIR/api
+
+# Install PyTorch with CUDA 13 support for ARM64
+RUN $COMFYUI_VENV_PIP install --upgrade pip && \
+    $COMFYUI_VENV_PIP install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
+
+# Install ComfyUI dependencies
+RUN uv pip install torchsde einops omegaconf safetensors kornia pymatting pillow markupsafe --system-site-packages
+
+# Clone ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+WORKDIR /opt/ComfyUI
+
+# Install ComfyUI requirements
+RUN uv pip install -r requirements.txt --system-site-packages
+
+# Create directories for ai-dock compatibility
+RUN mkdir -p /opt/ai-dock/bin /opt/ai-dock/etc
+
+# Create a startup script that mimics ai-dock behavior
+RUN echo '#!/bin/bash\n\
+export PYTHONPATH="/opt/ComfyUI:$PYTHONPATH"\n\
+cd /opt/ComfyUI\n\
+exec $COMFYUI_VENV_PYTHON main.py "$@"\n\
+' > /opt/ai-dock/bin/start-comfyui.sh && chmod +x /opt/ai-dock/bin/start-comfyui.sh
+
+# Create a basic init.sh script
+RUN echo '#!/bin/bash\n\
+echo "Starting ComfyUI service..."\n\
+exec /opt/ai-dock/bin/start-comfyui.sh\n\
+' > /opt/ai-dock/bin/init.sh && chmod +x /opt/ai-dock/bin/init.sh
+
+# Set the default venv
+ENV PYTHON_DEFAULT_VENV=comfyui
+
+EXPOSE 8188
+
+# Default command
+CMD ["/opt/ai-dock/bin/init.sh"]
