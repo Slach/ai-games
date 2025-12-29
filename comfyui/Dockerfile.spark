@@ -76,12 +76,13 @@ RUN /usr/bin/python3 -c "import torch; print('SYSTEM', torch.__version__, torch.
 RUN /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.version.cuda, torch.__file__)"
 
 # Install ComfyUI custom-nodes
-RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; torch_ver = torch.__version__.split('+')[0];  cuda_ver = torch.version.cuda; print(f'SUKA234 torch_ver={torch_ver} cuda_ver={cuda_ver}')"
 
 # Clone ComfyUI-TRELLIS2 directly and install it to ensure CUDA detection works
 RUN git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2
 # Fix platform compatibility for wheel installation
 RUN pip config set global.break-system-packages true
+RUN grep -vE '^\s*#' /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
+RUN --device=nvidia.com/gpu uv pip install --no-deps -r /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
 
 RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
