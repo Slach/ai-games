@@ -4,26 +4,18 @@ services:
     build:
       context: .
       dockerfile: ./comfyui/Dockerfile.spark
-      args:
-        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
-        COMFYUI_BUILD_REF: ${COMFYUI_BUILD_REF:-}
+      tags:
+      - comfyui:spark-full
+  env:
+    HF_TOKEN: "${HF_TOKEN}"
+    HF_XET_HIGH_PERFORMANCE: "1"
+  volumes:
+    ~/.cache/hugginface:/root/.cache/huggingface
 
-    volumes:
-      ## Workspace
-      - ./workspace:${WORKSPACE:-/workspace/}:rshared
-
-      # Will echo to root-owned authorized_keys file;
-      # Avoids changing local file owner
-      - ./config/authorized_keys:/root/.ssh/authorized_keys_mount
-    ports:
-        # SSH available on host machine port 2222 to avoid conflict. Change to suit
-        - ${SSH_PORT_HOST:-2222}:22
-        # Caddy port for service portal
-        - ${SERVICEPORTAL_PORT_HOST:-1111}:${SERVICEPORTAL_PORT_HOST:-1111}
-        # ComfyUI web interface
-        - ${COMFYUI_PORT_HOST:-8188}:${COMFYUI_PORT_HOST:-8188}
-        # Jupyter server
-        - ${JUPYTER_PORT_HOST:-8888}:${JUPYTER_PORT_HOST:-8888}
-
-    env_file:
-      - .env.comfyui
+  deploy:
+     resources:
+       reservations:
+         devices:
+           - driver: nvidia
+             count: all
+             capabilities: [gpu]

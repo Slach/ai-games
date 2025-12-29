@@ -3,8 +3,7 @@
 # For ARM64 compatibility, we'll use a generic Ubuntu base and install ARM64-compatible PyTorch
 FROM ubuntu:24.04
 
-LABEL org.opencontainers.image.source https://github.com/ai-dock/comfyui
-LABEL org.opencontainers.image.description "ComfyUI Stable Diffusion backend and GUI (ARM64)"
+LABEL org.opencontainers.image.description "ComfyUI Stable Diffusion backend and GUI (ARM64) for NVIDIA GB10"
 LABEL maintainer="Eugene Klimov <bloodjazman@gmail.com>"
 
 # Install system dependencies
@@ -27,66 +26,40 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     openssh-server \
     supervisor \
+    yq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv using --break-system-packages due to PEP 668
 RUN pip3 install --break-system-packages uv
 
-# Set environment variables similar to ai-dock
-ENV VENV_DIR=/opt/venv
-ENV COMFYUI_VENV=$VENV_DIR/comfyui
-ENV COMFYUI_VENV_PYTHON=$COMFYUI_VENV/bin/python
-ENV COMFYUI_VENV_PIP=$COMFYUI_VENV/bin/pip
-
-ENV API_VENV=$VENV_DIR/api
-ENV API_VENV_PYTHON=$API_VENV/bin/python
-ENV API_VENV_PIP=$API_VENV/bin/pip
-
-ENV IMAGE_SLUG="comfyui"
-ENV OPT_SYNC=ComfyUI
-
-# Prepare environment
-ARG PYTHON_VERSION="3.12"
-ENV PYTHON_VERSION=${PYTHON_VERSION}
-
-# Create virtual environments
-RUN python3 -m venv $VENV_DIR/comfyui && \
-    python3 -m venv $VENV_DIR/api
-
 # Install PyTorch with CUDA 13 support for ARM64
-RUN uv pip install --break-system-packages --upgrade pip && \
-    uv pip install --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
+RUN uv pip install --system --break-system-packages --upgrade pip && \
+    uv pip install --system --break-system-packages torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu130
 
 # Install ComfyUI dependencies
-RUN uv pip install --break-system-packages torchsde einops omegaconf safetensors kornia pymatting pillow markupsafe
+RUN uv pip install --system --break-system-packages torchsde einops omegaconf safetensors kornia pymatting pillow markupsafe install huggingface_hub[cli]
 
+# get latest release for ComfyUI
 # Clone ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+# @todo use https://github.com/Comfy-Org/ComfyUI
+RUN COMFYUI_VERISION=$(curl -sL https://github.com/comfyanonymous/ComfyUI/releases/latest -H "Accept: application/json" | jq -r .tag_name) && \
+   git clone git clone --depth 1 --branch "${COMFYUI_VERISION}"  https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
 WORKDIR /opt/ComfyUI
 
 # Install ComfyUI requirements
-RUN uv pip install --break-system-packages -r requirements.txt
+RUN uv venv 
+RUN uv pip install comfy-cli
+RUN uv pip install -r requirements.txt
+RUN uv pip install -r manager_requirements.txt
 
-# Create directories for ai-dock compatibility
-RUN mkdir -p /opt/ai-dock/bin /opt/ai-dock/etc
+# Install ComfyUI custom-nodes 
+RUN /opt/ComfyUI/.venv/bin/comfy node install https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2
+RUN /opt/ComfyUI/.venv/bin/comfy node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
+RUN /opt/ComfyUI/.venv/bin/comfy node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
 
-# Create a startup script that mimics ai-dock behavior
-RUN echo '#!/bin/bash\n\
-export PYTHONPATH="/opt/ComfyUI:$PYTHONPATH"\n\
-cd /opt/ComfyUI\n\
-exec $COMFYUI_VENV_PYTHON main.py "$@"\n\
-' > /opt/ai-dock/bin/start-comfyui.sh && chmod +x /opt/ai-dock/bin/start-comfyui.sh
+# Install ComfyUI models 
 
-# Create a basic init.sh script
-RUN echo '#!/bin/bash\n\
-echo "Starting ComfyUI service..."\n\
-exec /opt/ai-dock/bin/start-comfyui.sh\n\
-' > /opt/ai-dock/bin/init.sh && chmod +x /opt/ai-dock/bin/init.sh
-
-# Set the default venv
-ENV PYTHON_DEFAULT_VENV=comfyui
+CMD ["/opt/ComfyUI/.venv/bin/python", "main.py", "--enable-manager","--preview-method auto", "--front-end-version Comfy-Org/ComfyUI_frontend@latest"]
 
 EXPOSE 8188
 
-# Default command
-CMD ["/opt/ai-dock/bin/init.sh"]
