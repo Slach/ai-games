@@ -3,8 +3,11 @@ docker buildx inspect gpubuilder >/dev/null 2>&1 || docker buildx create --progr
     --driver-opt "image=moby/buildkit:buildx-stable-1-gpu" \
     --bootstrap
 
+
+cd "$CUR_DIR"
 docker buildx --builder gpubuilder build \
   --progress=plain \
   -t comfyui:spark-full \
   -f "${CUR_DIR}/comfyui/Dockerfile.spark" \
   --load .
+cd -

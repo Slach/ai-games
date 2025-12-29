@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1-labs
+ARG CUR_DIR=.
 ARG UBUNTU_VERSION=24.04
 # This needs to generally match the container host's environment.
 ARG CUDA_VERSION=13.0.2
@@ -8,7 +9,6 @@ ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VER
 ARG BASE_CUDA_RUN_CONTAINER=nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
 
 FROM ${BASE_CUDA_DEV_CONTAINER} AS comfyui
-
 LABEL org.opencontainers.image.description="ComfyUI backend and GUI (ARM64) for NVIDIA GB10"
 LABEL maintainer="Eugene Klimov <bloodjazman@gmail.com>"
 
@@ -83,6 +83,40 @@ RUN git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2 /opt/
 RUN pip config set global.break-system-packages true
 RUN grep -vE '^\s*#' /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
 RUN --device=nvidia.com/gpu uv pip install --no-deps -r /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
+# manually install, based on https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/blob/main/.github/workflows/build-cu130-torch291.yml 
+# todo remove all before install.py, after fix https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/issues/1 and https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2/issues/38 
+RUN --device=nvidia.com/gpu apt install -y \
+            cuda-nvcc-13-0 \
+            cuda-cudart-dev-13-0 \
+            libcublas-dev-13-0 \
+            libcusparse-dev-13-0 \
+            libcurand-dev-13-0 \
+            libcufft-dev-13-0 \
+            libcusolver-dev-13-0 \
+            cuda-nvtx-13-0
+
+ENV PATH="/usr/local/cuda-13.0/bin:${PATH}"
+ENV CUDA_HOME=/usr/local/cuda-13.0
+ENV CUDA_PATH=/usr/local/cuda-13.0
+ENV TORCH_SHORT=291
+ENV TORCH_MM=29
+ENV TORCH_CUDA_ARCH_LIST='12.1'
+
+RUN uv pip install --no-cache wheel setuptools ninja
+
+RUN mkdir -p /tmp/nvdiffrec_render-wheels/
+
+RUN git clone --depth=1 https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/ /tmp/nvdiffrec_render-wheels/ && \
+    cd /tmp/nvdiffrec_render-wheels/ && \
+    git clone --depth=1 https://github.com/NVlabs/nvdiffrec.git && \
+    mkdir -p nvdiffrec_render_pkg && \
+    cp -rf nvdiffrec/render nvdiffrec_render_pkg/nvdiffrec_render && \
+    cp -vf setup.py nvdiffrec_render_pkg/
+# replace JIT compilation to static import
+COPY comfyui/nvdiffrec_ops.py /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg/nvdiffrec_render/renderutils/ops.py
+RUN --device=nvidia.com/gpu cd /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg && \
+          /opt/ComfyUI/.venv/bin/pip install --no-build-isolation .
+
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
 
 RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
