@@ -1,21 +1,16 @@
 # Compose file build variables set in .env
 services:
   comfyui:
-    build:
-      context: .
-      dockerfile: ./comfyui/Dockerfile.spark
-      tags:
-      - comfyui:spark-full
-  env:
-    HF_TOKEN: "${HF_TOKEN}"
-    HF_XET_HIGH_PERFORMANCE: "1"
-  volumes:
-    ~/.cache/hugginface:/root/.cache/huggingface
+    image: comfyui:spark-full
+    environment:
+      - HF_XET_HIGH_PERFORMANCE=1
+    volumes:
+     - ${HOME}/.cache/hugginface:/root/.cache/huggingface
 
-  deploy:
-     resources:
-       reservations:
-         devices:
-           - driver: nvidia
-             count: all
-             capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

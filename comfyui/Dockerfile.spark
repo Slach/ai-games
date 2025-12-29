@@ -1,13 +1,19 @@
-# For build automation - Allows building from any ai-dock base image
-# Use a *cuda*base* image as default because pytorch brings the libs
-# For ARM64 compatibility, we'll use a generic Ubuntu base and install ARM64-compatible PyTorch
-FROM ubuntu:24.04
+# syntax=docker/dockerfile:1-labs
+ARG UBUNTU_VERSION=24.04
+# This needs to generally match the container host's environment.
+ARG CUDA_VERSION=13.0.2
+# Target the CUDA build image
+ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
 
-LABEL org.opencontainers.image.description "ComfyUI Stable Diffusion backend and GUI (ARM64) for NVIDIA GB10"
+ARG BASE_CUDA_RUN_CONTAINER=nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+FROM ${BASE_CUDA_DEV_CONTAINER} AS comfyui
+
+LABEL org.opencontainers.image.description="ComfyUI backend and GUI (ARM64) for NVIDIA GB10"
 LABEL maintainer="Eugene Klimov <bloodjazman@gmail.com>"
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt update && apt install -y \
     python3 \
     python3-pip \
     python3-venv \
@@ -24,42 +30,60 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-dev \
     libglx0 \
     libglib2.0-0 \
-    openssh-server \
-    supervisor \
     yq \
+    && apt autoremove && apt clean && apt autoclean \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv using --break-system-packages due to PEP 668
 RUN pip3 install --break-system-packages uv
 
 # Install PyTorch with CUDA 13 support for ARM64
-RUN uv pip install --system --break-system-packages --upgrade pip && \
-    uv pip install --system --break-system-packages torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu130
+ENV LD_LIBRARY_PATH=/usr/local/cuda-13/compat
+RUN uv pip install --no-cache --system --break-system-packages --upgrade pip && \
+    uv pip install --no-cache --system --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 
-# Install ComfyUI dependencies
-RUN uv pip install --system --break-system-packages torchsde einops omegaconf safetensors kornia pymatting pillow markupsafe install huggingface_hub[cli]
+
+RUN uv pip install --no-cache --system --break-system-packages huggingface_hub[cli]
 
 # get latest release for ComfyUI
 # Clone ComfyUI
 # @todo use https://github.com/Comfy-Org/ComfyUI
 RUN COMFYUI_VERISION=$(curl -sL https://github.com/comfyanonymous/ComfyUI/releases/latest -H "Accept: application/json" | jq -r .tag_name) && \
-   git clone git clone --depth 1 --branch "${COMFYUI_VERISION}"  https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+   git clone --depth 1 --branch "${COMFYUI_VERISION}"  https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
 WORKDIR /opt/ComfyUI
 
+
 # Install ComfyUI requirements
-RUN uv venv 
-RUN uv pip install comfy-cli
-RUN uv pip install -r requirements.txt
-RUN uv pip install -r manager_requirements.txt
+RUN python3 -m venv --system-site-packages /opt/ComfyUI/.venv
+RUN grep -vE '^\s*#' requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/requirements.no_torch.txt
+RUN grep -vE '^\s*#' manager_requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/manager_requirements.no_torch.txt
+
+RUN COMFYUI_MANAGER_VERSION=$(curl -s https://api.github.com/repos/Comfy-Org/ComfyUI-Manager/tags | jq -r '.[].name' | head -n 1) && \
+# todo WTF, why cm-cli.py exists only in main ? but not exists in latest release tag?
+#    git clone --depth 1 --branch "${COMFYUI_MANAGER_VERSION}" https://github.com/Comfy-Org/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager && \
+    git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager 
+
+RUN uv pip install --no-cache -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
+RUN uv pip install --no-cache comfy-cli
+
+RUN uv pip install --no-cache --no-deps -r /opt/ComfyUI/requirements.no_torch.txt
+RUN uv pip install --no-cache --no-deps -r /opt/ComfyUI/manager_requirements.no_torch.txt 
+
+ENV COMFYUI_PATH=/opt/ComfyUI/
+
+# check torch versions
+RUN /usr/bin/python3 -c "import torch; print('SYSTEM', torch.__version__, torch.version.cuda, torch.__file__)"
+RUN /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.version.cuda, torch.__file__)"
 
 # Install ComfyUI custom-nodes 
-RUN /opt/ComfyUI/.venv/bin/comfy node install https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2
-RUN /opt/ComfyUI/.venv/bin/comfy node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
-RUN /opt/ComfyUI/.venv/bin/comfy node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; torch_ver = torch.__version__.split('+')[0];  cuda_ver = torch.version.cuda; print(f'SUKA torch_ver={torch_ver} cuda_ver={cuda_ver}')"
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2
+RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
+RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
 
 # Install ComfyUI models 
 
-CMD ["/opt/ComfyUI/.venv/bin/python", "main.py", "--enable-manager","--preview-method auto", "--front-end-version Comfy-Org/ComfyUI_frontend@latest"]
+CMD ["/opt/ComfyUI/.venv/bin/python3", "main.py", "--enable-manager","--preview-method auto", "--front-end-version Comfy-Org/ComfyUI_frontend@latest"]
 
 EXPOSE 8188
 
