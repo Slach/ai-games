@@ -39,10 +39,7 @@ RUN pip3 install --break-system-packages uv
 
 # Install PyTorch with CUDA 13 support for ARM64
 ENV LD_LIBRARY_PATH=/usr/local/cuda-13/compat
-RUN uv pip install --no-cache --system --break-system-packages --upgrade pip && \
-    uv pip install --no-cache --system --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
-
-
+RUN uv pip install --no-cache --system --break-system-packages --upgrade pip
 RUN uv pip install --no-cache --system --break-system-packages huggingface_hub[cli]
 
 # get latest release for ComfyUI
@@ -55,6 +52,8 @@ WORKDIR /opt/ComfyUI
 
 # Install ComfyUI requirements
 RUN python3 -m venv --system-site-packages /opt/ComfyUI/.venv
+RUN uv pip install --no-cache --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
 RUN grep -vE '^\s*#' requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/requirements.no_torch.txt
 RUN grep -vE '^\s*#' manager_requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/manager_requirements.no_torch.txt
 
@@ -66,25 +65,21 @@ RUN COMFYUI_MANAGER_VERSION=$(curl -s https://api.github.com/repos/Comfy-Org/Com
 RUN uv pip install --no-cache -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
 RUN uv pip install --no-cache comfy-cli
 
-RUN uv pip install --no-cache --no-deps -r /opt/ComfyUI/requirements.no_torch.txt
-RUN uv pip install --no-cache --no-deps -r /opt/ComfyUI/manager_requirements.no_torch.txt 
+RUN uv pip install --no-cache -r /opt/ComfyUI/requirements.no_torch.txt 
+RUN uv pip install --no-cache -r /opt/ComfyUI/manager_requirements.no_torch.txt
 
 ENV COMFYUI_PATH=/opt/ComfyUI/
-
-# check torch versions
-RUN /usr/bin/python3 -c "import torch; print('SYSTEM', torch.__version__, torch.version.cuda, torch.__file__)"
-RUN /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.version.cuda, torch.__file__)"
 
 # Install ComfyUI custom-nodes
 
 # Clone ComfyUI-TRELLIS2 directly and install it to ensure CUDA detection works
+# manually install, based on https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/blob/main/.github/workflows/build-cu130-torch291.yml 
+# todo remove all before install.py, after fix https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/issues/1 and https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2/issues/38 
 RUN git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2
 # Fix platform compatibility for wheel installation
 RUN pip config set global.break-system-packages true
 RUN grep -vE '^\s*#' /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
-RUN --device=nvidia.com/gpu uv pip install --no-deps -r /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
-# manually install, based on https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/blob/main/.github/workflows/build-cu130-torch291.yml 
-# todo remove all before install.py, after fix https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/issues/1 and https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2/issues/38 
+RUN --device=nvidia.com/gpu uv pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
 RUN --device=nvidia.com/gpu apt install -y \
             cuda-nvcc-13-0 \
             cuda-cudart-dev-13-0 \
@@ -115,7 +110,7 @@ RUN git clone --depth=1 https://github.com/PozzettiAndrea/nvdiffrec_render-wheel
 # replace JIT compilation to static import
 COPY comfyui/nvdiffrec_ops.py /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg/nvdiffrec_render/renderutils/ops.py
 # Install ninja build system for faster builds
-RUN apt-get update && apt-get install -y ninja-build
+RUN apt update && apt install -y ninja-build
 
 # Set comprehensive build environment
 ENV MAX_JOBS=$(nproc)
@@ -134,12 +129,15 @@ RUN --device=nvidia.com/gpu \
     MAKEFLAGS="-j$(nproc)" \
     /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
 
-RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
-RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
 
-# Install ComfyUI models 
+# check torch with CUDA versions
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.version.cuda, torch.__file__, torch.device(torch.cuda.current_device()))"
 
-CMD ["/opt/ComfyUI/.venv/bin/python3", "main.py", "--enable-manager","--preview-method auto", "--front-end-version Comfy-Org/ComfyUI_frontend@latest"]
+# TODO Install ComfyUI models 
+
+CMD ["/opt/ComfyUI/.venv/bin/python3", "main.py", "--enable-manager","--preview-method", "auto", "--front-end-version","Comfy-Org/ComfyUI_frontend@latest"]
 
 EXPOSE 8188
 
