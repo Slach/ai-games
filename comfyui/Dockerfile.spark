@@ -114,10 +114,25 @@ RUN git clone --depth=1 https://github.com/PozzettiAndrea/nvdiffrec_render-wheel
     cp -vf setup.py nvdiffrec_render_pkg/
 # replace JIT compilation to static import
 COPY comfyui/nvdiffrec_ops.py /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg/nvdiffrec_render/renderutils/ops.py
+# Install ninja build system for faster builds
+RUN apt-get update && apt-get install -y ninja-build
+
+# Set comprehensive build environment
+ENV MAX_JOBS=$(nproc)
+ENV CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
+ENV MAKEFLAGS="-j$(nproc)"
+ENV CC=gcc
+ENV CXX=g++
+
 RUN --device=nvidia.com/gpu cd /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg && \
           /opt/ComfyUI/.venv/bin/pip install --no-build-isolation .
 
-RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
+# Run the installation with parallel build settings
+RUN --device=nvidia.com/gpu \
+    MAX_JOBS=$(nproc) \
+    CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
+    MAKEFLAGS="-j$(nproc)" \
+    /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
 
 RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
 RUN /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
