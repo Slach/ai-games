@@ -30,6 +30,7 @@ RUN apt update && apt install -y \
     libgtk-3-dev \
     libglx0 \
     libglib2.0-0 \
+    ninja-build \
     yq \
     && apt autoremove && apt clean && apt autoclean \
     && rm -rf /var/lib/apt/lists/*
@@ -42,17 +43,44 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda-13/compat
 RUN uv pip install --no-cache --system --break-system-packages --upgrade pip
 RUN uv pip install --no-cache --system --break-system-packages huggingface_hub[cli]
 
+# Increase parallelism for build environment
+ENV MAX_JOBS=$(nproc)
+ENV CMAKE_GENERATOR=Ninja
+ENV CUDA_NVCC_FLAGS="--ptxas-options=--threads=$(nproc)"
+ENV CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
+ENV MAKEFLAGS="-j$(nproc)"
+ENV CC=gcc
+ENV CXX=g++
+ENV GIT_SUBMODULE_FETCH_JOBS=$(nproc)
+RUN git config --global submodule.fetchJobs $(nproc) && git config --global fetch.parallel $(nproc)
+
+RUN --device=nvidia.com/gpu apt install -y \
+            cuda-nvcc-13-0 \
+            cuda-cudart-dev-13-0 \
+            libcublas-dev-13-0 \
+            libcusparse-dev-13-0 \
+            libcurand-dev-13-0 \
+            libcufft-dev-13-0 \
+            libcusolver-dev-13-0 \
+            cuda-nvtx-13-0
+
+ENV PATH="/usr/local/cuda-13.0/bin:${PATH}"
+ENV CUDA_HOME=/usr/local/cuda-13.0
+ENV CUDA_PATH=/usr/local/cuda-13.0
+ENV TORCH_CUDA_ARCH_LIST="12.1"
+
 # get latest release for ComfyUI
 # Clone ComfyUI
 # @todo use https://github.com/Comfy-Org/ComfyUI
 RUN COMFYUI_VERISION=$(curl -sL https://github.com/comfyanonymous/ComfyUI/releases/latest -H "Accept: application/json" | jq -r .tag_name) && \
    git clone --depth 1 --branch "${COMFYUI_VERISION}"  https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
 WORKDIR /opt/ComfyUI
+RUN python3 -m venv --system-site-packages /opt/ComfyUI/.venv
+RUN --device=nvidia.com/gpu uv pip install --no-cache wheel setuptools ninja numpy
 
 
 # Install ComfyUI requirements
-RUN python3 -m venv --system-site-packages /opt/ComfyUI/.venv
-RUN uv pip install --no-cache --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+RUN uv pip install --no-cache --break-system-packages torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
 
 RUN grep -vE '^\s*#' requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/requirements.no_torch.txt
 RUN grep -vE '^\s*#' manager_requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/manager_requirements.no_torch.txt
@@ -72,32 +100,38 @@ ENV COMFYUI_PATH=/opt/ComfyUI/
 
 # Install ComfyUI custom-nodes
 
+# Images nunchaku 
+RUN --device=nvidia.com/gpu git clone --depth 1 https://github.com/nunchaku-tech/nunchaku.git /opt/nunchaku && \
+    cd /opt/nunchaku && \
+    git submodule init && \
+    git submodule update --jobs 20 --depth 1 && \
+    git submodule foreach --recursive 'git submodule init && git submodule update --jobs 20 --depth 1' && \
+    /opt/ComfyUI/.venv/bin/pip install Cython && \
+    /opt/ComfyUI/.venv/bin/pip install --no-build-isolation -e ".[dev,docs]" && \
+    cd -
+
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
+
+# TTS chatterbox
+RUN --device=nvidia.com/gpu uv pip install --no-build-isolation --no-cache chatterbox-tts
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
+
+# video + image
+RUN --device=nvidia.com/gpu git clone --recursive --jobs $(nproc) --depth 1 https://github.com/ModelTC/LightX2V.git /tmp/LightX2V && \
+    uv pip install --no-build-isolation --no-cache /tmp/LightX2V
+RUN --device=nvidia.com/gpu git clone --depth=1 --recurse-submodules https://github.com/gaclove/ComfyUI-Lightx2vWrapper.git /opt/ComfyUI/custom_nodes/ComfyUI-Lightx2vWrapper && \
+    cd /opt/ComfyUI/custom_nodes/ComfyUI-Lightx2vWrapper && \
+    uv pip install --no-cache --no-build-isolation -r lightx2v/requirements.txt && \
+    uv pip install --no-cache --no-build-isolation -r requirements.txt
+
+# Image to 3D 
 # Clone ComfyUI-TRELLIS2 directly and install it to ensure CUDA detection works
 # manually install, based on https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/blob/main/.github/workflows/build-cu130-torch291.yml 
 # todo remove all before install.py, after fix https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/issues/1 and https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2/issues/38 
 RUN git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-TRELLIS2 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2
-# Fix platform compatibility for wheel installation
-RUN pip config set global.break-system-packages true
 RUN grep -vE '^\s*#' /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.txt | grep -viE '^\s*(torch|torchvision|torchaudio)\b' > /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
-RUN --device=nvidia.com/gpu uv pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
-RUN --device=nvidia.com/gpu apt install -y \
-            cuda-nvcc-13-0 \
-            cuda-cudart-dev-13-0 \
-            libcublas-dev-13-0 \
-            libcusparse-dev-13-0 \
-            libcurand-dev-13-0 \
-            libcufft-dev-13-0 \
-            libcusolver-dev-13-0 \
-            cuda-nvtx-13-0
+RUN --device=nvidia.com/gpu uv pip install --no-cache -r /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/requirements.no_torch.txt
 
-ENV PATH="/usr/local/cuda-13.0/bin:${PATH}"
-ENV CUDA_HOME=/usr/local/cuda-13.0
-ENV CUDA_PATH=/usr/local/cuda-13.0
-ENV TORCH_SHORT=291
-ENV TORCH_MM=29
-ENV TORCH_CUDA_ARCH_LIST='12.1'
-
-RUN uv pip install --no-cache wheel setuptools ninja
 
 RUN mkdir -p /tmp/nvdiffrec_render-wheels/
 
@@ -112,25 +146,15 @@ COPY comfyui/nvdiffrec_ops.py /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg/
 # Install ninja build system for faster builds
 RUN apt update && apt install -y ninja-build
 
-# Set comprehensive build environment
-ENV MAX_JOBS=$(nproc)
-ENV CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
-ENV MAKEFLAGS="-j$(nproc)"
-ENV CC=gcc
-ENV CXX=g++
 
 RUN --device=nvidia.com/gpu cd /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg && \
           /opt/ComfyUI/.venv/bin/pip install --no-build-isolation .
 
+ENV FLASH_ATTENTION_FORCE_BUILD=TRUE
+ENV FLASH_ATTN_CUDA_ARCHS=121
 # Run the installation with parallel build settings
-RUN --device=nvidia.com/gpu \
-    MAX_JOBS=$(nproc) \
-    CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
-    MAKEFLAGS="-j$(nproc)" \
-    /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 /opt/ComfyUI/custom_nodes/ComfyUI-TRELLIS2/install.py
 
-RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
-RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
 
 # check torch with CUDA versions
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.version.cuda, torch.__file__, torch.device(torch.cuda.current_device()))"
