@@ -149,11 +149,10 @@ RUN git clone --depth=1 https://github.com/PozzettiAndrea/nvdiffrec_render-wheel
     cp -vf setup.py nvdiffrec_render_pkg/
 # replace JIT compilation to static import
 COPY comfyui/nvdiffrec_ops.py /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg/nvdiffrec_render/renderutils/ops.py
-# Install ninja build system for faster builds
-RUN apt update && apt install -y ninja-build
 
 
 RUN --device=nvidia.com/gpu cd /tmp/nvdiffrec_render-wheels/nvdiffrec_render_pkg && \
+          echo "SUKA !!! $CUDA_HOME" && \
           /opt/ComfyUI/.venv/bin/pip install --no-build-isolation .
 
 ENV FLASH_ATTENTION_FORCE_BUILD=TRUE
