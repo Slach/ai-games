@@ -118,12 +118,17 @@ RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/pip install --break-system-pa
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
 
 # video + image
-RUN --device=nvidia.com/gpu git clone --recursive --jobs $(nproc) --depth 1 https://github.com/ModelTC/LightX2V.git /tmp/LightX2V && \
-    uv pip install --no-build-isolation --no-cache /tmp/LightX2V
-RUN --device=nvidia.com/gpu git clone --depth=1 --recurse-submodules https://github.com/gaclove/ComfyUI-Lightx2vWrapper.git /opt/ComfyUI/custom_nodes/ComfyUI-Lightx2vWrapper && \
-    cd /opt/ComfyUI/custom_nodes/ComfyUI-Lightx2vWrapper && \
-    uv pip install --no-cache --no-build-isolation -r lightx2v/requirements.txt && \
-    uv pip install --no-cache --no-build-isolation -r requirements.txt
+RUN --device=nvidia.com/gpu git clone --recursive --jobs $(nproc) --depth 1 https://github.com/ModelTC/LightX2V.git /tmp/LightX2V
+# Install LightX2V with dependency conflicts ignored due to decord compatibility issues
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/pip install --break-system-packages --no-deps --no-cache /tmp/LightX2V
+RUN --device=nvidia.com/gpu git clone --depth=1 --recurse-submodules https://github.com/gaclove/ComfyUI-Lightx2vWrapper.git /opt/ComfyUI/custom_nodes/ComfyUI-Lightx2vWrapper
+# Install Lightx2vWrapper dependencies with --no-deps due to decord compatibility issues
+# First, copy the requirements files and modify them to remove problematic decord dependency
+RUN --device=nvidia.com/gpu cd /opt/ComfyUI/custom_nodes/ComfyUI-Lightx2vWrapper && \
+    grep -v -E '^decord|^decord==' lightx2v/requirements.txt > lightx2v/requirements_filtered.txt && \
+    grep -v -E '^decord|^decord==' requirements.txt > requirements_filtered.txt && \
+    /opt/ComfyUI/.venv/bin/pip install --break-system-packages --no-deps --no-cache -r lightx2v/requirements_filtered.txt && \
+    /opt/ComfyUI/.venv/bin/pip install --break-system-packages --no-deps --no-cache -r requirements_filtered.txt
 
 # Image to 3D 
 # Clone ComfyUI-TRELLIS2 directly and install it to ensure CUDA detection works
