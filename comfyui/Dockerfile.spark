@@ -113,7 +113,8 @@ RUN --device=nvidia.com/gpu git clone --depth 1 https://github.com/nunchaku-tech
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/nunchaku-tech/ComfyUI-nunchaku
 
 # TTS chatterbox
-RUN --device=nvidia.com/gpu uv pip install --no-build-isolation --no-cache chatterbox-tts
+# Install chatterbox-tts ignoring dependency conflicts
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/pip install --break-system-packages --force-reinstall --no-deps --no-cache chatterbox-tts
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/comfy --skip-prompt --no-enable-telemetry node install https://github.com/filliptm/ComfyUI_Fill-ChatterBox
 
 # video + image
