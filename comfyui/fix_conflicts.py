@@ -7,6 +7,7 @@ This script will:
 3. Update those files to match the frozen versions
 """
 
+import ast
 import os
 import sys
 import subprocess
@@ -210,51 +211,262 @@ def update_pyproject_toml(pyproject_path, frozen_packages):
         return False
 
 
-def find_and_update_dependencies(frozen_packages, search_path="/opt"):
-    """Find and update all requirements.txt and pyproject.toml files"""
+def find_and_update_dependencies(frozen_packages, search_path="."):
+    """Find and update all requirements.txt, setup.py, and pyproject.toml files"""
     search_path = Path(search_path)
-    
-    # Find all requirements.txt files
+
+    # Find all requirements.txt files (including in subdirectories)
     requirements_files = list(search_path.rglob("requirements*.txt"))
-    requirements_files.extend(list(search_path.glob("requirements*.txt")))
-    
-    # Find all pyproject.toml files
+
+    # Find all pyproject.toml files (including in subdirectories)
     pyproject_files = list(search_path.rglob("pyproject.toml"))
-    pyproject_files.extend(list(search_path.glob("pyproject.toml")))
-    
+
+    # Find all setup.py files (including in subdirectories)
+    setup_files = list(search_path.rglob("setup.py"))
+
     print(f"Found {len(requirements_files)} requirements files to process")
     print(f"Found {len(pyproject_files)} pyproject.toml files to process")
-    
+    print(f"Found {len(setup_files)} setup.py files to process")
+
     updated_count = 0
-    
+
     for req_file in requirements_files:
         if update_requirements_txt(str(req_file), frozen_packages):
             updated_count += 1
-    
+
     for pyproj_file in pyproject_files:
         if update_pyproject_toml(str(pyproj_file), frozen_packages):
             updated_count += 1
-    
+
+    for setup_file in setup_files:
+        if update_setup_py(str(setup_file), frozen_packages):
+            updated_count += 1
+
     print(f"Updated {updated_count} files with frozen package versions")
     return updated_count
 
 
+def update_setup_py(setup_path, frozen_packages):
+    """Update setup.py to match frozen package versions"""
+    if not os.path.exists(setup_path):
+        print(f"Setup file {setup_path} does not exist, skipping")
+        return False
+
+    print(f"Updating {setup_path}")
+
+    with open(setup_path, 'r') as f:
+        content = f.read()
+
+    original_content = content
+
+    # Look for install_requires and other dependency specifications in setup.py
+    # This regex finds patterns like: install_requires=['package>=1.0', ...]
+    # First, find the install_requires section
+    import ast
+    try:
+        tree = ast.parse(content)
+        visitor = SetupPyVisitor(frozen_packages)
+        visitor.visit(tree)
+
+        if visitor.updated:
+            # Write the modified AST back to the file
+            import ast
+            updated_content = ast.unparse(tree)  # This converts AST back to source code
+            with open(setup_path, 'w') as f:
+                f.write(updated_content)
+            print(f"Updated {setup_path} with frozen package versions")
+            return True
+        else:
+            print(f"No changes needed for {setup_path}")
+            return False
+    except Exception as e:
+        print(f"Error parsing {setup_path}: {e}")
+        # Fallback to regex-based approach for simple cases
+        return update_setup_py_fallback(content, setup_path, frozen_packages)
+
+
+class SetupPyVisitor(ast.NodeTransformer):
+    def __init__(self, frozen_packages):
+        self.frozen_packages = frozen_packages
+        self.updated = False
+
+    def visit_Call(self, node):
+        # Look for setup() calls
+        if isinstance(node.func, ast.Name) and node.func.id == 'setup':
+            for keyword in node.keywords:
+                if keyword.arg in ['install_requires', 'extras_require']:
+                    if isinstance(keyword.value, ast.List):
+                        keyword.value = self._update_list_node(keyword.value)
+                    elif isinstance(keyword.value, ast.Dict):  # extras_require case
+                        keyword.value = self._update_extras_require_node(keyword.value)
+        return self.generic_visit(node)
+
+    def _update_list_node(self, list_node):
+        updated = False
+        new_elts = []
+        for elt in list_node.elts:
+            if isinstance(elt, ast.Str):  # Python < 3.8
+                updated_req = self._update_requirement(elt.s)
+                if updated_req and updated_req != elt.s:
+                    new_elt = ast.Str(s=updated_req)
+                    new_elts.append(new_elt)
+                    updated = True
+                else:
+                    new_elts.append(elt)
+            elif isinstance(elt, ast.Constant) and isinstance(elt.value, str):  # Python 3.8+
+                updated_req = self._update_requirement(elt.value)
+                if updated_req and updated_req != elt.value:
+                    new_elt = ast.Constant(value=updated_req)
+                    new_elts.append(new_elt)
+                    updated = True
+                else:
+                    new_elts.append(elt)
+            elif isinstance(elt, ast.JoinedStr):  # f-strings are not handled here
+                new_elts.append(elt)  # Skip f-strings for now
+            else:
+                new_elts.append(elt)
+
+        if updated:
+            self.updated = True
+            list_node.elts = new_elts
+
+        return list_node
+
+    def _update_extras_require_node(self, dict_node):
+        updated = False
+        for i, key in enumerate(dict_node.keys):
+            if isinstance(key, ast.Str):  # Python < 3.8
+                value = dict_node.values[i]
+            elif isinstance(key, ast.Constant):  # Python 3.8+
+                value = dict_node.values[i]
+            else:
+                continue
+
+            # The value is the list of requirements
+            if isinstance(value, ast.List):
+                updated_value = self._update_list_node(value)
+                if updated_value is not value:  # If it was modified
+                    dict_node.values[i] = updated_value
+                    updated = True
+
+        if updated:
+            self.updated = True
+
+        return dict_node
+
+    def _update_requirement(self, req):
+        # Extract package name from requirement string (e.g., "package>=1.0,<2.0" -> "package")
+        package_match = re.match(r'^([a-zA-Z0-9\-_.]+)', req)
+        if package_match:
+            req_package = package_match.group(1).lower()
+            if req_package in self.frozen_packages:
+                frozen_version = self.frozen_packages[req_package]
+                if frozen_version != "git+url":
+                    # Preserve version specifiers but update the version
+                    # For example: "package>=1.0,<2.0" -> "package=={frozen_version}"
+                    new_req = f"{req_package}=={frozen_version}"
+                    return new_req
+        return None
+
+
+def update_setup_py_fallback(content, setup_path, frozen_packages):
+    """Fallback method to update setup.py using regex if AST parsing fails"""
+    import re
+
+    original_content = content
+
+    # Find install_requires section in setup.py
+    # Pattern matches: install_requires=['...', '...', ...]
+    pattern = r'(install_requires\s*=\s*\[)([^\]]+)(\])'
+
+    def replace_requirements(match):
+        prefix, reqs_content, suffix = match.group(1, 2, 3)
+
+        # Split requirements by comma, being careful with nested quotes
+        reqs = []
+        current = ""
+        quote_char = None
+        i = 0
+        while i < len(reqs_content):
+            char = reqs_content[i]
+
+            if quote_char is None and char in ['"', "'"]:
+                quote_char = char
+                current += char
+            elif char == quote_char:
+                current += char
+                quote_char = None
+            elif char == ',' and quote_char is None:
+                reqs.append(current.strip())
+                current = ""
+            else:
+                current += char
+            i += 1
+
+        if current.strip():
+            reqs.append(current.strip())
+
+        updated_reqs = []
+        for req in reqs:
+            # Remove leading/trailing whitespace and quotes
+            req = req.strip()
+            if not req:
+                updated_reqs.append(req)
+                continue
+
+            # Extract package name from requirement string
+            package_match = re.match(r'^[\'"]?([a-zA-Z0-9\-_.]+)', req)
+            if package_match:
+                req_package = package_match.group(1).lower()
+                if req_package in frozen_packages:
+                    frozen_version = frozen_packages[req_package]
+                    if frozen_version != "git+url":
+                        # Create new requirement with exact version
+                        quote_start = req[0] if req[0] in ['"', "'"] else "'"
+                        quote_end = req[-1] if req[-1] in ['"', "'"] else "'"
+                        new_req = f"{quote_start}{req_package}=={frozen_version}{quote_end}"
+                        updated_reqs.append(new_req)
+                        print(f"  Updated {req_package} to {frozen_version}")
+                    else:
+                        updated_reqs.append(req)
+                else:
+                    updated_reqs.append(req)
+            else:
+                updated_reqs.append(req)
+
+        return prefix + ', '.join(updated_reqs) + suffix
+
+    updated_content = re.sub(pattern, replace_requirements, content)
+
+    if updated_content != original_content:
+        with open(setup_path, 'w') as f:
+            f.write(updated_content)
+        print(f"Updated {setup_path} with frozen package versions using fallback method")
+        return True
+    else:
+        print(f"No changes needed for {setup_path} using fallback method")
+        return False
+
+
 def main():
     print("Starting pip conflict resolution...")
-    
+
+    # Parse command line arguments to get search path
+    search_path = sys.argv[1] if len(sys.argv) > 1 else "."
+
     # Run pip freeze to capture current state
     if not run_pip_freeze():
         print("Failed to run pip freeze, exiting")
         return 1
-    
+
     # Parse the freeze output
     frozen_packages = parse_pip_freeze()
     print(f"Found {len(frozen_packages)} packages in pip freeze")
-    
-    # Find and update all dependency files
-    updated_files = find_and_update_dependencies(frozen_packages)
-    
-    print(f"Successfully processed {updated_files} files")
+
+    # Find and update all dependency files in the specified search path
+    updated_files = find_and_update_dependencies(frozen_packages, search_path)
+
+    print(f"Successfully processed {updated_files} files in {search_path}")
     return 0
 
 
