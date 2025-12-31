@@ -23,8 +23,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     relative_path_file=$(echo "$line" | awk '{print $1}')
     url=$(echo "$line" | awk '{print $2}')
 
+    # Extract destination file and relative path from the first field
+    destination_file=$(basename "$relative_path_file")
+    relative_path=$(dirname "$relative_path_file")
+
     # Use the specified command format
-    comfy model download --url "$url" --relative-path "${HOME}/.cache/comfyui/${relative_path_file}"
+    comfy model download --url "$url" --relative-path "${HOME}/.cache/comfyui/${relative_path}" --filename="${destination_file}"
 done < comfyui/models_urls.txt
 
 cd -
