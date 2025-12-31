@@ -60,11 +60,7 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda-13/compat:$LD_LIBRARY_PATH
 ENV LD_LIBRARY_PATH=/opt/ComfyUI/.venv/lib/python3.12/site-packages/torch/lib:$LD_LIBRARY_PATH
 
 RUN --mount=type=cache,id=comfyui-cache,target=/root/.cache/ uv pip install --system --break-system-packages --upgrade pip
-# Run pip freeze to capture state after pip upgrade
-RUN /opt/ComfyUI/.venv/bin/pip freeze > /opt/pip_freeze_after_pip_upgrade.txt
 RUN --mount=type=cache,id=comfyui-cache,target=/root/.cache/ uv pip install --system --break-system-packages huggingface_hub[cli]
-# Run pip freeze to capture state after huggingface_hub installation
-RUN /opt/ComfyUI/.venv/bin/pip freeze > /opt/pip_freeze_after_hf.txt
 
 # Increase parallelism for build environment
 ENV CMAKE_GENERATOR=Ninja
@@ -312,11 +308,6 @@ RUN python3 /opt/fix_conflicts.py
 
 # check torch with CUDA versions
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.__file__, torch.version.cuda, torch.cuda.is_available(), torch.device(torch.cuda.current_device()) )"
-
-COPY comfyui/extra_model_paths.yaml /opt/ComfyUI/
-# TODO Install ComfyUI models 
-
-CMD ["/opt/ComfyUI/.venv/bin/python3", "main.py", "--enable-manager","--preview-method", "auto", "--front-end-version","Comfy-Org/ComfyUI_frontend@latest"]
 
 EXPOSE 8188
 

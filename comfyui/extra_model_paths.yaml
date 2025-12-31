@@ -1,8 +1,0 @@
-checkpoints:
-  - /root/.cache/huggingface/hub
-loras:
-  - /root/.cache/huggingface/hub
-controlnet:
-  - /root/.cache/huggingface/hub
-vae:
-  - /root/.cache/huggingface/hub

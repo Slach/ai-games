@@ -11,6 +11,10 @@ services:
     - "127.0.0.1:8188:8188"
     volumes:
      - ${HOME}/.cache/hugginface:/root/.cache/huggingface
+     - ${HOME}/.cache/comfyui:/opt/ComfyUI/models
+    command: [
+      "/opt/ComfyUI/.venv/bin/python3","main.py","--enable-manager","--preview-method","auto","--front-end-version","Comfy-Org/ComfyUI_frontend@latest", "--listen", "0.0.0.0" 
+    ]
 
     deploy:
       resources:
