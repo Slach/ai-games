@@ -5,9 +5,11 @@ docker buildx inspect gpubuilder >/dev/null 2>&1 || docker buildx create --progr
 
 
 cd "$CUR_DIR"
+cp -fL /lib/aarch64-linux-gnu/libnvcuvid.so ./comfyui/libnvcuvid.so 
 docker buildx --builder gpubuilder build \
   --progress=plain \
   -t comfyui:spark-full \
   -f "${CUR_DIR}/comfyui/Dockerfile.spark" \
+  --build-arg NPROC=16 \
   --load .
 cd -
