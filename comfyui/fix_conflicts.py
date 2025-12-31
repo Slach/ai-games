@@ -18,22 +18,37 @@ try:
     import toml
 except ImportError:
     print("toml package not found, installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "toml"])
+    # Try to use the ComfyUI virtual environment pip first
+    pip_executable = "/opt/ComfyUI/.venv/bin/pip"
+    if os.path.exists(pip_executable):
+        subprocess.check_call([pip_executable, "install", "toml"])
+    else:
+        # Fallback to system pip
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "toml"])
     import toml
 
 
 def run_pip_freeze(output_file="/opt/pip_freeze.txt"):
     """Run pip freeze and save to file"""
     print(f"Running pip freeze and saving to {output_file}")
-    result = subprocess.run([sys.executable, "-m", "pip", "freeze"], 
-                          capture_output=True, text=True)
+
+    # Try to use the ComfyUI virtual environment pip first
+    pip_executable = "/opt/ComfyUI/.venv/bin/pip"
+    if os.path.exists(pip_executable):
+        result = subprocess.run([pip_executable, "freeze"],
+                              capture_output=True, text=True)
+    else:
+        # Fallback to system pip
+        result = subprocess.run([sys.executable, "-m", "pip", "freeze"],
+                              capture_output=True, text=True)
+
     if result.returncode != 0:
         print(f"Error running pip freeze: {result.stderr}")
         return False
-    
+
     with open(output_file, 'w') as f:
         f.write(result.stdout)
-    
+
     print(f"Successfully saved pip freeze output to {output_file}")
     return True
 
