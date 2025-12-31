@@ -23,6 +23,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     relative_path_file=$(echo "$line" | awk '{print $1}')
     url=$(echo "$line" | awk '{print $2}')
 
+    # Skip lines that don't have both relative_path_file and url
+    if [[ -z "$relative_path_file" ]] || [[ -z "$url" ]]; then
+        echo "Warning: Skipping line with invalid format: $line"
+        continue
+    fi
+
     # Extract destination file and relative path from the first field
     destination_file=$(basename "$relative_path_file")
     relative_path=$(dirname "$relative_path_file")
