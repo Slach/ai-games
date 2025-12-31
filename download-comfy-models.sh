@@ -9,8 +9,8 @@ if [[ ! -f "comfyui/models_urls.txt" ]]; then
     exit 1
 fi
 
-uv venv --force
-uv install comfy-cli
+uv venv --allow-existing
+uv pip install comfy-cli
 source ./.venv/bin/activate
 
 # Read models_urls.txt line by line
