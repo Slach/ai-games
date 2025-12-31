@@ -301,6 +301,7 @@ RUN python3 /opt/fix_conflicts.py
 # check torch with CUDA versions
 RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; print('VENV', torch.__version__, torch.__file__, torch.version.cuda, torch.cuda.is_available(), torch.device(torch.cuda.current_device()) )"
 
+COPY comfyui/extra_model_paths.yaml /opt/ComfyUI/
 # TODO Install ComfyUI models 
 
 CMD ["/opt/ComfyUI/.venv/bin/python3", "main.py", "--enable-manager","--preview-method", "auto", "--front-end-version","Comfy-Org/ComfyUI_frontend@latest"]

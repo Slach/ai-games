@@ -4,6 +4,11 @@ services:
     image: comfyui:spark-full
     environment:
       - HF_XET_HIGH_PERFORMANCE=1
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface
+      - DIFFUSERS_CACHE=/root/.cache/huggingface      
+    ports:
+    - "127.0.0.1:8188:8188"
     volumes:
      - ${HOME}/.cache/hugginface:/root/.cache/huggingface
 
