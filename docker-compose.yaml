@@ -12,10 +12,20 @@ services:
     volumes:
      - ${HOME}/.cache/hugginface:/root/.cache/huggingface
      - ${HOME}/.cache/comfyui:/opt/ComfyUI/models
+     - comfyui-user:/opt/ComfyUI/user
+     - comfyui-output:/opt/ComfyUI/output
+     - comfyui-input:/opt/ComfyUI/input
     command: [
       "/opt/ComfyUI/.venv/bin/python3","main.py","--enable-manager","--preview-method","auto","--front-end-version","Comfy-Org/ComfyUI_frontend@latest", "--listen", "0.0.0.0" 
     ]
 
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8188/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
     deploy:
       resources:
         reservations:
@@ -23,3 +33,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+volumes:
+  comfyui-user:
+  comfyui-input:
+  comfyui-output:
