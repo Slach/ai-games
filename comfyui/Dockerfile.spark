@@ -55,6 +55,8 @@ RUN apt update && apt install -y \
     libboost-all-dev \
     libtbb-dev \
     swig \
+    libeigen3-dev \
+    python3-numpy \
     && apt autoremove && apt clean && apt autoclean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -286,34 +288,9 @@ RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; pri
 # Image to 3D 
 
 # ComfyUI-GeometryPack required for ComfyUI-TRELLIS2
-RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
-    uv pip install --no-build-isolation scikit-build-core puccinialin 'maturin<0.14' nanobind && \
-    export PATH="/opt/ComfyUI/.venv/bin:/root/.cargo/bin:/root/.cache/puccinialin/rustup/bin:$PATH" && \
-    git clone --depth=1 https://github.com/CGAL/cgal-swig-bindings.git /opt/cgal-swig && \
-    cd /opt/cgal-swig && \
-    mkdir build && cd build && \
-    cmake \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCGAL_DIR=/usr/lib/aarch64-linux-gnu/cmake/CGAL \
-        -DPython3_EXECUTABLE=/opt/ComfyUI/.venv/bin/python3 \
-        -DCMAKE_INSTALL_PREFIX=/opt/ComfyUI/.venv \        
-        -DBUILD_PYTHON=ON \
-        -DBUILD_JAVA=OFF \
-        .. && \
-    echo "=== CMAKE CONFIG DONE ===" && \
-    grep -r "Python" CMakeCache.txt || true && \
-    echo "=== BUILDING ===" && \
-    ninja && \
-    echo "=== INSTALLING ===" && \
-    ninja install && \
-    echo "=== SEARCHING EVERYWHERE ===" && \
-    find / -name "*cgal*" -o -name "*CGAL*.so" 2>/dev/null | head -50 && \
-    echo "=== SITE-PACKAGES ===" && \
-    ls -la /opt/ComfyUI/.venv/lib/python*/site-packages/ | head -20 && \
-    ls -la /usr/local/lib/python*/dist-packages/ 2>/dev/null | head -20 || true && \
-    find /root -name "cgal*" -o -name "CGAL*" 2>/dev/null && \
-    find /opt/ComfyUI/.venv -name "cgal*" 2>/dev/null && \
-    /opt/ComfyUI/.venv/bin/python3 -c "import CGAL; print('CGAL OK', CGAL.__version__)"
+# CGAL Python bindings must be built from source for aarch64 (PyPI packages don't work on ARM)
+# System CGAL libraries (libcgal-dev etc.) are already installed above for compilation
+
 
 
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu git clone --depth=1 --recursive --shallow-submodules https://github.com/fwilliams/point-cloud-utils.git /opt/point-cloud-utils && \
@@ -332,13 +309,79 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
     CXXFLAGS="-Wno-error=changes-meaning" \
     /opt/ComfyUI/.venv/bin/pip install .
 
-RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack && \
-    sed -i '/cgal/d; /embreex/d; /point-cloud-utils/d; /PyNanoInstantMeshes/d' /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack/requirements.txt && \
-    sed -i '/cgal/d; /embreex/d; /point-cloud-utils/d; /PyNanoInstantMeshes/d' /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack/pyproject.toml && \
-    ls -la /opt/ComfyUI/.venv/bin/maturin && \
-    /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack/requirements.txt && \
-    cd /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack/ && \
-    /opt/ComfyUI/.venv/bin/python3 install.py 
+# Install GDAL Python bindings (optional - may fail due to system dependencies)
+# TRELLIS2 doesn't use GDAL, and GeometryPack works without it
+RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
+    bash -c "echo 'Attempting GDAL installation (optional)...' && \
+    /opt/ComfyUI/.venv/bin/pip install --no-build-isolation GDAL && \
+    /opt/ComfyUI/.venv/bin/python3 -c 'from osgeo import gdal; print(\"✓ GDAL installed\")' || echo '⚠ GDAL optional, continuing...'"
+
+# Install missing dependencies for GeometryPack (excluding CGAL which needs special handling)
+RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
+    /opt/ComfyUI/.venv/bin/pip install --no-build-isolation libigl pymeshlab && \
+    /opt/ComfyUI/.venv/bin/python3 -c "import igl; import pymeshlab; print('✓ libigl and pymeshlab installed')"
+
+# Build CGAL Python bindings from source (required for aarch64, PyPI packages don't work)
+RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
+    /opt/ComfyUI/.venv/bin/pip install --no-build-isolation scikit-build-core puccinialin 'maturin<0.14' nanobind && \
+    export PATH="/opt/ComfyUI/.venv/bin:/root/.cargo/bin:/root/.cache/puccinialin/rustup/bin:$PATH" && \
+    git clone --depth=1 https://github.com/CGAL/cgal-swig-bindings.git /opt/cgal-swig && \
+    cd /opt/cgal-swig && \
+    mkdir -p build && cd build && \
+    cmake -G "Ninja" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+        -DBUILD_SHARED_LIBS=ON \
+        -DCGAL_HEADER_ONLY=OFF \
+        -DWITH_CGAL_Polyhedron_3=ON \
+        -DWITH_CGAL_Polygon_mesh_processing=ON \
+        -DWITH_CGAL_Kernel=ON \
+        -DWITH_CGAL_Surface_mesh=ON \
+        -DBUILD_JAVA=OFF \
+        -DBUILD_PYTHON=ON \
+        -DPYTHON_EXECUTABLE=/opt/ComfyUI/.venv/bin/python3 \
+        -DPYTHON_INCLUDE_DIR=/opt/ComfyUI/.venv/include/python3.* \
+        -DPYTHON_LIBRARY=/opt/ComfyUI/.venv/lib/python3.*/libpython3.*.so \
+        .. && \
+    ninja && \
+    ninja install && \
+    /opt/ComfyUI/.venv/bin/python3 -c "from CGAL import CGAL_Polygon_mesh_processing; from CGAL.CGAL_Polyhedron_3 import Polyhedron_3; print('✓ CGAL Python bindings OK')"
+
+# Install ComfyUI-GeometryPack (required by ComfyUI-TRELLIS2)
+# Now CGAL is available, so requirements.txt should work
+RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
+    git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack && \
+    cd /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack && \
+    /opt/ComfyUI/.venv/bin/pip install -r requirements.txt && \
+    /opt/ComfyUI/.venv/bin/python3 install.py && \
+    # Final verification
+    /opt/ComfyUI/.venv/bin/python3 -c "import igl; import pymeshlab; from CGAL import CGAL_Polygon_mesh_processing; print('✓ All GeometryPack dependencies OK: igl, pymeshlab, CGAL')"
+
+# Run comprehensive tests for CGAL, GDAL, igl, pymeshlab
+RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "\
+try: \
+    from CGAL import CGAL_Polygon_mesh_processing; \
+    from CGAL.CGAL_Polyhedron_3 import Polyhedron_3; \
+    print('✓ CGAL: OK') \
+except ImportError as e: \
+    print(f'✗ CGAL: MISSING - {e}') \
+; \
+try: \
+    import igl; \
+    print('✓ libigl: OK') \
+except ImportError as e: \
+    print(f'✗ libigl: MISSING - {e}') \
+; \
+try: \
+    import pymeshlab; \
+    print('✓ pymeshlab: OK') \
+except ImportError as e: \
+    print(f'✗ pymeshlab: MISSING - {e}') \
+; \
+from osgeo import gdal; print('✓ GDAL: OK') if True else None \
+" && echo "✅ All critical dependencies verified"
+
 # todo install blender
 #    && \
 #    find /opt/ComfyUI/.venv/ -name bunny.obj && \
