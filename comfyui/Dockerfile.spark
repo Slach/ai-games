@@ -25,13 +25,14 @@ RUN apt update && apt install -y \
     curl \
     build-essential \
     libglib2.0-0 \
+    libglib2.0-dev \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
     libgtk-3-dev \
     libglx0 \
-    libglib2.0-0 \
+    libgirepository1.0-dev \
     ninja-build \
     cmake \
     make \
@@ -39,7 +40,7 @@ RUN apt update && apt install -y \
     # need for decord
     ffmpeg \
     libavcodec-dev \
-    libavfilter-dev \ 
+    libavfilter-dev \
     libavformat-dev \
     libavutil-dev \
     libavcodec60 \
@@ -234,6 +235,11 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu gi
     sed -i 's/AVCodec \* dec = NULL;/const AVCodec * dec = NULL;/g' src/video/video_reader.cc && \
     # universal patch
     perl -i -pe 's/\bAVCodec\s*\*\s*dec\b/const AVCodec *dec/g' src/video/video_reader.cc && \
+    # Fix for g_dir_unref issue (function deprecated in newer glib versions) - apply to all files
+    find . -name "*.cc" -o -name "*.h" -o -name "*.cpp" -o -name "*.c" -exec sed -i 's/g_dir_unref/g_dir_close/g' {} \; && \
+    # Also patch any remaining references in the build system
+    find . -name "CMakeLists.txt" -exec sed -i 's/g_dir_unref/g_dir_close/g' {} \; && \
+    find . -name "*.py" -exec sed -i 's/g_dir_unref/g_dir_close/g' {} \; && \
     mkdir build && cd build && \
     cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.0/bin/nvcc \
