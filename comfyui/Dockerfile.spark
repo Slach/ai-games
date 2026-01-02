@@ -286,7 +286,8 @@ RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "import torch; pri
 # Image to 3D 
 
 # ComfyUI-GeometryPack required for ComfyUI-TRELLIS2
-RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu uv pip install --no-build-isolation scikit-build-core puccinialin 'maturin<0.14' nanobind && \
+RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
+    uv pip install --no-build-isolation scikit-build-core puccinialin 'maturin<0.14' nanobind && \
     export PATH="/opt/ComfyUI/.venv/bin:/root/.cargo/bin:/root/.cache/puccinialin/rustup/bin:$PATH" && \
     git clone --depth=1 https://github.com/CGAL/cgal-swig-bindings.git /opt/cgal-swig && \
     cd /opt/cgal-swig && \
@@ -295,11 +296,25 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu uv
         -DCMAKE_BUILD_TYPE=Release \
         -DCGAL_DIR=/usr/lib/aarch64-linux-gnu/cmake/CGAL \
         -DPython3_EXECUTABLE=/opt/ComfyUI/.venv/bin/python3 \
+        -DCMAKE_INSTALL_PREFIX=/opt/ComfyUI/.venv \        
         -DBUILD_PYTHON=ON \
         -DBUILD_JAVA=OFF \
         .. && \
+    echo "=== CMAKE CONFIG DONE ===" && \
+    grep -r "Python" CMakeCache.txt || true && \
+    echo "=== BUILDING ===" && \
     ninja && \
-    ninja install
+    echo "=== INSTALLING ===" && \
+    ninja install && \
+    echo "=== SEARCHING EVERYWHERE ===" && \
+    find / -name "*cgal*" -o -name "*CGAL*.so" 2>/dev/null | head -50 && \
+    echo "=== SITE-PACKAGES ===" && \
+    ls -la /opt/ComfyUI/.venv/lib/python*/site-packages/ | head -20 && \
+    ls -la /usr/local/lib/python*/dist-packages/ 2>/dev/null | head -20 || true && \
+    find /root -name "cgal*" -o -name "CGAL*" 2>/dev/null && \
+    find /opt/ComfyUI/.venv -name "cgal*" 2>/dev/null && \
+    /opt/ComfyUI/.venv/bin/python3 -c "import CGAL; print('CGAL OK', CGAL.__version__)"
+
 
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu git clone --depth=1 --recursive --shallow-submodules https://github.com/fwilliams/point-cloud-utils.git /opt/point-cloud-utils && \
     cd /opt/point-cloud-utils && \
@@ -323,8 +338,12 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu gi
     ls -la /opt/ComfyUI/.venv/bin/maturin && \
     /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack/requirements.txt && \
     cd /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack/ && \
-    /opt/ComfyUI/.venv/bin/python3 install.py && \
-    /opt/ComfyUI/.venv/bin/python3 blender_install.py
+    /opt/ComfyUI/.venv/bin/python3 install.py 
+# todo install blender
+#    && \
+#    find /opt/ComfyUI/.venv/ -name bunny.obj && \
+#    /opt/ComfyUI/.venv/bin/python3 test_cgal_bunny.py && \
+#    /opt/ComfyUI/.venv/bin/python3 blender_install.py
 
 # Clone ComfyUI-TRELLIS2 directly and install it to ensure CUDA detection works
 # manually install, based on https://github.com/PozzettiAndrea/nvdiffrec_render-wheels/blob/main/.github/workflows/build-cu130-torch291.yml 

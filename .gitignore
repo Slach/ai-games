@@ -1,3 +1,7 @@
 .venv
 *.so
 .vscode/
+comfyui/user/
+comfyui/output/
+comfyui/input/
+comfiui/web_custom_versions/
