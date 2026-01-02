@@ -6,7 +6,8 @@ services:
       - HF_XET_HIGH_PERFORMANCE=1
       - HF_HOME=/root/.cache/huggingface
       - TRANSFORMERS_CACHE=/root/.cache/huggingface
-      - DIFFUSERS_CACHE=/root/.cache/huggingface      
+      - DIFFUSERS_CACHE=/root/.cache/huggingface
+      - LD_PRELOAD=/usr/local/lib/libglib_compat.so      
     ports:
     - "127.0.0.1:8188:8188"
     volumes:

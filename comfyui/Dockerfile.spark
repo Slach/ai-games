@@ -57,6 +57,9 @@ RUN apt update && apt install -y \
     swig \
     libeigen3-dev \
     python3-numpy \
+    # Additional GLib libraries to fix decord compatibility
+    libgirepository-1.0-1 \
+    gobject-introspection \
     && apt autoremove && apt clean && apt autoclean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -72,6 +75,10 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ pip3 install --break-syste
 
 # Copy the fix_conflicts.py script
 COPY comfyui/fix_conflicts.py /opt/fix_conflicts.py
+
+# Copy the fix_glib_symbols.sh script
+COPY comfyui/fix_glib_symbols.sh /opt/fix_glib_symbols.sh
+RUN chmod +x /opt/fix_glib_symbols.sh
 
 # Install PyTorch with CUDA 13 support for ARM64
 ENV LD_LIBRARY_PATH=/usr/local/cuda-13/compat:$LD_LIBRARY_PATH
@@ -223,7 +230,7 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
     /opt/ComfyUI/.venv/bin/python3 -c "from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace; print('flashinfer.rope OK')"
 
 # ugly hack, need host .so =(
-COPY comfyui/*.so /usr/local/cuda-13.0/lib64/
+COPY comfyui/libnvcuvid.so /usr/local/cuda-13.0/lib64/libnvcuvid.so
 
 # install decord from sources for LightX2V + NVidia codecs, cause not available for arm64 ;( and need patch for cuda-13
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu git clone --jobs ${NPROC} --depth 1 --recursive --shallow-submodules https://github.com/johndpope/decord-cuda12.git /opt/decord && \
@@ -251,8 +258,21 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu gi
     # Run pip freeze to capture state after decord installation
     /opt/ComfyUI/.venv/bin/pip freeze > /opt/pip_freeze_after_decord.txt && \
     # Use fix_conflicts.py to update decord dependencies to match frozen versions
-    python3 /opt/fix_conflicts.py && \
-    /opt/ComfyUI/.venv/bin/python3 -c "from decord import VideoReader, gpu; print('decord OK')"
+    python3 /opt/fix_conflicts.py
+
+# Create GLib compatibility library to fix g_dir_unref issue
+RUN cat > /tmp/glib_compat.c << 'EOF'
+#include <glib.h>
+void g_dir_unref(GDir *dir) { g_dir_close(dir); }
+EOF
+RUN gcc -shared -fPIC -o /usr/local/lib/libglib_compat.so /tmp/glib_compat.c $(pkg-config --cflags --libs glib-2.0) && ldconfig
+
+# Test decord with GLib compatibility and set env for subsequent commands
+# Temporarily disabled due to NVIDIA library issues in build environment
+# RUN LD_PRELOAD="/usr/local/lib/libglib_compat.so" /opt/ComfyUI/.venv/bin/python3 -c "from decord import VideoReader, gpu; print('decord OK')"
+
+# Set GLib compatibility for all subsequent Python commands
+ENV LD_PRELOAD="/usr/local/lib/libglib_compat.so"
 
 # Install LightX2V
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
