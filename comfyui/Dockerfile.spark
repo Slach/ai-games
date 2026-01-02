@@ -343,44 +343,60 @@ RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
         -DPYTHON_EXECUTABLE=/opt/ComfyUI/.venv/bin/python3 \
         -DPYTHON_INCLUDE_DIR=/opt/ComfyUI/.venv/include/python3.* \
         -DPYTHON_LIBRARY=/opt/ComfyUI/.venv/lib/python3.*/libpython3.*.so \
+        -DCMAKE_INSTALL_PREFIX=/opt/ComfyUI/.venv \
         .. && \
     ninja && \
     ninja install && \
     /opt/ComfyUI/.venv/bin/python3 -c "from CGAL import CGAL_Polygon_mesh_processing; from CGAL.CGAL_Polyhedron_3 import Polyhedron_3; print('✓ CGAL Python bindings OK')"
 
 # Install ComfyUI-GeometryPack (required by ComfyUI-TRELLIS2)
-# Now CGAL is available, so requirements.txt should work
+# Now CGAL is available, install GeometryPack requirements excluding cgal and embreex which cause issues
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ --device=nvidia.com/gpu \
     git clone --depth=1 https://github.com/PozzettiAndrea/ComfyUI-GeometryPack.git /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack && \
     cd /opt/ComfyUI/custom_nodes/ComfyUI-GeometryPack && \
-    /opt/ComfyUI/.venv/bin/pip install -r requirements.txt && \
+    grep -v -E '^cgal|^pycgal|^embreex' requirements.txt > requirements_filtered.txt && \
+    /opt/ComfyUI/.venv/bin/pip install -r requirements_filtered.txt && \
     /opt/ComfyUI/.venv/bin/python3 install.py && \
     # Final verification
     /opt/ComfyUI/.venv/bin/python3 -c "import igl; import pymeshlab; from CGAL import CGAL_Polygon_mesh_processing; print('✓ All GeometryPack dependencies OK: igl, pymeshlab, CGAL')"
 
-# Run comprehensive tests for CGAL, GDAL, igl, pymeshlab
-RUN --device=nvidia.com/gpu /opt/ComfyUI/.venv/bin/python3 -c "\
-try: \
-    from CGAL import CGAL_Polygon_mesh_processing; \
-    from CGAL.CGAL_Polyhedron_3 import Polyhedron_3; \
-    print('✓ CGAL: OK') \
-except ImportError as e: \
-    print(f'✗ CGAL: MISSING - {e}') \
-; \
-try: \
-    import igl; \
-    print('✓ libigl: OK') \
-except ImportError as e: \
-    print(f'✗ libigl: MISSING - {e}') \
-; \
-try: \
-    import pymeshlab; \
-    print('✓ pymeshlab: OK') \
-except ImportError as e: \
-    print(f'✗ pymeshlab: MISSING - {e}') \
-; \
-from osgeo import gdal; print('✓ GDAL: OK') if True else None \
-" && echo "✅ All critical dependencies verified"
+# Run comprehensive tests for CGAL, igl, pymeshlab (GDAL is optional)
+RUN echo '#!/usr/bin/env python3\n\
+try:\n\
+    from CGAL import CGAL_Polygon_mesh_processing\n\
+    from CGAL.CGAL_Polyhedron_3 import Polyhedron_3\n\
+    print("✓ CGAL: OK")\n\
+    cg_ok = True\n\
+except ImportError as e:\n\
+    print(f"✗ CGAL: MISSING - {e}")\n\
+    cg_ok = False\n\
+try:\n\
+    import igl\n\
+    print("✓ libigl: OK")\n\
+    ig_ok = True\n\
+except ImportError as e:\n\
+    print(f"✗ libigl: MISSING - {e}")\n\
+    ig_ok = False\n\
+try:\n\
+    import pymeshlab\n\
+    print("✓ pymeshlab: OK")\n\
+    pm_ok = True\n\
+except ImportError as e:\n\
+    print(f"✗ pymeshlab: MISSING - {e}")\n\
+    pm_ok = False\n\
+try:\n\
+    from osgeo import gdal\n\
+    print("✓ GDAL: OK")\n\
+    gd_ok = True\n\
+except ImportError as e:\n\
+    print(f"⚠ GDAL: OPTIONAL - {e}")\n\
+    gd_ok = False\n\
+if not all([cg_ok, ig_ok, pm_ok]):\n\
+    raise Exception("Critical dependencies (CGAL, igl, pymeshlab) are missing")\n\
+print("All critical dependencies verified")\n\
+' > /tmp/test_deps.py && \
+    /opt/ComfyUI/.venv/bin/python3 /tmp/test_deps.py && \
+    echo "✅ All critical dependencies verified"
 
 # todo install blender
 #    && \
