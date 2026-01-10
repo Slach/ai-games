@@ -75,4 +75,4 @@ if __name__ == "__main__":
     if not gdal_ok:
         print("\nTo fix GDAL: pip install gdal or pip install osgeo-gdal")
 
-    return not (cgal_ok and (gdal_ok or sys_gdal_ok))
+    assert not (cgal_ok and (gdal_ok or sys_gdal_ok))

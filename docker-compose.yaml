@@ -1,6 +1,34 @@
 # Compose file build variables set in .env
 services:
+  # look llama.cpp in https://github.com/Slach/nvidia-spark
+  pixelle-mcp:
+    image: pixelle:spark-full
+    build:
+      dockerfile: pixelle-mcp/Dockerfile.spark
+      context: pixelle-mcp/
+    environment:
+      - HOST=0.0.0.0
+      - COMFYUI_BASE_URL=http://comfyui:8188
+      - COMFYUI_EXECUTOR_TYPE=http
+      - CHAINLIT_AUTH_ENABLED=false
+      - CHAINLIT_SAVE_STARTER_ENABLED=false
+      - OLLAMA_BASE_URL="http://llama.cpp:8090/v1"
+      - OLLAMA_MODELS="cturan/IQuest-Coder-V1-40B,noctrex/Nemotron-3-Nano-30B"
+    ports:
+      - "127.0.0.1:9004:9004"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9004/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - comfyui
+    networks:
+      - spark-network
+
   comfyui:
+    # use `bash -xe ./build-comfyui-docker.sh`, to get image 
     image: comfyui:spark-full
     environment:
       - HF_XET_HIGH_PERFORMANCE=1
@@ -11,7 +39,7 @@ services:
     ports:
     - "127.0.0.1:8188:8188"
     volumes:
-     - ${HOME}/.cache/hugginface:/root/.cache/huggingface
+     - ${HOME}/.cache/huggingface:/root/.cache/huggingface
      - ${HOME}/.cache/comfyui:/opt/ComfyUI/models
      - ./comfyui/user/:/opt/ComfyUI/user
      - ./comfyui/output/:/opt/ComfyUI/output
@@ -26,8 +54,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    
+      start_period: 40s    
+    networks:
+      - spark-network
     deploy:
       resources:
         reservations:
@@ -35,7 +64,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-volumes:
-  comfyui-user:
-  comfyui-input:
-  comfyui-output:
+
+# docker network create spark-network
+networks:
+  spark-network:
+    external: true
