@@ -4,7 +4,7 @@ services:
   pixelle-mcp:
     image: pixelle:spark-full
     build:
-      dockerfile: pixelle-mcp/Dockerfile.spark
+      dockerfile: Dockerfile.spark
       context: pixelle-mcp/
     environment:
       - HOST=0.0.0.0
