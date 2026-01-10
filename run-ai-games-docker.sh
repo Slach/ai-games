@@ -1,13 +1,22 @@
 #!/bin/bash
 
-# Build pixelle-mcp
-echo "Building pixelle-mcp..."
-docker build -t pixelle:spark-full -f pixelle-mcp/Dockerfile.spark pixelle-mcp/
+if [[ "0" == $(docker network ls | grep -c spark-network) ]]; then
+  echo "Creating spark-network"
+  docker network create spark-network
+fi
 
-# Build comfyui
-echo "Building comfyui..."
-./build-comfyui-docker.sh
+if [[ "0" == $(docker image ls | grep -c -E "comfyui.+spark-full") ]]; then
+    echo "Building pixelle-mcp..."
+    docker build -t pixelle:spark-full -f pixelle-mcp/Dockerfile.spark pixelle-mcp/
+fi 
 
-# Run services
+if [[ "0" == $(docker image ls | grep -c -E "comfyui.+spark-full") ]]; then
+    echo "Building comfyui..."
+  ./build-comfyui-jdocker.sh
+fi 
+
 echo "Running docker-compose up..."
-docker-compose up -d pixelle-mcp
+docker compose up -d
+
+ncp add --profile=ai-games pixelle http://127.0.0.1:9004/pixelle/mcp
+ncp list --profile=ai-games

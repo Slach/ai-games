@@ -1,11 +1,17 @@
-FROM astral/uv:python3.14-bookworm-slim
+FROM astral/uv:python3.14-bookworm-slim AS app
 
-RUN mkdir -p /app
+RUN apt update && apt install -y git git-lfs curl
+RUN git clone --depth=1 https://github.com/AIDC-AI/Pixelle-MCP.git /app/
+
 WORKDIR /app
+RUN mkdir -p /app/data/custom_workflows /app/data/custom_starters
+COPY .env.pixelle-mcp /app/.env
 
 RUN uv venv
-RUN mkdir -p /app/data/custom_workflows /app/data/custom_starters
-RUN uv pip install pixelle
+RUN uv sync --frozen
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:9004/health || exit 1
 
 EXPOSE 9004
 CMD [ "/app/.venv/bin/pixelle","start" ]
