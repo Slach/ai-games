@@ -67,6 +67,7 @@ services:
       - pixelle-mcp
     environment:
       - PIXELLE_MCP_URL=http://pixelle-mcp:9004/pixelle/mcp
+      - LLAMA_CPP_URL=http://llama.cpp:8090/v1
     networks:
       - spark-network
     restart: unless-stopped
