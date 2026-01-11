@@ -7,10 +7,10 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 
 ### Vision & Uniqueness
 
-**Persistent AI-generated narrative** — сюжет развивается каждый день, сохраняя память о прошлых событиях
-**Multi-modal content** — не только текст, но и генерируемые картинки, видео, 3D сцены, голоса персонажей
-**Collaborative gameplay** — решения принимаются группой игроков, влияя на общую историю
-**Asynchronous format** — идеально для занятых людей, 5-10 минут в день
+**Persistent AI-generated narrative** — the plot develops every day, maintaining memory of past events
+**Multi-modal content** — not only text, but also generated pictures, videos, 3D scenes, character voices
+**Collaborative gameplay** — decisions are made by a group of players, affecting the overall story
+**Asynchronous format** — ideal for busy people, 5-10 minutes per day
 
 ## Architecture
 
@@ -52,27 +52,27 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 ## Core Components
 
 ### 1. Game Master Agent (strands-agents)
-- Генерация ежедневного сюжета
-- Реакция на решения игроков
-- Поддержание консистентности мира
-- Оркестрация NPC и событий
+- Generation of daily plot
+- Reaction to player decisions
+- Maintaining world consistency
+- Orchestration of NPCs and events
 
 ### 2. NPC System (npcpy)
-- Уникальные личности для членов экипажа
-- Автономное поведение NPC
-- Диалоги и взаимодействия
+- Unique personalities for crew members
+- Autonomous NPC behavior
+- Dialogues and interactions
 
 ### 3. Content Generation (ComfyUI)
-- **Картинки:** сцены, персонажи, локации (nunchaku)
-- **Видео:** ключевые моменты истории (Lightx2v)
-- **3D:** корабль, станции, планеты (TRELLIS2)
-- **Голоса:** озвучка персонажей (ChatterBox)
+- **Pictures:** scenes, characters, locations (nunchaku)
+- **Video:** key moments of the story (Lightx2v)
+- **3D:** ship, stations, planets (TRELLIS2)
+- **Voices:** character voiceovers (ChatterBox)
 
 ### 4. World State
-- Состояние корабля и экипажа
-- История событий
-- Отношения между персонажами
-- Ресурсы и инвентарь
+- Ship and crew status
+- Event history
+- Character relationships
+- Resources and inventory
 
 ### 5. Telegram Interface
 - Bot: commands, notifications
@@ -89,43 +89,43 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 | Content Gen | ComfyUI (Docker) |
 | Database | PostgreSQL + pgvector |
 | Queue | Redis |
-| Hosting | VPS с GPU / Cloud GPU |
+| Hosting | VPS with GPU / Cloud GPU |
 
 ## Daily Gameplay Loop
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  08:00  │  Game Master генерирует дневной эпизод           │
+│  08:00  │  Game Master generates the daily episode         │
 ├─────────┼───────────────────────────────────────────────────┤
-│  08:30  │  Игроки получают уведомление с завязкой          │
+│  08:30  │  Players receive notification with the setup     │
 ├─────────┼───────────────────────────────────────────────────┤
-│  08:00- │  Игроки обсуждают и голосуют за действия         │
-│  20:00  │  NPC реагируют на промежуточные решения          │
+│  08:00- │  Players discuss and vote for actions            │
+│  20:00  │  NPCs react to intermediate decisions            │
 ├─────────┼───────────────────────────────────────────────────┤
-│  20:00  │  Подсчёт голосов, определение исхода             │
+│  20:00  │  Vote counting, outcome determination            │
 ├─────────┼───────────────────────────────────────────────────┤
-│  20:30  │  Генерация контента (картинки, видео)            │
+│  20:30  │  Content generation (pictures, video)            │
 ├─────────┼───────────────────────────────────────────────────┤
-│  21:00  │  Публикация результата дня, тизер завтра         │
+│  21:00  │  Publication of the day's result, teaser for tomorrow │
 └─────────┴───────────────────────────────────────────────────┘
 ```
 
 ## Implementation Phases
 
 ### Phase 1: Foundation (Months 1-2)
-- ComfyUI Docker setup с HuggingFace cache mounting
-- Исследование strands-agents и npcpy
-- Простой Game Master (text only)
-- Базовый Telegram бот
+- ComfyUI Docker setup with HuggingFace cache mounting
+- Research of strands-agents and npcpy
+- Simple Game Master (text only)
+- Basic Telegram bot
 - Basic story generation and choice system
 - Simple Telegram bot integration
 
 ### Phase 2: Content Generation (Months 3-4)
-- ComfyUI интеграция через MCP
+- ComfyUI integration via MCP
 - Full ComfyUI integration
-- Генерация картинок для сцен
-- NPC с уникальными личностями
-- Система голосования
+- Scene picture generation
+- NPCs with unique personalities
+- Voting system
 - Automated content creation pipeline
 - Basic multiplayer functionality
 
@@ -140,25 +140,25 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 
 ### Phase 4: Rich Experience (Months 7+)
 - Telegram Mini App
-- Видео генерация
-- 3D сцены
-- Голоса персонажей
-- Множество кораблей/групп
-- Кросс-групповые события
-- Монетизация
+- Video generation
+- 3D scenes
+- Character voices
+- Multiple ships/groups
+- Cross-group events
+- Monetization
 
 ## Deployment Strategy
 
 ### Local Development
-- Docker Compose для локального ComfyUI instance
+- Docker Compose for local ComfyUI instance
 - Local HuggingFace cache mounting
-- Development Telegram bot для testing
+- Development Telegram bot for testing
 
 ### Production
-- Containerized deployment с GPU acceleration
-- CDN для serving generated content
-- Scalable backend для handling multiple game sessions
-- Monitoring and analytics для player engagement
+- Containerized deployment with GPU acceleration
+- CDN for serving generated content
+- Scalable backend for handling multiple game sessions
+- Monitoring and analytics for player engagement
 
 ## Required Components
 
@@ -192,12 +192,12 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 
 ## Risks & Mitigations
 
-| Риск | Вероятность | Митигация |
-|------|-------------|-----------|
-| GPU дорого | High | Оптимизация моделей, batching |
-| Latency генерации | Medium | Async pipeline, pre-generation |
-| Консистентность сюжета | High | Memory система, world state |
-| Telegram ограничения | Medium | Fallback на Mini App |
+| Risk | Probability | Mitigation |
+|------|-------------|------------|
+| GPU expensive | High | Model optimization, batching |
+| Generation latency | Medium | Async pipeline, pre-generation |
+| Plot consistency | High | Memory system, world state |
+| Telegram limitations | Medium | Fallback to Mini App |
 | GPU resource management | Medium | Docker Compose optimization |
 | Content moderation | Low | Automated filters + human review |
 | Scalability | Medium | VPS with GPU scaling |
@@ -222,6 +222,6 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 This project represents an innovative approach to gaming that leverages generative AI to create unique, daily experiences for players. The cooperative nature and daily story generation create a sense of community and anticipation that should drive engagement and retention. The modular architecture allows for future expansion to different settings and gameplay mechanics.
 
 **Target:** Q1-Q2 2026
-**Бюджет времени:** Параллельно с Flight Reminder Bot, 1-2 часа/неделю
-**Репо:** https://github.com/Slach/AI-MMO (TBD)
-**Status:** Идея / Раннее исследование
+**Time Budget:** Parallel with Flight Reminder Bot, 1-2 hours/week
+**Repo:** https://github.com/Slach/ai-games
+**Status:** Idea / Early research
