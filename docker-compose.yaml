@@ -16,6 +16,8 @@ services:
       start_period: 10s
     depends_on:
       - comfyui
+    volumes:
+     - ./pixelle-mcp/workflows:/app/data/custom_workflows
     networks:
       - spark-network
 
