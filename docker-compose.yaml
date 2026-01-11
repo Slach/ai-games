@@ -70,6 +70,8 @@ services:
     networks:
       - spark-network
     restart: unless-stopped
+    volumes:
+      - ./game-master/:/app/
 
 # docker network create spark-network
 networks:
