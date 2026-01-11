@@ -12,7 +12,7 @@ fi
 
 if [[ "0" == $(docker image ls | grep -c -E "comfyui.+spark-full") ]]; then
     echo "Building comfyui..."
-  ./build-comfyui-jdocker.sh
+  ./build-comfyui-docker.sh
 fi 
 
 echo "Running docker-compose up..."
