@@ -1,0 +1,74 @@
+{
+  "1": {
+    "inputs": {
+      "text": [
+        "8",
+        0
+      ],
+      "model_version": "IndexTTS-1.5",
+      "language": "auto",
+      "speed": 1,
+      "seed": 590844751,
+      "temperature": 1,
+      "top_p": 0.8000000000000002,
+      "top_k": 30,
+      "repetition_penalty": 10,
+      "length_penalty": 0,
+      "num_beams": 3,
+      "max_mel_tokens": 600,
+      "sentence_split": "auto",
+      "reference_audio": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "IndexTTSNode",
+    "_meta": {
+      "title": "Index TTS"
+    }
+  },
+  "3": {
+    "inputs": {
+      "audio": "常伟思.wav",
+      "start_time": 0,
+      "duration": 0
+    },
+    "class_type": "VHS_LoadAudioUpload",
+    "_meta": {
+      "title": "Load Audio (Upload)🎥🅥🅗🅢"
+    }
+  },
+  "7": {
+    "inputs": {
+      "filename_prefix": "audio/ComfyUI",
+      "quality": "V0",
+      "audioUI": "",
+      "audio": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveAudioMP3",
+    "_meta": {
+      "title": "Save Audio (MP3)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "value": "你好，我是小明，很高兴认识你"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$text.value!:text prompt"
+    }
+  },
+  "9": {
+    "inputs": {
+      "value": " [DEFAULT CHOICE] Convert text to speech using Edge TTS.\n    \n    Examples:\n    - \"你好，我是小明，很高兴认识你\""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  }
+}

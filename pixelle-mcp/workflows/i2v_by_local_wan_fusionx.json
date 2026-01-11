@@ -1,0 +1,266 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 432032413892461,
+      "steps": 10,
+      "cfg": 1,
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "54",
+        0
+      ],
+      "positive": [
+        "50",
+        0
+      ],
+      "negative": [
+        "50",
+        1
+      ],
+      "latent_image": [
+        "50",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": [
+        "57",
+        0
+      ],
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "30": {
+    "inputs": {
+      "frame_rate": 16,
+      "loop_count": 0,
+      "filename_prefix": "Video",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Video Combine 🎥🅥🅗🅢"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "Wan14Bi2vFusioniX.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "49": {
+    "inputs": {
+      "clip_name": "clip_vision_h.safetensors"
+    },
+    "class_type": "CLIPVisionLoader",
+    "_meta": {
+      "title": "Load CLIP Vision"
+    }
+  },
+  "50": {
+    "inputs": {
+      "width": [
+        "55",
+        1
+      ],
+      "height": [
+        "55",
+        2
+      ],
+      "length": 81,
+      "batch_size": 1,
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ],
+      "clip_vision_output": [
+        "51",
+        0
+      ],
+      "start_image": [
+        "55",
+        0
+      ]
+    },
+    "class_type": "WanImageToVideo",
+    "_meta": {
+      "title": "WanImageToVideo"
+    }
+  },
+  "51": {
+    "inputs": {
+      "crop": "none",
+      "clip_vision": [
+        "49",
+        0
+      ],
+      "image": [
+        "55",
+        0
+      ]
+    },
+    "class_type": "CLIPVisionEncode",
+    "_meta": {
+      "title": "CLIP Vision Encode"
+    }
+  },
+  "52": {
+    "inputs": {
+      "image": "ComfyUI_temp_nacql_00013_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$image.image!:The image to generate the video, must be a url"
+    }
+  },
+  "54": {
+    "inputs": {
+      "shift": 2.0000000000000004,
+      "model": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "55": {
+    "inputs": {
+      "width": [
+        "56",
+        0
+      ],
+      "height": [
+        "56",
+        0
+      ],
+      "interpolation": "nearest",
+      "method": "keep proportion",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "🔧 Image Resize"
+    }
+  },
+  "56": {
+    "inputs": {
+      "value": 512
+    },
+    "class_type": "easy int",
+    "_meta": {
+      "title": "$video_size.value:生成视频的最大边，必须是512、768、1024这三个值之一,值越大生成视频越清楚,但是生成速度越慢,显存占用越高."
+    }
+  },
+  "57": {
+    "inputs": {
+      "value": "图片动起来"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$prompt.value!:The prompt to generate the video, support Chinese and English"
+    }
+  },
+  "58": {
+    "inputs": {
+      "value": "Generate high-quality videos from image using WAN2.1 FusionX model.\n    \n    Creates videos from input images with exceptional detail, style diversity, and prompt adherence.\n    The model excels at photorealistic scenes, artistic styles, and complex compositions.\n    \n    The video dimensions are automatically determined based on the input image's aspect ratio:\n    - Low quality: 512px on the long side (recommended for faster generation)\n    - High quality: 1024px on the long side (use only when explicitly requested)\n\n    支持中英文提示词，中文示例：\n    - \"让图片中的人物缓缓转头微笑，阳光洒在脸上\"\n    - \"镜头从远景拉近到特写，人物深呼吸后挥手\"\n    - \"猫咪慢慢眨眼，尾巴轻轻摆动，背景有微风吹过\"\n    \n    English examples:\n    - \"Camera slowly zooms in while the person smiles and waves\"\n    - \"Wind gently blows through hair as the character looks into distance\"\n    - \"Slow motion of water droplets falling with soft lighting\"\n\n    Prompt writing tips for best results:\n    1. Length and Detail: Keep prompts around 80–100 words long, offering rich descriptions to support layered and vivid video output.\n    2. Camera Movement: Clearly describe how the camera moves, such as tracking shots, pan left/right, dolly in/out, or tilt up/down. Avoid fast movements like whip pans or crash zooms.\n    3. Lighting and Shadows: Define lighting styles and sources—use terms like soft light, hard light, backlight, and volumetric lighting to shape the scene's atmosphere and depth.\n    4. Atmosphere and Mood: Each prompt should convey a clear emotional tone such as somber, mysterious, dreamlike, or euphoric.\n    5. Composition and Perspective: Use cinematic framing techniques like close-ups, wide shots, low angles, or high angles to emphasize focus and perspective.\n    6. Visual Style: Incorporate stylistic cues such as cinematic, vintage film look, shallow depth of field, or motion blur.\n    7. Time and Environmental Context: Include relevant context such as time of day, weather conditions, and setting to enhance realism and immersion."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  }
+}

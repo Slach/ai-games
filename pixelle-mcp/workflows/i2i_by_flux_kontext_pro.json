@@ -1,0 +1,137 @@
+{
+  "2": {
+    "inputs": {
+      "image": "1751943612063-1d03642f-8440-44ce-8fba-dfc43d7b6eda.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$image.image!:The image to generate the image, must be a url"
+    }
+  },
+  "4": {
+    "inputs": {
+      "prompt": [
+        "6",
+        0
+      ],
+      "aspect_ratio": [
+        "26",
+        0
+      ],
+      "guidance": 3,
+      "steps": 50,
+      "seed": 24667053531579,
+      "prompt_upsampling": false,
+      "input_image": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "FluxKontextProImageNode",
+    "_meta": {
+      "title": "Flux.1 Kontext [pro] Image"
+    }
+  },
+  "5": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "value": "Remove text from an image"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$prompt.value!:The prompt to generate the image, must be english"
+    }
+  },
+  "7": {
+    "inputs": {
+      "value": "Edit existing images using text instructions with FLUX Kontext Pro model.\n    If user gives multiple images, you need call image_merge tool to merge them into one image first, then use this tool to edit the merged image.\n    \n    Modifies existing images based on your text instructions. You can change objects, \n    remove elements, alter text, modify colors, and more.\n    \n    Example instructions based on official FLUX playground:\n    - \"remove the people from the background\"\n    - \"change the drink to a virgin colada\"\n    - \"the frog is now a panda and replace 'ULTRA' by 'KONTEXT'\"\n    - \"camera is closer to the cat who's now looking at the camera\"\n    - \"she's now holding an orange umbrella and smiling\"\n    - \"replace 'joy' by 'BFL'\"\n    - \"give the ball stick man cartoon arms and legs and a simplistic face\"\n    - \"Style the lizard as woven out of string or yarn — crafty, textile feel\""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  },
+  "22": {
+    "inputs": {
+      "image": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "24": {
+    "inputs": {
+      "string": "X:Y",
+      "find": "X",
+      "replace": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "StringReplace",
+    "_meta": {
+      "title": "Replace"
+    }
+  },
+  "25": {
+    "inputs": {
+      "prefix": "",
+      "suffix": "",
+      "input": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "SomethingToString",
+    "_meta": {
+      "title": "Something To String"
+    }
+  },
+  "26": {
+    "inputs": {
+      "string": [
+        "24",
+        0
+      ],
+      "find": "Y",
+      "replace": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "StringReplace",
+    "_meta": {
+      "title": "Replace"
+    }
+  },
+  "27": {
+    "inputs": {
+      "prefix": "",
+      "suffix": "",
+      "input": [
+        "22",
+        1
+      ]
+    },
+    "class_type": "SomethingToString",
+    "_meta": {
+      "title": "Something To String"
+    }
+  }
+}

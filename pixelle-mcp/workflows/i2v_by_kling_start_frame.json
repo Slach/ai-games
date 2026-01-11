@@ -1,0 +1,114 @@
+{
+  "1": {
+    "inputs": {
+      "prompt": [
+        "7",
+        0
+      ],
+      "negative_prompt": "",
+      "model_name": [
+        "12",
+        0
+      ],
+      "cfg_scale": 0.8,
+      "mode": [
+        "10",
+        0
+      ],
+      "aspect_ratio": "16:9",
+      "duration": "5",
+      "start_frame": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "KlingImage2VideoNode",
+    "_meta": {
+      "title": "KlingImage2VideoNode"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "auto-workflow-gen-temp_2025-06-03_6321b72f95324bb489b0872dbf21c8c5_副本.jpeg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$image.image!:The image to generate the image, must be a url"
+    }
+  },
+  "4": {
+    "inputs": {
+      "filename_prefix": "video/ComfyUI",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "6": {
+    "inputs": {
+      "value": "Generate video from image using Kling Start Frame model.\n    \n    This tool creates a video from a single image based on your text prompt.\n    The video will be generated with a smooth transition and a natural flow.\n    \n    提示词技巧：详细描述动作、表情、镜头运动和环境变化\n    \n    示例：\n    - \"让图片中的人物缓缓转头微笑，头发随风飘动\"\n    - \"猫咪慢慢眨眼，尾巴轻轻摆动，阳光洒在毛发上\"\n    - \"镜头从远景拉近到特写，人物深呼吸后微笑挥手\"\n    - \"Camera slowly zooms in while the person smiles and waves\"\n    - \"Wind gently blows through hair as the character looks into distance\""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  },
+  "7": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$prompt.value:The prompt to generate the image, support Chinese and English"
+    }
+  },
+  "9": {
+    "inputs": {
+      "value": "std"
+    },
+    "class_type": "easy string",
+    "_meta": {
+      "title": "$mode.value:\"The mode of the video, must be one of the following: 'std', 'pro'\""
+    }
+  },
+  "10": {
+    "inputs": {
+      "anything": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  },
+  "11": {
+    "inputs": {
+      "value": "kling-v1-6"
+    },
+    "class_type": "easy string",
+    "_meta": {
+      "title": "$model_name.value:\"The model name, must be one of the following: 'kling-v1', 'kling-v1-5', 'kling-v1-6', 'kling-v2-master'\""
+    }
+  },
+  "12": {
+    "inputs": {
+      "anything": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  }
+}

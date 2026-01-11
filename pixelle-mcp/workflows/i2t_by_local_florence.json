@@ -1,0 +1,68 @@
+{
+  "6": {
+    "inputs": {
+      "image": "06.JPG"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$image.image!:The image to analyze, must be a url"
+    }
+  },
+  "10": {
+    "inputs": {
+      "model": "microsoft/Florence-2-large",
+      "precision": "fp16",
+      "attention": "sdpa"
+    },
+    "class_type": "DownloadAndLoadFlorence2Model",
+    "_meta": {
+      "title": "DownloadAndLoadFlorence2Model"
+    }
+  },
+  "11": {
+    "inputs": {
+      "text_input": "",
+      "task": "more_detailed_caption",
+      "fill_mask": true,
+      "keep_model_loaded": false,
+      "max_new_tokens": 1024,
+      "num_beams": 3,
+      "do_sample": true,
+      "output_mask_select": "",
+      "seed": 1098631327477633,
+      "image": [
+        "6",
+        0
+      ],
+      "florence2_model": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "Florence2Run",
+    "_meta": {
+      "title": "Florence2Run"
+    }
+  },
+  "18": {
+    "inputs": {
+      "anything": [
+        "11",
+        2
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  },
+  "20": {
+    "inputs": {
+      "value": "Generate high-quality text descriptions from images using local Florence model.\n    \n    Main use cases:\n    1. **Reverse image prompt generation**:\n       - When users upload an image and want to get prompts for AI art generation\n       - Analyzes visual elements, style, composition, etc. to generate prompts for Stable Diffusion, DALL-E, and other models\n       - In this case, return the tool's raw output directly to users without any modification or summary\n       - Users can directly use these prompts for image generation\n    2. **Image content understanding**:\n       - When users ask about specific content, objects, scenes, people, etc. in the image\n       - Need to understand the semantic content of the image and answer users' specific questions\n       - In this case, combine tool output with conversation context to give users contextually appropriate natural responses\n       - Don't return raw output directly, but provide targeted replies based on understanding results"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  }
+}

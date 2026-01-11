@@ -1,0 +1,60 @@
+{
+  "1": {
+    "inputs": {
+      "direction": "right",
+      "match_image_size": true,
+      "image1": [
+        "2",
+        0
+      ],
+      "image2": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "ImageConcanate",
+    "_meta": {
+      "title": "Image Concatenate"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "02 (2).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$first_image.image!:The first image to merge, must be a url"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "06.JPG"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$second_image.image!:The second image to merge, must be a url"
+    }
+  },
+  "5": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "value": "Merge two images into one along the horizontal axis.\n    \n    It is generally used when a user has input multiple pictures, but the parameter of the tool is only one picture.\n    For example, a user wants to generate image by kontext pro with multi reference images, and so on."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  }
+}

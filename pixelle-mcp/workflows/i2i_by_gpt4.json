@@ -1,0 +1,87 @@
+{
+  "1": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "51becc10279d43a3a2f6bec640c77240.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$image.image!:The image to generate the image, must be a url"
+    }
+  },
+  "4": {
+    "inputs": {
+      "prompt": [
+        "6",
+        0
+      ],
+      "seed": 0,
+      "quality": [
+        "8",
+        0
+      ],
+      "background": "opaque",
+      "size": "auto",
+      "n": 1,
+      "image": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "OpenAIGPTImage1",
+    "_meta": {
+      "title": "OpenAI GPT Image"
+    }
+  },
+  "5": {
+    "inputs": {
+      "value": " Transform and edit images using GPT-4o's multimodal image generation.\n    \n    Features enhanced photorealism, accurate text rendering, and contextual understanding.\n    Supports multiple languages and conversation-like iterative refinement.\n    \n    Prompting tips:\n    - Use natural, descriptive language\n    - Specify colors, lighting, mood, and perspective\n    - For text in images: mention font style and placement\n    - Be clear about desired style and atmosphere\n    \n    Quality levels:\n    - low: Fast, draft quality\n    - medium: Balanced (recommended)  \n    - high: Best detail, slower\n    \n    Examples:\n    - \"Make this photo look like a watercolor painting\"\n    - \"Change the background to a sunset sky\"\n    - \"Add text 'WELCOME' in elegant font at the top\"\n    - \"Convert to black and white vintage style\"\n    - \"把这张照片改成中国水墨画风格\"\n    - \"在图片顶部添加'欢迎光临'四个大字，使用毛笔字体\"\n    - \"将背景换成樱花飞舞的春日场景\""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  },
+  "6": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$prompt.value!:The prompt to generate the image, support all languages"
+    }
+  },
+  "7": {
+    "inputs": {
+      "value": "medium"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$quality.value:The quality of the image, must be one of the following: 'low', 'medium', 'high'"
+    }
+  },
+  "8": {
+    "inputs": {
+      "anything": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  }
+}

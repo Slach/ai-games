@@ -1,0 +1,83 @@
+{
+  "1": {
+    "inputs": {
+      "prompt": [
+        "7",
+        0
+      ],
+      "persist_context": false,
+      "model": [
+        "9",
+        0
+      ],
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "OpenAIChatNode",
+    "_meta": {
+      "title": "OpenAI Chat"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "有问题的图.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "$image.image!:The image to analyze, must be a url"
+    }
+  },
+  "3": {
+    "inputs": {
+      "anything": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  },
+  "5": {
+    "inputs": {
+      "value": "Analyze image using OpenAI's GPT model."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "MCP"
+    }
+  },
+  "7": {
+    "inputs": {
+      "value": "Describe the image detailedly"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$prompt.value:The prompt to analyze"
+    }
+  },
+  "8": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "$model.value:The model to use, must be one of the following: \"gpt-4.1-mini \", \"gpt-4.1 \",\"gpt-4o\""
+    }
+  },
+  "9": {
+    "inputs": {
+      "anything": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  }
+}
