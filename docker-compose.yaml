@@ -61,16 +61,14 @@ services:
 
   game-master:
     build:
-      dockerfile: Dockerfile.game-master
-      context: .
+      dockerfile: Dockerfile.spark
+      context: game-master/
     depends_on:
       - pixelle-mcp
     environment:
       - PIXELLE_MCP_URL=http://pixelle-mcp:9004/pixelle/mcp
     networks:
       - spark-network
-    volumes:
-      - ./game_master.py:/app/game_master.py
     restart: unless-stopped
 
 # docker network create spark-network

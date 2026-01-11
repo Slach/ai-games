@@ -17,5 +17,5 @@ RUN uv pip install -r requirements.txt
 # Copy the application code
 COPY game_master.py .
 
-# Run the game master agent
+# Ensure the working directory is correct and run the agent
 CMD ["python", "game_master.py"]
