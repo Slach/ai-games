@@ -2,9 +2,11 @@ FROM astral/uv:python3.14-bookworm-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for building native extensions
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    cmake \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
