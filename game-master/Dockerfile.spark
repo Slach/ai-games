@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # Install Python dependencies
+RUN uv venv
 RUN uv pip install -r requirements.txt
 
 # Copy the application code
-COPY game_master.py .
+COPY *.py .
 
 # Ensure the working directory is correct and run the agent
 CMD ["python", "game_master.py"]
