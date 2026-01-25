@@ -2,5 +2,6 @@ strands-agents
 strands-agents-tools
 mcp
 npcpy
-chromadb
+chromadb==0.4.22
+pydantic-settings
 kuzu
