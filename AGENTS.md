@@ -33,4 +33,6 @@ The base setting is a starship crew in a Star Trek universe, but the system is d
 
 ## Deployment
 
-The system will be deployed using Docker containers with Pixelle-MCP and ComfyUI running as services that can be called by the game master system to generate content on demand.
+- Always use PYTHONDONTWRITEBYTECODE=1 for running python code
+- The system will be deployed using Docker containers, every service shall be run as separate service in docker-compose
+- Pixelle-MCP and ComfyUI running as services that can be called by the paython code to generate content on demand.

@@ -6,16 +6,15 @@ using strands-agents/sdk-python for orchestration and npcpy for NPC character ge
 All LLM interactions use the LLAMA_CPP_URL environment variable.
 """
 
-from strands_agents import Agent
-from strands_agents.models.llamacpp import LlamaCppModel
-from strands_agents.tools.mcp import MCPClient
+from strands import Agent
+from strands.models.llamacpp import LlamaCppModel
+from strands.tools.mcp import MCPClient
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime
 from npcpy import NPC, NPCManager
 

@@ -2,3 +2,5 @@ strands-agents
 strands-agents-tools
 mcp
 npcpy
+chromadb
+kuzu

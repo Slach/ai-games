@@ -2,7 +2,6 @@ FROM astral/uv:python3.14-bookworm-slim
 
 WORKDIR /app
 
-# Install system dependencies for building native extensions
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -11,15 +10,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN uv venv
-RUN uv pip install -r requirements.txt
+RUN uv pip install --no-cache --system --break-system-packages -r requirements.txt
 
-# Copy the application code
 COPY *.py .
-
-# Ensure the working directory is correct and run the agent
+ENV PYTHONDONTWRITEBYTECODE=1
 CMD ["python", "game_master.py"]
