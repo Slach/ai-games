@@ -1,9 +1,15 @@
 .env
 .venv
 *.so
+.idea/
 .vscode/
 comfyui/user/
 comfyui/output/
 comfyui/input/
 comfyui/web_custom_versions/
 .aider*
+.claude/
+.qwen/
+.opencode/
+__pycache__/
+*.pyc
