@@ -60,6 +60,7 @@ services:
               capabilities: [gpu]
 
   game-master:
+    image: game-master:spark-full
     build:
       dockerfile: Dockerfile.spark
       context: game-master/
