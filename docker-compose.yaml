@@ -1,6 +1,8 @@
-# Compose file build variables set in .env
+# Docker Compose for AI Game Master
+# Environment variables are loaded from .env file
+
 services:
-  # look llama.cpp in https://github.com/Slach/nvidia-spark
+  # Pixelle-MCP Server - Content generation orchestration
   pixelle-mcp:
     image: pixelle:spark-full
     build:
@@ -17,12 +19,12 @@ services:
     depends_on:
       - comfyui
     volumes:
-     - ./pixelle-mcp/workflows:/app/data/custom_workflows
+      - ./pixelle-mcp/workflows:/app/data/custom_workflows
     networks:
       - spark-network
 
+  # ComfyUI - Image/Video/3D generation backend
   comfyui:
-    # use `bash -xe ./build-comfyui-docker.sh`, to get image
     image: comfyui:spark-full
     environment:
       - HF_XET_HIGH_PERFORMANCE=1
@@ -31,18 +33,24 @@ services:
       - DIFFUSERS_CACHE=/root/.cache/huggingface
       - LD_PRELOAD=/usr/local/lib/libglib_compat.so
     ports:
-    - "127.0.0.1:8188:8188"
+      - "127.0.0.1:8188:8188"
     volumes:
-     - ${HOME}/.cache/huggingface:/root/.cache/huggingface
-     - ${HOME}/.cache/comfyui:/opt/ComfyUI/models
-     - ./comfyui/user/:/opt/ComfyUI/user
-     - ./comfyui/output/:/opt/ComfyUI/output
-     - ./comfyui/input/:/opt/ComfyUI/input
-     - ./comfyui/web_custom_versions/:/opt/ComfyUI/web_custom_versions/
-    command: [
-      "/opt/ComfyUI/.venv/bin/python3","main.py","--enable-manager","--preview-method","auto","--front-end-version","Comfy-Org/ComfyUI_frontend@latest", "--listen", "0.0.0.0"
-    ]
-
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ${HOME}/.cache/comfyui:/opt/ComfyUI/models
+      - ./comfyui/user/:/opt/ComfyUI/user
+      - ./comfyui/output/:/opt/ComfyUI/output
+      - ./comfyui/input/:/opt/ComfyUI/input
+      - ./comfyui/web_custom_versions/:/opt/ComfyUI/web_custom_versions/
+    command:
+      - "/opt/ComfyUI/.venv/bin/python3"
+      - "main.py"
+      - "--enable-manager"
+      - "--preview-method"
+      - "auto"
+      - "--front-end-version"
+      - "Comfy-Org/ComfyUI_frontend@latest"
+      - "--listen"
+      - "0.0.0.0"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8188/"]
       interval: 30s
@@ -59,6 +67,43 @@ services:
               count: all
               capabilities: [gpu]
 
+  # Game Master API - FastAPI service for game orchestration
+  game-master-api:
+    image: game-master-api:spark-full
+    build:
+      dockerfile: Dockerfile
+      context: game-master-api/
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama.cpp:8090/v1}
+      - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
+    depends_on:
+      - pixelle-mcp
+    networks:
+      - spark-network
+    restart: unless-stopped
+    volumes:
+      - ./game-master-api/:/app/
+
+  # Telegram Bot - Player interface via Telegram
+  telegram-bot:
+    image: telegram-bot:spark-full
+    build:
+      dockerfile: Dockerfile
+      context: telegram-bot/
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - GAME_MASTER_API_URL=http://game-master-api:8000
+    depends_on:
+      - game-master-api
+    networks:
+      - spark-network
+    restart: unless-stopped
+    volumes:
+      - ./telegram-bot/:/app/
+
+  # Game Master - Legacy service (updated to use new API internally)
   game-master:
     image: game-master:spark-full
     build:
@@ -66,9 +111,11 @@ services:
       context: game-master/
     depends_on:
       - pixelle-mcp
+      - game-master-api
     environment:
-      - PIXELLE_MCP_URL=http://pixelle-mcp:9004/pixelle/mcp
-      - LLAMA_CPP_URL=http://llama.cpp:8090/v1
+      - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
+      - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama.cpp:8090/v1}
+      - GAME_MASTER_API_URL=http://game-master-api:8000
     networks:
       - spark-network
     restart: unless-stopped
