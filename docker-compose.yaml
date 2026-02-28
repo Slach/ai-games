@@ -71,7 +71,7 @@ services:
   game-master-api:
     image: game-master-api:spark-full
     build:
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.spark
       context: game-master-api/
     ports:
       - "127.0.0.1:8000:8000"
@@ -113,7 +113,7 @@ services:
       - pixelle-mcp
       - game-master-api
     environment:
-      - GAME_MASTER_API_URL=http://game-master-api:8000
+      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
       - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
       - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
     networks:
