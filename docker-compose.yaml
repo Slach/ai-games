@@ -103,7 +103,7 @@ services:
     volumes:
       - ./telegram-bot/:/app/
 
-  # Game Master - Legacy service (updated to use new API internally)
+  # Game Master Scheduler - triggers daily generation via game-master-api
   game-master:
     image: game-master:spark-full
     build:
@@ -113,9 +113,9 @@ services:
       - pixelle-mcp
       - game-master-api
     environment:
-      - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
-      - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama.cpp:8090/v1}
       - GAME_MASTER_API_URL=http://game-master-api:8000
+      - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
+      - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
     networks:
       - spark-network
     restart: unless-stopped

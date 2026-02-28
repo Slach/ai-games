@@ -1,7 +1,3 @@
-strands-agents 
-strands-agents-tools
-mcp
-npcpy
-chromadb==0.4.22
-pydantic-settings
-kuzu
+# Game Master Scheduler - calls game-master-api
+aiohttp>=3.9.0
+python-dotenv>=1.0.0
