@@ -5,20 +5,19 @@ Game Master Agent - STRANDS-based AI for game orchestration
 import os
 import logging
 import json
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-# Try to import strands, but provide fallback if not available
+# Try to import strands
 try:
     from strands import Agent
     from strands.models.openai import OpenAIModel
     STRANDS_AVAILABLE = True
 except ImportError:
     STRANDS_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("strands-agents not available, using fallback")
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class ContentPrompts(BaseModel):
     comic_prompt: str
 
 
-# NPC role templates - these will be used to generate NPCs based on player's team
+# NPC role templates
 NPC_TEMPLATES = {
     "captain": {
         "role": "Captain",
@@ -95,18 +94,17 @@ class GameMasterAgent:
     and content generation using STRANDS SDK.
     """
 
-    def __init__(self):
-        # Use environment variables with defaults
+    def __init__(self, language: str = "en"):
         self.llm_base_url = os.getenv("LLAMA_CPP_URL", "http://llama.cpp:8090/v1")
         self.pixelle_mcp_url = os.getenv("PIXELLE_MCP_URL", "http://pixelle-mcp:9004/pixelle/mcp")
+        self.language = language
 
         self.agent: Optional[Agent] = None
         self.npcs: Dict[str, Dict[str, Any]] = {}
 
-        # Initialize default NPCs
         self._init_default_npcs()
 
-        logger.info(f"GameMasterAgent initialized with LLM: {self.llm_base_url}")
+        logger.info(f"GameMasterAgent initialized with LLM: {self.llm_base_url}, language: {language}")
         logger.info(f"Pixelle-MCP URL: {self.pixelle_mcp_url}")
 
     def _init_default_npcs(self):
@@ -119,16 +117,9 @@ class GameMasterAgent:
         }
 
     def generate_team_npcs(self, player_role: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Generate NPC team based on player's role.
-        If player is Engineer, other NPCs should complement that role.
-        """
-        team_npcs = {}
+        """Generate NPC team based on player's role"""
+        team_npcs = {"captain": NPC_TEMPLATES["captain"].copy()}
 
-        # Always include captain
-        team_npcs["captain"] = NPC_TEMPLATES["captain"].copy()
-
-        # Add complementary roles based on player's position
         role_complements = {
             "Chief Engineer": ["pilot", "communications"],
             "XO (First Officer)": ["engineer", "security"],
@@ -147,267 +138,249 @@ class GameMasterAgent:
     async def initialize(self):
         """Initialize the agent with LLM connection"""
         if not STRANDS_AVAILABLE:
-            logger.warning("STRANDS not available, agent will use fallback")
+            logger.error("STRANDS not available - LLM generation will not work")
             return
 
         try:
-            # Initialize OpenAI-compatible model (works with llama.cpp)
             model = OpenAIModel(
+                model_id="default",
                 api_base=self.llm_base_url,
-                model="default",
                 params={
                     "max_tokens": 2000,
                     "temperature": 0.7,
                     "repeat_penalty": 1.1,
                 },
             )
-
             self.agent = Agent(model=model)
             logger.info("Game Master Agent initialized with STRANDS")
         except Exception as e:
             logger.error(f"Failed to initialize STRANDS agent: {e}")
             self.agent = None
 
-    def _generate_story_fallback(self, day: int, previous_summary: str) -> GameStory:
-        """Fallback story generation without LLM"""
-        scenarios = [
-            {
-                "setting": "Deep space, near an uncharted nebula",
-                "conflict": "Mysterious energy readings threaten ship systems",
-                "narrative": f"Day {day}: The crew navigates through a strange nebula when sensors detect anomalous energy patterns. The ship's AI begins reporting unexpected behaviors, and crew members experience vivid dreams of alien landscapes.",
-                "decision_points": [
-                    {
-                        "id": "a1",
-                        "text": "Изучить артефакт с помощью сканеров",
-                        "consequence": "Обнаружены скрытые паттерны в энергии",
-                    },
-                    {
-                        "id": "a2",
-                        "text": "Попробовать установить контакт",
-                        "consequence": "Артефакт реагирует на сигнал",
-                    },
-                    {
-                        "id": "a3",
-                        "text": "Отойти на безопасное расстояние",
-                        "consequence": "Артефакт остаётся неактивным",
-                    },
-                ],
-            },
-            {
-                "setting": "Orbiting a newly discovered planet",
-                "conflict": "Planet shows signs of ancient civilization",
-                "narrative": f"Day {day}: A planet in the system reveals ruins of an advanced civilization. The team must decide whether to investigate the ruins or continue the primary mission. Strange symbols on the structures seem to respond to the crew's presence.",
-                "decision_points": [
-                    {
-                        "id": "a1",
-                        "text": "Отправить экспедицию на поверхность",
-                        "consequence": "Найдены технологии, меняющие понимание истории",
-                    },
-                    {
-                        "id": "a2",
-                        "text": "Провести орбитальное сканирование",
-                        "consequence": "Обнаружены подземные структуры",
-                    },
-                    {
-                        "id": "a3",
-                        "text": "Сообщить командованию и ждать указаний",
-                        "consequence": "Получены новые протоколы исследования",
-                    },
-                ],
-            },
-            {
-                "setting": "Space station emergency",
-                "conflict": "Station life support failing, need immediate decision",
-                "narrative": f"Day {day}: A nearby space station sends a distress signal - their life support is failing. The crew must decide how to help while managing their own resources. Complicating matters, the station's cargo manifests are classified.",
-                "decision_points": [
-                    {
-                        "id": "a1",
-                        "text": "Предоставить максимум ресурсов для спасения",
-                        "consequence": "Экипаж спасён, но ресурсы корабля истощены",
-                    },
-                    {
-                        "id": "a2",
-                        "text": "Отправить только разведывательную группу",
-                        "consequence": "Выяснены истинные причины бедствия",
-                    },
-                    {
-                        "id": "a3",
-                        "text": "Сообщить командованию и ждать приказов",
-                        "consequence": "Получены противоречивые инструкции",
-                    },
-                ],
-            },
-        ]
+    def _parse_json_from_response(self, response: str) -> Optional[Dict]:
+        """Try to extract JSON from LLM response"""
+        try:
+            # Try direct JSON parse first
+            return json.loads(response)
+        except json.JSONDecodeError:
+            pass
 
-        scenario = scenarios[(day - 1) % len(scenarios)]
+        # Try to find JSON block
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
 
-        return GameStory(
-            day=day,
-            setting=scenario["setting"],
-            conflict=scenario["conflict"],
-            narrative=scenario["narrative"],
-            decision_points=scenario["decision_points"],
-        )
-
-    def _generate_npc_dialogue_fallback(
-        self, npc: Dict[str, Any], story: GameStory, player_role: str
-    ) -> NPCDialogue:
-        """Fallback NPC dialogue generation"""
-        # Generate role-specific dialogue
-        role = npc["role"]
-        name = npc.get("name", npc.get("default_name", "Crew Member"))
-
-        dialogues = {
-            "Captain": f"{name}: \"Crew, we need to assess this situation carefully. {player_role}, what's your recommendation?\"",
-            "Pilot": f"{name}: \"I can get us there fast, but that route is risky. Your call, boss.\"",
-            "Chief Engineer": f"{name}: \"The systems are holding, but I'm seeing some unusual readings. This could be interesting... or problematic.\"",
-            "Communications Officer": f"{name}: \"I'm picking up faint signals. Let me try to decode them before we make any moves.\"",
-            "Science Officer": f"{name}: \"Fascinating! The data suggests patterns we've never observed before. We must investigate further.\"",
-            "Security Chief": f"{name}: \"I'm not comfortable with this. We need to consider the risks before proceeding.\"",
-        }
-
-        return NPCDialogue(
-            npc_name=name,
-            npc_role=role,
-            dialogue=dialogues.get(role, "The crew discusses the situation."),
-            emotion="concerned",
-        )
-
-    def _generate_content_prompts_fallback(
-        self, story: GameStory, player_role: str
-    ) -> ContentPrompts:
-        """Fallback content prompt generation"""
-        return ContentPrompts(
-            image_prompt=f"Sci-fi space scene: {story.setting}. Crew members in futuristic uniforms examining mysterious phenomenon. Cinematic lighting, detailed, 4K.",
-            video_prompt=f"Dynamic space scene showing {story.conflict.lower()}. Ship systems flickering, crew responding to emergency. Dramatic camera movements.",
-            scene_3d_prompt=f"3D model of a futuristic spaceship bridge with crew stations, holographic displays, and view of space with nebula in background.",
-            comic_prompt=f"Comic strip panels: 1) Crew discovers anomaly, 2) NPCs react with concern, 3) Player character makes decision, 4) Consequences unfold. Space opera style.",
-        )
+        return None
 
     async def generate_daily_story(
         self, day: int, previous_summary: str = "", player_role: str = ""
     ) -> GameStory:
-        """Generate daily story using LLM or fallback"""
-        if self.agent:
-            try:
-                prompt = f"""
-                Generate a daily episode for a cooperative space exploration game.
+        """Generate daily story using LLM"""
+        logger.info(f"[STORY] Starting story generation for Day {day}, language: {self.language}")
 
-                Context:
-                - Day: {day}
-                - Previous summary: {previous_summary or "First day of mission"}
-                - Player role: {player_role or "Crew member"}
-
-                Create a compelling narrative with:
-                1. A setting (space location, station, planet)
-                2. A central conflict or mystery
-                3. 3 decision points for players with visible actions and hidden consequences
-
-                Return JSON with: setting, conflict, narrative, decision_points (array with id, text, consequence)
-                """
-
-                response = self.agent(prompt)
-                # Parse response as JSON (simplified - in production, use proper JSON mode)
-                return self._generate_story_fallback(day, previous_summary)
-
-            except Exception as e:
-                logger.error(f"LLM story generation failed: {e}")
-                return self._generate_story_fallback(day, previous_summary)
+        if self.language == "ru":
+            lang_directive = "IMPORTANT: Respond entirely in RUSSIAN. All narrative, actions, and consequences must be in Russian language."
+            player_role_display = player_role or "Член экипажа"
         else:
-            return self._generate_story_fallback(day, previous_summary)
+            lang_directive = "IMPORTANT: Respond entirely in ENGLISH. All narrative, actions, and consequences must be in English language."
+            player_role_display = player_role or "Crew member"
+
+        if not self.agent:
+            logger.error("[STORY] LLM agent not available - cannot generate story")
+            raise RuntimeError("LLM agent not available - cannot generate story")
+
+        logger.info(f"[STORY] Sending prompt to LLM")
+        try:
+            prompt = f"""
+Generate a daily episode for a cooperative space exploration game.
+
+Context:
+- Day: {day}
+- Previous summary: {previous_summary or "First day of mission"}
+- Player role: {player_role_display}
+
+Create a compelling narrative with:
+1. A setting (space location, station, planet)
+2. A central conflict or mystery
+3. 3 decision points for players with visible actions and hidden consequences
+
+Return ONLY valid JSON with this structure:
+{{
+    "setting": "description of the location",
+    "conflict": "the central problem",
+    "narrative": "the story description",
+    "decision_points": [
+        {{"id": "a1", "text": "action 1", "consequence": "result 1"}},
+        {{"id": "a2", "text": "action 2", "consequence": "result 2"}},
+        {{"id": "a3", "text": "action 3", "consequence": "result 3"}}
+    ]
+}}
+
+{lang_directive}
+"""
+
+            logger.debug(f"[STORY] Prompt sent to LLM, waiting for response...")
+            response = self.agent(prompt)
+            response_str = str(response)
+            logger.info(f"[STORY] LLM response received ({len(response_str)} chars)")
+            logger.debug(f"[STORY] Raw response: {response_str[:500]}...")
+
+            parsed = self._parse_json_from_response(response_str)
+            if parsed:
+                logger.info(f"[STORY] JSON parsed successfully")
+                story = GameStory(
+                    day=day,
+                    setting=parsed.get("setting", ""),
+                    conflict=parsed.get("conflict", ""),
+                    narrative=parsed.get("narrative", ""),
+                    decision_points=parsed.get("decision_points", []),
+                )
+                logger.info(f"[STORY] Story generated: setting='{story.setting[:50]}...', conflict='{story.conflict[:50]}...'")
+                logger.info(f"[STORY] Decision points: {len(story.decision_points)} actions")
+                return story
+
+            logger.error(f"[STORY] Failed to parse JSON from LLM response")
+            raise ValueError("Failed to parse JSON from LLM response")
+
+        except Exception as e:
+            logger.error(f"[STORY] LLM story generation failed: {e}")
+            raise
 
     async def generate_npc_dialogues(
         self, story: GameStory, player_role: str
     ) -> List[NPCDialogue]:
         """Generate NPC dialogues for the day"""
-        # Generate team based on player role
+        logger.info(f"[NPC] Starting NPC dialogue generation, language: {self.language}")
         team_npcs = self.generate_team_npcs(player_role)
         dialogues = []
 
+        if self.language == "ru":
+            lang_directive = "Respond in RUSSIAN."
+            player_role_display = player_role or "Член экипажа"
+        else:
+            lang_directive = "Respond in ENGLISH."
+            player_role_display = player_role or "Crew member"
+
+        if not self.agent:
+            logger.error("[NPC] LLM agent not available - cannot generate NPC dialogues")
+            raise RuntimeError("LLM agent not available - cannot generate NPC dialogues")
+
+        logger.info(f"[NPC] Generating dialogues for {len(team_npcs)} NPCs: {list(team_npcs.keys())}")
+
         for npc_key, npc in team_npcs.items():
-            if self.agent:
-                try:
-                    prompt = f"""
-                    You are {npc.get('name', npc.get('default_name'))}, {npc['role']}.
-                    Personality: {npc['personality']}
-                    Speech style: {npc['speech_style']}
+            try:
+                npc_name = npc.get('name', npc.get('default_name', 'Unknown'))
+                logger.info(f"[NPC] Generating dialogue for {npc_name} ({npc_key})")
 
-                    Game context: {story.narrative}
-                    Player role: {player_role}
+                prompt = f"""
+You are {npc_name}, {npc['role']}.
+Personality: {npc['personality']}
+Speech style: {npc['speech_style']}
 
-                    Generate a short reaction (1-2 sentences) in character.
-                    """
+Game context: {story.narrative}
+Player role: {player_role_display}
 
-                    response = self.agent(prompt)
-                    dialogues.append(
-                        NPCDialogue(
-                            npc_name=npc.get("name", npc.get("default_name")),
-                            npc_role=npc["role"],
-                            dialogue=response or f"{npc['role']} considers the situation.",
-                            emotion="neutral",
-                        )
+Generate a short reaction (1-2 sentences) in character.
+{lang_directive}
+"""
+
+                response = self.agent(prompt)
+                response_str = str(response).strip()
+                logger.info(f"[NPC] {npc_key}: Response received ({len(response_str)} chars)")
+                logger.debug(f"[NPC] {npc_key}: '{response_str[:100]}...'")
+
+                dialogues.append(
+                    NPCDialogue(
+                        npc_name=npc_name,
+                        npc_role=npc["role"],
+                        dialogue=response_str,
+                        emotion="neutral",
                     )
-                except Exception as e:
-                    logger.error(f"NPC dialogue generation failed for {npc_key}: {e}")
-                    dialogues.append(self._generate_npc_dialogue_fallback(npc, story, player_role))
-            else:
-                dialogues.append(self._generate_npc_dialogue_fallback(npc, story, player_role))
+                )
+            except Exception as e:
+                logger.error(f"[NPC] Dialogue generation failed for {npc_key}: {e}")
+                raise
 
+        logger.info(f"[NPC] Generated {len(dialogues)} NPC dialogues successfully")
         return dialogues
 
     async def generate_content_prompts(
         self, story: GameStory, dialogues: List[NPCDialogue], player_role: str
     ) -> ContentPrompts:
         """Generate prompts for content generation (image, video, comic)"""
-        if self.agent:
-            try:
-                prompt = f"""
-                Generate content prompts for a game day.
+        logger.info(f"[CONTENT] Starting content prompt generation, language: {self.language}")
 
-                Story: {story.narrative}
-                Player role: {player_role}
-
-                Return JSON with: image_prompt, video_prompt, scene_3d_prompt, comic_prompt
-                """
-
-                response = self.agent(prompt)
-                return self._generate_content_prompts_fallback(story, player_role)
-            except Exception as e:
-                logger.error(f"Content prompt generation failed: {e}")
-                return self._generate_content_prompts_fallback(story, player_role)
+        if self.language == "ru":
+            lang_directive = "Respond in RUSSIAN."
         else:
-            return self._generate_content_prompts_fallback(story, player_role)
+            lang_directive = "Respond in ENGLISH."
+
+        if not self.agent:
+            logger.error("[CONTENT] LLM agent not available - cannot generate content prompts")
+            raise RuntimeError("LLM agent not available - cannot generate content prompts")
+
+        try:
+            prompt = f"""
+Generate content prompts for a game day.
+
+Story: {story.narrative}
+Player role: {player_role}
+
+Return ONLY valid JSON with this structure:
+{{
+    "image_prompt": "description for image generation",
+    "video_prompt": "description for video generation",
+    "scene_3d_prompt": "description for 3D scene",
+    "comic_prompt": "description for comic strip"
+}}
+
+{lang_directive}
+"""
+
+            logger.info(f"[CONTENT] Sending prompt to LLM")
+            response = self.agent(prompt)
+            response_str = str(response)
+            logger.info(f"[CONTENT] LLM response received ({len(response_str)} chars)")
+
+            parsed = self._parse_json_from_response(response_str)
+            if parsed:
+                prompts = ContentPrompts(
+                    image_prompt=parsed.get("image_prompt", ""),
+                    video_prompt=parsed.get("video_prompt", ""),
+                    scene_3d_prompt=parsed.get("scene_3d_prompt", ""),
+                    comic_prompt=parsed.get("comic_prompt", ""),
+                )
+                logger.info(f"[CONTENT] Content prompts generated successfully")
+                return prompts
+
+            logger.error(f"[CONTENT] Failed to parse JSON from LLM response")
+            raise ValueError("Failed to parse JSON from LLM response")
+
+        except Exception as e:
+            logger.error(f"[CONTENT] Content prompt generation failed: {e}")
+            raise
 
     async def generate_personalized_comic(
         self, story: GameStory, player_profile: Dict[str, Any]
     ) -> str:
         """Generate a personalized comic for the player"""
-        # This would call Pixelle-MCP to generate the actual comic
-        # For now, return a placeholder
-
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
 
         comic_prompt = f"""
-        Generate a comic strip showing the player ({player_role}) in today's story.
-        Player traits: {', '.join(traits)}
-        Story: {story.narrative}
+Generate a comic strip showing the player ({player_role}) in today's story.
+Player traits: {', '.join(traits)}
+Story: {story.narrative}
 
-        Include 4-6 panels showing:
-        1. Introduction to the day's situation
-        2. NPC interaction
-        3. Player making a decision
-        4. Immediate consequences
-        """
-
-        # TODO: Call Pixelle-MCP API to generate comic
-        # async with aiohttp.ClientSession() as session:
-        #     async with session.post(f"{self.pixelle_mcp_url}/generate/comic", json={
-        #         "prompt": comic_prompt,
-        #         "workflow": "comic_generation"
-        #     }) as resp:
-        #         result = await resp.json()
-        #         return result.get("image_url", "")
+Include 4-6 panels showing:
+1. Introduction to the day's situation
+2. NPC interaction
+3. Player making a decision
+4. Immediate consequences
+"""
 
         return f"/content/comics/day_{story.day}_player_{player_profile.get('player_id', 'unknown')}.webp"
 
@@ -415,37 +388,42 @@ class GameMasterAgent:
         self, player_id: int, message: str, player_profile: Dict[str, Any]
     ) -> str:
         """Process a player message and generate Game Master response"""
-        if self.agent:
-            try:
-                player_role = player_profile.get("role", "Crew Member")
-                prompt = f"""
-                You are the Game Master of a space exploration game.
-                Player (role: {player_role}) sent this message:
+        if not self.agent:
+            raise RuntimeError("LLM agent not available")
 
-                "{message}"
+        try:
+            player_role = player_profile.get("role", "Crew Member")
 
-                Respond in character as the Game Master, acknowledging their input
-                and guiding the narrative forward. Keep it engaging and in the
-                Star Trek universe tone.
-                """
+            if self.language == "ru":
+                lang_directive = "Respond in RUSSIAN."
+            else:
+                lang_directive = "Respond in ENGLISH."
 
-                response = self.agent(prompt)
-                return response or "Game Master received your message."
-            except Exception as e:
-                logger.error(f"Message processing failed: {e}")
-                return "Game Master received your message."
-        else:
-            return f"Game Master received: \"{message}\". Response will be generated soon."
+            prompt = f"""
+You are the Game Master of a space exploration game.
+Player (role: {player_role}) sent this message:
+
+"{message}"
+
+Respond in character as the Game Master, acknowledging their input
+and guiding the narrative forward. Keep it engaging and in the
+Star Trek universe tone.
+{lang_directive}
+"""
+
+            response = self.agent(prompt)
+            return str(response) if response else "Game Master received your message."
+        except Exception as e:
+            logger.error(f"Message processing failed: {e}")
+            raise
 
     async def generate_default_action(
         self, story: GameStory, player_profile: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Generate a default action when player doesn't choose"""
-        # Choose based on player personality
         traits = player_profile.get("personality_traits", [])
         actions = story.decision_points
 
-        # Simple personality-based selection
         if "логичный" in traits or "аналитический" in traits:
             return actions[0] if len(actions) > 0 else actions[0]
         elif "смелый" in traits or "решительный" in traits:
@@ -455,8 +433,12 @@ class GameMasterAgent:
 
 
 # Factory function
-async def create_game_master_agent() -> GameMasterAgent:
-    """Create and initialize Game Master agent"""
-    agent = GameMasterAgent()
+async def create_game_master_agent(language: str = "en") -> GameMasterAgent:
+    """Create and initialize Game Master agent
+
+    Args:
+        language: Language for content generation ("en" or "ru")
+    """
+    agent = GameMasterAgent(language=language)
     await agent.initialize()
     return agent

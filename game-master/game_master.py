@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # Get configuration from environment
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-master-api:8000")
 GAME_SCHEDULE_TIME = os.getenv("GAME_SCHEDULE_TIME", "08:00")  # 24h format
+GAME_LANGUAGE = os.getenv("GAME_LANGUAGE", "en")  # "en" or "ru"
 
 
 class GameMasterScheduler:
@@ -35,15 +36,17 @@ class GameMasterScheduler:
 
     def __init__(self):
         self.api_url = GAME_MASTER_API_URL
+        self.language = GAME_LANGUAGE
         self.last_generation = None
 
     async def generate_daily_episode(self) -> dict:
         """Call game-master-api to generate a new daily episode"""
-        logger.info(f"Calling {self.api_url}/admin/generate-day to generate daily episode")
+        logger.info(f"Calling {self.api_url}/admin/generate-day to generate daily episode (language: {self.language})")
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.api_url}/admin/generate-day") as resp:
+                # Pass language as query parameter
+                async with session.post(f"{self.api_url}/admin/generate-day?language={self.language}") as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
                         logger.error(f"API error: {resp.status} - {error_text}")
@@ -144,6 +147,7 @@ async def main():
     logger.info("Starting Game Master Scheduler")
     logger.info(f"GAME_MASTER_API_URL: {GAME_MASTER_API_URL}")
     logger.info(f"GAME_SCHEDULE_TIME: {GAME_SCHEDULE_TIME}")
+    logger.info(f"GAME_LANGUAGE: {GAME_LANGUAGE}")
 
     scheduler = GameMasterScheduler()
 

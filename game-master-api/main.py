@@ -428,24 +428,36 @@ async def get_game_messages(player_id: int, limit: int = 10):
 
 # Admin endpoints (for game master internal use)
 @app.post("/admin/generate-day")
-async def generate_daily_episode():
-    """Generate a new daily episode (called by game master scheduler)"""
+async def generate_daily_episode(language: str = "en"):
+    """Generate a new daily episode (called by game master scheduler)
+
+    Args:
+        language: Language for content generation ("en" or "ru")
+    """
     day_num = storage.game_state.day
 
-    # Create and initialize GameMasterAgent
-    game_master = await create_game_master_agent()
+    logger.info(f"=== GENERATE DAY STARTED ===")
+    logger.info(f"Day number: {day_num}")
+    logger.info(f"Language: {language}")
+
+    logger.info(f"Creating GameMasterAgent with language={language}")
+    # Create and initialize GameMasterAgent with language
+    game_master = await create_game_master_agent(language=language)
 
     # Get current day's story
+    player_role = "Crew Member" if language != "ru" else "Член экипажа"
+    logger.info(f"Player role: {player_role}")
     story = await game_master.generate_daily_story(
         day=day_num,
         previous_summary=storage.game_state.last_updated.isoformat(),
-        player_role="Crew Member"
+        player_role=player_role
     )
 
     # Generate NPC dialogues
+    logger.info(f"Generating NPC dialogues...")
     dialogues = await game_master.generate_npc_dialogues(
         story=story,
-        player_role="Crew Member"
+        player_role=player_role
     )
 
     new_day = GameDay(
@@ -463,6 +475,11 @@ async def generate_daily_episode():
     storage.game_days[day_num] = new_day
     storage.game_state.day += 1
     storage.game_state.last_updated = datetime.now()
+
+    logger.info(f"=== GENERATE DAY COMPLETED ===")
+    logger.info(f"Story: {story.narrative[:100]}...")
+    logger.info(f"NPC dialogues: {len(dialogues)}")
+    logger.info(f"Player actions: {len(story.decision_points)}")
 
     return new_day.model_dump()
 
