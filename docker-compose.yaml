@@ -18,8 +18,8 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      - comfyui:
-          condition: service_healthy
+      comfyui:
+        condition: service_healthy
     volumes:
       - ./pixelle-mcp/workflows:/app/data/custom_workflows
     networks:
@@ -84,10 +84,10 @@ services:
       - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
     depends_on:
-      - pixelle-mcp:
-          condition: service_healthy
-      - comfyui:
-          condition: service_healthy
+      pixelle-mcp:
+        condition: service_healthy
+      comfyui:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -110,8 +110,8 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - GAME_MASTER_API_URL=http://game-master-api:8000
     depends_on:
-      - game-master-api:
-          condition: service_healthy
+      game-master-api:
+        condition: service_healthy
     networks:
       - spark-network
     restart: unless-stopped
@@ -119,15 +119,15 @@ services:
       - ./telegram-bot/:/app/
 
   # Game Master Scheduler - triggers daily generation via game-master-api
-  # Can be run manually for debugging: docker compose run --rm game-master
+  # Can be run manually for debugging: duxocker compose run --rm game-master
   game-master:
     image: game-master:spark-full
     build:
       dockerfile: Dockerfile.spark
       context: game-master/
     depends_on:
-      - game-master-api:
-          condition: service_healthy
+      game-master-api:
+        condition: service_healthy
     environment:
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
       - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
