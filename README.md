@@ -4,38 +4,21 @@ AI-powered cooperative game delivered through Telegram bot. Each day, an AI gene
 
 ## Architecture
 
-```
-                    ┌──────────────────┐
-                    │    llama.cpp     │
-                    │  (external LLM)  │
-                    └────────▲─────────┘
-                             │
-             ┌───────────┴─────────────┐
-             │                      │
-  ┌─────────▼──────────┐        │
-  │   Game Master API  │        │
-  │  (FastAPI)        │        │
-  │   + SQLite DB      │        │
-  └───────┬───────────┘        │
-          │                     │
-   ┌────┴────────────┬────────┐ │
-   │                 │        │ │
-   ▼                 ▼        │ │
-┌────────────┐  ┌────────────┐ │
-│Telegram Bot │  │Game Master │ │
-│ (aiogram)  │  │ (scheduler)│ │
-└────────────┘  └────┬───────┘ │
-                     │        │
-                     └────────┘
-```
-                           │
-                           ▼
-                    ┌─────────────────┐
-                    │  Pixelle-MCP   │
-                    │                 │────▶┌──────────────┐
-                    └─────────────────┘     │   ComfyUI   │
-                                            │ (GPU required)│
-                                            └──────────────┘
+```mermaid
+graph TD
+    A[Telegram API] --> B[telegram-bot]
+    B --> C[game-master-api]
+    D[game-master] --> C
+    C --> E[pixelle-mcp]
+    E --> F[comfyui]
+    C --> G[llama.cpp<br/>external]
+
+    style B fill:#E1F5FE
+    style C fill:#E8F5E9
+    style E fill:#FFF3E0
+    style F fill:#FFF3E0
+    style G fill:#E0E0E0
+    style D fill:#F3E5F5
 ```
 
 ## Services
