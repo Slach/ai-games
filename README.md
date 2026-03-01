@@ -5,33 +5,58 @@ AI-powered cooperative game delivered through Telegram bot. Each day, an AI gene
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Compose Services                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │ Telegram     │───▶│ Game Master  │───▶│ Pixelle-MCP  │  │
-│  │ Bot          │    │ API          │    │              │  │
-│  │ (aiogram)    │    │ (FastAPI)    │    │              │  │
-│  └──────────────┘    └──────────────┘    └──────┬───────┘  │
-│                                                 │          │
-│                                    ┌────────────┴────────┐ │
-│                                    │   ComfyUI          │ │
-│                                    │   (GPU required)   │ │
-│                                    └────────────────────┘ │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+                    ┌──────────────────┐
+                    │    llama.cpp     │
+                    │  (external LLM)  │
+                    └────────▲─────────┘
+                             │
+             ┌───────────┴─────────────┐
+             │                      │
+  ┌─────────▼──────────┐        │
+  │   Game Master API  │        │
+  │  (FastAPI)        │        │
+  │   + SQLite DB      │        │
+  └───────┬───────────┘        │
+          │                     │
+   ┌────┴────────────┬────────┐ │
+   │                 │        │ │
+   ▼                 ▼        │ │
+┌────────────┐  ┌────────────┐ │
+│Telegram Bot │  │Game Master │ │
+│ (aiogram)  │  │ (scheduler)│ │
+└────────────┘  └────┬───────┘ │
+                     │        │
+                     └────────┘
+```
+                           │
+                           ▼
+                    ┌─────────────────┐
+                    │  Pixelle-MCP   │
+                    │                 │────▶┌──────────────┐
+                    └─────────────────┘     │   ComfyUI   │
+                                            │ (GPU required)│
+                                            └──────────────┘
 ```
 
 ## Services
 
-### 1. Game Master API (`game-master-api/`)
+| Service | Port | Description |
+|---------|------|-------------|
+| game-master-api | 8000 | FastAPI backend with SQLite persistence |
+| telegram-bot | N/A | Telegram bot interface |
+| pixelle-mcp | 9004 | Content generation orchestration |
+| comfyui | 8188 | Image/Video generation backend |
+| game-master | N/A | Daily generation scheduler (run manually for debugging) |
+
+### Game Master API (`game-master-api/`)
 FastAPI service that orchestrates the game:
 - Player onboarding with behavioral testing
 - Daily story generation using STRANDS Agents SDK
 - NPC dialogue generation
 - Personalized comic generation via Pixelle-MCP
 - Player action processing
+- Text/voice message handling
+- SQLite persistence for game state
 
 **Ports:** 8000
 
@@ -41,26 +66,39 @@ FastAPI service that orchestrates the game:
 - `GET /players/{player_id}/profile` - Get player profile
 - `GET /game/current-day` - Get current day's episode
 - `POST /game/actions` - Submit player action
+- `POST /game/messages` - Send message to game master
 - `POST /admin/generate-day` - Generate new daily episode
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic
 
-### 2. Telegram Bot (`telegram-bot/`)
+### Telegram Bot (`telegram-bot/`)
 Player interface via Telegram:
 - `/start` - Begin onboarding or return to game
 - `/profile` - Show player role and traits
 - `/today` - View current day episode
+- `/help` - Show help information
 - Interactive keyboards for action selection
 - Voice message support
 - Text chat with Game Master
 
 **Ports:** None (outbound Telegram API only)
 
-### 3. Pixelle-MCP (`pixelle-mcp/`)
+### Game Master Scheduler (`game-master/`)
+Scheduled task runner that triggers daily episode generation. Can be run manually for debugging.
+
+**Usage:**
+```bash
+# Run single generation cycle for testing
+GAME_MASTER_MODE=single docker compose run --rm game-master
+```
+
+**Ports:** None
+
+### Pixelle-MCP (`pixelle-mcp/`)
 Content generation orchestration via MCP protocol.
 
 **Ports:** 9004
 
-### 4. ComfyUI (`comfyui/`)
+### ComfyUI (`comfyui/`)
 Image/video/3D generation backend. Requires GPU.
 
 **Ports:** 8188
@@ -71,7 +109,9 @@ Image/video/3D generation backend. Requires GPU.
 - Docker and Docker Compose
 - NVIDIA GPU (for ComfyUI)
 - NVIDIA Container Toolkit
-- Telegram Bot Token
+- Telegram Bot Token (get from @BotFather)
+- External `spark-network` Docker network
+- External `llama.cpp` service running on port 8090
 
 ### Configuration
 
@@ -80,29 +120,27 @@ Image/video/3D generation backend. Requires GPU.
 cp .env.example .env
 ```
 
-2. Edit `.env` and set:
+2. Edit `.env` and set your Telegram bot token:
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token_here
-LLAMA_CPP_URL=http://llama.cpp:8090/v1
-PIXELLE_MCP_URL=http://pixelle-mcp:9004/pixelle/mcp
 ```
 
 ### Running the Services
 
-1. Create the Docker network:
+1. Build and start services:
 ```bash
-docker network create spark-network
+docker compose up -d
 ```
 
-2. Build and start services:
+2. Check logs:
 ```bash
-docker-compose up -d
+docker compose logs -f game-master-api
+docker compose logs -f telegram-bot
 ```
 
-3. Check logs:
+3. Run single generation cycle (for testing):
 ```bash
-docker-compose logs -f game-master-api
-docker-compose logs -f telegram-bot
+GAME_MASTER_MODE=single docker compose run --rm game-master
 ```
 
 ## Onboarding Flow
@@ -171,6 +209,11 @@ cd telegram-bot
 pip install -r requirements.txt
 export TELEGRAM_BOT_TOKEN=your_token
 python bot.py
+
+# Game Master (for debugging)
+cd game-master
+pip install -r requirements.txt
+GAME_MASTER_MODE=single python game_master.py
 ```
 
 ## API Documentation
@@ -179,31 +222,52 @@ Visit `http://localhost:8000/docs` for Swagger UI.
 
 ## Troubleshooting
 
+### API Connection Failed
+
+Check game-master-api health:
+```bash
+curl http://localhost:8000/health
+docker compose logs game-master-api
+```
+
 ### GPU Not Available
 ```bash
-docker-compose logs comfyui
+docker compose logs comfyui
 # Check if NVIDIA runtime is configured
 nvidia-smi
 ```
 
 ### Pixelle-MCP Connection Issues
 ```bash
-docker-compose logs pixelle-mcp
+docker compose logs pixelle-mcp
 # Verify ComfyUI is running first
-docker-compose ps
+docker compose ps
 ```
 
 ### Telegram Bot Not Responding
 ```bash
 # Check if bot token is set
-docker-compose exec telegram-bot env | grep TELEGRAM
+docker compose exec telegram-bot env | grep TELEGRAM
 # Verify API connectivity
-docker-compose exec telegram-bot ping game-master-api
+docker compose exec telegram-bot ping game-master-api
 ```
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| LLAMA_CPP_URL | http://llama.cpp:8090/v1 | LLM endpoint |
+| LLAMA_CPP_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
+| PIXELLE_MCP_URL | http://pixelle-mcp:9004/pixelle/mcp | Content gen endpoint |
+| COMFYUI_URL | http://comfyui:8188 | Image gen endpoint |
+| TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
+| GAME_SCHEDULE_TIME | 08:00 | Daily generation time |
+| GAME_MASTER_MODE | scheduled | single/simulation/scheduled |
+| GAME_LANGUAGE | ru | en or ru |
 
 ## Future Enhancements
 
-- [ ] PostgreSQL persistence
+- [ ] SQLite persistence (in progress)
 - [ ] Redis for task queue
 - [ ] Voice message transcription
 - [ ] 3D scene generation

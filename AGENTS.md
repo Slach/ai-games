@@ -36,3 +36,10 @@ The base setting is a starship crew in a Star Trek universe, but the system is d
 - Always use PYTHONDONTWRITEBYTECODE=1 for running python code
 - The system will be deployed using Docker containers, every service shall be run as separate service in docker-compose
 - Pixelle-MCP and ComfyUI running as services that can be called by the paython code to generate content on demand.
+
+## Important Rules
+
+- **llama.cpp is an external service** - Do not add llama.cpp service to docker-compose.yaml. It's already running on the spark-network.
+- **spark-network is external** - The Docker network `spark-network` is created externally. Do not try to create it in docker-compose.
+- **Use health checks** - Always use `condition: service_healthy` for service dependencies when possible.
+- **game-master for debugging** - The `game-master` scheduler can be run manually with `docker compose run --rm game-master` for local debugging without Telegram bot.

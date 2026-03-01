@@ -142,13 +142,15 @@ class GameMasterAgent:
             return
 
         try:
+            # For llama.cpp compatibility, we need to use the correct OpenAI-compatible config
+            # The api_key is required by the OpenAI client but can be any value for local llama.cpp
             model = OpenAIModel(
-                model_id="default",
-                api_base=self.llm_base_url,
+                model_id=os.getenv("LLAMA_CPP_MODEL", "unsloth/Qwen3.5-27B"),
+                api_key=os.getenv("LLAMA_CPP_API_KEY", "placeholder-key-for-llama-cpp"),
+                base_url=self.llm_base_url,
                 params={
                     "max_tokens": 2000,
                     "temperature": 0.7,
-                    "repeat_penalty": 1.1,
                 },
             )
             self.agent = Agent(model=model)

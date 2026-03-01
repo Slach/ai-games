@@ -1,5 +1,6 @@
 # Docker Compose for AI Game Master
 # Environment variables are loaded from .env file
+# Note: Uses external spark-network and llama.cpp service
 
 services:
   # Pixelle-MCP Server - Content generation orchestration
@@ -17,7 +18,8 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      - comfyui
+      - comfyui:
+          condition: service_healthy
     volumes:
       - ./pixelle-mcp/workflows:/app/data/custom_workflows
     networks:
@@ -77,9 +79,21 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama.cpp:8090/v1}
+      - LLAMA_CPP_API_KEY=${LLAMA_CPP_API_KEY:-placeholder-key-for-llama-cpp}
+      - LLAMA_CPP_MODEL=${LLAMA_CPP_MODEL:-unsloth/Qwen3.5-27B}
       - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
+      - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
     depends_on:
-      - pixelle-mcp
+      - pixelle-mcp:
+          condition: service_healthy
+      - comfyui:
+          condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - spark-network
     restart: unless-stopped
@@ -96,7 +110,8 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - GAME_MASTER_API_URL=http://game-master-api:8000
     depends_on:
-      - game-master-api
+      - game-master-api:
+          condition: service_healthy
     networks:
       - spark-network
     restart: unless-stopped
@@ -104,26 +119,26 @@ services:
       - ./telegram-bot/:/app/
 
   # Game Master Scheduler - triggers daily generation via game-master-api
+  # Can be run manually for debugging: docker compose run --rm game-master
   game-master:
     image: game-master:spark-full
     build:
       dockerfile: Dockerfile.spark
       context: game-master/
     depends_on:
-      - pixelle-mcp
-      - game-master-api
+      - game-master-api:
+          condition: service_healthy
     environment:
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
       - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
       - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
-      - GAME_LANGUAGE=${GAME_LANGUAGE:-en}
+      - GAME_LANGUAGE=${GAME_LANGUAGE:-ru}
     networks:
       - spark-network
     restart: unless-stopped
     volumes:
       - ./game-master/:/app/
 
-# docker network create spark-network
 networks:
   spark-network:
     external: true

@@ -8,12 +8,13 @@ import asyncio
 import aiohttp
 from typing import Optional
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from . import language as lang
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-master-api:8000")
-
+BOT_LANGUAGE = os.getenv("BOT_LANGUAGE", "ru")
 
 # ============== FSM States ==============
 
@@ -52,13 +53,13 @@ async def api_request(method: str, endpoint: str, data: Optional[dict] = None) -
 
 # ============== Keyboard Builders ==============
 
-def create_onboarding_keyboard(options: list) -> InlineKeyboardMarkup:
+def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboardMarkup:
     """Create inline keyboard for onboarding options"""
     builder = InlineKeyboardBuilder()
     for option in options:
         builder.add(InlineKeyboardButton(
             text=option["label"],
-            callback_data=f"onboarding_answer:{option['value']}"
+            callback_data=f"onboarding_answer:{question_id}:{option['value']}"
         ))
     builder.adjust(1)  # One button per row
     return builder.as_markup()
@@ -66,12 +67,13 @@ def create_onboarding_keyboard(options: list) -> InlineKeyboardMarkup:
 
 def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Create main menu keyboard"""
+    menu = lang.get_menu(BOT_LANGUAGE)
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="/start")],
-            [KeyboardButton(text="/profile")],
-            [KeyboardButton(text="/today")],
-            [KeyboardButton(text="/help")],
+            [KeyboardButton(text=menu["start"])],
+            [KeyboardButton(text=menu["profile"])],
+            [KeyboardButton(text=menu["today"])],
+            [KeyboardButton(text=menu["help"])],
         ],
         resize_keyboard=True
     )
@@ -91,75 +93,77 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
 
 # ============== Handlers ==============
 
-@aiogram.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     """Handle /start command"""
     player_id = message.from_user.id
 
     # Check if player already has a profile
-    try:
         profile = await api_request("GET", f"/players/{player_id}/profile")
         # Player already has a profile
+        msgs = lang.get_onboarding(BOT_LANGUAGE)
         await message.answer(
-            f"Добро пожаловать назад, {profile['role']}!\n\n"
-            f"Ваша роль: {profile['role_description']}\n"
-            f"Характеристики: {', '.join(profile['personality_traits'])}\n\n"
-            f"Используйте /today для просмотра текущего дня игры.",
+            msgs["welcome_back"].format(
+                role=profile['role'],
+                role_description=profile['role_description'],
+                traits=', '.join(profile['personality_traits'])
+            ),
             reply_markup=create_main_menu_keyboard()
         )
     except Exception:
         # No profile, start onboarding
+        msgs = lang.get_onboarding(BOT_LANGUAGE)
         await message.answer(
-            "Добро пожаловать в AI Game Master!\n\n"
-            "Вы присоединяетесь к экипажу звездного корабля.\n"
-            "Давайте определим вашу роль через несколько вопросов.\n\n"
-            "Отвечайте на вопросы, выбирая один из вариантов.",
+            msgs["welcome"],
             reply_markup=create_main_menu_keyboard()
         )
 
         # Start onboarding session
         try:
-            result = await api_request("POST", f"/onboarding/start", {"player_id": player_id})
+            result = await api_request("POST", "/onboarding/start", {"player_id": player_id})
             await state.update_data(session_id=result["session_id"])
 
             if result["question"]:
                 question = result["question"]
-                keyboard = create_onboarding_keyboard(question["options"])
+                keyboard = create_onboarding_keyboard(question["options"], question["id"])
+                msgs = lang.get_onboarding(BOT_LANGUAGE)
                 await message.answer(
-                    f"Вопрос {question['id']}:\n\n{question['text']}",
+                    msgs["question_prefix"].format(id=question['id'], text=question['text']),
                     reply_markup=keyboard
                 )
                 await OnboardingState.waiting_for_answer.set()
         except Exception as e:
-            await message.answer(f"Произошла ошибка при запуске: {e}")
+            msgs = lang.get_errors(BOT_LANGUAGE)
+            await message.answer(msgs["onboarding_error"].format(error=e))
 
 
-@aiogram.message(Command("profile"))
 async def cmd_profile(message: types.Message):
     """Show player profile"""
     player_id = message.from_user.id
 
-    try:
         profile = await api_request("GET", f"/players/{player_id}/profile")
+        msgs = lang.get_profile(BOT_LANGUAGE)
         await message.answer(
-            f"👤 **Ваш профиль**\n\n"
-            f"**Роль:** {profile['role']}\n\n"
-            f"{profile['role_description']}\n\n"
-            f"**Характеристики:**\n- {'\n- '.join(profile['personality_traits'])}\n\n"
-            f"**Визуализация:** {profile['avatar_description']}",
+            f"{msgs['title']}\n\n"
+            f"{msgs['role'].format(role=profile['role'])}\n\n"
+            f"{msgs['description'].format(role_description=profile['role_description'])}\n\n"
+            f"{msgs['traits'].format(traits='\n- '.join(profile['personality_traits']))}\n\n"
+            f"{msgs['visualization'].format(avatar=profile['avatar_description'])}",
             parse_mode="Markdown"
         )
     except Exception:
-        await message.answer(
-            "У вас ещё нет профиля. Пройдите онбординг с помощью /start"
-        )
+        msgs = lang.get_profile(BOT_LANGUAGE)
+        await message.answer(msgs["no_profile"])
 
 
-@aiogram.message(Command("today"))
 async def cmd_today(message: types.Message):
     """Show current day's game episode"""
-    try:
+        msgs = lang.get_current_day(BOT_LANGUAGE)
         day = await api_request("GET", "/game/current-day")
+
+        # Create action keyboard if there are actions
+        keyboard = None
+        if day.get("player_actions"):
+            keyboard = create_action_keyboard(day["player_actions"])
 
         actions_text = "\n\n".join([
             f"{i+1}. {a['text']}"
@@ -167,61 +171,51 @@ async def cmd_today(message: types.Message):
         ])
 
         await message.answer(
-            f"📅 **День {day['day']}**\n\n"
-            f"*Сюжет:*\n{day['story']}\n\n"
-            f"*NPC диалоги:*\n"
+            msgs["title"].format(day=day['day']) + "\n\n"
+            f"{msgs['story'].format(story=day['story'])}\n\n"
+            f"{msgs['npc_dialogues']}\n"
             + "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in day.get("npc_dialogues", [])]) +
-            f"\n\n*Ваши действия:*\n{actions_text}",
-            parse_mode="Markdown"
+            f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n"
+            f"{msgs['select_action']}",
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
     except Exception as e:
-        await message.answer(f"Не удалось получить информацию о текущем дне: {e}")
+        msgs = lang.get_current_day(BOT_LANGUAGE)
+        await message.answer(msgs["error"].format(error=e))
 
 
-@aiogram.message(Command("help"))
 async def cmd_help(message: types.Message):
     """Show help information"""
+    msgs = lang.get_help(BOT_LANGUAGE)
     await message.answer(
-        "🎮 **AI Game Master - Помощь**\n\n"
-        "**Команды:**\n"
-        "/start - Начать или продолжить игру\n"
-        "/profile - Показать ваш профиль\n"
-        "/today - Текущий день игры\n"
-        "/help - Эта справка\n\n"
-        "**Как играть:**\n"
-        "1. Каждый день генерируется новый сюжет\n"
-        "2. Вы выбираете действия из предложенных вариантов\n"
-        "3. Ваши решения влияют на развитие истории\n"
-        "4. Вы можете общаться с Game Master в любое время\n\n"
-        "Напишите сообщение для общения с Game Master.",
+        f"{msgs['title']}\n\n"
+        f"{msgs['commands']}\n\n"
+        f"{msgs['how_to_play']}",
         parse_mode="Markdown"
     )
 
 
-@aiogram.message(F.content_type == types.ContentType.VOICE)
 async def handle_voice_message(message: types.Message):
     """Handle voice messages"""
     player_id = message.from_user.id
 
-    # Download voice file
-    voice = message.voice
-    file = await bot.get_file(voice.file_id)
-    # TODO: Download file and send to speech-to-text service
-
+    msgs = lang.get_messages(BOT_LANGUAGE)
     await message.answer(
-        "Спасибо за голосовое сообщение!\n"
-        "Game Master получил ваше сообщение и ответит скоро."
+        msgs["voice_received"]
     )
 
-    # TODO: Send message to Game Master API
-    # await api_request("POST", "/game/messages", {
-    #     "player_id": player_id,
-    #     "message": "voice:message_id",
-    #     "message_type": "voice"
-    # })
+    # Send message to Game Master API
+    try:
+        await api_request("POST", "/game/messages", {
+            "player_id": player_id,
+            "message": "[voice message]",
+            "message_type": "voice"
+        })
+    except Exception as e:
+        logger.error(f"Failed to send voice message to API: {e}")
 
 
-@aiogram.message(F.text & ~F.command)
 async def handle_text_message(message: types.Message):
     """Handle regular text messages (chat with Game Master)"""
     player_id = message.from_user.id
@@ -234,65 +228,71 @@ async def handle_text_message(message: types.Message):
             "message_type": "text"
         })
 
+        msgs = lang.get_messages(BOT_LANGUAGE)
         await message.answer(
-            "Game Master получил ваше сообщение.\n"
-            "Ответ будет сгенерирован в ближайшее время."
+            msgs["text_received"]
         )
     except Exception as e:
-        await message.answer(f"Произошла ошибка: {e}")
+        msgs = lang.get_errors(BOT_LANGUAGE)
+        await message.answer(msgs["error"].format(error=e))
 
 
-@aiogram.callback_query(F.data.startswith("onboarding_answer:"))
 async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
     """Handle onboarding answer selection"""
-    data = callback.data.split(":")[1]
+    parts = callback.data.split(":")
+    msgs = lang.get_errors(BOT_LANGUAGE)
+    if len(parts) != 3:
+        await callback.answer(msgs["invalid_format"])
+        return
+
+    question_id = int(parts[1])
+    answer_value = parts[2]
     session_id = await state.get_data().get("session_id")
 
-    try:
-        # Extract question_id from callback data (we need to store it)
-        # For now, get current question from API
-        status = await api_request("GET", f"/onboarding/{session_id}")
-        question_id = status["current_question"] + 1  # 1-indexed
+    if not session_id:
+        await callback.answer(msgs["session_not_found"])
+        return
 
+    try:
         result = await api_request("POST", f"/onboarding/{session_id}/answer", {
             "question_id": question_id,
-            "answer": data
+            "answer": answer_value
         })
 
         if result["completed"]:
             profile = result["profile"]
+            msgs = lang.get_onboarding(BOT_LANGUAGE)
             await callback.message.answer(
-                f"🎉 Онбординг завершён!\n\n"
-                f"Ваша роль: **{profile['role']}**\n\n"
-                f"{profile['role_description']}\n\n"
-                f"**Характеристики:**\n- {'\n- '.join(profile['personality_traits'])}\n\n"
-                f"Добро пожаловать на борт!\n\n"
-                f"Используйте /today для просмотра текущего дня игры.",
+                msgs["onboarding_complete"].format(
+                    role=profile['role'],
+                    role_description=profile['role_description'],
+                    traits='\n- '.join(profile['personality_traits'])
+                ),
                 parse_mode="Markdown",
                 reply_markup=create_main_menu_keyboard()
             )
             await state.clear()
         else:
             next_question = result["next_question"]
-            keyboard = create_onboarding_keyboard(next_question["options"])
+            keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+            msgs = lang.get_onboarding(BOT_LANGUAGE)
             await callback.message.answer(
-                f"Вопрос {next_question['id']}:\n\n{next_question['text']}",
+                msgs["question_prefix"].format(id=next_question['id'], text=next_question['text']),
                 reply_markup=keyboard
             )
 
         await callback.answer()
     except Exception as e:
-        await callback.message.answer(f"Произошла ошибка: {e}")
+        msgs = lang.get_errors(BOT_LANGUAGE)
+        await callback.message.answer(msgs["error"].format(error=e))
         await callback.answer()
 
 
-@aiogram.callback_query(F.data.startswith("action:"))
 async def action_selection(callback: types.CallbackQuery):
     """Handle player action selection"""
     action_id = callback.data.split(":")[1]
     player_id = callback.from_user.id
 
-    try:
         # Get current day to validate
         day = await api_request("GET", "/game/current-day")
 
@@ -304,14 +304,15 @@ async def action_selection(callback: types.CallbackQuery):
             "choice": "selected"
         })
 
+        msgs = lang.get_actions(BOT_LANGUAGE)
         await callback.message.answer(
-            f"Ваш выбор записан!\n\n"
-            f"Game Master обработает ваше решение и обновит сюжет.\n\n"
-            f"Вы можете продолжить общение с Game Master или подождать следующего дня."
+            msgs["recorded"],
+            reply_markup=create_main_menu_keyboard()
         )
         await callback.answer()
     except Exception as e:
-        await callback.message.answer(f"Произошла ошибка при записи выбора: {e}")
+        msgs = lang.get_actions(BOT_LANGUAGE)
+        await callback.message.answer(msgs["error"].format(error=e))
         await callback.answer()
 
 
