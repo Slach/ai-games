@@ -81,8 +81,9 @@ COPY comfyui/fix_glib_symbols.sh /opt/fix_glib_symbols.sh
 RUN chmod +x /opt/fix_glib_symbols.sh
 
 # Install PyTorch with CUDA 13 support for ARM64
-ENV LD_LIBRARY_PATH=/usr/local/cuda-13/compat:$LD_LIBRARY_PATH
 ENV LD_LIBRARY_PATH=/opt/ComfyUI/.venv/lib/python3.12/site-packages/torch/lib:$LD_LIBRARY_PATH
+RUN ln -s /usr/local/cuda-13.0/targets/sbsa-linux/lib/stubs/libcuda.so /usr/local/cuda-13.0/targets/sbsa-linux/lib/stubs/libcuda.so.1
+ENV LD_LIBRARY_PATH=/usr/local/cuda-13.0/targets/sbsa-linux/lib/stubs:$LD_LIBRARY_PATH
 
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ uv pip install --system --break-system-packages --upgrade pip
 RUN --mount=type=cache,id=comfyui-cache,target=/root/ uv pip install --system --break-system-packages huggingface_hub[cli]
