@@ -12,4 +12,5 @@ comfyui/web_custom_versions/
 .qwen/
 .opencode/
 __pycache__/
+game_master.db
 *.pyc

@@ -239,8 +239,8 @@ docker compose exec telegram-bot ping game-master-api
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| LLAMA_CPP_URL | http://llama.cpp:8090/v1 | LLM endpoint |
-| LLAMA_CPP_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
+| LLM_URL | http://llama.cpp:8090/v1 | LLM endpoint |
+| LLM_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
 | PIXELLE_MCP_URL | http://pixelle-mcp:9004/pixelle/mcp | Content gen endpoint |
 | COMFYUI_URL | http://comfyui:8188 | Image gen endpoint |
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |

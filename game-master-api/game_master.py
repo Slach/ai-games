@@ -95,7 +95,7 @@ class GameMasterAgent:
     """
 
     def __init__(self, language: str = "en"):
-        self.llm_base_url = os.getenv("LLAMA_CPP_URL", "http://llama.cpp:8090/v1")
+        self.llm_base_url = os.getenv("LLM_URL", "http://llama.cpp:8090/v1")
         self.pixelle_mcp_url = os.getenv("PIXELLE_MCP_URL", "http://pixelle-mcp:9004/pixelle/mcp")
         self.language = language
 
@@ -145,8 +145,8 @@ class GameMasterAgent:
             # For llama.cpp compatibility, we need to use the correct OpenAI-compatible config
             # The api_key is required by the OpenAI client but can be any value for local llama.cpp
             model = OpenAIModel(
-                model_id=os.getenv("LLAMA_CPP_MODEL", "unsloth/Qwen3.5-27B"),
-                api_key=os.getenv("LLAMA_CPP_API_KEY", "placeholder-key-for-llama-cpp"),
+                model_id=os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B"),
+                api_key=os.getenv("LLM_API_KEY", "placeholder-key-for-llama-cpp"),
                 base_url=self.llm_base_url,
                 params={
                     "max_tokens": 2000,

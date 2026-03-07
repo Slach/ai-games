@@ -173,7 +173,7 @@ docker-compose restart telegram-bot
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TELEGRAM_BOT_TOKEN` | Telegram bot authentication token | Required |
-| `LLAMA_CPP_URL` | LLM provider endpoint | `http://llama.cpp:8090/v1` |
+| `LLM_URL` | LLM provider endpoint | `http://llama.cpp:8090/v1` |
 | `PIXELLE_MCP_URL` | Pixelle-MCP server endpoint | `http://pixelle-mcp:9004/pixelle/mcp` |
 | `GAME_MASTER_API_URL` | Game Master API endpoint | `http://game-master-api:8000` |
 | `GAME_SCHEDULE_TIME` | Daily generation time (24h format) | `08:00` |

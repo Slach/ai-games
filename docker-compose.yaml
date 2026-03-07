@@ -77,9 +77,9 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama.cpp:8090/v1}
-      - LLAMA_CPP_API_KEY=${LLAMA_CPP_API_KEY:-placeholder-key-for-llama-cpp}
-      - LLAMA_CPP_MODEL=${LLAMA_CPP_MODEL:-unsloth/Qwen3.5-27B}
+      - LLM_URL=${LLM_URL:-http://llama.cpp:8090/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-placeholder-key-for-llama-cpp}
+      - LLM_MODEL=${LLM_MODEL:-unsloth/Qwen3.5-27B}
       - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
     depends_on:
