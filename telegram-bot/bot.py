@@ -292,9 +292,10 @@ async def cmd_profile(message: types.Message):
         
         # Add avatar if available (URL or description)
         if profile.get("avatar_url"):
-            profile_text += f"{msgs['visualization'].format(avatar=f'[Avatar Image]({profile[\"avatar_url\"]})')}"
+            avatar_link = f"[Avatar Image]({profile['avatar_url']})"
+            profile_text += msgs['visualization'].format(avatar=avatar_link)
         elif profile.get("avatar_description"):
-            profile_text += f"{msgs['visualization'].format(avatar=profile['avatar_description'])}"
+            profile_text += msgs['visualization'].format(avatar=profile['avatar_description'])
         
         await message.answer(
             profile_text,
