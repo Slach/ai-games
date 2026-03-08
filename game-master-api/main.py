@@ -636,56 +636,6 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
     return {"messages": messages}
 
 
-# Games management endpoints
-@app.get("/games/available")
-async def list_available_games():
-    """List available games for players to join"""
-    try:
-        games = get_available_games()
-        return {
-            "games": [
-                GameInfo(
-                    game_id=g["game_id"],
-                    name=g["name"],
-                    description=g.get("description", ""),
-                    player_count=len(get_players_in_game(g["game_id"])),
-                    status=g["status"]
-                ).model_dump()
-                for g in games
-            ]
-        }
-    except Exception as e:
-        logger.error(f"Failed to list available games: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list games: {str(e)}")
-
-
-@app.post("/games/{game_id}/join")
-async def join_game_endpoint(player_id: int, game_id: str):
-    """Join a game as a player"""
-    # Check if player already has a profile
-    profile = get_player_profile(player_id)
-    if not profile:
-        raise HTTPException(status_code=400, detail="Player must complete onboarding first")
-
-    # Try to join game
-    success = join_game(player_id, game_id)
-    if not success:
-        raise HTTPException(status_code=400, detail="Player already in a game")
-
-    return {"status": "joined", "game_id": game_id}
-
-
-@app.post("/games/{game_id}/leave")
-async def leave_game_endpoint(player_id: int, game_id: str):
-    """Leave a game"""
-    profile = get_player_profile(player_id)
-    if not profile or profile.get("game_id") != game_id:
-        raise HTTPException(status_code=400, detail="Player not in this game")
-
-    success = leave_game(player_id)
-    return {"status": "left", "game_id": game_id}
-
-
 # Admin endpoints
 @app.post("/admin/generate-day")
 async def generate_daily_episode(language: str = "en"):
