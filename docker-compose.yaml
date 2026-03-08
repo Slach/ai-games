@@ -107,7 +107,7 @@ services:
       context: telegram-bot/
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - GAME_MASTER_API_URL=http://game-master-api:8000
+      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
     depends_on:
       game-master-api:
         condition: service_healthy
