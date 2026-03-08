@@ -561,21 +561,6 @@ async def poll_game_updates(player_id: int, since: Optional[str] = None):
     return updates
 
 
-def update_player_last_poll(player_id: int, last_poll: str) -> bool:
-    """Update player's last poll timestamp"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """UPDATE player_profiles SET last_poll = ? WHERE player_id = ?""",
-        (last_poll, player_id)
-    )
-
-    conn.commit()
-    conn.close()
-    return True
-
-
 # Player action endpoints
 @app.post("/game/actions")
 async def submit_player_action(
