@@ -246,7 +246,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             
             # Start onboarding session
             try:
-                result = await api_request("POST", "/onboarding/start", {"player_id": player_id})
+                result = await api_request("POST", "/onboarding/start", {"player_id": player_id}, params={"language": BOT_LANGUAGE})
                 session_id = result.get("session_id")
                 game_id = result.get("game_id", "default_game")
                 
@@ -431,7 +431,7 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
         result = await api_request("POST", f"/onboarding/{session_id}/answer", {
             "question_id": question_id,
             "answer": answer_value
-        })
+        }, params={"language": BOT_LANGUAGE})
         
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
         
