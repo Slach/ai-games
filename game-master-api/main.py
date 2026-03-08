@@ -34,6 +34,7 @@ from database import (
     get_available_games,
     get_db_connection,
     get_player_actions,
+    get_players_in_game,
 )
 
 # Configure logging
