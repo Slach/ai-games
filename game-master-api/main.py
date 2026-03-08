@@ -287,18 +287,46 @@ async def get_onboarding_questions():
 
 
 @app.get("/onboarding/questions/generate")
-async def generate_onboarding_questions():
+async def generate_onboarding_questions(game_id: str = "default_game"):
     """Generate 2-3 dynamic onboarding questions based on game setting"""
-    try:
-        questions = await generate_dynamic_onboarding_questions()
-        return {"questions": [q.model_dump() for q in questions]}
-    except Exception as e:
-        logger.error(f"Failed to generate dynamic questions: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate questions: {str(e)}")
+    game = get_game(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    # Generate dynamic questions based on game setting
+    dynamic_questions = [
+        OnboardingQuestion(
+            id=101,
+            text=f"In the {game['setting']}, you encounter an unknown signal. How do you respond?",
+            options=[
+                {"value": "cautious", "label": "Investigate cautiously with sensors"},
+                {"value": "bold", "label": "Approach directly and attempt contact"},
+            ]
+        ),
+        OnboardingQuestion(
+            id=102,
+            text=f"As a crew member in {game['name']}, what is your priority?",
+            options=[
+                {"value": "safety", "label": "Crew safety above all else"},
+                {"value": "discovery", "label": "Knowledge and discovery"},
+                {"value": "mission", "label": "Complete the mission objectives"},
+            ]
+        ),
+        OnboardingQuestion(
+            id=103,
+            text=f"When faced with a moral dilemma in {game['setting']}, you would:",
+            options=[
+                {"value": "empathetic", "label": "Consider everyone's feelings"},
+                {"value": "logical", "label": "Follow logic and rules"},
+            ]
+        ),
+    ]
+
+    return {"questions": [q.model_dump() for q in dynamic_questions]}
 
 
 @app.post("/onboarding/start")
-async def start_onboarding(player_id: int):
+async def start_onboarding(player_id: int, game_id: str = "default_game"):
     """Start a new onboarding session for a player"""
     # Check if player already has a profile
     existing_profile = get_player_profile(player_id)
@@ -307,9 +335,14 @@ async def start_onboarding(player_id: int):
         raise HTTPException(status_code=400, detail="Player already has a profile")
     
     session = create_onboarding_session(player_id)
-    next_question = get_next_question(0)
+    
+    # Get dynamic questions for the game
+    dynamic_questions_result = await generate_onboarding_questions(game_id)
+    next_question = dynamic_questions_result["questions"][0] if dynamic_questions_result.get("questions") else None
+    
     return {
         "session_id": session["session_id"],
+        "game_id": game_id,
         "question": next_question.model_dump() if next_question else None,
     }
 
@@ -325,14 +358,18 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer):
     answers[answer.question_id] = answer.answer
     current_question = session["current_question"] + 1
 
-    completed = current_question >= len(STATIC_ONBOARDING_QUESTIONS)
-    if completed:
-        profile_data = generate_player_profile_from_answers(session["player_id"], answers)
-        create_player_profile(profile_data)
-
+    # Check if all questions answered (3 dynamic questions)
+    completed = current_question >= 3
+    
     update_onboarding_session(session_id, current_question, answers, completed)
 
-    next_question = get_next_question(current_question) if not completed else None
+    next_question = None
+    if not completed:
+        # Get next dynamic question
+        game_id = session.get("game_id", "default_game")
+        dynamic_questions_result = await generate_onboarding_questions(game_id)
+        remaining_questions = dynamic_questions_result["questions"][current_question:]
+        next_question = remaining_questions[0] if remaining_questions else None
 
     result = {
         "completed": completed,
@@ -340,6 +377,10 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer):
     }
 
     if completed:
+        # Generate profile from answers
+        profile_data = generate_player_profile_from_answers(session["player_id"], answers)
+        profile_data["game_id"] = session.get("game_id", "default_game")
+        create_player_profile(profile_data)
         result["profile"] = profile_data
 
     return result
@@ -366,53 +407,42 @@ async def complete_onboarding(session_id: str):
     try:
         comic_generator = create_comic_generator()
         
-        avatar_prompt = f"""
-        Sci-fi character portrait: {profile['role']}.
-        Personality traits: {', '.join(profile['personality_traits'])}.
-        Futuristic uniform, detailed face, cinematic lighting, 4K quality.
-        Space opera style, Star Trek aesthetic.
-        """
+        avatar_url = await comic_generator.generate_character_image(
+            character_name=profile["role"],
+            role=profile["role"],
+            traits=profile["personality_traits"],
+            scene_description=profile.get("avatar_description", "")
+        )
         
-        # Use the scene generation endpoint for avatar
-        async with aiohttp.ClientSession() as session_http:
-            async with session_http.post(
-                f"{comic_generator.pixelle_mcp_url}/generate/image",
-                json={
-                    "prompt": avatar_prompt,
-                    "workflow": comic_generator.workflows["character"],
-                    "output_format": "webp",
-                },
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    avatar_url = result.get("image_url", result.get("path", ""))
-                    
-                    # Update profile with avatar URL
-                    profile["avatar_url"] = avatar_url
-                    create_player_profile(profile)
-                    
-                    return {
-                        "status": "completed",
-                        "profile": profile,
-                        "avatar_url": avatar_url
-                    }
-                else:
-                    logger.error(f"Avatar generation failed: {resp.status}")
-                    # Return profile without avatar if generation fails
-                    return {
-                        "status": "completed",
-                        "profile": profile,
-                        "avatar_url": None
-                    }
+        # Update profile with avatar URL
+        if avatar_url:
+            update_player_profile_avatar(player_id, avatar_url)
+            profile["avatar_url"] = avatar_url
+            
     except Exception as e:
-        logger.error(f"Avatar generation error: {e}")
-        # Return profile without avatar if generation fails
-        return {
-            "status": "completed",
-            "profile": profile,
-            "avatar_url": None
-        }
+        logger.error(f"Avatar generation failed: {e}")
+        # Continue without avatar URL
+
+    return {
+        "status": "completed",
+        "profile": profile,
+        "avatar_url": profile.get("avatar_url")
+    }
+
+
+def update_player_profile_avatar(player_id: int, avatar_url: str) -> bool:
+    """Update player profile with avatar URL"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE player_profiles SET avatar_url = ? WHERE player_id = ?""",
+        (avatar_url, player_id)
+    )
+
+    conn.commit()
+    conn.close()
+    return True
 
 
 @app.get("/onboarding/{session_id}")
@@ -422,10 +452,16 @@ async def get_onboarding_status(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    next_question = get_next_question(session["current_question"]) if not session["completed"] else None
+    next_question = None
+    if not session["completed"]:
+        game_id = session.get("game_id", "default_game")
+        dynamic_questions_result = await generate_onboarding_questions(game_id)
+        remaining_questions = dynamic_questions_result["questions"][session["current_question"]:]
+        next_question = remaining_questions[0] if remaining_questions else None
 
     return {
         "session_id": session["session_id"],
+        "game_id": session.get("game_id", "default_game"),
         "current_question": session["current_question"],
         "completed": session["completed"],
         "next_question": next_question.model_dump() if next_question else None,
@@ -440,10 +476,11 @@ async def get_player_profile_endpoint(player_id: int):
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found. Complete onboarding first.")
     
-    # Return profile with avatar_url if available
+    # Return profile with avatar_url and game_id
     return {
         **profile,
         "avatar_url": profile.get("avatar_url"),
+        "game_id": profile.get("game_id"),
     }
 
 
@@ -537,70 +574,51 @@ def update_player_last_poll(player_id: int, last_poll: str) -> bool:
 
 
 @app.get("/game/poll/{player_id}")
-async def poll_game_updates(player_id: int, last_poll: Optional[str] = None):
+async def poll_game_updates(player_id: int, since: Optional[str] = None):
     """Poll for new game updates (days, actions, messages) since last poll"""
-    # Get player profile to check game_id
     profile = get_player_profile(player_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found")
+
+    # Get last poll timestamp
+    last_poll = since or profile.get("last_poll")
     
-    game_id = profile.get("game_id")
-    
-    response = PollResponse()
-    
+    updates = {
+        "new_game_day": None,
+        "pending_actions": [],
+        "messages_from_gm": [],
+        "npc_messages": []
+    }
+
     try:
-        # Check for new game day
+        # Check for current day with pending actions
         state = get_game_state()
-        current_day = get_game_day(state["day"])
+        day = get_game_day(state["day"])
         
-        if current_day:
-            # Check if player has pending actions to select
-            if current_day.get("player_actions"):
-                response.pending_actions = [
-                    {
-                        "action_id": a["id"],
-                        "text": a["text"],
-                        "consequence": a.get("consequence", "")
-                    }
-                    for a in current_day["player_actions"]
-                ]
-            
-            # Check if this is a new day (simplified check)
-            response.new_game_day = {
-                "day": current_day["day"],
-                "story": current_day["story"],
-                "has_actions": bool(current_day.get("player_actions"))
-            }
-        
-        # Get recent messages from Game Master
-        messages = get_game_messages(player_id, limit=5)
-        response.messages_from_gm = [
-            {
-                "id": m["id"],
-                "message": m["message"],
-                "timestamp": m["timestamp"]
-            }
-            for m in messages if m.get("message_type") == "text_response"
-        ]
-        
-        # Get NPC messages (from game day dialogues)
-        if current_day and current_day.get("npc_dialogues"):
-            response.npc_messages = [
-                {
-                    "npc": d["npc"],
-                    "dialogue": d["dialogue"]
+        if day and day.get("player_actions"):
+            # Check if player has already selected action
+            player_actions = get_player_actions(player_id, day["day"])
+            if not player_actions:
+                updates["pending_actions"] = day["player_actions"]
+                updates["new_game_day"] = {
+                    "day": day["day"],
+                    "story": day["story"],
+                    "npc_dialogues": day["npc_dialogues"]
                 }
-                for d in current_day["npc_dialogues"]
-            ]
-        
-        # Check if player has avatar_url
-        if profile.get("avatar_url"):
-            response.avatar_url = profile["avatar_url"]
-        
+
+        # Get recent messages from Game Master
+        messages = get_game_messages(player_id, limit=10)
+        if last_poll:
+            messages = [m for m in messages if m.get("timestamp", "") > last_poll]
+        updates["messages_from_gm"] = messages
+
+        # Update last poll timestamp
+        update_player_last_poll(player_id, datetime.now().isoformat())
+
     except Exception as e:
-        logger.error(f"Failed to poll game updates for player {player_id}: {e}")
-    
-    return response.model_dump()
+        logger.error(f"Poll failed for player {player_id}: {e}")
+
+    return updates
 
 
 # Player action endpoints
@@ -833,27 +851,28 @@ async def leave_game_endpoint(player_id: int, game_id: str):
     return {"status": "left", "game_id": game_id}
 
 
-# Games endpoints
+# Games management endpoints
 @app.get("/games/available")
-async def get_available_games():
+async def list_available_games():
     """Get list of available games"""
     games = get_available_games()
-    return {"games": games}
+    return {"games": [dict(g) for g in games]}
 
 
 @app.post("/games/{game_id}/join")
-async def join_game_endpoint(game_id: str, player_id: int):
+async def join_game_endpoint(player_id: int, game_id: str):
     """Join a game as a player"""
     # Check if player already has a profile
     existing_profile = get_player_profile(player_id)
     if not existing_profile:
         raise HTTPException(status_code=400, detail="Player must complete onboarding first")
 
-    success = join_game(game_id, player_id)
+    # Try to join game
+    success = join_game(player_id, game_id)
     if not success:
-        raise HTTPException(status_code=400, detail="Cannot join game - player already in another game or game is full")
+        raise HTTPException(status_code=400, detail="Player already in a game")
 
-    # Update player profile
+    # Update player profile with game_id
     profile_data = {
         "player_id": player_id,
         "avatar_url": existing_profile.get("avatar_url"),
@@ -866,6 +885,17 @@ async def join_game_endpoint(game_id: str, player_id: int):
     create_player_profile(profile_data)
 
     return {"status": "joined", "game_id": game_id}
+
+
+@app.post("/games/{game_id}/leave")
+async def leave_game_endpoint(player_id: int, game_id: str):
+    """Leave a game"""
+    profile = get_player_profile(player_id)
+    if not profile or profile.get("game_id") != game_id:
+        raise HTTPException(status_code=400, detail="Player not in this game")
+
+    success = leave_game(player_id)
+    return {"status": "left", "game_id": game_id}
 
 
 # Admin endpoints
