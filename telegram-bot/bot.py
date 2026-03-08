@@ -132,7 +132,8 @@ async def poll_game_updates(player_id: int):
         last_poll = profile.get("last_poll") if profile else None
         
         # Poll for updates using the new endpoint
-        result = await api_request("GET", f"/game/poll/{player_id}", params={"last_poll": last_poll})
+        params = {"last_poll": last_poll} if last_poll is not None else {}
+        result = await api_request("GET", f"/game/poll/{player_id}", params=params)
         
         # Process updates
         if result.get("new_game_day"):
