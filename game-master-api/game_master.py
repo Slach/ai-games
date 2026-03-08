@@ -153,7 +153,7 @@ class GameMasterAgent:
                     "base_url": self.llm_base_url,
                 },
                 params={
-                    "max_tokens": 2000,
+                    "max_tokens": 261120,
                     "temperature": 0.7,
                 },
             )
