@@ -220,16 +220,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
         
         if profile:
             # Player already has a profile - welcome back
-            avatar_info = ""
-            if profile.get("avatar_description"):
-                avatar_info = f"\n\n{msgs['profile_avatar'].format(avatar=profile['avatar_description'])}"
-            
             await message.answer(
                 msgs["welcome_back"].format(
                     role=profile['role'],
                     role_description=profile['role_description'],
-                    traits=', '.join(profile['personality_traits']),
-                    avatar_info=avatar_info
+                    traits=', '.join(profile['personality_traits'])
                 ),
                 reply_markup=create_main_menu_keyboard()
             )
