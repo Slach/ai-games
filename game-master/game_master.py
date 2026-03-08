@@ -323,6 +323,28 @@ class GameMasterScheduler:
             logger.error(f"Failed to generate daily episode: {e}")
             raise
 
+    async def generate_comics_for_all_players(self, day_result: dict) -> None:
+        """Generate personalized comics for all players in the game"""
+        try:
+            # Get all players in current game
+            players = await self.get_players_in_game()
+            
+            if not players:
+                logger.info("No players found in game")
+                return
+            
+            logger.info(f"Generating comics for {len(players)} players")
+            
+            # Generate comic for each player
+            for player_id in players:
+                try:
+                    await self.generate_comic_for_player(player_id, day_result.get("day"))
+                except Exception as e:
+                    logger.error(f"Failed to generate comic for player {player_id}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to generate comics batch: {e}")
+
     async def generate_comic_for_player(self, player_id: int, day: int | None = None) -> dict:
         """Call game-master-api to generate a personalized comic for a player"""
         logger.info(f"Calling API to generate comic for player {player_id}")
@@ -346,6 +368,81 @@ class GameMasterScheduler:
         except Exception as e:
             logger.error(f"Failed to generate comic for player {player_id}: {e}")
             raise
+
+    async def check_pending_actions(self) -> list:
+        """Check for players who haven't selected actions yet"""
+        try:
+            state = await self.check_game_state()
+            current_day = state.get("day", 1)
+            
+            # Get all players in game
+            players = await self.get_players_in_game()
+            
+            pending = []
+            for player_id in players:
+                # Check if player has action for current day
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{self.api_url}/game/actions/{player_id}/{current_day}") as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            if not result.get("has_action"):
+                                pending.append(player_id)
+            return pending
+            
+        except Exception as e:
+            logger.error(f"Failed to check pending actions: {e}")
+            return []
+
+    async def auto_select_actions(self, player_ids: list) -> None:
+        """Auto-select actions for players who haven't chosen"""
+        try:
+            state = await self.check_game_state()
+            current_day = state.get("day", 1)
+            
+            for player_id in player_ids:
+                logger.info(f"Auto-selecting action for player {player_id}")
+                
+                # Call API to auto-select action based on player profile
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.api_url}/game/auto-action/{player_id}/{current_day}",
+                        json={"timeout_hours": AUTO_ACTION_TIMEOUT_HOURS}
+                    ) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            logger.info(f"Auto-selected action for player {player_id}: {result.get('action_id')}")
+                        else:
+                            error_text = await resp.text()
+                            logger.error(f"Auto-action failed for player {player_id}: {resp.status} - {error_text}")
+                            
+        except Exception as e:
+            logger.error(f"Failed to auto-select actions: {e}")
+
+    async def check_and_auto_select(self) -> None:
+        """Check for pending actions and auto-select if timeout reached"""
+        try:
+            state = await self.check_game_state()
+            current_day = state.get("day", 1)
+            
+            # Get last update time for the day
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.api_url}/game/day/{current_day}") as resp:
+                    if resp.status == 200:
+                        day_data = await resp.json()
+                        created_at = day_data.get("created_at", "")
+                        
+                        # Calculate time since day creation
+                        if created_at:
+                            day_created = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            hours_since = (datetime.now(day_created.tzinfo) - day_created).total_seconds() / 3600
+                            
+                            if hours_since >= AUTO_ACTION_TIMEOUT_HOURS:
+                                pending_players = await self.check_pending_actions()
+                                if pending_players:
+                                    logger.info(f"Auto-action timeout reached for {len(pending_players)} players")
+                                    await self.auto_select_actions(pending_players)
+        except Exception as e:
+            logger.error(f"Failed to check auto-action timeout: {e}")
 
     async def update_npc_team(self, day: int) -> dict:
         """
