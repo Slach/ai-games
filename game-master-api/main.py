@@ -35,6 +35,7 @@ from database import (
     get_db_connection,
     get_player_actions,
     get_players_in_game,
+    update_player_profile_last_poll,
 )
 
 # Configure logging
@@ -554,7 +555,7 @@ async def poll_game_updates(player_id: int, since: Optional[str] = None):
         updates["messages_from_gm"] = messages
 
         # Update last poll timestamp
-        update_player_last_poll(player_id, datetime.now().isoformat())
+        update_player_profile_last_poll(player_id, datetime.now().isoformat())
 
     except Exception as e:
         logger.error(f"Poll failed for player {player_id}: {e}")
