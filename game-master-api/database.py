@@ -99,6 +99,8 @@ def init_db():
             id INTEGER PRIMARY KEY CHECK (id = 1),
             day INTEGER DEFAULT 1,
             status TEXT DEFAULT 'active',
+            ship_alive INTEGER DEFAULT 1,
+            crew_health INTEGER DEFAULT 100,
             last_updated TEXT NOT NULL
         )
     """)
@@ -107,7 +109,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM game_state")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
-            "INSERT INTO game_state (id, day, status, last_updated) VALUES (1, 1, 'active', ?)",
+            "INSERT INTO game_state (id, day, status, ship_alive, crew_health, last_updated) VALUES (1, 1, 'active', 1, 100, ?)",
             (datetime.now().isoformat(),)
         )
 
@@ -411,20 +413,46 @@ def get_game_state() -> Dict[str, Any]:
     return {
         "day": row["day"],
         "status": row["status"],
+        "ship_alive": bool(row["ship_alive"]),
+        "crew_health": row["crew_health"],
         "last_updated": row["last_updated"]
     }
 
 
-def update_game_state(day: int, status: str = "active") -> Dict[str, Any]:
+def update_game_state(day: int, status: str = "active", ship_alive: bool = True, crew_health: int = 100) -> Dict[str, Any]:
     """Update game state"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """UPDATE game_state
-           SET day = ?, status = ?, last_updated = ?
+           SET day = ?, status = ?, ship_alive = ?, crew_health = ?, last_updated = ?
            WHERE id = 1""",
-        (day, status, datetime.now().isoformat())
+        (day, status, 1 if ship_alive else 0, crew_health, datetime.now().isoformat())
+    )
+
+    conn.commit()
+    conn.close()
+
+    return get_game_state()
+
+
+def is_game_active() -> bool:
+    """Check if game is still active (ship and crew alive)"""
+    state = get_game_state()
+    return state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
+
+
+def end_game(reason: str = "game_over") -> Dict[str, Any]:
+    """End the game by setting ship destroyed and crew health to 0"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE game_state
+           SET status = ?, ship_alive = 0, crew_health = 0, last_updated = ?
+           WHERE id = 1""",
+        (reason, datetime.now().isoformat())
     )
 
     conn.commit()
