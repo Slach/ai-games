@@ -347,6 +347,62 @@ class GameMasterScheduler:
             logger.error(f"Failed to generate comic for player {player_id}: {e}")
             raise
 
+    async def update_npc_team(self, day: int) -> dict:
+        """
+        Update NPC team based on team assembly logic.
+        Track team assembly over 3 days from first crew member.
+        Assign bot NPCs if team not full after 3 days.
+        """
+        logger.info(f"Updating NPC team for day {day}")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Call API to update NPC team
+                async with session.post(f"{self.api_url}/admin/update-npc-team", json={
+                    "day": day,
+                    "language": self.language
+                }) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(f"API error: {resp.status} - {error_text}")
+                        raise Exception(f"API error: {resp.status}")
+
+                    result = await resp.json()
+                    logger.info(f"NPC team updated: {result.get('npc_count')} NPCs")
+                    return result
+
+        except Exception as e:
+            logger.error(f"Failed to update NPC team: {e}")
+            return {"status": "failed", "error": str(e)}
+
+    async def notify_player_auto_action(self, player_id: int, day: int, action_text: str) -> bool:
+        """
+        Notify player that AI selected an action on their behalf.
+        Returns True if notification sent successfully.
+        """
+        logger.info(f"Sending auto-action notification to player {player_id}")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Call API to send notification
+                async with session.post(f"{self.api_url}/admin/notify-player", json={
+                    "player_id": player_id,
+                    "day": day,
+                    "message_type": "auto_action",
+                    "action_text": action_text
+                }) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"Failed to send notification: {resp.status}")
+                        return False
+                    
+                    result = await resp.json()
+                    logger.info(f"Notification sent to player {player_id}")
+                    return True
+
+        except Exception as e:
+            logger.error(f"Failed to notify player: {e}")
+            return False
+
     async def get_game_state(self) -> dict:
         """Get current game state from API"""
         try:
