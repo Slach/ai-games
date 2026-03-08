@@ -473,6 +473,69 @@ async def get_current_game_day():
 
 
 @app.get("/game/poll/{player_id}")
+async def poll_game_updates(player_id: int, since: Optional[str] = None):
+    """Poll for new game updates (days, actions, messages) since last poll"""
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player profile not found")
+
+    # Get last poll timestamp
+    last_poll = since or profile.get("last_poll")
+    
+    updates = {
+        "new_game_day": None,
+        "pending_actions": [],
+        "messages_from_gm": [],
+        "npc_messages": []
+    }
+
+    try:
+        # Check for current day with pending actions
+        state = get_game_state()
+        day = get_game_day(state["day"])
+        
+        if day and day.get("player_actions"):
+            # Check if player has already selected action
+            player_actions = get_player_actions(player_id, day["day"])
+            if not player_actions:
+                updates["pending_actions"] = day["player_actions"]
+                updates["new_game_day"] = {
+                    "day": day["day"],
+                    "story": day["story"],
+                    "npc_dialogues": day["npc_dialogues"]
+                }
+
+        # Get recent messages from Game Master
+        messages = get_game_messages(player_id, limit=10)
+        if last_poll:
+            messages = [m for m in messages if m.get("timestamp", "") > last_poll]
+        updates["messages_from_gm"] = messages
+
+        # Update last poll timestamp
+        update_player_last_poll(player_id, datetime.now().isoformat())
+
+    except Exception as e:
+        logger.error(f"Poll failed for player {player_id}: {e}")
+
+    return updates
+
+
+def update_player_last_poll(player_id: int, last_poll: str) -> bool:
+    """Update player's last poll timestamp"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE player_profiles SET last_poll = ? WHERE player_id = ?""",
+        (last_poll, player_id)
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+@app.get("/game/poll/{player_id}")
 async def poll_game_updates(player_id: int, last_poll: Optional[str] = None):
     """Poll for new game updates (days, actions, messages) since last poll"""
     # Get player profile to check game_id
@@ -665,6 +728,41 @@ async def join_game_endpoint(request: JoinGameRequest):
     except Exception as e:
         logger.error(f"Failed to join game: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to join game: {str(e)}")
+
+
+# Games management endpoints
+@app.get("/games/available")
+async def get_available_games():
+    """Get list of available games"""
+    games = get_available_games()
+    return {"games": games}
+
+
+@app.post("/games/{game_id}/join")
+async def join_game_endpoint(player_id: int, game_id: str):
+    """Join a game as a player"""
+    # Check if player already has a profile
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(status_code=400, detail="Player must complete onboarding first")
+
+    # Try to join game
+    success = join_game(player_id, game_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Player already in a game")
+
+    return {"status": "joined", "game_id": game_id}
+
+
+@app.post("/games/{game_id}/leave")
+async def leave_game_endpoint(player_id: int, game_id: str):
+    """Leave a game"""
+    profile = get_player_profile(player_id)
+    if not profile or profile.get("game_id") != game_id:
+        raise HTTPException(status_code=400, detail="Player not in this game")
+
+    success = leave_game(player_id)
+    return {"status": "left", "game_id": game_id}
 
 
 # Admin endpoints
