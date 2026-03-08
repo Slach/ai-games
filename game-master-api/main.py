@@ -630,6 +630,22 @@ async def submit_game_message(player_id: int, message: str, message_type: str = 
         }
 
 
+@app.get("/game/actions/{player_id}/{day}")
+async def get_player_actions_endpoint(player_id: int, day: int):
+    """Get player actions for a specific day"""
+    actions = get_player_actions(player_id, day)
+    return {"actions": actions}
+
+
+@app.get("/players")
+async def get_all_players():
+    """Get all players in the current game"""
+    # Get default game players
+    game_id = "default_game"
+    players = get_players_in_game(game_id)
+    return [{"player_id": pid, "game_id": game_id} for pid in players]
+
+
 @app.get("/game/messages/{player_id}")
 async def get_game_messages_endpoint(player_id: int, limit: int = 10):
     """Get player's message history"""
@@ -639,7 +655,7 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
 
 # Admin endpoints
 @app.post("/admin/generate-day")
-async def generate_daily_episode(language: str = "en"):
+async def generate_daily_episode(language: str = "en", previous_actions: list = None, team_assembly_status: dict = None):
     """Generate a new daily episode (called by game master scheduler)"""
     state = get_game_state()
     day_num = state["day"]
@@ -647,14 +663,25 @@ async def generate_daily_episode(language: str = "en"):
     logger.info(f"=== GENERATE DAY STARTED ===")
     logger.info(f"Day number: {day_num}")
     logger.info(f"Language: {language}")
+    logger.info(f"Previous actions count: {len(previous_actions) if previous_actions else 0}")
+    logger.info(f"Team assembly status: {team_assembly_status}")
 
     game_master = await create_game_master_agent(language=language)
 
     player_role = "Crew Member" if language != "ru" else "Член экипажа"
     logger.info(f"Player role: {player_role}")
+    
+    # Generate previous day summary from actions for story consistency
+    previous_summary = ""
+    if previous_actions:
+        action_summaries = []
+        for action in previous_actions:
+            action_summaries.append(f"Day {action.get('day', 0)}: Player chose '{action.get('choice')}'")
+        previous_summary = " | ".join(action_summaries)
+    
     story = await game_master.generate_daily_story(
         day=day_num,
-        previous_summary=state["last_updated"],
+        previous_summary=previous_summary or state["last_updated"],
         player_role=player_role
     )
 
@@ -673,6 +700,7 @@ async def generate_daily_episode(language: str = "en"):
             "image": f"/content/day_{day_num}/scene.jpg",
             "comic": f"/content/day_{day_num}/comic.webp",
         },
+        "previous_day_summary": previous_summary,
     }
 
     create_game_day(new_day)
