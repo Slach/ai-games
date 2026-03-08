@@ -1,10 +1,11 @@
-FROM python:3.11-slim
+FROM astral/uv:python3.14-bookworm-slim
 
 WORKDIR /app
 
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv venv
+RUN uv pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY . .

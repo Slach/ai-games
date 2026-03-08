@@ -103,7 +103,7 @@ services:
   telegram-bot:
     image: telegram-bot:spark-full
     build:
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.spark
       context: telegram-bot/
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
