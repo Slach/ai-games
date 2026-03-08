@@ -190,25 +190,25 @@ Return ONLY valid JSON with this structure:
         return STATIC_ONBOARDING_QUESTIONS[:3]
 
 
-def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str]) -> Dict[str, Any]:
+def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str], game_id: str = "default_game") -> Dict[str, Any]:
     """Generate player profile based on onboarding answers"""
     role_mapping = {
         "technical": {
             "role": "Chief Engineer",
             "description": "Вы отвечаете за техническое состояние корабля. Ваша способность быстро находить решения в критических ситуациях спасает экипаж.",
-            "avatar": "Техничный специалист в инженерном костюме, с инструментами и голографическими дисплеями вокруг",
+            "avatar_description": "Техничный специалист в инженерном костюме, с инструментами и голографическими дисплеями вокруг",
             "traits": ["технический", "практичный", "решительный"],
         },
         "diplomatic": {
             "role": "XO (First Officer)",
             "description": "Вы координируете действия экипажа и ведёте переговоры с внешними контактами. Ваше умение находить общий язык решает исход кризисов.",
-            "avatar": "Офицер связи в форменной униформе, с коммуникатором и уверенным взглядом",
+            "avatar_description": "Офицер связи в форменной униформе, с коммуникатором и уверенным взглядом",
             "traits": ["коммуникабельный", "стратегический", "эмпатичный"],
         },
         "exploration": {
             "role": "Science Officer",
             "description": "Вы исследуете неизвестное и анализируете данные. Ваша способность видеть закономерности открывает новые возможности.",
-            "avatar": "Учёный в лабораторном халате, с сканером и научными приборами",
+            "avatar_description": "Учёный в лабораторном халате, с сканером и научными приборами",
             "traits": ["аналитический", "любопытный", "методичный"],
         },
     }
@@ -230,10 +230,11 @@ def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str]
 
     return {
         "player_id": player_id,
-        "avatar_description": profile_data["avatar"],
+        "avatar_description": profile_data["avatar_description"],
         "role": profile_data["role"],
         "role_description": profile_data["description"],
         "personality_traits": traits,
+        "game_id": game_id,
     }
 
 
@@ -676,6 +677,73 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
     return {"messages": messages}
 
 
+# Game polling endpoint
+@app.get("/game/poll/{player_id}")
+async def poll_game_updates(player_id: int, last_poll: Optional[str] = None):
+    """Poll for new game updates since last poll"""
+    # Get player profile
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player profile not found")
+
+    # Get current day
+    state = get_game_state()
+    day = get_game_day(state["day"])
+    if not day:
+        return {"updates": []}
+
+    updates = {
+        "new_game_day": None,
+        "pending_actions": [],
+        "messages_from_gm": [],
+        "npc_messages": [],
+    }
+
+    # Check for new game day
+    if last_poll:
+        player_last_poll = profile.get("last_poll")
+        if not player_last_poll or player_last_poll < last_poll:
+            updates["new_game_day"] = {
+                "day": day["day"],
+                "story": day["story"],
+                "npc_dialogues": day["npc_dialogues"],
+                "player_actions": day.get("player_actions", []),
+            }
+
+    # Check for pending actions (actions not yet selected by player)
+    player_actions = get_player_actions(player_id, state["day"])
+    existing_action_ids = [a["action_id"] for a in player_actions]
+    
+    for action in day.get("player_actions", []):
+        if action["id"] not in existing_action_ids:
+            updates["pending_actions"].append(action)
+
+    # Get recent messages from Game Master
+    messages = get_game_messages(player_id, limit=5)
+    updates["messages_from_gm"] = [
+        m for m in messages if m.get("message_type") == "text_response"
+    ]
+
+    # Update player's last_poll timestamp
+    update_player_profile_last_poll(player_id, datetime.now().isoformat())
+
+    return updates
+
+
+def update_player_profile_last_poll(player_id: int, last_poll: str):
+    """Update player's last_poll timestamp"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE player_profiles SET last_poll = ? WHERE player_id = ?""",
+        (last_poll, player_id)
+    )
+
+    conn.commit()
+    conn.close()
+
+
 # Games endpoints
 @app.get("/games/available")
 async def list_available_games():
@@ -763,6 +831,41 @@ async def leave_game_endpoint(player_id: int, game_id: str):
 
     success = leave_game(player_id)
     return {"status": "left", "game_id": game_id}
+
+
+# Games endpoints
+@app.get("/games/available")
+async def get_available_games():
+    """Get list of available games"""
+    games = get_available_games()
+    return {"games": games}
+
+
+@app.post("/games/{game_id}/join")
+async def join_game_endpoint(game_id: str, player_id: int):
+    """Join a game as a player"""
+    # Check if player already has a profile
+    existing_profile = get_player_profile(player_id)
+    if not existing_profile:
+        raise HTTPException(status_code=400, detail="Player must complete onboarding first")
+
+    success = join_game(game_id, player_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot join game - player already in another game or game is full")
+
+    # Update player profile
+    profile_data = {
+        "player_id": player_id,
+        "avatar_url": existing_profile.get("avatar_url"),
+        "avatar_description": existing_profile.get("avatar_description"),
+        "role": existing_profile["role"],
+        "role_description": existing_profile["role_description"],
+        "personality_traits": existing_profile["personality_traits"],
+        "game_id": game_id,
+    }
+    create_player_profile(profile_data)
+
+    return {"status": "joined", "game_id": game_id}
 
 
 # Admin endpoints

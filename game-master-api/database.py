@@ -44,10 +44,13 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS player_profiles (
             player_id INTEGER PRIMARY KEY,
+            avatar_url TEXT,
             avatar_description TEXT,
             role TEXT NOT NULL,
             role_description TEXT,
             personality_traits TEXT DEFAULT '[]',
+            game_id TEXT,
+            last_poll TEXT,
             created_at TEXT NOT NULL
         )
     """)
@@ -104,6 +107,58 @@ def init_db():
             last_updated TEXT NOT NULL
         )
     """)
+
+    # Games table for multiple game support
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games (
+            game_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            setting TEXT DEFAULT 'starship',
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            max_players INTEGER DEFAULT 10
+        )
+    """)
+
+    # Initialize default game if not exists
+    cursor.execute("SELECT COUNT(*) FROM games")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            """INSERT INTO games (game_id, name, description, setting, status, created_at, max_players) 
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("default_game", "Starship Crew", "Join the crew of a starship in space exploration", "starship", "active", datetime.now().isoformat(), 10)
+        )
+
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized successfully")
+
+    # Games table for multiple game support
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games (
+            game_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            setting TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            last_updated TEXT NOT NULL
+        )
+    """)
+
+    # Initialize default game if not exists
+    cursor.execute("SELECT COUNT(*) FROM games")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            """INSERT INTO games (game_id, name, setting, status, created_at, last_updated) 
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("default_game", "Starship Crew", "Star Trek Universe", "active", 
+             datetime.now().isoformat(), datetime.now().isoformat())
+        )
+
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized successfully")
 
     # Initialize game state if not exists
     cursor.execute("SELECT COUNT(*) FROM game_state")
@@ -202,14 +257,17 @@ def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any
 
     cursor.execute(
         """INSERT OR REPLACE INTO player_profiles
-           (player_id, avatar_description, role, role_description, personality_traits, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           (player_id, avatar_url, avatar_description, role, role_description, personality_traits, game_id, last_poll, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             player_data["player_id"],
+            player_data.get("avatar_url"),
             player_data.get("avatar_description"),
             player_data["role"],
             player_data.get("role_description"),
             json.dumps(player_data.get("personality_traits", [])),
+            player_data.get("game_id"),
+            None,  # last_poll initialized to None
             datetime.now().isoformat()
         )
     )
@@ -234,10 +292,13 @@ def get_player_profile(player_id: int) -> Optional[Dict[str, Any]]:
 
     return {
         "player_id": row["player_id"],
+        "avatar_url": row["avatar_url"],
         "avatar_description": row["avatar_description"],
         "role": row["role"],
         "role_description": row["role_description"],
         "personality_traits": json.loads(row["personality_traits"] or "[]"),
+        "game_id": row["game_id"],
+        "last_poll": row["last_poll"],
         "created_at": row["created_at"]
     }
 
@@ -459,3 +520,223 @@ def end_game(reason: str = "game_over") -> Dict[str, Any]:
     conn.close()
 
     return get_game_state()
+
+
+# ============== Games ==============
+
+def create_game(game_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Create a new game"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """INSERT INTO games (game_id, name, description, setting, status, created_at, max_players)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            game_data["game_id"],
+            game_data["name"],
+            game_data.get("description"),
+            game_data.get("setting", "starship"),
+            game_data.get("status", "active"),
+            datetime.now().isoformat(),
+            game_data.get("max_players", 10)
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    return get_game(game_data["game_id"])
+
+
+def get_game(game_id: str) -> Optional[Dict[str, Any]]:
+    """Get a game by ID"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return {
+        "game_id": row["game_id"],
+        "name": row["name"],
+        "description": row["description"],
+        "setting": row["setting"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "max_players": row["max_players"]
+    }
+
+
+def get_available_games() -> List[Dict[str, Any]]:
+    """Get all available games"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM games WHERE status = 'active'")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def join_game(game_id: str, player_id: int) -> bool:
+    """Join a game as a player"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Check if player is already in another game
+    cursor.execute("SELECT game_id FROM player_profiles WHERE player_id = ?", (player_id,))
+    existing_game = cursor.fetchone()
+
+    if existing_game and existing_game["game_id"]:
+        conn.close()
+        return False  # Player already in a game
+
+    # Check if game has room
+    cursor.execute("SELECT COUNT(*) FROM player_profiles WHERE game_id = ?", (game_id,))
+    current_players = cursor.fetchone()[0]
+
+    game = get_game(game_id)
+    if not game or current_players >= game["max_players"]:
+        conn.close()
+        return False  # Game is full
+
+    # Update player profile with game_id
+    cursor.execute(
+        """UPDATE player_profiles SET game_id = ? WHERE player_id = ?""",
+        (game_id, player_id)
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_players_in_game(game_id: str) -> List[int]:
+    """Get list of player IDs in a game"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT player_id FROM player_profiles WHERE game_id = ?", (game_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [row["player_id"] for row in rows]
+
+
+def update_player_profile_last_poll(player_id: int, last_poll: str):
+    """Update player's last_poll timestamp"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE player_profiles SET last_poll = ? WHERE player_id = ?""",
+        (last_poll, player_id)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============== Games Management ==============
+
+def create_game(game_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Create a new game"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """INSERT INTO games (game_id, name, setting, status, created_at, last_updated)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            game_data["game_id"],
+            game_data["name"],
+            game_data["setting"],
+            game_data.get("status", "active"),
+            datetime.now().isoformat(),
+            datetime.now().isoformat()
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    return get_game(game_data["game_id"])
+
+
+def get_game(game_id: str) -> Optional[Dict[str, Any]]:
+    """Get a game by ID"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return {
+        "game_id": row["game_id"],
+        "name": row["name"],
+        "setting": row["setting"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "last_updated": row["last_updated"]
+    }
+
+
+def get_available_games() -> List[Dict[str, Any]]:
+    """Get all available games"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM games WHERE status = 'active'")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def join_game(player_id: int, game_id: str) -> bool:
+    """Join a game as a player"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Check if player already has a game
+    cursor.execute("SELECT game_id FROM player_profiles WHERE player_id = ?", (player_id,))
+    existing = cursor.fetchone()
+
+    if existing and existing["game_id"]:
+        conn.close()
+        return False  # Player already in a game
+
+    # Update player profile with game_id
+    cursor.execute(
+        """UPDATE player_profiles SET game_id = ? WHERE player_id = ?""",
+        (game_id, player_id)
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def leave_game(player_id: int) -> bool:
+    """Leave current game"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE player_profiles SET game_id = NULL WHERE player_id = ?""",
+        (player_id,)
+    )
+
+    conn.commit()
+    conn.close()
+    return True
