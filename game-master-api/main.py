@@ -650,8 +650,7 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
     return {"messages": messages}
 
 
-# Game polling endpoint
-# Games endpoints
+# Games management endpoints
 @app.get("/games/available")
 async def list_available_games():
     """List available games for players to join"""
@@ -662,8 +661,8 @@ async def list_available_games():
                 GameInfo(
                     game_id=g["game_id"],
                     name=g["name"],
-                    description=g["description"],
-                    player_count=len(g.get("players", [])),
+                    description=g.get("description", ""),
+                    player_count=len(get_players_in_game(g["game_id"])),
                     status=g["status"]
                 ).model_dump()
                 for g in games
@@ -672,45 +671,6 @@ async def list_available_games():
     except Exception as e:
         logger.error(f"Failed to list available games: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list games: {str(e)}")
-
-
-@app.post("/games/{game_id}/join")
-async def join_game_endpoint(request: JoinGameRequest):
-    """Join a game"""
-    # Check if player already has a profile
-    existing_profile = get_player_profile(request.player_id)
-    
-    if existing_profile and existing_profile.get("game_id"):
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Player already in game {existing_profile['game_id']}"
-        )
-    
-    # Check if game exists
-    game = get_game(request.game_id)
-    if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
-    
-    # Join the game
-    try:
-        join_result = join_game(request.player_id, request.game_id)
-        
-        return {
-            "status": "joined",
-            "game_id": request.game_id,
-            "player_id": request.player_id
-        }
-    except Exception as e:
-        logger.error(f"Failed to join game: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to join game: {str(e)}")
-
-
-# Games management endpoints
-@app.get("/games/available")
-async def get_available_games():
-    """Get list of available games"""
-    games = get_available_games()
-    return {"games": games}
 
 
 @app.post("/games/{game_id}/join")
