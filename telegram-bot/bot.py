@@ -34,7 +34,7 @@ import language as lang
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -246,7 +246,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             
             # Start onboarding session
             try:
-                result = await api_request("POST", "/onboarding/start", {"player_id": player_id}, params={"language": BOT_LANGUAGE})
+                result = await api_request("POST", "/onboarding/start", params={"language": BOT_LANGUAGE, "player_id": player_id})
                 session_id = result.get("session_id")
                 game_id = result.get("game_id", "default_game")
                 
@@ -370,11 +370,7 @@ async def handle_voice_message(message: types.Message):
     
     # Send message to Game Master API
     try:
-        await api_request("POST", "/game/messages", {
-            "player_id": player_id,
-            "message": "[voice message]",
-            "message_type": "voice"
-        })
+        await api_request("POST", "/game/messages", params={"player_id": player_id, "message": "[voice message]", "message_type": "voice"})
     except Exception as e:
         logger.error(f"Failed to send voice message to API: {e}")
 
@@ -385,11 +381,7 @@ async def handle_text_message(message: types.Message):
     
     try:
         # Send message to Game Master API
-        response = await api_request("POST", "/game/messages", {
-            "player_id": player_id,
-            "message": message.text,
-            "message_type": "text"
-        })
+        response = await api_request("POST", "/game/messages", params={"player_id": player_id, "message": message.text, "message_type": "text"})
         
         msgs = lang.get_messages(BOT_LANGUAGE)
         
