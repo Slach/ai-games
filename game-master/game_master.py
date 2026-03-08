@@ -554,7 +554,7 @@ class GameMasterScheduler:
             raise
 
     async def run_scheduled_loop(self):
-        """Run the daily generation on a schedule with enhanced game loop"""
+        """Run the daily generation on a schedule with full game loop"""
         logger.info(f"Starting scheduled loop. Daily generation at {GAME_SCHEDULE_TIME}")
 
         while True:
@@ -568,14 +568,21 @@ class GameMasterScheduler:
                 # Wait until next run time
                 await asyncio.sleep(wait_seconds)
 
-                # Generate daily episode with all game loop features
+                # Generate daily episode with full game loop validation
                 result = await self.generate_daily_episode()
-                logger.info(f"Generation completed: {result.get('status', 'unknown')}")
+                
+                if result.get("status") == "game_ended":
+                    logger.info("Game has ended, stopping scheduled generation")
+                    break
+                
+                logger.info(f"Generation completed: Day {result.get('day')}")
 
             except Exception as e:
                 logger.error(f"Error in scheduled loop: {e}")
                 # Wait 1 hour before retrying on error
                 await asyncio.sleep(3600)
+
+    def get_next_run_time(self) -> datetime:
         """Calculate next run time based on schedule"""
         now = datetime.now()
         schedule_hour, schedule_minute = map(int, GAME_SCHEDULE_TIME.split(":"))
