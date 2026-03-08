@@ -17,66 +17,106 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        TELEGRAM LAYER                           │
-├─────────────────┬───────────────────────────────────────────────┤
-│  Telegram Bot   │            Telegram Mini App                  │
-│  (commands,     │  (rich UI, 3D viewer, voting, character       │
-│   notifications)│   profiles, story timeline)                   │
-└────────┬────────┴─────────────────────┬─────────────────────────┘
-         │                              │
-         ▼                              ▼
+├─────────────────────────────────────────────────────────────────┤
+│  Telegram Bot (aiogram)                                         │
+│  - Commands: /start, /profile, /today, /help                    │
+│  - Onboarding flow with FSM                                     │
+│  - Message handling (text & voice)                              │
+└──────────────────────┬──────────────────────────────────────────┘
+                       │
+                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      GAME ORCHESTRATOR                          │
-│              (strands-agents/sdk-python)                        │
+│                    GAME MASTER API                              │
+│              (FastAPI + STRANDS Agent)                          │
 │                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ Game Master  │  │ Story Engine │  │ World State  │          │
-│  │   Agent      │  │              │  │   Manager    │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         ▼                   ▼                   ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  NPC Agents  │    │   ComfyUI    │    │   Database   │
-│  (npcpy)     │    │  (MCP Server)│    │  (PostgreSQL)│
-└──────────────┘    └──────────────┘    └──────────────┘
-                            │
-         ┌──────────────────┼──────────────────┐
-         ▼                  ▼                  ▼
-  ┌────────────┐    ┌────────────┐    ┌────────────┐
-  │  Images    │    │   Video    │    │    3D      │
-  │ (nunchaku) │    │ (Lightx2v) │    │ (TRELLIS2) │
-  └────────────┘    └────────────┘    └────────────┘
-```
+│  ┌─────────────────────┐  ┌──────────────────┐                 │
+│  │ Game Master Agent   │  │ Comic Generator  │                 │
+│  │ (game_master.py)    │  │ (comic_generator.py)│               │
+│  └─────────────────────┘  └──────────────────┘                 │
+│                                                                 │
+│  REST API Endpoints:                                            │
+│  - /onboarding/*                                                │
+│  - /players/*                                                   │
+│  - /game/*                                                      │
+│  - /admin/*                                                     │
+└──────────────────────┬──────────────────────────────────────────┘
+                       │
+               ┌───────┼───────┐
+               ▼       ▼       ▼
+        ┌─────────┐ ┌──────────┐ ┌──────────┐
+        │game-master│ │pixelle-  │ │comfyui   │
+        │scheduler│ │mcp       │ │          │
+        │         │ │(MCP)     │ │(GPU gen) │
+        └─────────┘ └──────────┘ └──────────┘
+                       │
+               ┌───────┴───────┐
+               ▼               ▼
+        ┌────────────┐  ┌────────────┐
+        │ Images     │  │ Video/3D   │
+        │ (nunchaku) │  │ generation │
+        └────────────┘  └────────────┘
 
-## Core Components
+Database: SQLite (game_master.db)
+- Player profiles
+- Onboarding sessions
+- Game days
+- Player actions
+- Messages
 
-### 1. Game Master Agent (strands-agents)
-- Generation of daily plot
-- Reaction to player decisions
-- Maintaining world consistency
-- Orchestration of NPCs and events
+## Core Components (Current Implementation)
 
-### 2. NPC System (npcpy)
-- Unique personalities for crew members
-- Autonomous NPC behavior
-- Dialogues and interactions
+### 1. Game Master Agent (strands-agents) - ✅ IMPLEMENTED
+- Generation of daily plot using LLM
+- NPC dialogue generation with personality templates
+- Content prompt generation for visual assets
+- Located in `game-master-api/game_master.py`
 
-### 3. Content Generation (ComfyUI)
-- **Pictures:** scenes, characters, locations (nunchaku)
-- **Video:** key moments of the story (Lightx2v)
-- **3D:** ship, stations, planets (TRELLIS2)
-- **Voices:** character voiceovers (ChatterBox)
+### 2. Onboarding System - ✅ IMPLEMENTED
+- Multi-question onboarding flow via Telegram bot
+- Player profile creation with role and traits
+- FSM state management in `telegram-bot/bot.py`
 
-### 4. World State
-- Ship and crew status
-- Event history
-- Character relationships
-- Resources and inventory
+### 3. Story Generation - ✅ IMPLEMENTED
+- Daily episode generation at scheduled time
+- JSON-formatted story output (setting, conflict, narrative)
+- Decision points with action choices
+- Language support (English/Russian)
 
-### 5. Telegram Interface
-- Bot: commands, notifications
-- Mini App: rich UI, 3D viewer, voting, character profiles, story timeline
+### 4. Player Action System - ✅ IMPLEMENTED
+- Action selection via inline keyboard
+- Action recording in database
+- Default action selection if player doesn't choose
+- Consequence tracking
+
+### 5. Message System - ✅ IMPLEMENTED
+- Text message handling with Game Master response
+- Voice message support (stored, no transcription yet)
+- Message history per player
+- Located in `telegram-bot/bot.py`
+
+### 6. Content Generation (ComfyUI + Pixelle-MCP) - ⏳ PLANNED
+- **Pictures:** scenes, characters, locations (nunchaku workflow)
+- **Video:** key moments of the story (Lightx2v workflow)
+- **3D:** ship, stations, planets (TRELLIS2 workflow)
+- **Voices:** character voiceovers (ChatterBox workflow)
+- Comic strip generation with multiple panels
+
+### 7. Database - ✅ IMPLEMENTED
+- SQLite database (`game_master.db`)
+- Player profiles and onboarding sessions
+- Game days and player actions
+- Message history
+
+### 8. Telegram Interface - ✅ IMPLEMENTED
+- Bot commands: /start, /profile, /today, /help
+- Onboarding flow with inline keyboards
+- Action selection via callback queries
+- Language support (English/Russian)
+
+### 9. Scheduler - ✅ IMPLEMENTED
+- Daily generation at configured time (default 08:00)
+- Single-run mode for testing
+- Located in `game-master/game_master.py`
 
 ## Tech Stack
 
@@ -91,61 +131,98 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 | Queue | Redis |
 | Hosting | VPS with GPU / Cloud GPU |
 
-## Daily Gameplay Loop
+## Daily Gameplay Loop (Current Flow)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  08:00  │  Game Master generates the daily episode         │
+│  08:00  │  Game Master Scheduler triggers daily episode    │
 ├─────────┼───────────────────────────────────────────────────┤
-│  08:30  │  Players receive notification with the setup     │
+│  08:00+ │  Episode generated via game-master-api           │
+│         │  - Story with setting, conflict, narrative       │
+│         │  - NPC dialogues with personalities              │
+│         │  - Decision points for player actions            │
 ├─────────┼───────────────────────────────────────────────────┤
-│  08:00- │  Players discuss and vote for actions            │
-│  20:00  │  NPCs react to intermediate decisions            │
+│  Anytime│  Players can:                                      │
+│         │  - View current day via /today                   │
+│         │  - Select action from decision points            │
+│         │  - Send text/voice messages to Game Master       │
+│         │  - Check profile with /profile                   │
 ├─────────┼───────────────────────────────────────────────────┤
-│  20:00  │  Vote counting, outcome determination            │
+│  End of │  If no action selected:                          │
+│  Day    │  - AI selects default action based on traits     │
+│         │  - Action recorded and consequences applied      │
 ├─────────┼───────────────────────────────────────────────────┤
-│  20:30  │  Content generation (pictures, video)            │
-├─────────┼───────────────────────────────────────────────────┤
-│  21:00  │  Publication of the day's result, teaser for tomorrow │
+│  Next   │  New episode generated based on previous actions │
+│  Day    │  - Story continues from previous day             │
+│         │  - Player choices influence narrative            │
 └─────────┴───────────────────────────────────────────────────┘
 ```
 
 ## Implementation Phases
 
-### Phase 1: Foundation (Months 1-2)
-- ComfyUI Docker setup with HuggingFace cache mounting
-- Research of strands-agents and npcpy
-- Simple Game Master (text only)
-- Basic Telegram bot
-- Basic story generation and choice system
-- Simple Telegram bot integration
+### Phase 1: Foundation (Months 1-2) - MOSTLY COMPLETE ✅
 
-### Phase 2: Content Generation (Months 3-4)
-- ComfyUI integration via MCP
-- Full ComfyUI integration
-- Scene picture generation
-- NPCs with unique personalities
-- Voting system
-- Automated content creation pipeline
-- Basic multiplayer functionality
+**Implemented:**
+- [x] Docker Compose setup with all services
+- [x] Game Master Agent with STRANDS SDK integration
+- [x] Basic Telegram bot with aiogram
+- [x] Story generation system (text only)
+- [x] Onboarding flow with player profiles
+- [x] Player action selection system
+- [x] Message handling (text and voice)
+- [x] SQLite database for persistence
+- [x] Daily scheduler for episode generation
+- [x] Language support (English/Russian)
 
-### Phase 3: Character AI & Advanced Features (Months 5-6)
-- NPCPY integration for dynamic character behaviors
-- Telegram Mini App
-- Character personality systems
-- Character relationship mechanics
-- Dialogue generation systems
-- Enhanced UI/UX for Telegram Mini App
-- Performance optimization
+**Remaining TODOs:**
+- [ ] ComfyUI Docker setup with HuggingFace cache mounting
+- [ ] Pixelle-MCP integration for content generation
+- [ ] Comic strip generation workflow
+- [ ] NPC personality system refinement
+- [ ] Default action selection logic improvement
+- [ ] Error handling and logging improvements
 
-### Phase 4: Rich Experience (Months 7+)
-- Telegram Mini App
-- Video generation
-- 3D scenes
-- Character voices
-- Multiple ships/groups
-- Cross-group events
-- Monetization
+**Status:** Core gameplay loop is functional. Content generation pipeline needs implementation.
+
+### Phase 2: Content Generation (Months 3-4) - PLANNED ⏳
+
+**Planned Features:**
+- [ ] ComfyUI integration via MCP server
+- [ ] Scene picture generation (nunchaku workflow)
+- [ ] Character portrait generation
+- [ ] Comic strip generation with multiple panels
+- [ ] Video generation for key story moments (Lightx2v)
+- [ ] 3D scene generation (TRELLIS2)
+- [ ] Automated content creation pipeline
+- [ ] Content caching and delivery system
+
+**Dependencies:** GPU resources, HuggingFace models, ComfyUI workflows
+
+### Phase 3: Character AI & Advanced Features (Months 5-6) - PLANNED ⏳
+
+**Planned Features:**
+- [ ] NPCPY integration for dynamic character behaviors
+- [ ] Telegram Mini App with rich UI
+- [ ] Character relationship mechanics
+- [ ] Enhanced dialogue generation systems
+- [ ] Voice generation for NPCs (ChatterBox)
+- [ ] Performance optimization for content generation
+- [ ] Multiplayer voting system
+
+**Dependencies:** NPCPY library, Telegram Mini App framework
+
+### Phase 4: Rich Experience (Months 7+) - FUTURE ⏳
+
+**Planned Features:**
+- [ ] Full video generation pipeline
+- [ ] Advanced 3D scene rendering
+- [ ] Character voiceovers with emotional range
+- [ ] Multiple ships/groups for parallel stories
+- [ ] Cross-group events and interactions
+- [ ] Monetization options (premium content, subscriptions)
+- [ ] Analytics and player engagement tracking
+
+**Dependencies:** Additional GPU resources, CDN infrastructure
 
 ## Deployment Strategy
 
