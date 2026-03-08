@@ -155,7 +155,7 @@ docker-compose restart telegram-bot
 ┌─────────────────┐
 │ game-master-api │  ← REST API, AI generation
 └────────┬────────┘
-         │
+         ▲
     ┌────┴────┐
     ▼         ▼
 ┌─────────┐ ┌──────────┐
