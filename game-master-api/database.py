@@ -1,4 +1,139 @@
-"""
+# Требования к AI Game Master (Нереализованные функции)
+
+## Обзор
+
+Этот документ описывает функциональные требования, которые ещё не реализованы в текущей версии системы. Все перечисленные ниже функции являются приоритетными для дальнейшей разработки.
+
+---
+
+## 1. Проверка статуса корабля и экипажа
+
+### Описание
+Перед генерацией нового игрового дня система должна проверять последнее состояние игры на предмет:
+- Жив ли корабль (не уничтожен в предыдущем дне)
+- Жив ли экипаж (все члены или хотя бы ключевые персонажи)
+
+### Что нужно реализовать
+
+1. **Добавить проверку состояния в `game_master.py`**
+   - Перед генерацией нового дня вызывать метод получения последнего игрового состояния
+   - Проверять флаги `ship_alive` и `crew_alive` из базы данных
+
+2. **Обработать критические сценарии**
+   - Если корабль уничтожен: завершить текущую кампанию, предложить перезапуск
+   - Если экипаж погиб: генерировать сценарий выживания/спасения
+   - Если часть экипажа погибла: адаптировать NPC диалоги и сюжет
+
+3. **Добавить в базу данных**
+   - Поля `ship_alive` (boolean) в таблице game_days
+   - Поля `crew_status` (JSON или отдельная таблица) для отслеживания состояния каждого NPC
+
+---
+
+## 2. Генерация персонализированных комиксов с использованием npcpy и ComfyUI
+
+### Описание
+Создание визуальных комиксов на основе игрового дня с персональными элементами игрока. В настоящее время существует только заглушка в `comic_generator.py`.
+
+### Что нужно реализовать
+
+1. **Интеграция NPCPY для генерации персонажей**
+   - Использовать NPCPY для создания уникальных визуальных образов игроков на основе их профиля (роль, характеристики)
+   - Генерировать изображения NPC с учётом их ролей и эмоционального состояния
+
+2. **Интеграция ComfyUI через Pixelle-MCP**
+   - Настроить workflow для генерации 4-6 панелей комикса
+   - Каждая панель должна показывать:
+     - Введение в ситуацию дня
+     - Взаимодействие с NPC
+     - Игрок принимает решение
+     - Немедленные последствия
+
+3. **Персонализация контента**
+   - Использовать `player_profile` для генерации персонажа игрока
+   - Интегрировать `personality_traits` в описание персонажа
+   - Адаптировать стиль комикса под язык игры (EN/RU)
+
+4. **Добавить в API**
+   - Обновить endpoint `/admin/generate-comic/{player_id}` для реальной генерации
+   - Возвращать URL сгенерированного комикса вместо заглушки
+
+---
+
+## 3. Генерация визуальных аватаров игроков во время онбординга
+
+### Описание
+Создание персонального аватара игрока на основе его профиля (роль, характеристики) в процессе онбординга. В настоящее время аватары не генерируются.
+
+### Что нужно реализовать
+
+1. **Добавить endpoint для генерации аватара**
+   - Новый API endpoint: `/players/{player_id}/avatar`
+   - Или добавить в существующий `/onboarding/{session_id}/answer`
+
+2. **Интеграция с ComfyUI/Pixelle-MCP**
+   - Создать workflow для генерации аватара космического корабля
+   - Использовать роль игрока как основной параметр (например, инженер = синий/технический стиль)
+   - Использовать характеристики для детализации (смелый = динамичная поза и т.д.)
+
+3. **Сохранение в базу данных**
+   - Добавить поле `avatar_url` в таблицу player_profiles
+   - Сохранить URL сгенерированного изображения после завершения онбординга
+
+4. **Отображение в Telegram боте**
+   - Показывать аватар в команде `/profile`
+   - Использовать аватар в уведомлениях и комиксах
+
+---
+
+## 4. Использование последствий действий игрока как входных данных для следующей генерации
+
+### Описание
+Система должна учитывать выбор игрока и его последствия при генерации следующего игрового дня. В настоящее время каждый день генерируется независимо от предыдущих выборов.
+
+### Что нужно реализовать
+
+1. **Сохранение последствий действий**
+   - В таблице `player_actions` добавить поле `consequence_result` (JSON)
+   - После выбора игрока записывать фактический результат выбранного действия
+
+2. **Передача контекста в Game Master**
+   - Обновить метод `generate_daily_story()` в `game_master.py`
+   - Добавить параметр `previous_day_consequences` с результатами предыдущих выборов
+   - Использовать этот контекст для связности сюжета
+
+3. **Адаптация NPC диалогов**
+   - Обновить метод `generate_npc_dialogues()`
+   - Учитывать последствия предыдущих действий в реакциях NPC
+   - Например: если игрок спас кого-то, NPC будет благодарен; если проигнорировал угрозу — NPC будет обеспокоен
+
+4. **Добавить в базу данных**
+   - В таблице `game_days` добавить поле `previous_day_summary` (текст)
+   - Сохранять краткое резюме предыдущего дня для передачи в следующий генерацию
+
+5. **Обновить scheduler**
+   - В `game_master/game_master.py` передавать контекст предыдущего дня при вызове API
+   - Использовать `previous_summary` из базы данных при генерации нового дня
+
+---
+
+## Приоритеты реализации
+
+| Приоритет | Функция | Сложность | Зависимости |
+|-----------|---------|-----------|-------------|
+| 1 | Проверка статуса корабля и экипажа | Средняя | База данных, Game Master |
+| 2 | Использование последствий действий | Высокая | База данных, Game Master, API |
+| 3 | Генерация аватаров игроков | Средняя | ComfyUI, NPCPY, API |
+| 4 | Персонализированные комиксы | Высокая | ComfyUI, NPCPY, API, Avatar system |
+
+---
+
+## Примечания
+
+- Все функции требуют интеграции с существующей базой данных PostgreSQL
+- Для генерации изображений требуется доступ к GPU через ComfyUI
+- NPCPY требует отдельной настройки для визуальной генерации персонажей
+- Рекомендуется тестировать каждую функцию отдельно перед интеграцией в production
 SQLite database storage for Game Master API
 """
 
@@ -61,6 +196,9 @@ def init_db():
             player_actions TEXT DEFAULT '[]',
             generated_content TEXT DEFAULT '{}',
             teaser TEXT,
+            ship_alive INTEGER DEFAULT 1,
+            crew_status TEXT DEFAULT '{}',
+            previous_day_summary TEXT,
             created_at TEXT NOT NULL
         )
     """)
@@ -73,6 +211,7 @@ def init_db():
             day INTEGER NOT NULL,
             action_id TEXT NOT NULL,
             choice TEXT NOT NULL,
+            consequence_result TEXT DEFAULT '{}',
             created_at TEXT NOT NULL,
             FOREIGN KEY (player_id) REFERENCES player_profiles(player_id)
         )
@@ -245,8 +384,8 @@ def create_game_day(day_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     cursor.execute(
         """INSERT OR REPLACE INTO game_days
-           (day, story, npc_dialogues, player_actions, generated_content, teaser, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (day, story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             day_data["day"],
             day_data["story"],
@@ -254,6 +393,9 @@ def create_game_day(day_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             json.dumps(day_data.get("player_actions", [])),
             json.dumps(day_data.get("generated_content", {})),
             day_data.get("teaser"),
+            day_data.get("ship_alive", 1),
+            json.dumps(day_data.get("crew_status", {})),
+            day_data.get("previous_day_summary"),
             datetime.now().isoformat()
         )
     )
@@ -283,21 +425,24 @@ def get_game_day(day: int) -> Optional[Dict[str, Any]]:
         "player_actions": json.loads(row["player_actions"] or "[]"),
         "generated_content": json.loads(row["generated_content"] or "{}"),
         "teaser": row["teaser"],
+        "ship_alive": bool(row["ship_alive"]),
+        "crew_status": json.loads(row["crew_status"] or "{}"),
+        "previous_day_summary": row["previous_day_summary"],
         "created_at": row["created_at"]
     }
 
 
 # ============== Player Actions ==============
 
-def save_player_action(player_id: int, day: int, action_id: str, choice: str) -> Dict[str, Any]:
+def save_player_action(player_id: int, day: int, action_id: str, choice: str, consequence_result: Dict[str, Any] = None) -> Dict[str, Any]:
     """Save a player action"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
-        """INSERT INTO player_actions (player_id, day, action_id, choice, created_at)
-           VALUES (?, ?, ?, ?, ?)""",
-        (player_id, day, action_id, choice, datetime.now().isoformat())
+        """INSERT INTO player_actions (player_id, day, action_id, choice, consequence_result, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (player_id, day, action_id, choice, json.dumps(consequence_result or {}), datetime.now().isoformat())
     )
 
     action_id_db = cursor.lastrowid
@@ -309,7 +454,8 @@ def save_player_action(player_id: int, day: int, action_id: str, choice: str) ->
         "player_id": player_id,
         "day": day,
         "action_id": action_id,
-        "choice": choice
+        "choice": choice,
+        "consequence_result": consequence_result or {}
     }
 
 
@@ -332,7 +478,13 @@ def get_player_actions(player_id: int, day: Optional[int] = None) -> List[Dict[s
     rows = cursor.fetchall()
     conn.close()
 
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        action_dict = dict(row)
+        action_dict["consequence_result"] = json.loads(row["consequence_result"] or "{}")
+        result.append(action_dict)
+    
+    return result
 
 
 # ============== Game Messages ==============
