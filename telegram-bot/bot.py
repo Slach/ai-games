@@ -391,7 +391,7 @@ async def handle_text_message(message: types.Message):
             
     except Exception as e:
         logger.error(f"Failed to send text message to API: {e}")
-        msgs = lang.get_errors(BOT_LANGUAGE)
+        msgs = lang.get_messages(BOT_LANGUAGE)
         await message.answer(msgs["error"].format(error=str(e)))
 
 
@@ -535,7 +535,7 @@ async def refresh_game(callback: types.CallbackQuery):
         
     except Exception as e:
         logger.error(f"Failed to refresh game for player {player_id}: {e}")
-        await callback.answer(lang.get_errors(BOT_LANGUAGE)["error"].format(error=str(e)))
+        await callback.answer(lang.get_messages(BOT_LANGUAGE)["error"].format(error=str(e)))
 
 
 # ============== Polling Loop ==============
