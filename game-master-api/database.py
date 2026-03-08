@@ -629,6 +629,21 @@ def get_players_in_game(game_id: str) -> List[int]:
     return [row["player_id"] for row in rows]
 
 
+def leave_game(player_id: int) -> bool:
+    """Leave current game"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE player_profiles SET game_id = NULL WHERE player_id = ?""",
+        (player_id,)
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
 def update_player_profile_last_poll(player_id: int, last_poll: str):
     """Update player's last_poll timestamp"""
     conn = get_db_connection()
