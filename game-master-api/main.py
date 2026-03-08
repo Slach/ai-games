@@ -139,10 +139,10 @@ def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
     return STATIC_ONBOARDING_QUESTIONS[current_question]
 
 
-async def generate_dynamic_onboarding_questions() -> List[OnboardingQuestion]:
+async def generate_dynamic_onboarding_questions(language: str = "en") -> List[OnboardingQuestion]:
     """Generate 2-3 dynamic onboarding questions based on game setting"""
     try:
-        game_master = await create_game_master_agent(language="en")
+        game_master = await create_game_master_agent(language=language)
         
         prompt = """
 Generate 2-3 onboarding questions for a space exploration game.
@@ -292,13 +292,13 @@ async def get_onboarding_questions():
 
 
 @app.get("/onboarding/questions/generate")
-async def generate_onboarding_questions(game_id: str = "default_game"):
-    """Generate 2-3 dynamic onboarding questions based on game setting"""
+async def generate_static_onboarding_questions(game_id: str = "default_game"):
+    """Generate 2-3 static onboarding questions based on game setting (fallback)"""
     game = get_game(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # Generate dynamic questions based on game setting
+    # Generate static questions based on game setting
     dynamic_questions = [
         OnboardingQuestion(
             id=101,
@@ -331,7 +331,7 @@ async def generate_onboarding_questions(game_id: str = "default_game"):
 
 
 @app.post("/onboarding/start")
-async def start_onboarding(player_id: int, game_id: str = "default_game"):
+async def start_onboarding(player_id: int, game_id: str = "default_game", language: str = "en"):
     """Start a new onboarding session for a player"""
     # Check if player already has a profile
     existing_profile = get_player_profile(player_id)
@@ -342,7 +342,7 @@ async def start_onboarding(player_id: int, game_id: str = "default_game"):
     session = create_onboarding_session(player_id)
     
     # Get dynamic questions for the game
-    dynamic_questions_result = await generate_onboarding_questions(game_id)
+    dynamic_questions_result = await generate_dynamic_onboarding_questions(language=language)
     next_question = dynamic_questions_result["questions"][0] if dynamic_questions_result.get("questions") else None
     
     return {
@@ -353,7 +353,7 @@ async def start_onboarding(player_id: int, game_id: str = "default_game"):
 
 
 @app.post("/onboarding/{session_id}/answer")
-async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer):
+async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, language: str = "en"):
     """Submit an answer to an onboarding question"""
     session = get_onboarding_session(session_id)
     if not session:
@@ -372,7 +372,7 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer):
     if not completed:
         # Get next dynamic question
         game_id = session.get("game_id", "default_game")
-        dynamic_questions_result = await generate_onboarding_questions(game_id)
+        dynamic_questions_result = await generate_dynamic_onboarding_questions(language=language)
         remaining_questions = dynamic_questions_result["questions"][current_question:]
         next_question = remaining_questions[0] if remaining_questions else None
 
@@ -451,7 +451,7 @@ def update_player_profile_avatar(player_id: int, avatar_url: str) -> bool:
 
 
 @app.get("/onboarding/{session_id}")
-async def get_onboarding_status(session_id: str):
+async def get_onboarding_status(session_id: str, language: str = "en"):
     """Get onboarding session status"""
     session = get_onboarding_session(session_id)
     if not session:
@@ -460,7 +460,7 @@ async def get_onboarding_status(session_id: str):
     next_question = None
     if not session["completed"]:
         game_id = session.get("game_id", "default_game")
-        dynamic_questions_result = await generate_onboarding_questions(game_id)
+        dynamic_questions_result = await generate_dynamic_onboarding_questions(language=language)
         remaining_questions = dynamic_questions_result["questions"][session["current_question"]:]
         next_question = remaining_questions[0] if remaining_questions else None
 
