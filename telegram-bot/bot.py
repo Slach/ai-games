@@ -1,12 +1,19 @@
 """
-Telegram Bot for AI Game Master - Rewritten with new architecture
+Telegram Bot for AI Game Master - New Architecture
 
 Key Features:
 1. Onboarding via API - Questions fetched from game-master-api
 2. Multiple Games Support - Track which game each player participates in
-3. Polling Mechanism - Periodic checks for updates from API
-4. Avatar Display - Show generated avatars in profiles
-5. Inline Keyboards - For action selection and onboarding
+3. Polling Mechanism - Periodic polling for updates from API
+4. Enhanced Game Flow - Better state management and inline keyboards
+5. Avatar Display - Show generated avatars in profiles
+
+Architecture:
+- Uses aiogram with FSM for state management
+- Maintains existing language support (Russian/English)
+- Uses existing language.py for messages
+- Proper error handling and logging
+- Async HTTP calls to game-master-api
 """
 
 import os
@@ -37,8 +44,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-master-api:8000")
 BOT_LANGUAGE = os.getenv("BOT_LANGUAGE", "ru")
-POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # seconds between API polls
-
+POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # seconds between polls
 
 # ============== FSM States ==============
 
@@ -50,27 +56,51 @@ class OnboardingState(StatesGroup):
 
 class GameSessionState(StatesGroup):
     """State machine for game session tracking"""
-    in_game = State()
+    waiting_for_action = State()
+    waiting_for_message = State()
 
 
-# ============== Global State Storage ==============
+# ============== Player State Storage ==============
 
-# In-memory storage for player sessions (in production, use Redis)
-player_sessions: Dict[int, Dict[str, Any]] = {}
+# In-memory storage for player state (could be replaced with Redis in production)
+player_states: Dict[int, Dict[str, Any]] = {}
+
+
+def get_player_state(player_id: int) -> Dict[str, Any]:
+    """Get or create player state"""
+    if player_id not in player_states:
+        player_states[player_id] = {
+            "game_id": None,
+            "onboarding_session_id": None,
+            "current_question": 0,
+            "last_poll": datetime.now(),
+            "pending_updates": []
+        }
+    return player_states[player_id]
+
+
+def update_player_state(player_id: int, **kwargs):
+    """Update player state with new values"""
+    state = get_player_state(player_id)
+    state.update(kwargs)
 
 
 # ============== Helper Functions ==============
 
-async def api_request(method: str, endpoint: str, data: Optional[dict] = None) -> dict:
+async def api_request(method: str, endpoint: str, data: Optional[dict] = None, params: Optional[dict] = None) -> dict:
     """Make a request to the Game Master API"""
     url = f"{GAME_MASTER_API_URL}{endpoint}"
     async with aiohttp.ClientSession() as session:
-        async with session.request(method, url, json=data) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                logger.error(f"API error: {resp.status} - {error_text}")
-                raise Exception(f"API error: {resp.status}")
-            return await resp.json()
+        try:
+            async with session.request(method, url, json=data, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    logger.error(f"API error: {resp.status} - {error_text}")
+                    raise Exception(f"API error: {resp.status} - {error_text}")
+                return await resp.json()
+        except aiohttp.ClientError as e:
+            logger.error(f"HTTP error during API request: {e}")
+            raise
 
 
 async def fetch_onboarding_questions() -> list:
@@ -80,7 +110,39 @@ async def fetch_onboarding_questions() -> list:
         return result.get("questions", [])
     except Exception as e:
         logger.error(f"Failed to fetch onboarding questions: {e}")
-        return []
+        raise
+
+
+async def check_player_game_status(player_id: int) -> Optional[Dict[str, Any]]:
+    """Check if player has an existing game profile"""
+    try:
+        profile = await api_request("GET", f"/players/{player_id}/profile")
+        return profile
+    except Exception:
+        return None
+
+
+async def poll_game_updates(player_id: int):
+    """Poll for new game updates (days, actions, messages)"""
+    state = get_player_state(player_id)
+    
+    try:
+        # Check for current day
+        day = await api_request("GET", "/game/current-day")
+        
+        # Check if player has pending actions to select
+        if day.get("player_actions"):
+            state["pending_updates"].append({
+                "type": "new_day",
+                "day": day,
+                "timestamp": datetime.now()
+            })
+        
+        # Update last poll time
+        state["last_poll"] = datetime.now()
+        
+    except Exception as e:
+        logger.error(f"Failed to poll game updates for player {player_id}: {e}")
 
 
 # ============== Keyboard Builders ==============
@@ -124,73 +186,13 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
 
 
 def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
-    """Create keyboard with game info and action buttons"""
+    """Create keyboard with game information"""
     builder = InlineKeyboardBuilder()
     builder.add(InlineKeyboardButton(
         text="🔄 Refresh",
         callback_data=f"refresh_game:{game_id}"
     ))
     return builder.as_markup()
-
-
-# ============== Player Session Management ==============
-
-def get_player_session(player_id: int) -> Optional[Dict[str, Any]]:
-    """Get player session data"""
-    return player_sessions.get(player_id)
-
-
-def set_player_session(player_id: int, game_id: str, session_data: Dict[str, Any]):
-    """Set player session data"""
-    player_sessions[player_id] = {
-        "game_id": game_id,
-        "session_data": session_data,
-        "last_poll": datetime.now()
-    }
-
-
-def clear_player_session(player_id: int):
-    """Clear player session data"""
-    if player_id in player_sessions:
-        del player_sessions[player_id]
-
-
-# ============== Polling Mechanism ==============
-
-async def poll_game_updates():
-    """Periodically poll game-master-api for updates"""
-    logger.info("Starting polling loop")
-    
-    while True:
-        try:
-            # Check all players for updates
-            for player_id in list(player_sessions.keys()):
-                session = get_player_session(player_id)
-                if not session:
-                    continue
-                
-                game_id = session.get("game_id")
-                if not game_id:
-                    continue
-                
-                try:
-                    # Check for new messages from Game Master/NPCs
-                    messages = await api_request("GET", f"/game/messages/{player_id}?limit=5")
-                    
-                    # Check current day status
-                    day_data = await api_request("GET", "/game/current-day")
-                    
-                    logger.info(f"Polling updates for player {player_id}, game {game_id}")
-                    
-                except Exception as e:
-                    logger.error(f"Error polling updates for player {player_id}: {e}")
-            
-            # Wait for next poll interval
-            await asyncio.sleep(POLLING_INTERVAL)
-            
-        except Exception as e:
-            logger.error(f"Error in polling loop: {e}")
-            await asyncio.sleep(60)  # Wait longer on error
 
 
 # ============== Handlers ==============
@@ -201,160 +203,134 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     msgs = lang.get_onboarding(BOT_LANGUAGE)
     
+    # Check if player already has a profile
     try:
-        # Check if player already has a profile
-        profile = await api_request("GET", f"/players/{player_id}/profile")
+        profile = await check_player_game_status(player_id)
         
-        # Player already has a profile - join existing game
-        logger.info(f"Player {player_id} returning, showing welcome back message")
-        
-        avatar_url = profile.get('avatar_description', '')
-        avatar_text = f"\n\n🖼️ **Avatar:**\n{avatar_url}" if avatar_url else ""
-        
-        await message.answer(
-            msgs["welcome_back"].format(
-                role=profile['role'],
-                role_description=profile['role_description'],
-                traits=', '.join(profile['personality_traits'])
-            ) + avatar_text,
-            parse_mode="Markdown",
-            reply_markup=create_main_menu_keyboard()
-        )
-        
-        # Set game session
-        state_data = await state.get_data()
-        game_id = state_data.get("game_id") or f"game_{player_id}"
-        set_player_session(player_id, game_id, {"profile": profile})
-        
-    except Exception:
-        # No profile, start onboarding
-        logger.info(f"Player {player_id} starting onboarding")
-        
-        await message.answer(
-            msgs["welcome"],
-            reply_markup=create_main_menu_keyboard()
-        )
-        
-        # Start onboarding session via API
-        try:
-            result = await api_request("POST", "/onboarding/start", {"player_id": player_id})
+        if profile:
+            # Player already has a profile - welcome back
+            avatar_info = ""
+            if profile.get("avatar_description"):
+                avatar_info = f"\n\n{msgs['profile_avatar'].format(avatar=profile['avatar_description'])}"
             
-            if not result.get("session_id"):
-                raise Exception("No session ID returned")
+            await message.answer(
+                msgs["welcome_back"].format(
+                    role=profile['role'],
+                    role_description=profile['role_description'],
+                    traits=', '.join(profile['personality_traits']),
+                    avatar_info=avatar_info
+                ),
+                reply_markup=create_main_menu_keyboard()
+            )
             
-            await state.update_data(session_id=result["session_id"])
+            # Update player state with game info
+            update_player_state(player_id, game_id="current")
             
-            # Fetch questions from API
-            questions = await fetch_onboarding_questions()
+        else:
+            # No profile, start onboarding
+            await message.answer(
+                msgs["welcome"],
+                reply_markup=create_main_menu_keyboard()
+            )
             
-            if not questions:
-                raise Exception("No onboarding questions available")
-            
-            # Store question index in state
-            await state.update_data(question_index=0)
-            
-            if result.get("question"):
-                question = result["question"]
-                keyboard = create_onboarding_keyboard(question["options"], question["id"])
+            # Start onboarding session
+            try:
+                result = await api_request("POST", "/onboarding/start", {"player_id": player_id})
+                session_id = result.get("session_id")
                 
-                msgs = lang.get_onboarding(BOT_LANGUAGE)
-                await message.answer(
-                    msgs["question_prefix"].format(id=question['id'], text=question['text']),
-                    reply_markup=keyboard
-                )
-                await OnboardingState.waiting_for_answer.set()
-            else:
-                # No questions, onboarding complete
-                profile = result.get("profile", {})
-                msgs = lang.get_onboarding(BOT_LANGUAGE)
-                await message.answer(
-                    msgs["onboarding_complete"].format(
-                        role=profile.get('role', 'Crew Member'),
-                        role_description=profile.get('role_description', ''),
-                        traits='\n- '.join(profile.get('personality_traits', []))
-                    ),
-                    parse_mode="Markdown",
-                    reply_markup=create_main_menu_keyboard()
-                )
-                await state.clear()
+                if not session_id:
+                    raise Exception("No session ID returned from API")
                 
-        except Exception as e:
-            msgs = lang.get_errors(BOT_LANGUAGE)
-            logger.error(f"Onboarding error for player {player_id}: {e}")
-            await message.answer(msgs["onboarding_error"].format(error=e))
+                await state.update_data(session_id=session_id)
+                update_player_state(player_id, onboarding_session_id=session_id)
+                
+                question = result.get("question")
+                if question:
+                    keyboard = create_onboarding_keyboard(question["options"], question["id"])
+                    await message.answer(
+                        msgs["question_prefix"].format(id=question['id'], text=question['text']),
+                        reply_markup=keyboard
+                    )
+                    await OnboardingState.waiting_for_answer.set()
+                    
+            except Exception as e:
+                logger.error(f"Failed to start onboarding for player {player_id}: {e}")
+                error_msgs = lang.get_errors(BOT_LANGUAGE)
+                await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+                
+    except Exception as e:
+        logger.error(f"Error in /start command for player {player_id}: {e}")
+        error_msgs = lang.get_errors(BOT_LANGUAGE)
+        await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
 async def cmd_profile(message: types.Message):
     """Show player profile with avatar"""
     player_id = message.from_user.id
     
-    msgs = lang.get_profile(BOT_LANGUAGE)
-    
     try:
         profile = await api_request("GET", f"/players/{player_id}/profile")
+        msgs = lang.get_profile(BOT_LANGUAGE)
         
-        # Format avatar display
-        avatar_url = profile.get('avatar_description', '')
-        avatar_display = f"\n\n🖼️ **Avatar:**\n{avatar_url}" if avatar_url else ""
+        # Build profile message
+        profile_text = f"{msgs['title']}\n\n"
+        profile_text += f"{msgs['role'].format(role=profile['role'])}\n\n"
+        profile_text += f"{msgs['description'].format(role_description=profile['role_description'])}\n\n"
+        profile_text += f"{msgs['traits'].format(traits='\n- '.join(profile['personality_traits']))}\n\n"
+        
+        # Add avatar if available
+        if profile.get("avatar_description"):
+            profile_text += f"{msgs['visualization'].format(avatar=profile['avatar_description'])}"
         
         await message.answer(
-            f"{msgs['title']}\n\n"
-            f"{msgs['role'].format(role=profile['role'])}\n\n"
-            f"{msgs['description'].format(role_description=profile['role_description'])}\n\n"
-            f"{msgs['traits'].format(traits='\n- '.join(profile['personality_traits']))}" + avatar_display,
-            parse_mode="Markdown",
-            reply_markup=create_main_menu_keyboard()
+            profile_text,
+            parse_mode="Markdown"
         )
         
     except Exception as e:
+        logger.error(f"Failed to get profile for player {player_id}: {e}")
         msgs = lang.get_profile(BOT_LANGUAGE)
-        logger.error(f"Profile error for player {player_id}: {e}")
         await message.answer(msgs["no_profile"])
 
 
 async def cmd_today(message: types.Message):
-    """Show current day's game episode with action choices"""
+    """Show current day's game episode"""
     player_id = message.from_user.id
     
-    msgs = lang.get_current_day(BOT_LANGUAGE)
-    
     try:
-        # Get current day
+        msgs = lang.get_current_day(BOT_LANGUAGE)
         day = await api_request("GET", "/game/current-day")
         
-        # Create action keyboard if there are actions
+        # Create action keyboard if there are actions to select
         keyboard = None
         if day.get("player_actions"):
             keyboard = create_action_keyboard(day["player_actions"])
         
-        # Format story and dialogues
-        story_text = day.get('story', '')
-        npc_dialogues = day.get("npc_dialogues", [])
-        dialogues_text = "\n".join([f"- **{d['npc']}**: {d['dialogue']}" for d in npc_dialogues]) if npc_dialogues else "No NPC dialogues"
-        
+        # Build actions text
         actions_text = "\n\n".join([
             f"{i+1}. {a['text']}"
             for i, a in enumerate(day.get("player_actions", []))
         ])
         
-        # Check if player has already selected an action
-        player_actions = await api_request("GET", f"/game/messages/{player_id}?limit=1")
-        action_selected = any(a.get('action_id') for a in player_actions.get('messages', []))
+        # Build NPC dialogues text
+        npc_dialogues_text = ""
+        if day.get("npc_dialogues"):
+            npc_dialogues_text = "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in day["npc_dialogues"]])
         
         await message.answer(
             msgs["title"].format(day=day['day']) + "\n\n"
-            f"{msgs['story'].format(story=story_text)}\n\n"
-            f"{msgs['npc_dialogues']}\n{dialogues_text}\n\n"
-            f"{msgs['actions'].format(actions=actions_text)}\n\n"
+            f"{msgs['story'].format(story=day['story'])}\n\n"
+            f"{msgs['npc_dialogues']}\n{npc_dialogues_text}" +
+            f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n"
             f"{msgs['select_action']}",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
         
     except Exception as e:
+        logger.error(f"Failed to get current day for player {player_id}: {e}")
         msgs = lang.get_current_day(BOT_LANGUAGE)
-        logger.error(f"Today error for player {player_id}: {e}")
-        await message.answer(msgs["error"].format(error=e))
+        await message.answer(msgs["error"].format(error=str(e)))
 
 
 async def cmd_help(message: types.Message):
@@ -373,7 +349,6 @@ async def handle_voice_message(message: types.Message):
     player_id = message.from_user.id
     
     msgs = lang.get_messages(BOT_LANGUAGE)
-    
     await message.answer(
         msgs["voice_received"]
     )
@@ -403,7 +378,7 @@ async def handle_text_message(message: types.Message):
         
         msgs = lang.get_messages(BOT_LANGUAGE)
         
-        # Display Game Master response if available
+        # If there's a response from Game Master, show it
         if response.get("response"):
             await message.answer(
                 f"{msgs['game_master_response']}\n\n{response['response']}",
@@ -413,26 +388,28 @@ async def handle_text_message(message: types.Message):
             await message.answer(msgs["text_received"])
             
     except Exception as e:
+        logger.error(f"Failed to send text message to API: {e}")
         msgs = lang.get_errors(BOT_LANGUAGE)
-        logger.error(f"Text message error for player {player_id}: {e}")
-        await message.answer(msgs["error"].format(error=e))
+        await message.answer(msgs["error"].format(error=str(e)))
 
 
 async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
     """Handle onboarding answer selection"""
     parts = callback.data.split(":")
-    msgs = lang.get_errors(BOT_LANGUAGE)
+    error_msgs = lang.get_errors(BOT_LANGUAGE)
     
     if len(parts) != 3:
-        await callback.answer(msgs["invalid_format"])
+        await callback.answer(error_msgs["invalid_format"])
         return
     
     question_id = int(parts[1])
     answer_value = parts[2]
     session_id = await state.get_data().get("session_id")
     
+    player_id = callback.from_user.id
+    
     if not session_id:
-        await callback.answer(msgs["session_not_found"])
+        await callback.answer(error_msgs["session_not_found"])
         return
     
     try:
@@ -441,43 +418,44 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
             "answer": answer_value
         })
         
+        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+        
         if result.get("completed"):
-            profile = result.get("profile", {})
-            msgs = lang.get_onboarding(BOT_LANGUAGE)
+            profile = result.get("profile")
             
-            # Display avatar if generated
-            avatar_url = profile.get('avatar_description', '')
-            avatar_text = f"\n\n🖼️ **Avatar:**\n{avatar_url}" if avatar_url else ""
+            # Show completion message with avatar info
+            avatar_info = ""
+            if profile and profile.get("avatar_description"):
+                avatar_info = f"\n\n{onboarding_msgs['profile_avatar'].format(avatar=profile['avatar_description'])}"
             
             await callback.message.answer(
-                msgs["onboarding_complete"].format(
-                    role=profile.get('role', 'Crew Member'),
-                    role_description=profile.get('role_description', ''),
-                    traits='\n- '.join(profile.get('personality_traits', []))
-                ) + avatar_text,
+                onboarding_msgs["onboarding_complete"].format(
+                    role=profile['role'],
+                    role_description=profile['role_description'],
+                    traits='\n- '.join(profile['personality_traits']),
+                    avatar_info=avatar_info
+                ),
                 parse_mode="Markdown",
                 reply_markup=create_main_menu_keyboard()
             )
             
-            # Clear onboarding state
             await state.clear()
+            update_player_state(player_id, onboarding_session_id=None)
             
         else:
             next_question = result.get("next_question")
             if next_question:
                 keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
-                msgs = lang.get_onboarding(BOT_LANGUAGE)
                 await callback.message.answer(
-                    msgs["question_prefix"].format(id=next_question['id'], text=next_question['text']),
+                    onboarding_msgs["question_prefix"].format(id=next_question['id'], text=next_question['text']),
                     reply_markup=keyboard
                 )
         
         await callback.answer()
         
     except Exception as e:
-        msgs = lang.get_errors(BOT_LANGUAGE)
-        logger.error(f"Onboarding answer error: {e}")
-        await callback.message.answer(msgs["error"].format(error=e))
+        logger.error(f"Failed to submit onboarding answer: {e}")
+        await callback.message.answer(error_msgs["error"].format(error=str(e)))
         await callback.answer()
 
 
@@ -486,26 +464,25 @@ async def action_selection(callback: types.CallbackQuery):
     parts = callback.data.split(":")
     
     if len(parts) != 2:
-        await callback.answer("Invalid action format")
+        await callback.answer(lang.get_errors(BOT_LANGUAGE)["invalid_format"])
         return
     
     action_id = parts[1]
     player_id = callback.from_user.id
-    
-    msgs = lang.get_actions(BOT_LANGUAGE)
     
     try:
         # Get current day to validate
         day = await api_request("GET", "/game/current-day")
         
         # Submit action
-        result = await api_request("POST", "/game/actions", {
+        await api_request("POST", "/game/actions", {
             "player_id": player_id,
             "day": day["day"],
             "action_id": action_id,
             "choice": "selected"
         })
         
+        msgs = lang.get_actions(BOT_LANGUAGE)
         await callback.message.answer(
             msgs["recorded"],
             reply_markup=create_main_menu_keyboard()
@@ -513,52 +490,90 @@ async def action_selection(callback: types.CallbackQuery):
         await callback.answer()
         
     except Exception as e:
-        logger.error(f"Action selection error for player {player_id}: {e}")
-        await callback.message.answer(msgs["error"].format(error=e))
+        logger.error(f"Failed to record action for player {player_id}: {e}")
+        msgs = lang.get_actions(BOT_LANGUAGE)
+        await callback.message.answer(msgs["error"].format(error=str(e)))
         await callback.answer()
 
 
 async def refresh_game(callback: types.CallbackQuery):
-    """Refresh game state from API"""
+    """Refresh game information"""
     parts = callback.data.split(":")
     
     if len(parts) != 2:
-        await callback.answer("Invalid format")
+        await callback.answer(lang.get_errors(BOT_LANGUAGE)["invalid_format"])
         return
     
     game_id = parts[1]
     player_id = callback.from_user.id
     
     try:
-        # Get current day
+        # Refresh current day
         day = await api_request("GET", "/game/current-day")
         
-        # Re-display today's episode
         msgs = lang.get_current_day(BOT_LANGUAGE)
         
+        # Build actions text
         actions_text = "\n\n".join([
             f"{i+1}. {a['text']}"
             for i, a in enumerate(day.get("player_actions", []))
         ])
         
-        npc_dialogues = day.get("npc_dialogues", [])
-        dialogues_text = "\n".join([f"- **{d['npc']}**: {d['dialogue']}" for d in npc_dialogues]) if npc_dialogues else "No NPC dialogues"
+        # Build NPC dialogues text
+        npc_dialogues_text = ""
+        if day.get("npc_dialogues"):
+            npc_dialogues_text = "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in day["npc_dialogues"]])
         
         await callback.message.edit_text(
             msgs["title"].format(day=day['day']) + "\n\n"
             f"{msgs['story'].format(story=day['story'])}\n\n"
-            f"{msgs['npc_dialogues']}\n{dialogues_text}\n\n"
-            f"{msgs['actions'].format(actions=actions_text)}\n\n"
+            f"{msgs['npc_dialogues']}\n{npc_dialogues_text}" +
+            f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n"
             f"{msgs['select_action']}",
             parse_mode="Markdown",
             reply_markup=create_action_keyboard(day.get("player_actions", []))
         )
         
-        await callback.answer("Game refreshed")
+        await callback.answer()
         
     except Exception as e:
-        logger.error(f"Refresh error for player {player_id}: {e}")
-        await callback.answer(f"Error: {str(e)}")
+        logger.error(f"Failed to refresh game for player {player_id}: {e}")
+        await callback.answer(lang.get_errors(BOT_LANGUAGE)["error"].format(error=str(e)))
+
+
+# ============== Polling Loop ==============
+
+async def polling_loop(bot: Bot):
+    """Background polling loop for checking updates"""
+    logger.info("Starting polling loop")
+    
+    while True:
+        try:
+            # Get all player IDs from state storage
+            player_ids = list(player_states.keys())
+            
+            for player_id in player_ids:
+                state = get_player_state(player_id)
+                
+                # Check if enough time has passed since last poll
+                if (datetime.now() - state["last_poll"]).total_seconds() >= POLLING_INTERVAL:
+                    await poll_game_updates(player_id)
+                    
+                    # Process pending updates
+                    for update in state.get("pending_updates", []):
+                        if update["type"] == "new_day":
+                            day = update["day"]
+                            # Could send notification to player here
+                            logger.info(f"New game day available for player {player_id}: Day {day['day']}")
+                    
+                    # Clear processed updates
+                    state["pending_updates"] = []
+            
+            await asyncio.sleep(POLLING_INTERVAL)
+            
+        except Exception as e:
+            logger.error(f"Error in polling loop: {e}")
+            await asyncio.sleep(60)  # Wait before retrying
 
 
 # ============== Main Entry Point ==============
@@ -581,16 +596,25 @@ async def main():
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
     dp.message.register(handle_text_message, F.text & ~F.command)
     
-    # Callback handlers
+    # Callback query handlers
     dp.callback_query.register(onboarding_answer, F.data.startswith("onboarding_answer:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
     
-    # Start polling loop in background
-    asyncio.create_task(poll_game_updates())
-    
     logger.info("Starting Telegram Bot")
+    
+    # Start polling loop in background
+    polling_task = asyncio.create_task(polling_loop(bot))
+    
+    # Start bot polling
     await dp.start_polling(bot)
+    
+    # Clean up
+    polling_task.cancel()
+    try:
+        await polling_task
+    except asyncio.CancelledError:
+        pass
 
 
 if __name__ == "__main__":
