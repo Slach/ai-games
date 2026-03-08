@@ -430,17 +430,12 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
         if result.get("completed"):
             profile = result.get("profile")
             
-            # Show completion message with avatar info
-            avatar_info = ""
-            if profile and profile.get("avatar_description"):
-                avatar_info = f"\n\n{onboarding_msgs['profile_avatar'].format(avatar=profile['avatar_description'])}"
-            
+            # Show completion message
             await callback.message.answer(
                 onboarding_msgs["onboarding_complete"].format(
                     role=profile['role'],
                     role_description=profile['role_description'],
-                    traits='\n- '.join(profile['personality_traits']),
-                    avatar_info=avatar_info
+                    traits='\n- '.join(profile['personality_traits'])
                 ),
                 parse_mode="Markdown",
                 reply_markup=create_main_menu_keyboard()
@@ -462,7 +457,7 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
         
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}")
-        await callback.message.answer(error_msgs["error"].format(error=str(e)))
+        await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
         await callback.answer()
 
 
