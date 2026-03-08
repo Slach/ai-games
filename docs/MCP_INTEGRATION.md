@@ -6,62 +6,47 @@ This document explains how to use the MCP (Model Configuration Protocol) librari
 
 ## Required Libraries
 
-- `strands-agents` - Main agent framework
-- `mcp` - MCP protocol implementation
+- `strands-agents` - Main agent framework for LLM generation
+- `aiohttp` - HTTP client for Pixelle-MCP API calls
 - `asyncio` - Asynchronous programming support
 
-## Corrected Example Code
+## Current Implementation Status
 
-Here's the corrected version of the example code you provided:
+**NOTE:** MCP protocol integration is NOT currently implemented in this codebase. The system uses direct HTTP API calls to Pixelle-MCP instead. See `game-master-api/comic_generator.py` for the actual implementation pattern.
+
+## HTTP API Integration Pattern
+
+The current implementation uses aiohttp to call Pixelle-MCP endpoints directly:
 
 ```python
-from strands import Agent
-from strands.tools.mcp import MCPClient
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
-import asyncio
+import aiohttp
 
-async def create_agent_with_mcp_tools(mcp_server_url: str) -> Agent:
-    """
-    Creates an agent connected to an MCP server with available tools.
+async def generate_image(prompt: str) -> Optional[str]:
+    """Generate an image using Pixelle-MCP HTTP API"""
     
-    Args:
-        mcp_server_url: URL of the MCP server (e.g., "http://localhost:9000/mcp")
-        
-    Returns:
-        Agent instance with MCP tools integrated
-    """
-    # Create client for connecting to Streamable HTTP MCP server
-    async with streamable_http_client(mcp_server_url) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            
-            # List available tools from the MCP server
-            tools = await session.list_tools()
-            
-            # Print available tools for debugging
-            print(f"Available tools: {[tool.name for tool in tools]}")
-            
-            # Create MCP client to wrap the session
-            mcp_client = MCPClient(lambda: session)
-            
-            # Extract tools as callable functions compatible with Strands
-            strand_tools = mcp_client.list_tools_sync()
-    
-    return Agent(tools=strand_tools)
-
-# Example usage
-async def main():
-    # Connect to Pixelle-MCP server
-    agent = await create_agent_with_mcp_tools("http://localhost:9004/mcp")
-    
-    # Use the agent to generate content
-    response = agent("Generate an image of a futuristic spaceship")
-    print(response)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{PIXELLE_MCP_URL}/generate/image",
+                json={
+                    "prompt": prompt,
+                    "workflow": "t2i_flux_pro.json",
+                    "output_format": "webp",
+                },
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    return result.get("image_url", result.get("path", ""))
+                else:
+                    logger.error(f"Image generation failed: {resp.status}")
+                    return None
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
+        return None
 ```
+
+See `game-master-api/comic_generator.py` for complete implementation examples.
 
 ## Key Points About the Correction
 
@@ -73,15 +58,16 @@ if __name__ == "__main__":
 
 ## Usage Tips
 
-1. **Server Availability**: Make sure the Pixelle-MCP server is running before connecting
-2. **Port Configuration**: Use port 9004 for Pixelle-MCP as defined in the docker-compose
-3. **Error Handling**: Always wrap MCP connections in try-catch blocks
-4. **Async Operations**: Remember to use asyncio.run() for the main function
-5. **Logging**: Enable logging to debug connection issues
+1. **Server Availability**: Make sure the Pixelle-MCP server is running before making API calls
+2. **URL Configuration**: Use `http://pixelle-mcp:9004/pixelle/mcp` as defined in docker-compose.yaml
+3. **Error Handling**: Always wrap HTTP requests in try-catch blocks with proper timeouts
+4. **Async Operations**: Use aiohttp.ClientSession for async HTTP calls
+5. **Logging**: Enable logging to debug connection issues and track generation status
 
 ## Troubleshooting
 
 - If you get connection errors, verify that the Pixelle-MCP service is running
 - Check the docker-compose logs: `docker-compose logs pixelle-mcp`
-- Ensure the URL matches the service configuration in docker-compose
-- Verify that the network configuration allows communication between services
+- Ensure the URL matches the service configuration in docker-compose (`http://pixelle-mcp:9004/pixelle/mcp`)
+- Verify that the network configuration allows communication between services (spark-network)
+- Check ComfyUI health status - Pixelle-MCP depends on it being healthy
