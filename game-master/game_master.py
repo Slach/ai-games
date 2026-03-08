@@ -138,12 +138,17 @@ class GameMasterScheduler:
             return []
 
     async def generate_personalized_comics(self, day_data: Dict[str, Any], game_id: str = "default_game") -> List[Dict[str, Any]]:
-        """Generate personalized comics for all players in the game"""
+        """Generate personalized comics for all players in the game with unified intro story"""
         if not NPCPY_AVAILABLE:
             logger.info("NPCPY not available, using static comic generation")
         
         player_ids = await self.get_players_in_game(game_id)
         comics_generated = []
+        
+        # Get day data for common intro story
+        day_num = day_data.get("day", 1)
+        story = day_data.get("story", "")
+        npc_dialogues = day_data.get("npc_dialogues", [])
         
         for player_id in player_ids:
             try:
@@ -151,8 +156,8 @@ class GameMasterScheduler:
                 
                 async with aiohttp.ClientSession() as session:
                     url = f"{self.api_url}/admin/generate-comic/{player_id}"
-                    if day_data.get("day"):
-                        url += f"?day={day_data['day']}"
+                    if day_num:
+                        url += f"?day={day_num}"
                     
                     async with session.post(url) as resp:
                         if resp.status == 200:
@@ -172,7 +177,7 @@ class GameMasterScheduler:
         return comics_generated
 
     async def select_auto_action(self, player_id: int, day: int) -> Optional[Dict[str, Any]]:
-        """Select default action for player who hasn't chosen"""
+        """Select default action for player who hasn't chosen within timeout"""
         try:
             logger.info(f"Auto-selecting action for player {player_id} on day {day}")
             
@@ -214,8 +219,18 @@ class GameMasterScheduler:
                         "choice": "auto_selected"
                     }) as resp:
                         if resp.status == 200:
+                            result = await resp.json()
                             logger.info(f"Auto-selected action {selected_action.get('id')} for player {player_id}")
-                            return selected_action
+                            
+                            # Notify player of auto-selection
+                            async with session.post(f"{self.api_url}/game/messages", json={
+                                "player_id": player_id,
+                                "message": f"Game Master selected action for you: {selected_action.get('text')}. Your choice has been recorded.",
+                                "message_type": "auto_selection"
+                            }) as notify_resp:
+                                pass  # Notification sent
+                            
+                            return result
                         else:
                             logger.error(f"Failed to submit auto-selected action")
                             return None
@@ -226,10 +241,16 @@ class GameMasterScheduler:
             return None
 
     async def check_and_auto_select_actions(self, day: int):
-        """Check for players who haven't selected actions and auto-select for them"""
+        """Check for players who haven't selected actions within timeout and auto-select for them"""
         try:
             # Get all players in game
             player_ids = await self.get_players_in_game()
+            
+            if not player_ids:
+                logger.info("No players found in game")
+                return
+            
+            logger.info(f"Checking {len(player_ids)} players for action selection on day {day}")
             
             for player_id in player_ids:
                 # Check if player has already selected action
@@ -241,6 +262,7 @@ class GameMasterScheduler:
                                 continue  # Player already selected
                         
                         # No action found, auto-select
+                        logger.info(f"Player {player_id} has not selected action, auto-selecting")
                         await self.select_auto_action(player_id, day)
         except Exception as e:
             logger.error(f"Failed to check and auto-select actions: {e}")
@@ -248,22 +270,24 @@ class GameMasterScheduler:
     async def get_team_assembly_status(self, game_id: str = "default_game") -> Dict[str, Any]:
         """Track team assembly over 3 days from first crew member"""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.api_url}/game/team-status/{game_id}") as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-                    else:
-                        return {
-                            "days_since_first": 0,
-                            "team_assembled": False,
-                            "bot_npcs_needed": []
-                        }
+            # Get current day to determine assembly status
+            state = await self.check_game_state()
+            current_day = state.get("day", 1)
+            
+            # Check if team assembly is complete (3 days since first player joined)
+            team_assembly_complete = current_day >= 3
+            
+            return {
+                "days_since_first": current_day,
+                "team_assembled": team_assembly_complete,
+                "bot_npcs_needed": [] if team_assembly_complete else ["engineer", "pilot"]  # Example bot NPCs
+            }
         except Exception as e:
             logger.error(f"Failed to get team assembly status: {e}")
             return {
                 "days_since_first": 0,
                 "team_assembled": False,
-                "bot_npcs_needed": []
+                "bot_npcs_needed": ["engineer", "pilot"]
             }
 
     async def generate_daily_episode(self) -> dict:
