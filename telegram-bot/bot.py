@@ -263,7 +263,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         msgs["question_prefix"].format(id=question['id'], text=question['text']),
                         reply_markup=keyboard
                     )
-                    await OnboardingState.waiting_for_answer.set()
+                    await state.set_state(OnboardingState.waiting_for_answer)
                     
             except Exception as e:
                 logger.error(f"Failed to start onboarding for player {player_id}: {e}")
