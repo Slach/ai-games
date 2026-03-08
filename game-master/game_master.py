@@ -115,12 +115,24 @@ class GameMasterScheduler:
         """Get list of player IDs in the current game"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.api_url}/players/{game_id}/players") as resp:
-                    if resp.status != 200:
-                        # Fallback to getting all players from profile endpoint
-                        return []
-                    result = await resp.json()
-                    return result.get("player_ids", [])
+                # Try multiple endpoint variations for compatibility
+                endpoints = [
+                    f"{self.api_url}/players/{game_id}/players",
+                    f"{self.api_url}/players/{game_id}/list",
+                    f"{self.api_url}/players"
+                ]
+                
+                for endpoint in endpoints:
+                    async with session.get(endpoint) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            # Handle different response formats
+                            player_ids = result.get("player_ids", []) or result.get("players", []) or []
+                            if player_ids:
+                                return player_ids
+                
+                logger.warning(f"No players found for game {game_id}")
+                return []
         except Exception as e:
             logger.error(f"Failed to get players in game: {e}")
             return []
@@ -259,7 +271,7 @@ class GameMasterScheduler:
         logger.info(f"=== DAILY EPISODE GENERATION STARTED ===")
         logger.info(f"Language: {self.language}")
 
-        # Step 1: Validate game state
+        # Step 1: Validate game state before generation
         is_active = await self.validate_game_active()
         if not is_active:
             logger.warning("Game ended - stopping generation")
@@ -279,11 +291,15 @@ class GameMasterScheduler:
             previous_summary = f"Previous day consequences: {consequences}"
             logger.info(f"Incorporating {len(previous_actions)} previous actions into story")
 
-        # Step 4: Check team assembly status
+        # Step 4: Check team assembly status and NPC integration
         team_status = await self.get_team_assembly_status()
         if not team_status.get("team_assembled"):
             bot_npcs = team_status.get("bot_npcs_needed", [])
             logger.info(f"Team not fully assembled, adding {len(bot_npcs)} NPC bots")
+            
+            # Step 4a: Update NPC team with npcpy integration if available
+            if NPCPY_AVAILABLE and bot_npcs:
+                await self.update_npc_team(current_day)
 
         # Step 5: Call API to generate daily episode with previous actions context
         try:
