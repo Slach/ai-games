@@ -49,6 +49,7 @@ class GameMasterScheduler:
         self.api_url = GAME_MASTER_API_URL
         self.language = GAME_LANGUAGE
         self.last_generation = None
+        self.team_assembly_start = None  # Track when first crew member joined
 
     async def check_game_state(self) -> Dict[str, Any]:
         """Check current game state and verify ship/crew are alive"""
@@ -512,7 +513,29 @@ class GameMasterScheduler:
             logger.error(f"Failed to get game state: {e}")
             raise
 
-    def get_next_run_time(self) -> datetime:
+    async def run_scheduled_loop(self):
+        """Run the daily generation on a schedule with enhanced game loop"""
+        logger.info(f"Starting scheduled loop. Daily generation at {GAME_SCHEDULE_TIME}")
+
+        while True:
+            try:
+                # Calculate time until next run
+                next_run = self.get_next_run_time()
+                wait_seconds = (next_run - datetime.now()).total_seconds()
+
+                logger.info(f"Next generation scheduled for {next_run.isoformat()} (in {wait_seconds/3600:.1f} hours)")
+
+                # Wait until next run time
+                await asyncio.sleep(wait_seconds)
+
+                # Generate daily episode with all game loop features
+                result = await self.generate_daily_episode()
+                logger.info(f"Generation completed: {result.get('status', 'unknown')}")
+
+            except Exception as e:
+                logger.error(f"Error in scheduled loop: {e}")
+                # Wait 1 hour before retrying on error
+                await asyncio.sleep(3600)
         """Calculate next run time based on schedule"""
         now = datetime.now()
         schedule_hour, schedule_minute = map(int, GAME_SCHEDULE_TIME.split(":"))
