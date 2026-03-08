@@ -27,6 +27,10 @@ from database import (
     get_game_messages,
     get_game_state,
     update_game_state,
+    create_game,
+    get_game,
+    join_game,
+    get_available_games,
 )
 
 # Configure logging
@@ -52,9 +56,33 @@ class OnboardingAnswer(BaseModel):
     answer: str
 
 
+class GameInfo(BaseModel):
+    """Game information for available games list"""
+    game_id: str
+    name: str
+    description: str
+    player_count: int
+    status: str
+
+
+class JoinGameRequest(BaseModel):
+    """Request to join a game"""
+    player_id: int
+    game_id: str
+
+
+class PollResponse(BaseModel):
+    """Response from game polling endpoint"""
+    new_game_day: Optional[Dict[str, Any]] = None
+    pending_actions: List[Dict[str, Any]] = []
+    messages_from_gm: List[Dict[str, Any]] = []
+    npc_messages: List[Dict[str, Any]] = []
+    avatar_url: Optional[str] = None
+
+
 # ============== Onboarding Questions ==============
 
-ONBOARDING_QUESTIONS = [
+STATIC_ONBOARDING_QUESTIONS = [
     OnboardingQuestion(
         id=1,
         text="Корабль обнаружил неизвестный сигнал. Ваши действия?",
@@ -101,9 +129,65 @@ ONBOARDING_QUESTIONS = [
 
 def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
     """Get the next onboarding question"""
-    if current_question >= len(ONBOARDING_QUESTIONS):
+    if current_question >= len(STATIC_ONBOARDING_QUESTIONS):
         return None
-    return ONBOARDING_QUESTIONS[current_question]
+    return STATIC_ONBOARDING_QUESTIONS[current_question]
+
+
+async def generate_dynamic_onboarding_questions() -> List[OnboardingQuestion]:
+    """Generate 2-3 dynamic onboarding questions based on game setting"""
+    try:
+        game_master = await create_game_master_agent(language="en")
+        
+        prompt = """
+Generate 2-3 onboarding questions for a space exploration game.
+Questions should be about "what would you do in this situation" or "A or B preference".
+Questions help determine player role and personality traits.
+
+Return ONLY valid JSON with this structure:
+[
+    {
+        "id": 1,
+        "text": "question text",
+        "options": [
+            {"value": "option_value_1", "label": "Option 1 display text"},
+            {"value": "option_value_2", "label": "Option 2 display text"}
+        ]
+    }
+]
+"""
+        
+        response = game_master.agent(prompt)
+        response_str = str(response)
+        
+        # Try to parse JSON
+        import json
+        import re
+        
+        try:
+            questions = json.loads(response_str)
+        except json.JSONDecodeError:
+            # Try to extract JSON block
+            json_match = re.search(r'\[.*\]', response_str, re.DOTALL)
+            if json_match:
+                questions = json.loads(json_match.group())
+            else:
+                raise ValueError("Failed to parse JSON from LLM response")
+        
+        # Convert to OnboardingQuestion objects
+        result = []
+        for i, q in enumerate(questions, start=1):
+            result.append(OnboardingQuestion(
+                id=i,
+                text=q.get("text", f"Question {i}"),
+                options=q.get("options", [])
+            ))
+        
+        return result if result else STATIC_ONBOARDING_QUESTIONS[:3]
+        
+    except Exception as e:
+        logger.error(f"Failed to generate dynamic questions, using static: {e}")
+        return STATIC_ONBOARDING_QUESTIONS[:3]
 
 
 def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str]) -> Dict[str, Any]:
@@ -197,13 +281,30 @@ async def health_check():
 # Onboarding endpoints
 @app.get("/onboarding/questions")
 async def get_onboarding_questions():
-    """Get all onboarding questions"""
-    return {"questions": [q.model_dump() for q in ONBOARDING_QUESTIONS]}
+    """Get all static onboarding questions (backward compatibility)"""
+    return {"questions": [q.model_dump() for q in STATIC_ONBOARDING_QUESTIONS]}
+
+
+@app.get("/onboarding/questions/generate")
+async def generate_onboarding_questions():
+    """Generate 2-3 dynamic onboarding questions based on game setting"""
+    try:
+        questions = await generate_dynamic_onboarding_questions()
+        return {"questions": [q.model_dump() for q in questions]}
+    except Exception as e:
+        logger.error(f"Failed to generate dynamic questions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate questions: {str(e)}")
 
 
 @app.post("/onboarding/start")
 async def start_onboarding(player_id: int):
     """Start a new onboarding session for a player"""
+    # Check if player already has a profile
+    existing_profile = get_player_profile(player_id)
+    
+    if existing_profile:
+        raise HTTPException(status_code=400, detail="Player already has a profile")
+    
     session = create_onboarding_session(player_id)
     next_question = get_next_question(0)
     return {
@@ -223,7 +324,7 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer):
     answers[answer.question_id] = answer.answer
     current_question = session["current_question"] + 1
 
-    completed = current_question >= len(ONBOARDING_QUESTIONS)
+    completed = current_question >= len(STATIC_ONBOARDING_QUESTIONS)
     if completed:
         profile_data = generate_player_profile_from_answers(session["player_id"], answers)
         create_player_profile(profile_data)
@@ -241,6 +342,76 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer):
         result["profile"] = profile_data
 
     return result
+
+
+@app.post("/onboarding/{session_id}/complete")
+async def complete_onboarding(session_id: str):
+    """Complete onboarding and trigger avatar generation"""
+    session = get_onboarding_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not session["completed"]:
+        raise HTTPException(status_code=400, detail="Onboarding not completed yet")
+
+    player_id = session["player_id"]
+    
+    # Get player profile
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player profile not found")
+
+    # Generate avatar using comic_generator
+    try:
+        comic_generator = create_comic_generator()
+        
+        avatar_prompt = f"""
+        Sci-fi character portrait: {profile['role']}.
+        Personality traits: {', '.join(profile['personality_traits'])}.
+        Futuristic uniform, detailed face, cinematic lighting, 4K quality.
+        Space opera style, Star Trek aesthetic.
+        """
+        
+        # Use the scene generation endpoint for avatar
+        async with aiohttp.ClientSession() as session_http:
+            async with session_http.post(
+                f"{comic_generator.pixelle_mcp_url}/generate/image",
+                json={
+                    "prompt": avatar_prompt,
+                    "workflow": comic_generator.workflows["character"],
+                    "output_format": "webp",
+                },
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    avatar_url = result.get("image_url", result.get("path", ""))
+                    
+                    # Update profile with avatar URL
+                    profile["avatar_url"] = avatar_url
+                    create_player_profile(profile)
+                    
+                    return {
+                        "status": "completed",
+                        "profile": profile,
+                        "avatar_url": avatar_url
+                    }
+                else:
+                    logger.error(f"Avatar generation failed: {resp.status}")
+                    # Return profile without avatar if generation fails
+                    return {
+                        "status": "completed",
+                        "profile": profile,
+                        "avatar_url": None
+                    }
+    except Exception as e:
+        logger.error(f"Avatar generation error: {e}")
+        # Return profile without avatar if generation fails
+        return {
+            "status": "completed",
+            "profile": profile,
+            "avatar_url": None
+        }
 
 
 @app.get("/onboarding/{session_id}")
@@ -267,7 +438,12 @@ async def get_player_profile_endpoint(player_id: int):
     profile = get_player_profile(player_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found. Complete onboarding first.")
-    return profile
+    
+    # Return profile with avatar_url if available
+    return {
+        **profile,
+        "avatar_url": profile.get("avatar_url"),
+    }
 
 
 # Game state endpoints
@@ -294,6 +470,73 @@ async def get_current_game_day():
     if not day:
         raise HTTPException(status_code=404, detail="No game day generated yet")
     return day
+
+
+@app.get("/game/poll/{player_id}")
+async def poll_game_updates(player_id: int, last_poll: Optional[str] = None):
+    """Poll for new game updates (days, actions, messages) since last poll"""
+    # Get player profile to check game_id
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player profile not found")
+    
+    game_id = profile.get("game_id")
+    
+    response = PollResponse()
+    
+    try:
+        # Check for new game day
+        state = get_game_state()
+        current_day = get_game_day(state["day"])
+        
+        if current_day:
+            # Check if player has pending actions to select
+            if current_day.get("player_actions"):
+                response.pending_actions = [
+                    {
+                        "action_id": a["id"],
+                        "text": a["text"],
+                        "consequence": a.get("consequence", "")
+                    }
+                    for a in current_day["player_actions"]
+                ]
+            
+            # Check if this is a new day (simplified check)
+            response.new_game_day = {
+                "day": current_day["day"],
+                "story": current_day["story"],
+                "has_actions": bool(current_day.get("player_actions"))
+            }
+        
+        # Get recent messages from Game Master
+        messages = get_game_messages(player_id, limit=5)
+        response.messages_from_gm = [
+            {
+                "id": m["id"],
+                "message": m["message"],
+                "timestamp": m["timestamp"]
+            }
+            for m in messages if m.get("message_type") == "text_response"
+        ]
+        
+        # Get NPC messages (from game day dialogues)
+        if current_day and current_day.get("npc_dialogues"):
+            response.npc_messages = [
+                {
+                    "npc": d["npc"],
+                    "dialogue": d["dialogue"]
+                }
+                for d in current_day["npc_dialogues"]
+            ]
+        
+        # Check if player has avatar_url
+        if profile.get("avatar_url"):
+            response.avatar_url = profile["avatar_url"]
+        
+    except Exception as e:
+        logger.error(f"Failed to poll game updates for player {player_id}: {e}")
+    
+    return response.model_dump()
 
 
 # Player action endpoints
@@ -368,6 +611,60 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
     """Get player's message history"""
     messages = get_game_messages(player_id, limit)
     return {"messages": messages}
+
+
+# Games endpoints
+@app.get("/games/available")
+async def list_available_games():
+    """List available games for players to join"""
+    try:
+        games = get_available_games()
+        return {
+            "games": [
+                GameInfo(
+                    game_id=g["game_id"],
+                    name=g["name"],
+                    description=g["description"],
+                    player_count=len(g.get("players", [])),
+                    status=g["status"]
+                ).model_dump()
+                for g in games
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Failed to list available games: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list games: {str(e)}")
+
+
+@app.post("/games/{game_id}/join")
+async def join_game_endpoint(request: JoinGameRequest):
+    """Join a game"""
+    # Check if player already has a profile
+    existing_profile = get_player_profile(request.player_id)
+    
+    if existing_profile and existing_profile.get("game_id"):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Player already in game {existing_profile['game_id']}"
+        )
+    
+    # Check if game exists
+    game = get_game(request.game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Join the game
+    try:
+        join_result = join_game(request.player_id, request.game_id)
+        
+        return {
+            "status": "joined",
+            "game_id": request.game_id,
+            "player_id": request.player_id
+        }
+    except Exception as e:
+        logger.error(f"Failed to join game: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to join game: {str(e)}")
 
 
 # Admin endpoints
@@ -455,3 +752,6 @@ async def generate_personalized_comic(player_id: int, day: Optional[int] = None)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Add aiohttp import at module level for avatar generation
+import aiohttp
