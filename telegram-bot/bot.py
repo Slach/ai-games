@@ -411,7 +411,7 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
     
     question_id = int(parts[1])
     answer_value = parts[2]
-    session_id = await state.get_data().get("session_id")
+    session_id = (await state.get_data()).get("session_id")
     
     player_id = callback.from_user.id
     
