@@ -144,10 +144,14 @@ class GameMasterAgent:
         try:
             # For llama.cpp compatibility, we need to use the correct OpenAI-compatible config
             # The api_key is required by the OpenAI client but can be any value for local llama.cpp
+            # Note: STRANDS SDK requires api_key and base_url to be passed via client_args,
+            # not as direct model configuration parameters (see strands/models/openai.py)
             model = OpenAIModel(
                 model_id=os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B"),
-                api_key=os.getenv("LLM_API_KEY", "placeholder-key-for-llama-cpp"),
-                base_url=self.llm_base_url,
+                client_args={
+                    "api_key": os.getenv("LLM_API_KEY", "placeholder-key-for-llama-cpp"),
+                    "base_url": self.llm_base_url,
+                },
                 params={
                     "max_tokens": 2000,
                     "temperature": 0.7,
