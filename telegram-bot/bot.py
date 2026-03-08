@@ -127,14 +127,25 @@ async def poll_game_updates(player_id: int):
     state = get_player_state(player_id)
     
     try:
-        # Check for current day
-        day = await api_request("GET", "/game/current-day")
+        # Get last poll timestamp from profile
+        profile = await api_request("GET", f"/players/{player_id}/profile")
+        last_poll = profile.get("last_poll") if profile else None
         
-        # Check if player has pending actions to select
-        if day.get("player_actions"):
+        # Poll for updates using the new endpoint
+        result = await api_request("GET", f"/game/poll/{player_id}", params={"last_poll": last_poll})
+        
+        # Process updates
+        if result.get("new_game_day"):
             state["pending_updates"].append({
                 "type": "new_day",
-                "day": day,
+                "day": result["new_game_day"],
+                "timestamp": datetime.now()
+            })
+        
+        if result.get("pending_actions"):
+            state["pending_updates"].append({
+                "type": "pending_actions",
+                "actions": result["pending_actions"],
                 "timestamp": datetime.now()
             })
         
@@ -224,7 +235,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             )
             
             # Update player state with game info
-            update_player_state(player_id, game_id="current")
+            update_player_state(player_id, game_id=profile.get("game_id", "default_game"))
             
         else:
             # No profile, start onboarding
@@ -237,12 +248,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
             try:
                 result = await api_request("POST", "/onboarding/start", {"player_id": player_id})
                 session_id = result.get("session_id")
+                game_id = result.get("game_id", "default_game")
                 
                 if not session_id:
                     raise Exception("No session ID returned from API")
                 
-                await state.update_data(session_id=session_id)
-                update_player_state(player_id, onboarding_session_id=session_id)
+                await state.update_data(session_id=session_id, game_id=game_id)
+                update_player_state(player_id, onboarding_session_id=session_id, game_id=game_id)
                 
                 question = result.get("question")
                 if question:
@@ -278,8 +290,10 @@ async def cmd_profile(message: types.Message):
         profile_text += f"{msgs['description'].format(role_description=profile['role_description'])}\n\n"
         profile_text += f"{msgs['traits'].format(traits='\n- '.join(profile['personality_traits']))}\n\n"
         
-        # Add avatar if available
-        if profile.get("avatar_description"):
+        # Add avatar if available (URL or description)
+        if profile.get("avatar_url"):
+            profile_text += f"{msgs['visualization'].format(avatar=f'[Avatar Image]({profile[\"avatar_url\"]})')}"
+        elif profile.get("avatar_description"):
             profile_text += f"{msgs['visualization'].format(avatar=profile['avatar_description'])}"
         
         await message.answer(
