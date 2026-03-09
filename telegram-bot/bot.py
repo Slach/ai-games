@@ -26,6 +26,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.sqlite import SQLiteStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -582,9 +583,13 @@ async def main():
         logger.error("TELEGRAM_BOT_TOKEN not set")
         return
     
-    # Initialize bot and dispatcher
+    # Configure SQLite storage for FSM state persistence
+    db_path = os.getenv("AI_FSM_DB", "/app/fsm_storage.db")
+    storage = SQLiteStorage(path=db_path)
+    
+    # Initialize bot and dispatcher with SQLite storage
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher()
+    dp = Dispatcher(storage=storage)
     
     # Register handlers
     dp.message.register(cmd_start, Command("start"))
