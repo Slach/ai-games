@@ -13,7 +13,7 @@ Architecture:
 - Maintains existing language support (Russian/English)
 - Uses existing language.py for messages
 - Proper error handling and logging
-- Async HTTP calls to game-master-api
+- Async HTTP calls to game-master-˝
 """
 
 import os
@@ -21,7 +21,7 @@ import logging
 import asyncio
 import aiohttp
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
