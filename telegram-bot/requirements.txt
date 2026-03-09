@@ -2,16 +2,18 @@
 # Compatible with Python 3.10+
 
 # Telegram bot framework with FSM support
-aiogram>=3.0.0,<4.0.0
+aiogram
 
 # Async HTTP client for API calls
-aiohttp>=3.8.0,<4.0.0
+aiohttp
 
 # SQLite storage for aiogram FSM (persistent state)
-aiosqlite>=0.19.0
+aiosqlite
 
 # Environment variable loading (optional but recommended)
-python-dotenv>=1.0.0
+python-dotenv
 
 # Type checking and validation extensions for Python 3.10+
-typing-extensions>=4.0.0
+typing-extensions
+
+aiogram-sqlite-storage

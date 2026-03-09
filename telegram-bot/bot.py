@@ -26,7 +26,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.sqlite import SQLiteStorage
+from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -585,7 +585,7 @@ async def main():
     
     # Configure SQLite storage for FSM state persistence
     db_path = os.getenv("AI_FSM_DB", "/app/fsm_storage.db")
-    storage = SQLiteStorage(path=db_path)
+    storage = SQLStorage(path=db_path, serializing_method='json')
     
     # Initialize bot and dispatcher with SQLite storage
     bot = Bot(token=BOT_TOKEN)

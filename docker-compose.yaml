@@ -108,7 +108,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
-      - AI_FSM_DB=/app/fsm_storage.db
+      - AI_FSM_DB=/app/bot_storage.db
     depends_on:
       game-master-api:
         condition: service_healthy
@@ -117,7 +117,6 @@ services:
     restart: unless-stopped
     volumes:
       - ./telegram-bot/:/app/
-      - ./fsm_storage.db:/app/fsm_storage.db  # Persist FSM state across restarts
 
   # Game Master Scheduler - triggers daily generation via game-master-api
   # Can be run manually for debugging: duxocker compose run --rm game-master
