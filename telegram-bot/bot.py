@@ -13,7 +13,7 @@ Architecture:
 - Maintains existing language support (Russian/English)
 - Uses existing language.py for messages
 - Proper error handling and logging
-- Async HTTP calls to game-master-˝
+- Async HTTP calls to game-master-api
 """
 
 import os
