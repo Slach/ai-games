@@ -243,18 +243,22 @@ async def cmd_start(message: types.Message, state: FSMContext):
             
             # Start onboarding session
             try:
-                result = await api_request("POST", "/onboarding/start", params={"language": BOT_LANGUAGE, "player_id": player_id})
+                logger.info(f"Starting onboarding for player_id={player_id}, language={BOT_LANGUAGE}")
+                result = await api_request("POST", "/onboarding/start", data={"language": BOT_LANGUAGE, "player_id": player_id})
+                logger.info(f"Onboarding start response: {result}")
+
                 session_id = result.get("session_id")
                 game_id = result.get("game_id", "default_game")
-                
+
                 if not session_id:
                     raise Exception("No session ID returned from API")
-                
+
                 await state.update_data(session_id=session_id, game_id=game_id)
                 update_player_state(player_id, onboarding_session_id=session_id, game_id=game_id)
-                
+
                 question = result.get("question")
                 if question:
+                    logger.info(f"First onboarding question: id={question['id']}, text={question['text'][:50]}...")
                     keyboard = create_onboarding_keyboard(question["options"], question["id"])
                     await message.answer(
                         msgs["question_prefix"].format(id=question['id'], text=question['text']),
@@ -367,7 +371,7 @@ async def handle_voice_message(message: types.Message):
     
     # Send message to Game Master API
     try:
-        await api_request("POST", "/game/messages", params={"player_id": player_id, "message": "[voice message]", "message_type": "voice"})
+        await api_request("POST", "/game/messages", data={"player_id": player_id, "message": "[voice message]", "message_type": "voice"})
     except Exception as e:
         logger.error(f"Failed to send voice message to API: {e}")
 
@@ -378,7 +382,7 @@ async def handle_text_message(message: types.Message):
     
     try:
         # Send message to Game Master API
-        response = await api_request("POST", "/game/messages", params={"player_id": player_id, "message": message.text, "message_type": "text"})
+        response = await api_request("POST", "/game/messages", data={"player_id": player_id, "message": message.text, "message_type": "text"})
         
         msgs = lang.get_messages(BOT_LANGUAGE)
         
@@ -417,13 +421,15 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
         return
     
     try:
-        result = await api_request("POST", f"/onboarding/{session_id}/answer", {
+        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={question_id}, answer={answer_value}")
+        result = await api_request("POST", f"/onboarding/{session_id}/answer", data={
             "question_id": question_id,
             "answer": answer_value
         }, params={"language": BOT_LANGUAGE})
-        
+        logger.info(f"Onboarding answer response: completed={result.get('completed')}")
+
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
-        
+
         if result.get("completed"):
             profile = result.get("profile")
             
@@ -474,7 +480,7 @@ async def action_selection(callback: types.CallbackQuery):
         day = await api_request("GET", "/game/current-day")
         
         # Submit action
-        await api_request("POST", "/game/actions", {
+        await api_request("POST", "/game/actions", data={
             "player_id": player_id,
             "day": day["day"],
             "action_id": action_id,
@@ -585,7 +591,7 @@ async def main():
     
     # Configure SQLite storage for FSM state persistence
     db_path = os.getenv("AI_FSM_DB", "/app/fsm_storage.db")
-    storage = SQLStorage(path=db_path, serializing_method='json')
+    storage = SQLStorage(db_path=db_path, serializing_method='json')
     
     # Initialize bot and dispatcher with SQLite storage
     bot = Bot(token=BOT_TOKEN)

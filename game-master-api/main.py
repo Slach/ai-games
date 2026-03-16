@@ -5,7 +5,7 @@ Game Master API - FastAPI service for AI Game Master
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -76,6 +76,28 @@ class JoinGameRequest(BaseModel):
     game_id: str
 
 
+class StartOnboardingRequest(BaseModel):
+    """Request to start onboarding"""
+    player_id: int
+    game_id: str = "default_game"
+    language: str = "en"
+
+
+class GameMessageRequest(BaseModel):
+    """Request to send a game message"""
+    player_id: int
+    message: str
+    message_type: str = "text"
+
+
+class PlayerActionRequest(BaseModel):
+    """Request to submit player action"""
+    player_id: int
+    day: int
+    action_id: str
+    choice: str
+
+
 class PollResponse(BaseModel):
     """Response from game polling endpoint"""
     new_game_day: Optional[Dict[str, Any]] = None
@@ -141,9 +163,11 @@ def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
 
 async def generate_dynamic_onboarding_questions(language: str = "en") -> List[OnboardingQuestion]:
     """Generate 2-3 dynamic onboarding questions based on game setting"""
+    logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
     try:
         game_master = await create_game_master_agent(language=language)
-        
+        logger.info("Game Master agent created successfully")
+
         prompt = """
 Generate 2-3 onboarding questions for a space exploration game.
 Questions should be about "what would you do in this situation" or "A or B preference".
@@ -161,8 +185,10 @@ Return ONLY valid JSON with this structure:
     }
 ]
 """
-        
+
+        logger.info("Sending prompt to LLM agent...")
         response = game_master.agent(prompt)
+        logger.info(f"LLM response received: {response}")
         response_str = str(response)
         
         # Try to parse JSON
@@ -331,25 +357,37 @@ async def generate_static_onboarding_questions(game_id: str = "default_game"):
 
 
 @app.post("/onboarding/start")
-async def start_onboarding(player_id: int, game_id: str = "default_game", language: str = "en"):
+async def start_onboarding(request: StartOnboardingRequest):
     """Start a new onboarding session for a player"""
+    logger.info(f"=== START ONBOARDING ===")
+    logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
+
     # Check if player already has a profile
-    existing_profile = get_player_profile(player_id)
-    
+    existing_profile = get_player_profile(request.player_id)
+
     if existing_profile:
+        logger.warning(f"Player {request.player_id} already has a profile")
         raise HTTPException(status_code=400, detail="Player already has a profile")
-    
-    session = create_onboarding_session(player_id)
-    
+
+    session = create_onboarding_session(request.player_id)
+    logger.info(f"Onboarding session created: {session['session_id']}")
+
     # Get dynamic questions for the game
-    dynamic_questions_result = await generate_dynamic_onboarding_questions(language=language)
-    next_question = dynamic_questions_result["questions"][0] if dynamic_questions_result.get("questions") else None
-    
-    return {
+    logger.info("Calling generate_dynamic_onboarding_questions...")
+    dynamic_questions = await generate_dynamic_onboarding_questions(language=request.language)
+    logger.info(f"Generated {len(dynamic_questions)} questions")
+
+    next_question = dynamic_questions[0] if dynamic_questions else None
+    if next_question:
+        logger.info(f"First question: id={next_question.id}, text={next_question.text[:50]}...")
+
+    result = {
         "session_id": session["session_id"],
-        "game_id": game_id,
+        "game_id": request.game_id,
         "question": next_question.model_dump() if next_question else None,
     }
+    logger.info(f"=== START ONBOARDING COMPLETED ===")
+    return result
 
 
 @app.post("/onboarding/{session_id}/answer")
@@ -372,8 +410,8 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     if not completed:
         # Get next dynamic question
         game_id = session.get("game_id", "default_game")
-        dynamic_questions_result = await generate_dynamic_onboarding_questions(language=language)
-        remaining_questions = dynamic_questions_result["questions"][current_question:]
+        dynamic_questions = await generate_dynamic_onboarding_questions(language=language)
+        remaining_questions = dynamic_questions[current_question:]
         next_question = remaining_questions[0] if remaining_questions else None
 
     result = {
@@ -460,8 +498,8 @@ async def get_onboarding_status(session_id: str, language: str = "en"):
     next_question = None
     if not session["completed"]:
         game_id = session.get("game_id", "default_game")
-        dynamic_questions_result = await generate_dynamic_onboarding_questions(language=language)
-        remaining_questions = dynamic_questions_result["questions"][session["current_question"]:]
+        dynamic_questions = await generate_dynamic_onboarding_questions(language=language)
+        remaining_questions = dynamic_questions[session["current_question"]:]
         next_question = remaining_questions[0] if remaining_questions else None
 
     return {
@@ -477,9 +515,13 @@ async def get_onboarding_status(session_id: str, language: str = "en"):
 @app.get("/players/{player_id}/profile")
 async def get_player_profile_endpoint(player_id: int):
     """Get player profile"""
-    profile = get_player_profile(player_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Player profile not found. Complete onboarding first.")
+    try:
+        profile = get_player_profile(player_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Player profile not found. Complete onboarding first.")
+        return profile
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid player ID format: {str(e)}")
     
     # Return profile with avatar_url and game_id
     return {
@@ -565,38 +607,33 @@ async def poll_game_updates(player_id: int, since: Optional[str] = None):
 
 # Player action endpoints
 @app.post("/game/actions")
-async def submit_player_action(
-    player_id: int,
-    day: int,
-    action_id: str,
-    choice: str
-):
+async def submit_player_action(request: PlayerActionRequest):
     """Submit player's action selection"""
-    current_day = get_game_day(day)
+    current_day = get_game_day(request.day)
     if not current_day:
         raise HTTPException(status_code=404, detail="No active game day")
 
     valid_actions = [a["id"] for a in current_day["player_actions"]]
-    if action_id not in valid_actions:
+    if request.action_id not in valid_actions:
         raise HTTPException(status_code=400, detail="Invalid action ID")
 
-    result = save_player_action(player_id, day, action_id, choice)
+    result = save_player_action(request.player_id, request.day, request.action_id, request.choice)
     return {"status": "accepted", "action": result}
 
 
 # Message endpoints
 @app.post("/game/messages")
-async def submit_game_message(player_id: int, message: str, message_type: str = "text"):
+async def submit_game_message(request: GameMessageRequest):
     """Submit a message to the game master and get response"""
-    add_game_message(player_id, message, message_type)
+    add_game_message(request.player_id, request.message, request.message_type)
 
     # Get player profile
-    profile = get_player_profile(player_id)
+    profile = get_player_profile(request.player_id)
     if not profile:
         profile_data = {
             "role": "Crew Member",
             "personality_traits": [],
-            "player_id": player_id
+            "player_id": request.player_id
         }
     else:
         profile_data = {
