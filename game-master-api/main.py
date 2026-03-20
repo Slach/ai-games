@@ -376,11 +376,11 @@ async def start_onboarding(request: StartOnboardingRequest):
     # Get dynamic questions for the game
     logger.info("Calling generate_dynamic_onboarding_questions...")
     dynamic_questions = await generate_dynamic_onboarding_questions(language=request.language)
-   logger.info(f"Generated {len(dynamic_questions)} questions")
+    logger.info(f"Generated {len(dynamic_questions)} questions")
 
-        # Log generation time
-        gen_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Question generation took {gen_time:.2f} seconds")
+    # Log generation time
+    gen_time = (datetime.now() - start_time).total_seconds()
+    logger.info(f"Question generation took {gen_time:.2f} seconds")
 
     next_question = dynamic_questions[0] if dynamic_questions else None
     if next_question:
