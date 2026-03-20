@@ -88,12 +88,12 @@ def update_player_state(player_id: int, **kwargs):
 
 # ============== Helper Functions ==============
 
-async def api_request(method: str, endpoint: str, data: Optional[dict] = None, params: Optional[dict] = None) -> dict:
+async def api_request(method: str, endpoint: str, data: Optional[dict] = None, params: Optional[dict] = None, timeout_total: int = 600) -> dict:
     """Make a request to the Game Master API"""
     url = f"{GAME_MASTER_API_URL}{endpoint}"
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.request(method, url, json=data, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with session.request(method, url, json=data, params=params, timeout=aiohttp.ClientTimeout(total=timeout_total)) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
                     logger.error(f"API error: {resp.status} - {error_text}")
@@ -241,10 +241,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 reply_markup=create_main_menu_keyboard()
             )
             
-            # Start onboarding session
+            # Start onboarding session (long timeout for LLM generation)
             try:
                 logger.info(f"Starting onboarding for player_id={player_id}, language={BOT_LANGUAGE}")
-                result = await api_request("POST", "/onboarding/start", data={"language": BOT_LANGUAGE, "player_id": player_id})
+                result = await api_request("POST", "/onboarding/start", data={"player_id": player_id, "game_id": "default_game", "language": BOT_LANGUAGE}, timeout_total=600)
                 logger.info(f"Onboarding start response: {result}")
 
                 session_id = result.get("session_id")
@@ -267,7 +267,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     await state.set_state(OnboardingState.waiting_for_answer)
                     
             except Exception as e:
-                logger.error(f"Failed to start onboarding for player {player_id}: {e}")
+                logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}")
                 error_msgs = lang.get_errors(BOT_LANGUAGE)
                 await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
                 

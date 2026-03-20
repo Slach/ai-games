@@ -82,6 +82,85 @@ ROLE_DISPLAY = {
     },
 }
 
+# LLM prompts for dynamic content generation
+LLM_PROMPTS = {
+    LANGUAGE_RU: {
+        "onboarding_questions": """
+Сгенерируй 2-3 вопроса для онбординга в игре про космические исследования.
+Вопросы должны быть о "что бы ты сделал в этой ситуации" или "А или Б выбор".
+Вопросы помогают определить роль игрока и черты его личности.
+
+Верни ТОЛЬКО валидный JSON без каких-либо дополнительных текстов, markdown кода или комментариев.
+Структура:
+[
+    {{
+        "id": 1,
+        "text": "текст вопроса",
+        "options": [
+            {{"value": "значение_варианта_1", "label": "Отображаемый текст варианта 1"}},
+            {{"value": "значение_варианта_2", "label": "Отображаемый текст варианта 2"}}
+        ]
+    }}
+]
+
+Важно: НЕ используй markdown блоки (```json), НЕ добавляй никаких пояснений. ТОЛЬКО чистый JSON.
+""",
+    },
+    LANGUAGE_EN: {
+        "onboarding_questions": """
+Generate 2-3 onboarding questions for a space exploration game.
+Questions should be about "what would you do in this situation" or "A or B preference".
+Questions help determine player role and personality traits.
+
+Return ONLY valid JSON without any additional text, markdown code blocks, or comments.
+Structure:
+[
+    {{
+        "id": 1,
+        "text": "question text",
+        "options": [
+            {{"value": "option_value_1", "label": "Option 1 display text"}},
+            {{"value": "option_value_2", "label": "Option 2 display text"}}
+        ]
+    }}
+]
+
+Important: DO NOT use markdown code blocks (```json), DO NOT add any explanations. ONLY pure JSON.
+""",
+    },
+}
+
+
+# LLM language directives for prompts
+LLM_DIRECTIVES = {
+    LANGUAGE_RU: {
+        "onboarding_questions": "ВАЖНО: Отвечай ТОЛЬКО на русском языке. Все вопросы и варианты ответов должны быть на русском.",
+        "daily_story": "ВАЖНО: Отвечай ТОЛЬКО на русском языке. Все повествование, действия и последствия должны быть на русском языке.",
+        "npc_dialogue": "Отвечай на русском языке.",
+        "content_prompts": "Отвечай на русском языке.",
+        "player_message": "Отвечай на русском языке.",
+    },
+    LANGUAGE_EN: {
+        "onboarding_questions": "IMPORTANT: Respond in ENGLISH ONLY. All questions and options must be in English.",
+        "daily_story": "IMPORTANT: Respond entirely in ENGLISH. All narrative, actions, and consequences must be in English language.",
+        "npc_dialogue": "Respond in ENGLISH.",
+        "content_prompts": "Respond in ENGLISH.",
+        "player_message": "Respond in ENGLISH.",
+    },
+}
+
+
+def get_llm_prompt(prompt_key: str, language: str = LANGUAGE_RU) -> str:
+    """Get LLM prompt template for a specific type and language"""
+    prompts = LLM_PROMPTS.get(language, LLM_PROMPTS[LANGUAGE_RU])
+    return prompts.get(prompt_key, "")
+
+
+def get_llm_directive(directive_key: str, language: str = LANGUAGE_RU) -> str:
+    """Get LLM directive for a specific prompt type and language"""
+    directives = LLM_DIRECTIVES.get(language, LLM_DIRECTIVES[LANGUAGE_RU])
+    return directives.get(directive_key, "")
+
 
 def get_player_roles(language: str = LANGUAGE_RU):
     """Get player roles for a specific language"""

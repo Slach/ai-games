@@ -13,6 +13,7 @@ from datetime import datetime
 
 from game_master import GameMasterAgent, create_game_master_agent
 from comic_generator import ComicGenerator, create_comic_generator
+from language import get_llm_prompt, get_llm_directive
 from database import (
     init_db,
     create_onboarding_session,
@@ -164,26 +165,17 @@ def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
 async def generate_dynamic_onboarding_questions(language: str = "en") -> List[OnboardingQuestion]:
     """Generate 2-3 dynamic onboarding questions based on game setting"""
     logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
+    start_time = datetime.now()
     try:
         game_master = await create_game_master_agent(language=language)
         logger.info("Game Master agent created successfully")
 
-        prompt = """
-Generate 2-3 onboarding questions for a space exploration game.
-Questions should be about "what would you do in this situation" or "A or B preference".
-Questions help determine player role and personality traits.
+        prompt_template = get_llm_prompt("onboarding_questions", language)
+        lang_directive = get_llm_directive("onboarding_questions", language)
 
-Return ONLY valid JSON with this structure:
-[
-    {
-        "id": 1,
-        "text": "question text",
-        "options": [
-            {"value": "option_value_1", "label": "Option 1 display text"},
-            {"value": "option_value_2", "label": "Option 2 display text"}
-        ]
-    }
-]
+        prompt = f"""{prompt_template}
+
+{lang_directive}
 """
 
         logger.info("Sending prompt to LLM agent...")
@@ -194,16 +186,25 @@ Return ONLY valid JSON with this structure:
         # Try to parse JSON
         import json
         import re
-        
+
         try:
             questions = json.loads(response_str)
-        except json.JSONDecodeError:
-            # Try to extract JSON block
-            json_match = re.search(r'\[.*\]', response_str, re.DOTALL)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            # Try to extract JSON block - remove markdown code blocks first
+            cleaned_response = re.sub(r'```json\s*|\s*```', '', response_str, flags=re.IGNORECASE)
+            cleaned_response = re.sub(r'```\s*|\s*```', '', cleaned_response, flags=re.IGNORECASE)
+
+            # Try to extract JSON array
+            json_match = re.search(r'\[.*\]', cleaned_response, re.DOTALL)
             if json_match:
-                questions = json.loads(json_match.group())
+                try:
+                    questions = json.loads(json_match.group())
+                except json.JSONDecodeError as e2:
+                    logger.error(f"Failed to parse extracted JSON: {e2}")
+                    raise ValueError(f"Failed to parse JSON from LLM response. Raw: {cleaned_response[:200]}...")
             else:
-                raise ValueError("Failed to parse JSON from LLM response")
+                raise ValueError(f"Failed to find JSON array in LLM response. Cleaned: {cleaned_response[:200]}...")
         
         # Convert to OnboardingQuestion objects
         result = []
@@ -369,13 +370,17 @@ async def start_onboarding(request: StartOnboardingRequest):
         logger.warning(f"Player {request.player_id} already has a profile")
         raise HTTPException(status_code=400, detail="Player already has a profile")
 
-    session = create_onboarding_session(request.player_id)
+    session = create_onboarding_session(request.player_id, request.language)
     logger.info(f"Onboarding session created: {session['session_id']}")
 
     # Get dynamic questions for the game
     logger.info("Calling generate_dynamic_onboarding_questions...")
     dynamic_questions = await generate_dynamic_onboarding_questions(language=request.language)
-    logger.info(f"Generated {len(dynamic_questions)} questions")
+   logger.info(f"Generated {len(dynamic_questions)} questions")
+
+        # Log generation time
+        gen_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Question generation took {gen_time:.2f} seconds")
 
     next_question = dynamic_questions[0] if dynamic_questions else None
     if next_question:
@@ -397,20 +402,23 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Use the language from request or from session if already set
+    effective_language = language if language != "en" else session.get("language", "en")
+
     answers = session["answers"].copy()
     answers[answer.question_id] = answer.answer
     current_question = session["current_question"] + 1
 
     # Check if all questions answered (3 dynamic questions)
     completed = current_question >= 3
-    
-    update_onboarding_session(session_id, current_question, answers, completed)
+
+    update_onboarding_session(session_id, current_question, answers, completed, effective_language)
 
     next_question = None
     if not completed:
-        # Get next dynamic question
+        # Get next dynamic question using the same language as session
         game_id = session.get("game_id", "default_game")
-        dynamic_questions = await generate_dynamic_onboarding_questions(language=language)
+        dynamic_questions = await generate_dynamic_onboarding_questions(language=effective_language)
         remaining_questions = dynamic_questions[current_question:]
         next_question = remaining_questions[0] if remaining_questions else None
 

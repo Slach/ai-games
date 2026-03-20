@@ -36,6 +36,7 @@ def init_db():
             current_question INTEGER DEFAULT 0,
             answers TEXT DEFAULT '{}',
             completed INTEGER DEFAULT 0,
+            language TEXT DEFAULT 'en',
             created_at TEXT NOT NULL
         )
     """)
@@ -145,7 +146,7 @@ def init_db():
 
 # ============== Onboarding Sessions ==============
 
-def create_onboarding_session(player_id: int) -> Dict[str, Any]:
+def create_onboarding_session(player_id: int, language: str = "en") -> Dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -155,9 +156,9 @@ def create_onboarding_session(player_id: int) -> Dict[str, Any]:
 
     cursor.execute(
         """INSERT INTO onboarding_sessions
-           (session_id, player_id, current_question, answers, completed, created_at)
-           VALUES (?, ?, 0, '{}', 0, ?)""",
-        (session_id, player_id, created_at)
+           (session_id, player_id, current_question, answers, completed, language, created_at)
+           VALUES (?, ?, 0, '{}', 0, ?, ?)""",
+        (session_id, player_id, language, created_at)
     )
 
     conn.commit()
@@ -169,6 +170,7 @@ def create_onboarding_session(player_id: int) -> Dict[str, Any]:
         "current_question": 0,
         "answers": {},
         "completed": False,
+        "language": language,
         "created_at": created_at
     }
 
@@ -191,6 +193,7 @@ def get_onboarding_session(session_id: str) -> Optional[Dict[str, Any]]:
         "current_question": row["current_question"],
         "answers": json.loads(row["answers"] or "{}"),
         "completed": bool(row["completed"]),
+        "language": row["language"] or "en",
         "created_at": row["created_at"]
     }
 
@@ -199,18 +202,27 @@ def update_onboarding_session(
     session_id: str,
     current_question: int,
     answers: Dict[int, str],
-    completed: bool = False
+    completed: bool = False,
+    language: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """Update an onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        """UPDATE onboarding_sessions
-           SET current_question = ?, answers = ?, completed = ?
-           WHERE session_id = ?""",
-        (current_question, json.dumps(answers), 1 if completed else 0, session_id)
-    )
+    if language:
+        cursor.execute(
+            """UPDATE onboarding_sessions
+               SET current_question = ?, answers = ?, completed = ?, language = ?
+               WHERE session_id = ?""",
+            (current_question, json.dumps(answers), 1 if completed else 0, language, session_id)
+        )
+    else:
+        cursor.execute(
+            """UPDATE onboarding_sessions
+               SET current_question = ?, answers = ?, completed = ?
+               WHERE session_id = ?""",
+            (current_question, json.dumps(answers), 1 if completed else 0, session_id)
+        )
 
     conn.commit()
     conn.close()
