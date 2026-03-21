@@ -315,18 +315,23 @@ def wrap_text(text: str, width: int = 35) -> str:
     return '\n'.join(lines)
 
 
-def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboardMarkup:
-    """Create inline keyboard for onboarding options"""
-    builder = InlineKeyboardBuilder()
+def create_onboarding_keyboard(options: list, question_id: int) -> ReplyKeyboardMarkup:
+    """Create reply keyboard for onboarding options.
+    
+    Uses ReplyKeyboardMarkup instead of InlineKeyboardMarkup to avoid text truncation.
+    Telegram reply keyboards display full text without ellipsis.
+    """
+    keyboard = []
     for option in options:
-        # Wrap long labels to fit in Telegram button width
-        label = wrap_text(option["label"], width=35)
-        builder.add(InlineKeyboardButton(
-            text=label,
-            callback_data=f"onboarding_answer:{question_id}:{option['value']}"
-        ))
-    builder.adjust(1)  # One button per row
-    return builder.as_markup()
+        # Use full label text - reply keyboards don't truncate
+        button = KeyboardButton(text=option["label"])
+        keyboard.append([button])
+    
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=True  # Hide keyboard after selection
+    )
 
 
 def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -412,10 +417,18 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 if not session_id:
                     raise Exception("No session ID returned from API")
 
-                await state.update_data(session_id=session_id, game_id=game_id)
+                question = result.get("question")
+                if not question:
+                    raise Exception("No question returned from API")
+
+                await state.update_data(
+                    session_id=session_id,
+                    game_id=game_id,
+                    current_question_id=question["id"],
+                    current_options=question["options"]
+                )
                 update_player_state(player_id, onboarding_session_id=session_id, game_id=game_id)
 
-                question = result.get("question")
                 if question:
                     logger.info(f"First onboarding question: id={question['id']}, text={question['text'][:50]}...")
                     keyboard = create_onboarding_keyboard(question["options"], question["id"])
@@ -560,44 +573,62 @@ async def handle_text_message(message: types.Message):
         await message.answer(msgs["error"].format(error=str(e)))
 
 
-async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
-    """Handle onboarding answer selection"""
-    parts = callback.data.split(":")
+async def onboarding_answer(message: types.Message, state: FSMContext):
+    """Handle onboarding answer selection from reply keyboard.
+
+    Matches button text to option value and submits to API.
+    """
+    answer_text = message.text
+    player_id = message.from_user.id
     error_msgs = lang.get_errors(BOT_LANGUAGE)
 
-    if len(parts) != 3:
-        await callback.answer(error_msgs["invalid_format"])
-        return
+    logger.info(f"Onboarding answer handler called: player={player_id}, text={answer_text}")
 
-    question_id = int(parts[1])
-    answer_value = parts[2]
-    session_id = (await state.get_data()).get("session_id")
+    # Get current question data from state
+    state_data = await state.get_data()
+    session_id = state_data.get("session_id")
+    current_question_id = state_data.get("current_question_id")
+    current_options = state_data.get("current_options")
 
-    player_id = callback.from_user.id
+    logger.info(f"State data: session_id={session_id}, question_id={current_question_id}, options_count={len(current_options) if current_options else 0}")
 
     if not session_id:
-        await callback.answer(error_msgs["session_not_found"])
+        logger.error(f"No session_id in state for player {player_id}")
+        await message.answer(error_msgs["session_not_found"])
         return
 
-    # Immediately acknowledge the callback to prevent timeout
-    await callback.answer()
-
+    if not current_options:
+        logger.error(f"No current_options in state for player {player_id}")
+        await message.answer(error_msgs["invalid_format"])
+        return
+    
+    # Find matching option by button text
+    answer_value = None
+    for option in current_options:
+        if option["label"] == answer_text:
+            answer_value = option["value"]
+            break
+    
+    if not answer_value:
+        await message.answer(error_msgs["invalid_format"])
+        return
+    
     try:
-        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={question_id}, answer={answer_value}")
+        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, answer={answer_value}")
         result = await api_request("POST", f"/onboarding/{session_id}/answer", data={
-            "question_id": question_id,
+            "question_id": current_question_id,
             "answer": answer_value
         }, params={"language": BOT_LANGUAGE})
         logger.info(f"Onboarding answer response: completed={result.get('completed')}")
-
+        
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
-
+        
         if result.get("completed"):
             profile = result.get("profile")
             logger.info(f"Onboarding completed for player {player_id}: role={profile['role']}")
-
+            
             # Show completion message
-            await callback.message.answer(
+            await message.answer(
                 onboarding_msgs["onboarding_complete"].format(
                     role=profile['role'],
                     role_description=profile['role_description'],
@@ -606,29 +637,34 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
                 parse_mode="Markdown",
                 reply_markup=create_main_menu_keyboard()
             )
-
+            
             # Verify profile was created
             try:
                 verify_profile = await api_request("GET", f"/players/{player_id}/profile")
                 logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role')}")
             except Exception as verify_error:
                 logger.error(f"Profile verification failed for player {player_id}: {verify_error}")
-
+            
             await state.clear()
             update_player_state(player_id, onboarding_session_id=None)
-
+            
         else:
             next_question = result.get("next_question")
             if next_question:
+                # Store next question data in state for matching
+                await state.update_data(
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"]
+                )
                 keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
-                await callback.message.answer(
+                await message.answer(
                     onboarding_msgs["question_prefix"].format(id=next_question['id'], text=next_question['text']),
                     reply_markup=keyboard
                 )
-
+                
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}")
-        await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+        await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
 async def action_selection(callback: types.CallbackQuery):
@@ -773,10 +809,14 @@ async def main():
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
+
+    # Onboarding answer handler - must be registered BEFORE general text handlers
+    dp.message.register(onboarding_answer, OnboardingState.waiting_for_answer)
+
+    # General text message handler (catch-all for non-command messages)
     dp.message.register(handle_text_message, F.text & ~F.command)
-    
+
     # Callback query handlers
-    dp.callback_query.register(onboarding_answer, F.data.startswith("onboarding_answer:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
     
