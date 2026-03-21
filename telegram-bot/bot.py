@@ -47,6 +47,11 @@ GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-master-api:8
 BOT_LANGUAGE = os.getenv("BOT_LANGUAGE", "ru")
 POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # seconds between polls
 
+# Socks5 proxy configuration
+# Set to empty string to disable proxy (direct connection)
+# For Docker, use host.docker.internal:PORT or proxy IP address
+TELEGRAM_SOCKS_PROXY = os.getenv("TELEGRAM_SOCKS_PROXY", "")
+
 # ============== FSM States ==============
 
 class OnboardingState(StatesGroup):
@@ -88,20 +93,134 @@ def update_player_state(player_id: int, **kwargs):
 
 # ============== Helper Functions ==============
 
-async def api_request(method: str, endpoint: str, data: Optional[dict] = None, params: Optional[dict] = None, timeout_total: int = 600) -> dict:
-    """Make a request to the Game Master API"""
+def parse_proxy_url(proxy_url: str) -> tuple[str, int, Optional[str], Optional[str]]:
+    """Parse socks5 proxy URL into components.
+
+    Expected format: host:port or user:pass@host:port
+    Returns: (host, port, username, password)
+    """
+    # Remove protocol if present
+    if proxy_url.startswith("socks5://"):
+        proxy_url = proxy_url[9:]
+    elif proxy_url.startswith("socks5h://"):
+        proxy_url = proxy_url[10:]
+
+    # Extract credentials if present
+    username = None
+    password = None
+    if "@" in proxy_url:
+        creds, rest = proxy_url.rsplit("@", 1)
+        if ":" in creds:
+            username, password = creds.split(":", 1)
+        proxy_url = rest
+
+    # Extract host and port
+    if ":" in proxy_url:
+        host, port = proxy_url.rsplit(":", 1)
+        return (host, int(port), username, password)
+
+    return (proxy_url, 9999, username, password)
+
+
+async def create_aiohttp_session(proxy_url: str = None) -> aiohttp.ClientSession:
+    """Create an aiohttp ClientSession with Socks5 proxy support.
+
+    Args:
+        proxy_url: Proxy URL in format host:port or user:pass@host:port
+                   If None, uses TELEGRAM_SOCKS_PROXY env var
+
+    Returns:
+        Configured aiohttp.ClientSession
+    """
+    if proxy_url is None:
+        proxy_url = TELEGRAM_SOCKS_PROXY
+
+    try:
+        host, port, username, password = parse_proxy_url(proxy_url)
+
+        # Import and create Socks5 connector using ProxyConnector
+        from aiohttp_socks import ProxyConnector
+
+        connector = ProxyConnector(
+            host=host,
+            port=port,
+            username=username or None,
+            password=password or None
+        )
+
+        return aiohttp.ClientSession(connector=connector)
+
+    except Exception as e:
+        logger.warning(f"Failed to configure proxy {proxy_url}: {e}. Using direct connection.")
+        return aiohttp.ClientSession()
+
+
+async def api_request(method: str, endpoint: str, data: Optional[dict] = None, params: Optional[dict] = None, timeout_total: int = 600, ignore_codes: tuple = ()) -> Optional[dict]:
+    """Make a request to the Game Master API (direct connection, no proxy)
+    
+    Args:
+        method: HTTP method
+        endpoint: API endpoint path
+        data: JSON data for request body
+        params: Query parameters
+        timeout_total: Total timeout in seconds
+        ignore_codes: Tuple of HTTP status codes to ignore (return None instead of raising)
+        
+    Returns:
+        Response JSON as dict, or None if status code is in ignore_codes
+    """
     url = f"{GAME_MASTER_API_URL}{endpoint}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.request(method, url, json=data, params=params, timeout=aiohttp.ClientTimeout(total=timeout_total)) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error(f"API error: {resp.status} - {error_text}")
-                    raise Exception(f"API error: {resp.status} - {error_text}")
-                return await resp.json()
-        except aiohttp.ClientError as e:
-            logger.error(f"HTTP error during API request: {e}")
-            raise
+
+    # Direct connection - no proxy for internal API calls
+    session = aiohttp.ClientSession()
+
+    try:
+        async with session.request(method, url, json=data, params=params, timeout=aiohttp.ClientTimeout(total=timeout_total)) as resp:
+            if resp.status in ignore_codes:
+                return None
+            if resp.status != 200:
+                error_text = await resp.text()
+                logger.error(f"API error: {resp.status} - {error_text}")
+                raise Exception(f"API error: {resp.status} - {error_text}")
+            return await resp.json()
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP error during API request: {e}")
+        raise
+    finally:
+        await session.close()
+
+
+def create_bot_session(proxy_url: str = None):
+    """Create an AiohttpSession for aiogram Bot with SOCKS5 proxy support.
+
+    Args:
+        proxy_url: Proxy URL in format host:port or socks5://host:port
+                   or user:pass@host:port. Empty string for direct connection.
+
+    Returns:
+        AiohttpSession with SOCKS5 proxy configured (or direct connection)
+    """
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    if proxy_url is None:
+        proxy_url = TELEGRAM_SOCKS_PROXY
+
+    # Empty proxy means direct connection
+    if not proxy_url or not proxy_url.strip():
+        return AiohttpSession()
+
+    try:
+        # Ensure proxy URL has socks5:// prefix
+        if not proxy_url.startswith("socks5://") and not proxy_url.startswith("socks5h://"):
+            proxy_url = f"socks5://{proxy_url}"
+
+        session = AiohttpSession(proxy=proxy_url)
+        logger.info(f"Configured SOCKS5 proxy: {proxy_url}")
+        return session
+
+    except Exception as e:
+        logger.warning(f"Failed to configure proxy {proxy_url}: {e}. Using direct connection.")
+        return AiohttpSession()
 
 
 async def fetch_onboarding_questions() -> list:
@@ -126,16 +245,25 @@ async def check_player_game_status(player_id: int) -> Optional[Dict[str, Any]]:
 async def poll_game_updates(player_id: int):
     """Poll for new game updates (days, actions, messages)"""
     state = get_player_state(player_id)
-    
+
+    # Skip polling if player hasn't completed onboarding yet
+    if state.get("onboarding_session_id") is not None:
+        logger.debug(f"Skipping poll for player {player_id}: onboarding in progress")
+        return
+
     try:
         # Get last poll timestamp from profile
-        profile = await api_request("GET", f"/players/{player_id}/profile")
+        # If profile doesn't exist (404), skip polling silently
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        if not profile:
+            # Player hasn't completed onboarding yet - skip polling
+            return
         last_poll = profile.get("last_poll") if profile else None
-        
+
         # Poll for updates using the new endpoint
         params = {"last_poll": last_poll} if last_poll is not None else {}
         result = await api_request("GET", f"/game/poll/{player_id}", params=params)
-        
+
         # Process updates
         if result.get("new_game_day"):
             state["pending_updates"].append({
@@ -143,29 +271,58 @@ async def poll_game_updates(player_id: int):
                 "day": result["new_game_day"],
                 "timestamp": datetime.now()
             })
-        
+
         if result.get("pending_actions"):
             state["pending_updates"].append({
                 "type": "pending_actions",
                 "actions": result["pending_actions"],
                 "timestamp": datetime.now()
             })
-        
+
         # Update last poll time
         state["last_poll"] = datetime.now()
-        
+
     except Exception as e:
         logger.error(f"Failed to poll game updates for player {player_id}: {e}")
 
 
 # ============== Keyboard Builders ==============
 
+def wrap_text(text: str, width: int = 35) -> str:
+    """Wrap text into multiple lines for Telegram button.
+    
+    Telegram inline buttons have limited width. This function splits
+    long text into multiple lines at word boundaries.
+    """
+    words = text.split()
+    lines = []
+    current_line = []
+    current_length = 0
+    
+    for word in words:
+        if current_length + len(word) + 1 <= width:
+            current_line.append(word)
+            current_length += len(word) + 1
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
+            current_length = len(word)
+    
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    return '\n'.join(lines)
+
+
 def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboardMarkup:
     """Create inline keyboard for onboarding options"""
     builder = InlineKeyboardBuilder()
     for option in options:
+        # Wrap long labels to fit in Telegram button width
+        label = wrap_text(option["label"], width=35)
         builder.add(InlineKeyboardButton(
-            text=option["label"],
+            text=label,
             callback_data=f"onboarding_answer:{question_id}:{option['value']}"
         ))
     builder.adjust(1)  # One button per row
@@ -190,8 +347,10 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
     """Create inline keyboard for game actions"""
     builder = InlineKeyboardBuilder()
     for action in actions:
+        # Wrap long action text to fit in Telegram button width
+        text = wrap_text(action["text"], width=35)
         builder.add(InlineKeyboardButton(
-            text=action["text"],
+            text=text,
             callback_data=f"action:{action['id']}"
         ))
     builder.adjust(1)
@@ -405,21 +564,24 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
     """Handle onboarding answer selection"""
     parts = callback.data.split(":")
     error_msgs = lang.get_errors(BOT_LANGUAGE)
-    
+
     if len(parts) != 3:
         await callback.answer(error_msgs["invalid_format"])
         return
-    
+
     question_id = int(parts[1])
     answer_value = parts[2]
     session_id = (await state.get_data()).get("session_id")
-    
+
     player_id = callback.from_user.id
-    
+
     if not session_id:
         await callback.answer(error_msgs["session_not_found"])
         return
-    
+
+    # Immediately acknowledge the callback to prevent timeout
+    await callback.answer()
+
     try:
         logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={question_id}, answer={answer_value}")
         result = await api_request("POST", f"/onboarding/{session_id}/answer", data={
@@ -432,7 +594,8 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
 
         if result.get("completed"):
             profile = result.get("profile")
-            
+            logger.info(f"Onboarding completed for player {player_id}: role={profile['role']}")
+
             # Show completion message
             await callback.message.answer(
                 onboarding_msgs["onboarding_complete"].format(
@@ -443,10 +606,17 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
                 parse_mode="Markdown",
                 reply_markup=create_main_menu_keyboard()
             )
-            
+
+            # Verify profile was created
+            try:
+                verify_profile = await api_request("GET", f"/players/{player_id}/profile")
+                logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role')}")
+            except Exception as verify_error:
+                logger.error(f"Profile verification failed for player {player_id}: {verify_error}")
+
             await state.clear()
             update_player_state(player_id, onboarding_session_id=None)
-            
+
         else:
             next_question = result.get("next_question")
             if next_question:
@@ -455,13 +625,10 @@ async def onboarding_answer(callback: types.CallbackQuery, state: FSMContext):
                     onboarding_msgs["question_prefix"].format(id=next_question['id'], text=next_question['text']),
                     reply_markup=keyboard
                 )
-        
-        await callback.answer()
-        
+
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}")
         await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
-        await callback.answer()
 
 
 async def action_selection(callback: types.CallbackQuery):
@@ -588,13 +755,16 @@ async def main():
     if not BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set")
         return
-    
+
     # Configure SQLite storage for FSM state persistence
     db_path = os.getenv("AI_FSM_DB", "/app/fsm_storage.db")
     storage = SQLStorage(db_path=db_path, serializing_method='json')
-    
-    # Initialize bot and dispatcher with SQLite storage
-    bot = Bot(token=BOT_TOKEN)
+
+    # Create aiohttp session with Socks5 proxy for Telegram API
+    bot_session = create_bot_session()
+
+    # Initialize bot and dispatcher with SQLite storage and proxy session
+    bot = Bot(token=BOT_TOKEN, session=bot_session)
     dp = Dispatcher(storage=storage)
     
     # Register handlers

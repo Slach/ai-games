@@ -37,6 +37,7 @@ def init_db():
             answers TEXT DEFAULT '{}',
             completed INTEGER DEFAULT 0,
             language TEXT DEFAULT 'en',
+            questions TEXT DEFAULT '[]',
             created_at TEXT NOT NULL
         )
     """)
@@ -146,7 +147,7 @@ def init_db():
 
 # ============== Onboarding Sessions ==============
 
-def create_onboarding_session(player_id: int, language: str = "en") -> Dict[str, Any]:
+def create_onboarding_session(player_id: int, language: str = "en", questions: list = None) -> Dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -156,9 +157,9 @@ def create_onboarding_session(player_id: int, language: str = "en") -> Dict[str,
 
     cursor.execute(
         """INSERT INTO onboarding_sessions
-           (session_id, player_id, current_question, answers, completed, language, created_at)
-           VALUES (?, ?, 0, '{}', 0, ?, ?)""",
-        (session_id, player_id, language, created_at)
+           (session_id, player_id, current_question, answers, completed, language, questions, created_at)
+           VALUES (?, ?, 0, '{}', 0, ?, ?, ?)""",
+        (session_id, player_id, language, json.dumps(questions) if questions else '[]', created_at)
     )
 
     conn.commit()
@@ -171,6 +172,7 @@ def create_onboarding_session(player_id: int, language: str = "en") -> Dict[str,
         "answers": {},
         "completed": False,
         "language": language,
+        "questions": questions or [],
         "created_at": created_at
     }
 
@@ -194,6 +196,7 @@ def get_onboarding_session(session_id: str) -> Optional[Dict[str, Any]]:
         "answers": json.loads(row["answers"] or "{}"),
         "completed": bool(row["completed"]),
         "language": row["language"] or "en",
+        "questions": json.loads(row["questions"] or "[]"),
         "created_at": row["created_at"]
     }
 
@@ -203,18 +206,33 @@ def update_onboarding_session(
     current_question: int,
     answers: Dict[int, str],
     completed: bool = False,
-    language: Optional[str] = None
+    language: Optional[str] = None,
+    questions: Optional[list] = None
 ) -> Optional[Dict[str, Any]]:
     """Update an onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    if language:
+    if language and questions:
+        cursor.execute(
+            """UPDATE onboarding_sessions
+               SET current_question = ?, answers = ?, completed = ?, language = ?, questions = ?
+               WHERE session_id = ?""",
+            (current_question, json.dumps(answers), 1 if completed else 0, language, json.dumps(questions), session_id)
+        )
+    elif language:
         cursor.execute(
             """UPDATE onboarding_sessions
                SET current_question = ?, answers = ?, completed = ?, language = ?
                WHERE session_id = ?""",
             (current_question, json.dumps(answers), 1 if completed else 0, language, session_id)
+        )
+    elif questions:
+        cursor.execute(
+            """UPDATE onboarding_sessions
+               SET current_question = ?, answers = ?, completed = ?, questions = ?
+               WHERE session_id = ?""",
+            (current_question, json.dumps(answers), 1 if completed else 0, json.dumps(questions), session_id)
         )
     else:
         cursor.execute(

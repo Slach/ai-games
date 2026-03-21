@@ -7,6 +7,9 @@ aiogram
 # Async HTTP client for API calls
 aiohttp
 
+# Socks5 proxy support for aiohttp
+aiohttp-socks
+
 # SQLite storage for aiogram FSM (persistent state)
 aiosqlite
 

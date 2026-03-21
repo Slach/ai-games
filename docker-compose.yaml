@@ -109,6 +109,9 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
       - AI_FSM_DB=/app/bot_storage.db
+      - TELEGRAM_SOCKS_PROXY=${TELEGRAM_SOCKS_PROXY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       game-master-api:
         condition: service_healthy

@@ -360,6 +360,7 @@ async def generate_static_onboarding_questions(game_id: str = "default_game"):
 @app.post("/onboarding/start")
 async def start_onboarding(request: StartOnboardingRequest):
     """Start a new onboarding session for a player"""
+    start_time = datetime.now()
     logger.info(f"=== START ONBOARDING ===")
     logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
 
@@ -370,13 +371,18 @@ async def start_onboarding(request: StartOnboardingRequest):
         logger.warning(f"Player {request.player_id} already has a profile")
         raise HTTPException(status_code=400, detail="Player already has a profile")
 
-    session = create_onboarding_session(request.player_id, request.language)
-    logger.info(f"Onboarding session created: {session['session_id']}")
-
-    # Get dynamic questions for the game
+    # Generate dynamic questions ONCE and save to session
     logger.info("Calling generate_dynamic_onboarding_questions...")
     dynamic_questions = await generate_dynamic_onboarding_questions(language=request.language)
     logger.info(f"Generated {len(dynamic_questions)} questions")
+
+    # Create session with pre-generated questions
+    session = create_onboarding_session(
+        request.player_id, 
+        request.language,
+        questions=[q.model_dump() for q in dynamic_questions]
+    )
+    logger.info(f"Onboarding session created: {session['session_id']}")
 
     # Log generation time
     gen_time = (datetime.now() - start_time).total_seconds()
@@ -412,13 +418,19 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     # Check if all questions answered (3 dynamic questions)
     completed = current_question >= 3
 
+    # Get questions from session (pre-generated, no need to regenerate)
+    session_questions = session.get("questions", [])
+    
+    # Convert dict questions to OnboardingQuestion objects
+    from pydantic import TypeAdapter
+    question_adapter = TypeAdapter(list[OnboardingQuestion])
+    dynamic_questions = question_adapter.validate_python(session_questions) if session_questions else []
+
     update_onboarding_session(session_id, current_question, answers, completed, effective_language)
 
     next_question = None
     if not completed:
-        # Get next dynamic question using the same language as session
-        game_id = session.get("game_id", "default_game")
-        dynamic_questions = await generate_dynamic_onboarding_questions(language=effective_language)
+        # Get next question from pre-generated list
         remaining_questions = dynamic_questions[current_question:]
         next_question = remaining_questions[0] if remaining_questions else None
 
@@ -505,10 +517,14 @@ async def get_onboarding_status(session_id: str, language: str = "en"):
 
     next_question = None
     if not session["completed"]:
-        game_id = session.get("game_id", "default_game")
-        dynamic_questions = await generate_dynamic_onboarding_questions(language=language)
-        remaining_questions = dynamic_questions[session["current_question"]:]
-        next_question = remaining_questions[0] if remaining_questions else None
+        # Get questions from session (pre-generated, no need to regenerate)
+        session_questions = session.get("questions", [])
+        if session_questions:
+            from pydantic import TypeAdapter
+            question_adapter = TypeAdapter(list[OnboardingQuestion])
+            dynamic_questions = question_adapter.validate_python(session_questions)
+            remaining_questions = dynamic_questions[session["current_question"]:]
+            next_question = remaining_questions[0] if remaining_questions else None
 
     return {
         "session_id": session["session_id"],
