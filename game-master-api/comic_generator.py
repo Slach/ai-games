@@ -1,7 +1,7 @@
 """
 Image Generator - Direct ComfyUI API integration for image generation
 
-Calls ComfyUI /prompt API directly instead of going through Pixelle-MCP.
+Calls ComfyUI /prompt API directly for image generation.
 Uses Z-Image Turbo model for text-to-image generation.
 
 Model combination (verified working):

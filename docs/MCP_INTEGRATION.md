@@ -1,33 +1,33 @@
-# Using MCP Libraries for AI Game Development
+# ComfyUI Integration
 
 ## Overview
 
-This document explains how to use the MCP (Model Configuration Protocol) libraries to connect your AI game agents to content generation services like Pixelle-MCP and ComfyUI.
+This document explains how to use the ComfyUI HTTP API to connect your AI game agents to the content generation service.
 
 ## Required Libraries
 
 - `strands-agents` - Main agent framework for LLM generation
-- `aiohttp` - HTTP client for Pixelle-MCP API calls
+- `aiohttp` - HTTP client for ComfyUI API calls
 - `asyncio` - Asynchronous programming support
 
 ## Current Implementation Status
 
-**NOTE:** MCP protocol integration is NOT currently implemented in this codebase. The system uses direct HTTP API calls to Pixelle-MCP instead. See `game-master-api/comic_generator.py` for the actual implementation pattern.
+**NOTE:** The system uses direct HTTP API calls to ComfyUI. See `game-master-api/comic_generator.py` for the actual implementation pattern.
 
 ## HTTP API Integration Pattern
 
-The current implementation uses aiohttp to call Pixelle-MCP endpoints directly:
+The current implementation uses aiohttp to call ComfyUI endpoints directly:
 
 ```python
 import aiohttp
 
 async def generate_image(prompt: str) -> Optional[str]:
-    """Generate an image using Pixelle-MCP HTTP API"""
-    
+    """Generate an image using ComfyUI HTTP API"""
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{PIXELLE_MCP_URL}/generate/image",
+                f"{COMFYUI_URL}/prompt",
                 json={
                     "prompt": prompt,
                     "workflow": "t2i_flux_pro.json",
@@ -48,26 +48,18 @@ async def generate_image(prompt: str) -> Optional[str]:
 
 See `game-master-api/comic_generator.py` for complete implementation examples.
 
-## Key Points About the Correction
+## Key Points
 
 1. **Session Management**: The ClientSession is properly managed within the async context manager
-2. **Tool Discovery**: The tools are listed and made available to the agent
-3. **MCP Client**: The MCPClient correctly wraps the session to provide tools in Strands format
-4. **URL**: Updated to use the correct Pixelle-MCP port (9004) instead of generic 8000
-
-
-## Usage Tips
-
-1. **Server Availability**: Make sure the Pixelle-MCP server is running before making API calls
-2. **URL Configuration**: Use `http://pixelle-mcp:9004/pixelle/mcp` as defined in docker-compose.yaml
+2. **URL Configuration**: Use `http://comfyui:8188` as defined in docker-compose.yaml
 3. **Error Handling**: Always wrap HTTP requests in try-catch blocks with proper timeouts
 4. **Async Operations**: Use aiohttp.ClientSession for async HTTP calls
 5. **Logging**: Enable logging to debug connection issues and track generation status
 
 ## Troubleshooting
 
-- If you get connection errors, verify that the Pixelle-MCP service is running
-- Check the docker-compose logs: `docker-compose logs pixelle-mcp`
-- Ensure the URL matches the service configuration in docker-compose (`http://pixelle-mcp:9004/pixelle/mcp`)
+- If you get connection errors, verify that the ComfyUI service is running
+- Check the docker-compose logs: `docker-compose logs comfyui`
+- Ensure the URL matches the service configuration in docker-compose (`http://comfyui:8188`)
 - Verify that the network configuration allows communication between services (spark-network)
-- Check ComfyUI health status - Pixelle-MCP depends on it being healthy
+- Check ComfyUI health status

@@ -158,10 +158,10 @@ docker network rm spark-network
 docker network create spark-network
 ```
 
-### Pixelle-MCP Not Connecting
+### ComfyUI Not Running
 ```bash
-docker-compose logs pixelle-mcp
 docker-compose logs comfyui
+docker-compose ps
 ```
 
 ### Telegram Bot Not Responding
@@ -189,21 +189,16 @@ docker-compose restart telegram-bot
     ┌────┴────┐
     ▼         ▼
 ┌─────────┐ ┌──────────┐
-│pixelle- │ │game-master│
-│ mcp     │ │ scheduler │
-│(MCP)    │ │           │
+│comfyui  │ │game-master│
+│         │ │ scheduler │
+│(GPU gen)│ │           │
 └────┬────┘ └──────────┘
-     ▼
-┌─────────┐
-│ comfyui │  ← GPU content generation
-└─────────┘
 ```
 
 **Service Descriptions:**
 - **telegram-bot**: Player interface via Telegram commands and inline keyboards
 - **game-master-api**: FastAPI REST API with STRANDS-based Game Master agent, handles story generation, player profiles, actions, and messages
 - **game-master**: Scheduler service that triggers daily episode generation (runs at configured time or manually)
-- **pixelle-mcp**: MCP server for content generation orchestration (images, comics, videos)
 - **comfyui**: GPU-accelerated content generation backend with HuggingFace models
 
 ## 9. Environment Variables
@@ -214,7 +209,6 @@ docker-compose restart telegram-bot
 | `LLM_URL` | LLM provider endpoint (llama.cpp) | `http://llama.cpp:8090/v1` |
 | `LLM_API_KEY` | API key for LLM (any value for llama.cpp) | `placeholder-key-for-llama-cpp` |
 | `LLM_MODEL` | LLM model name | `unsloth/Qwen3.5-27B` |
-| `PIXELLE_MCP_URL` | Pixelle-MCP server endpoint | `http://pixelle-mcp:9004/pixelle/mcp` |
 | `COMFYUI_URL` | ComfyUI backend endpoint | `http://comfyui:8188` |
 | `GAME_MASTER_API_URL` | Game Master API endpoint | `http://game-master-api:8000` |
 | `GAME_SCHEDULE_TIME` | Daily generation time (24h format) | `08:00` |

@@ -10,20 +10,19 @@
 - **[STRANDS Agents SDK Python](https://github.com/strands-agents/sdk-python)** - For model-driven game master functionality. Currently implemented and handling game state management, narrative progression, NPC dialogue generation, and content prompt generation via LLM calls.
 
 ### Character AI Systems
-- **[NPCPY](https://github.com/NPC-Worldwide/npcpy)** - Planned for generating character behaviors and responses. Not yet integrated. Current implementation uses static NPC templates in `game_master.py`.
+- NPCs use static templates in `game_master.py` for dialogue and behavior.
 
 ### Content Generation
-- **[Pixelle-MCP](https://github.com/AIDC-AI/Pixelle-MCP)** - MCP server for generating video, audio, and images. Currently configured in Docker but using direct HTTP API calls (not MCP protocol). Comic generation partially implemented in `comic_generator.py` with fallback placeholders.
-- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** - Configured as GPU-accelerated content generation backend. Integrated with Pixelle-MCP via HTTP API. Image generation workflows available but not fully integrated into game flow.
+- **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** - GPU-accelerated content generation backend for images, videos, and comics. Called directly via HTTP API. Comic generation partially implemented in `comic_generator.py` with fallback placeholders.
 
 ## Architecture Overview
 
 The game will feature a cooperative experience delivered through a Telegram bot (Telegram Mini App planned). The core gameplay loop involves:
 
 1. **Daily Story Generation** - LLM generates a unique story once per day via STRANDS Agent
-2. **Content Generation** - Pixelle-MCP/ComfyUI creates comics, videos, 3D scenes (partially implemented)
+2. **Content Generation** - ComfyUI creates comics, images, and other visual content
 3. **Player Interaction** - Players make choices that advance the narrative
-4. **Dynamic Characters** - NPCs respond based on personalities (static templates currently, NPCPY planned)
+4. **NPC Responses** - NPCs respond based on static templates
 5. **Game State Management** - STRANDS Agents SDK manages game state and narrative flow
 
 ### Current Implementation Status
@@ -31,9 +30,7 @@ The game will feature a cooperative experience delivered through a Telegram bot 
 | System | Status | Notes |
 |--------|--------|-------|
 | STRANDS Agents SDK | ✅ Implemented | Game Master agent in `game_master.py`, handles story generation, NPC dialogues, content prompts |
-| Pixelle-MCP | ⚠️ Partially Integrated | HTTP API calls working, MCP protocol not used. Comic generation has fallback placeholders |
 | ComfyUI | ⚠️ Configured | GPU service running, image generation available but not fully integrated into game flow |
-| NPCPY | 📋 Planned | Not yet integrated. Current NPCs use static templates in `game_master.py` |
 | Telegram Mini App | 📋 Planned | TypeScript/React frontend not implemented yet |
 
 
@@ -45,7 +42,7 @@ The base setting is a starship crew in a Star Trek universe, but the system is d
 
 - Always use PYTHONDONTWRITEBYTECODE=1 for running python code
 - The system will be deployed using Docker containers, every service shall be run as separate service in docker-compose
-- Pixelle-MCP and ComfyUI running as services that can be called by the Python code to generate content on demand.
+- ComfyUI running as a service that can be called by the Python code to generate content on demand.
 
 ## Important Rules
 
@@ -72,6 +69,5 @@ The base setting is a starship crew in a Star Trek universe, but the system is d
 
 📋 **Planned for Future:**
 - Full content generation pipeline (videos, 3D scenes, voiceovers)
-- NPCPY integration for dynamic character behaviors
 - Telegram Mini App with rich UI
 - Multi-player voting and collaboration features

@@ -360,44 +360,6 @@ async def get_onboarding_questions():
     return {"questions": [q.model_dump() for q in STATIC_ONBOARDING_QUESTIONS]}
 
 
-@app.get("/onboarding/questions/generate")
-async def generate_static_onboarding_questions(game_id: str = "default_game"):
-    """Generate 2-3 static onboarding questions based on game setting (fallback)"""
-    game = get_game(game_id)
-    if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
-
-    dynamic_questions = [
-        OnboardingQuestion(
-            id=101,
-            text=f"In the {game['setting']}, you encounter an unknown signal. How do you respond?",
-            options=[
-                {"value": "cautious", "label": "Investigate cautiously with sensors"},
-                {"value": "bold", "label": "Approach directly and attempt contact"},
-            ],
-        ),
-        OnboardingQuestion(
-            id=102,
-            text=f"As a crew member in {game['name']}, what is your priority?",
-            options=[
-                {"value": "safety", "label": "Crew safety above all else"},
-                {"value": "discovery", "label": "Knowledge and discovery"},
-                {"value": "mission", "label": "Complete the mission objectives"},
-            ],
-        ),
-        OnboardingQuestion(
-            id=103,
-            text=f"When faced with a moral dilemma in {game['setting']}, you would:",
-            options=[
-                {"value": "empathetic", "label": "Consider everyone's feelings"},
-                {"value": "logical", "label": "Follow logic and rules"},
-            ],
-        ),
-    ]
-
-    return {"questions": [q.model_dump() for q in dynamic_questions]}
-
-
 @app.post("/onboarding/start")
 async def start_onboarding(request: StartOnboardingRequest):
     """Start a new onboarding session for a player"""

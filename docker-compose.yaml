@@ -3,28 +3,6 @@
 # Note: Uses external spark-network and llama.cpp service
 
 services:
-  # Pixelle-MCP Server - Content generation orchestration
-  pixelle-mcp:
-    image: pixelle:spark-full
-    build:
-      dockerfile: Dockerfile.spark
-      context: pixelle-mcp/
-    ports:
-      - "127.0.0.1:9004:9004"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9004/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    depends_on:
-      comfyui:
-        condition: service_healthy
-    volumes:
-      - ./pixelle-mcp/workflows:/app/data/custom_workflows
-    networks:
-      - spark-network
-
   # ComfyUI - Image/Video/3D generation backend
   comfyui:
     image: comfyui:spark-full
@@ -80,11 +58,8 @@ services:
       - LLM_URL=${LLM_URL:-http://llama.cpp:8090/v1}
       - LLM_API_KEY=${LLM_API_KEY:-placeholder-key-for-llama-cpp}
       - LLM_MODEL=${LLM_MODEL:-unsloth/Qwen3.5-27B}
-      - PIXELLE_MCP_URL=${PIXELLE_MCP_URL:-http://pixelle-mcp:9004/pixelle/mcp}
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
     depends_on:
-      pixelle-mcp:
-        condition: service_healthy
       comfyui:
         condition: service_healthy
     healthcheck:

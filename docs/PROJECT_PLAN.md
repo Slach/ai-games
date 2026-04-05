@@ -42,12 +42,12 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
 └──────────────────────┬──────────────────────────────────────────┘
                        │
                ┌───────┼───────┐
-               ▼       ▼       ▼
-        ┌─────────┐ ┌──────────┐ ┌──────────┐
-        │game-master│ │pixelle-  │ │comfyui   │
-        │scheduler│ │mcp       │ │          │
-        │         │ │(MCP)     │ │(GPU gen) │
-        └─────────┘ └──────────┘ └──────────┘
+               ▼       ▼
+        ┌─────────┐ ┌──────────┐
+        │game-master│ │comfyui   │
+        │scheduler│ │          │
+        │         │ │(GPU gen) │
+        └─────────┘ └──────────┘
                        │
                ┌───────┴───────┐
                ▼               ▼
@@ -94,7 +94,7 @@ Database: SQLite (game_master.db)
 - Message history per player
 - Located in `telegram-bot/bot.py`
 
-### 6. Content Generation (ComfyUI + Pixelle-MCP) - ⏳ PLANNED
+### 6. Content Generation (ComfyUI) - ⏳ PLANNED
 - **Pictures:** scenes, characters, locations (nunchaku workflow)
 - **Video:** key moments of the story (Lightx2v workflow)
 - **3D:** ship, stations, planets (TRELLIS2 workflow)
@@ -125,7 +125,6 @@ Database: SQLite (game_master.db)
 | Bot | Python + aiogram |
 | Mini App | TypeScript + React + Three.js |
 | Game Engine | strands-agents/sdk-python |
-| NPC AI | npcpy |
 | Content Gen | ComfyUI (Docker) |
 | Database | PostgreSQL + pgvector |
 | Queue | Redis |
@@ -176,7 +175,7 @@ Database: SQLite (game_master.db)
 
 **Remaining TODOs:**
 - [ ] ComfyUI Docker setup with HuggingFace cache mounting
-- [ ] Pixelle-MCP integration for content generation
+- [ ] ComfyUI integration for content generation
 - [ ] Comic strip generation workflow
 - [ ] NPC personality system refinement
 - [ ] Default action selection logic improvement
@@ -187,7 +186,7 @@ Database: SQLite (game_master.db)
 ### Phase 2: Content Generation (Months 3-4) - PLANNED ⏳
 
 **Planned Features:**
-- [ ] ComfyUI integration via MCP server
+- [ ] ComfyUI integration for content generation
 - [ ] Scene picture generation (nunchaku workflow)
 - [ ] Character portrait generation
 - [ ] Comic strip generation with multiple panels
@@ -201,7 +200,6 @@ Database: SQLite (game_master.db)
 ### Phase 3: Character AI & Advanced Features (Months 5-6) - PLANNED ⏳
 
 **Planned Features:**
-- [ ] NPCPY integration for dynamic character behaviors
 - [ ] Telegram Mini App with rich UI
 - [ ] Character relationship mechanics
 - [ ] Enhanced dialogue generation systems
@@ -209,7 +207,7 @@ Database: SQLite (game_master.db)
 - [ ] Performance optimization for content generation
 - [ ] Multiplayer voting system
 
-**Dependencies:** NPCPY library, Telegram Mini App framework
+**Dependencies:** Telegram Mini App framework
 
 ### Phase 4: Rich Experience (Months 7+) - FUTURE ⏳
 

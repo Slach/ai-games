@@ -6,7 +6,6 @@ This service runs on a schedule and triggers the game-master-api to:
 - Generate personalized comics for each player
 - Process player actions and auto-select if needed
 - Track team assembly over 3 days
-- Integrate npcpy for dynamic NPCs (when available)
 
 It does NOT do the actual AI generation - that's handled by game-master-api.
 """
@@ -18,13 +17,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
 import aiohttp
-
-# Try to import npcpy for dynamic NPC behaviors
-try:
-    import npcpy
-    NPCPY_AVAILABLE = True
-except ImportError:
-    NPCPY_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -139,9 +131,6 @@ class GameMasterScheduler:
 
     async def generate_personalized_comics(self, day_data: Dict[str, Any], game_id: str = "default_game") -> List[Dict[str, Any]]:
         """Generate personalized comics for all players in the game with unified intro story"""
-        if not NPCPY_AVAILABLE:
-            logger.info("NPCPY not available, using static comic generation")
-        
         player_ids = await self.get_players_in_game(game_id)
         comics_generated = []
         
@@ -315,15 +304,11 @@ class GameMasterScheduler:
             previous_summary = f"Previous day consequences: {consequences}"
             logger.info(f"Incorporating {len(previous_actions)} previous actions into story")
 
-        # Step 4: Check team assembly status and NPC integration
+        # Step 4: Check team assembly status
         team_status = await self.get_team_assembly_status()
         if not team_status.get("team_assembled"):
             bot_npcs = team_status.get("bot_npcs_needed", [])
             logger.info(f"Team not fully assembled, adding {len(bot_npcs)} NPC bots")
-            
-            # Step 4a: Update NPC team with npcpy integration if available
-            if NPCPY_AVAILABLE and bot_npcs:
-                await self.update_npc_team(current_day)
 
         # Step 5: Call API to generate daily episode with previous actions context
         try:
@@ -484,34 +469,6 @@ class GameMasterScheduler:
                                     await self.auto_select_actions(pending_players)
         except Exception as e:
             logger.error(f"Failed to check auto-action timeout: {e}")
-
-    async def update_npc_team(self, day: int) -> dict:
-        """
-        Update NPC team based on team assembly logic.
-        Track team assembly over 3 days from first crew member.
-        Assign bot NPCs if team not full after 3 days.
-        """
-        logger.info(f"Updating NPC team for day {day}")
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Call API to update NPC team
-                async with session.post(f"{self.api_url}/admin/update-npc-team", json={
-                    "day": day,
-                    "language": self.language
-                }) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(f"API error: {resp.status} - {error_text}")
-                        raise Exception(f"API error: {resp.status}")
-
-                    result = await resp.json()
-                    logger.info(f"NPC team updated: {result.get('npc_count')} NPCs")
-                    return result
-
-        except Exception as e:
-            logger.error(f"Failed to update NPC team: {e}")
-            return {"status": "failed", "error": str(e)}
 
     async def notify_player_auto_action(self, player_id: int, day: int, action_text: str) -> bool:
         """

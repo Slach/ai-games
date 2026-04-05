@@ -9,14 +9,12 @@ graph TD
     A[Telegram API] --> B[telegram-bot]
     B --> C[game-master-api]
     D[game-master] --> C
-    C --> E[pixelle-mcp]
-    E --> F[comfyui]
+    C --> E[comfyui]
     C --> G[llama.cpp<br/>external]
 
     style B fill:#E1F5FE
     style C fill:#E8F5E9
     style E fill:#FFF3E0
-    style F fill:#FFF3E0
     style G fill:#E0E0E0
     style D fill:#F3E5F5
 ```
@@ -27,7 +25,6 @@ graph TD
 |---------|------|-------------|
 | game-master-api | 8000 | FastAPI backend with SQLite persistence |
 | telegram-bot | N/A | Telegram bot interface |
-| pixelle-mcp | 9004 | Content generation orchestration |
 | comfyui | 8188 | Image/Video generation backend |
 | game-master | N/A | Daily generation scheduler (run manually for debugging) |
 
@@ -36,7 +33,7 @@ FastAPI service that orchestrates the game:
 - Player onboarding with behavioral testing
 - Daily story generation using STRANDS Agents SDK
 - NPC dialogue generation
-- Personalized comic generation via Pixelle-MCP
+- Personalized comic generation via ComfyUI
 - Player action processing
 - Text/voice message handling
 - SQLite persistence for game state
@@ -75,11 +72,6 @@ GAME_MASTER_MODE=single docker compose run --rm game-master
 ```
 
 **Ports:** None
-
-### Pixelle-MCP (`pixelle-mcp/`)
-Content generation orchestration via MCP protocol.
-
-**Ports:** 9004
 
 ### ComfyUI (`comfyui/`)
 Image/video/3D generation backend. Requires GPU.
@@ -220,13 +212,6 @@ docker compose logs comfyui
 nvidia-smi
 ```
 
-### Pixelle-MCP Connection Issues
-```bash
-docker compose logs pixelle-mcp
-# Verify ComfyUI is running first
-docker compose ps
-```
-
 ### Telegram Bot Not Responding
 ```bash
 # Check if bot token is set
@@ -241,7 +226,6 @@ docker compose exec telegram-bot ping game-master-api
 |----------|---------|-------------|
 | LLM_URL | http://llama.cpp:8090/v1 | LLM endpoint |
 | LLM_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
-| PIXELLE_MCP_URL | http://pixelle-mcp:9004/pixelle/mcp | Content gen endpoint |
 | COMFYUI_URL | http://comfyui:8188 | Image gen endpoint |
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
 | GAME_SCHEDULE_TIME | 08:00 | Daily generation time |
