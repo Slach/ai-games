@@ -22,6 +22,36 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+# Migration management
+MIGRATIONS = [
+    (1, """
+    CREATE TABLE IF NOT EXISTS migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+    )
+    """)
+]
+
+def get_current_schema_version(conn: sqlite3.Connection) -> int:
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(version) FROM migrations")
+    row = cursor.fetchone()
+    return row[0] if row[0] is not None else 0
+
+def run_migrations():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    current_version = get_current_schema_version(conn)
+    for version, sql in MIGRATIONS:
+        if version > current_version:
+            cursor.executescript(sql)
+            cursor.execute(
+                "INSERT INTO migrations (version, applied_at) VALUES (?, ?)",
+                (version, datetime.now().isoformat()),
+            )
+            conn.commit()
+    conn.close()
+
 
 def init_db():
     """Initialize database tables"""
@@ -147,7 +177,7 @@ def init_db():
 
 # ============== Onboarding Sessions ==============
 
-def create_onboarding_session(player_id: int, language: str = "en", questions: list = None) -> Dict[str, Any]:
+def create_onboarding_session(player_id: int, language: str = "en", questions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()

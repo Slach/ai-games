@@ -11,6 +11,7 @@ comfyui/web_custom_versions/
 .claude/
 .qwen/
 .opencode/
+.omc/
 __pycache__/
 *.db
 *.pyc

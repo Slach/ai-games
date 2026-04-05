@@ -276,8 +276,9 @@ def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str]
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     logger.info("Game Master API starting up")
+    run_migrations()
     init_db()
-    logger.info("Database initialized")
+    logger.info("Database initialized and migrations run")
     yield
     logger.info("Game Master API shutting down")
 
