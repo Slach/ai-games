@@ -553,7 +553,6 @@ class GameMasterScheduler:
         next_run = now.replace(hour=schedule_hour, minute=schedule_minute, second=0, microsecond=0)
 
         if next_run <= now:
-            from datetime import timedelta
             next_run = next_run + timedelta(days=1)
 
         return next_run

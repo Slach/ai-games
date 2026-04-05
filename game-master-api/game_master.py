@@ -9,6 +9,7 @@ import os
 import logging
 import json
 import uuid
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -461,8 +462,6 @@ class GameMasterAgent:
     @staticmethod
     def _strip_json_block(text: str) -> str:
         """Remove markdown code blocks and extract JSON."""
-        import re
-
         # Remove markdown code blocks
         cleaned = re.sub(r"```(?:json)?\s*", "", text)
         cleaned = re.sub(r"\s*```", "", cleaned)

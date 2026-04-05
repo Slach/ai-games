@@ -190,6 +190,17 @@ def run_migrations():
                 (version, datetime.now().isoformat()),
             )
             conn.commit()
+    
+    # Ensure critical tables exist regardless of migration tracking
+    # This handles cases where the database file persisted but tables were lost
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='onboarding_sessions'"
+    )
+    if cursor.fetchone() is None:
+        logger.warning("onboarding_sessions table missing, recreating...")
+        cursor.executescript(MIGRATIONS[1][1])  # Migration 2 creates onboarding_sessions
+        conn.commit()
+    
     conn.close()
 
 

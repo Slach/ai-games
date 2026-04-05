@@ -4,10 +4,12 @@ Game Master API - FastAPI service for AI Game Master
 
 import os
 import logging
+import traceback
+import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -453,8 +455,6 @@ async def submit_onboarding_answer(
 
     session_questions = session.get("questions", [])
 
-    from pydantic import TypeAdapter
-
     question_adapter = TypeAdapter(list[OnboardingQuestion])
     dynamic_questions = (
         question_adapter.validate_python(session_questions) if session_questions else []
@@ -515,20 +515,26 @@ async def complete_onboarding(session_id: str):
             traits=profile["personality_traits"],
             avatar_description=profile.get("avatar_description", ""),
         )
+        logger.info(f"Avatar prompt for player {player_id}: {avatar_prompt[:200]}...")
 
         # Call ComfyUI directly to generate the avatar
         comic_generator = create_comic_generator()
+        logger.info(f"Calling ComfyUI at {comic_generator.comfyui_url} for avatar generation")
         avatar_url = await comic_generator.generate_avatar_image(
             prompt=avatar_prompt, filename_prefix=f"avatar_{player_id}"
         )
 
         # Update profile with avatar URL
         if avatar_url:
+            logger.info(f"Avatar URL received for player {player_id}: {avatar_url}")
             update_player_profile_avatar(player_id, avatar_url)
             profile["avatar_url"] = avatar_url
+        else:
+            logger.warning(f"ComfyUI returned None for player {player_id} avatar")
 
     except Exception as e:
-        logger.error(f"Avatar generation failed: {e}")
+        logger.error(f"Avatar generation failed for player {player_id}: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
         # Continue without avatar URL
 
     # Check player count and start game if >= 3
@@ -582,8 +588,6 @@ async def get_onboarding_status(session_id: str, language: str = "en"):
         # Get questions from session (pre-generated, no need to regenerate)
         session_questions = session.get("questions", [])
         if session_questions:
-            from pydantic import TypeAdapter
-
             question_adapter = TypeAdapter(list[OnboardingQuestion])
             dynamic_questions = question_adapter.validate_python(session_questions)
             remaining_questions = dynamic_questions[session["current_question"] :]
@@ -907,6 +911,4 @@ async def generate_personalized_comic(player_id: int, day: Optional[int] = None)
 
 
 if __name__ == "__main__":
-    import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

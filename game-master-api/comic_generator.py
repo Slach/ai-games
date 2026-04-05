@@ -15,6 +15,7 @@ import json
 import uuid
 import logging
 import random
+import asyncio
 import aiohttp
 from typing import Optional, List, Dict, Any
 
@@ -149,28 +150,60 @@ class ImageGenerator:
             "client_id": self.client_id,
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.comfyui_url}/prompt",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise Exception(
-                        f"ComfyUI /prompt error {resp.status}: {error_text}"
+        # Retry logic for transient failures (DNS, connection refused, etc.)
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.comfyui_url}/prompt",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        if resp.status != 200:
+                            error_text = await resp.text()
+                            raise Exception(
+                                f"ComfyUI /prompt error {resp.status}: {error_text}"
+                            )
+                        response_text = await resp.text()
+                        if not response_text or not response_text.strip():
+                            raise Exception(
+                                f"ComfyUI /prompt returned empty response (status {resp.status})"
+                            )
+                        try:
+                            result = await resp.json()
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                            raise Exception(
+                                f"ComfyUI /prompt returned non-JSON response: {response_text[:200]}"
+                            ) from e
+                        prompt_id = result.get("prompt_id")
+                        if not prompt_id:
+                            raise Exception(
+                                f"ComfyUI /prompt response missing prompt_id: {result}"
+                            )
+                        logger.info(f"ComfyUI prompt queued: {prompt_id}")
+                        return prompt_id
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s backoff
+                    logger.warning(
+                        f"ComfyUI connection failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time}s..."
                     )
-                result = await resp.json()
-                prompt_id = result.get("prompt_id")
-                logger.info(f"ComfyUI prompt queued: {prompt_id}")
-                return prompt_id
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"ComfyUI connection failed after {max_retries} attempts: {last_error}"
+                    )
+        
+        raise Exception(f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}")
 
     async def _wait_for_completion(
         self, prompt_id: str, timeout: int = 300
     ) -> Dict[str, Any]:
         """Wait for ComfyUI to finish processing a prompt via /history endpoint."""
-        import asyncio
-
         start = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start) < timeout:
             async with aiohttp.ClientSession() as session:
@@ -179,7 +212,15 @@ class ImageGenerator:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status == 200:
-                        history = await resp.json()
+                        response_text = await resp.text()
+                        if not response_text or not response_text.strip():
+                            await asyncio.sleep(2)
+                            continue
+                        try:
+                            history = await resp.json()
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            await asyncio.sleep(2)
+                            continue
                         if prompt_id in history:
                             status = history[prompt_id].get("status", {})
                             if (

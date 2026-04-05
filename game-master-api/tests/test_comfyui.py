@@ -12,6 +12,8 @@ import json
 import os
 import sys
 import unittest
+import urllib.request
+import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 
 # Add parent dir to path for imports
@@ -214,8 +216,6 @@ class TestImageGeneratorIntegration(unittest.TestCase):
 
     def _check_comfyui_available(self):
         """Skip test if ComfyUI is not running."""
-        import urllib.request
-
         try:
             resp = urllib.request.urlopen(f"{self.comfyui_url}/system_stats", timeout=5)
             return True
@@ -227,8 +227,6 @@ class TestImageGeneratorIntegration(unittest.TestCase):
         if not self._check_comfyui_available():
             self.skipTest("ComfyUI not running")
 
-        import urllib.request
-
         resp = urllib.request.urlopen(f"{self.comfyui_url}/system_stats")
         self.assertEqual(resp.status, 200)
 
@@ -236,8 +234,6 @@ class TestImageGeneratorIntegration(unittest.TestCase):
         """Should submit Z-Image Turbo workflow and get prompt_id."""
         if not self._check_comfyui_available():
             self.skipTest("ComfyUI not running")
-
-        import asyncio
 
         wf = _build_zimage_turbo_workflow(
             prompt="test image, simple geometric shapes",
@@ -269,8 +265,6 @@ class TestImageGeneratorIntegration(unittest.TestCase):
         """End-to-end avatar generation test."""
         if not self._check_comfyui_available():
             self.skipTest("ComfyUI not running")
-
-        import asyncio
 
         async def _test():
             url = await self.gen.generate_avatar_image(

@@ -6,6 +6,9 @@
 - **Python** - Primary backend language for game logic and AI integration
 - **TypeScript** - Frontend and client-side development for Telegram Mini App (planned)
 
+#### Python Code Style
+- **All imports must be at the top of the file.** Never place `import` or `from ... import` statements inside functions, methods, `if` blocks, `try/except` blocks, or any other conditional/local scope. This ensures clarity, consistency, and avoids hidden import paths that make code harder to read and debug.
+
 ### AI and Game Master Systems
 - **[STRANDS Agents SDK Python](https://github.com/strands-agents/sdk-python)** - For model-driven game master functionality. Currently implemented and handling game state management, narrative progression, NPC dialogue generation, and content prompt generation via LLM calls.
 

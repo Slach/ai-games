@@ -34,6 +34,9 @@ from aiogram.types import (
     KeyboardButton,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp_socks import ProxyConnector
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.types import BufferedInputFile
 
 import language as lang
 
@@ -147,9 +150,6 @@ async def create_aiohttp_session(proxy_url: str = None) -> aiohttp.ClientSession
     try:
         host, port, username, password = parse_proxy_url(proxy_url)
 
-        # Import and create Socks5 connector using ProxyConnector
-        from aiohttp_socks import ProxyConnector
-
         connector = ProxyConnector(
             host=host, port=port, username=username or None, password=password or None
         )
@@ -221,8 +221,6 @@ def create_bot_session(proxy_url: str = None):
     Returns:
         AiohttpSession with SOCKS5 proxy configured (or direct connection)
     """
-    from aiogram.client.session.aiohttp import AiohttpSession
-
     if proxy_url is None:
         proxy_url = TELEGRAM_SOCKS_PROXY
 
@@ -357,7 +355,6 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 ) as resp:
                     if resp.status == 200:
                         photo_data = await resp.read()
-                        from aiogram.types import BufferedInputFile
 
                         photo = BufferedInputFile(photo_data, filename="avatar.png")
                         await bot.send_photo(
@@ -447,7 +444,6 @@ async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_
                         ) as resp:
                             if resp.status == 200:
                                 photo_data = await resp.read()
-                                from aiogram.types import BufferedInputFile
                                 photo = BufferedInputFile(photo_data, filename="avatar.png")
                                 await bot.send_photo(
                                     chat_id=other_id,
@@ -490,7 +486,6 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
                         ) as resp:
                             if resp.status == 200:
                                 photo_data = await resp.read()
-                                from aiogram.types import BufferedInputFile
                                 photo = BufferedInputFile(photo_data, filename="avatar.png")
                                 await bot.send_photo(
                                     chat_id=other_id,
