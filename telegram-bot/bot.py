@@ -318,7 +318,7 @@ async def poll_game_updates(player_id: int):
 
 
 async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
-    """Generate avatar in background and send to player when ready."""
+    """Generate avatar, then send onboarding complete message with avatar, then notify others."""
     try:
         result = await api_request(
             "POST",
@@ -326,6 +326,28 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             timeout_total=300,
         )
         avatar_url = result.get("avatar_url")
+        profile = result.get("profile", {})
+        game_started = result.get("game_started", False)
+        game_just_started = result.get("game_just_started", False)
+        player_count = result.get("player_count", 1)
+        other_player_ids = result.get("other_player_ids", [])
+
+        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+
+        # Build the onboarding message text
+        onboarding_text = onboarding_msgs["onboarding_complete"].format(
+            role=profile.get("role", "Crew Member"),
+            role_description=profile.get("role_description", ""),
+            traits="\n- ".join(profile.get("personality_traits", [])),
+        )
+
+        # Add game status message
+        if game_started:
+            onboarding_text += "\n\n" + onboarding_msgs["game_already_started"]
+        else:
+            onboarding_text += "\n\n" + onboarding_msgs["game_waiting"]
+
+        # Send message with or without avatar
         if avatar_url:
             logger.info(f"Avatar generated for player {player_id}: {avatar_url}")
             async with aiohttp.ClientSession() as session:
@@ -341,25 +363,144 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         await bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
-                            caption="🎨 Ваш аватар на борту корабля!",
+                            caption=onboarding_text,
+                            parse_mode="Markdown",
+                            reply_markup=create_main_menu_keyboard(),
                         )
                     else:
                         logger.warning(f"Failed to download avatar: {resp.status}")
                         await bot.send_message(
                             chat_id=player_id,
-                            text="🎨 Аватар создан! Используйте /profile чтобы посмотреть.",
+                            text=onboarding_text,
+                            parse_mode="Markdown",
+                            reply_markup=create_main_menu_keyboard(),
                         )
         else:
             logger.info(f"No avatar URL for player {player_id}")
+            await bot.send_message(
+                chat_id=player_id,
+                text=onboarding_text,
+                parse_mode="Markdown",
+                reply_markup=create_main_menu_keyboard(),
+            )
+
+        # If game just started (this player made it >= 3), notify all players
+        if game_just_started:
+            await _broadcast_game_started(player_id, profile, other_player_ids, bot)
+        elif game_started and other_player_ids:
+            # Game already started, but notify other players about new member
+            await _broadcast_new_player(player_id, profile, other_player_ids, bot)
+
     except Exception as e:
         logger.error(f"Avatar generation/sending failed for player {player_id}: {e}")
         try:
+            onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+            # Try to get profile info for fallback message
+            try:
+                profile = await api_request("GET", f"/players/{player_id}/profile")
+                text = onboarding_msgs["onboarding_complete"].format(
+                    role=profile.get("role", "Crew Member"),
+                    role_description=profile.get("role_description", ""),
+                    traits="\n- ".join(profile.get("personality_traits", [])),
+                )
+            except Exception:
+                text = onboarding_msgs["onboarding_complete"].format(
+                    role="Crew Member",
+                    role_description="",
+                    traits="Unknown",
+                )
             await bot.send_message(
                 chat_id=player_id,
-                text="Аватар будет доступен позже. Используйте /profile.",
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=create_main_menu_keyboard(),
             )
         except Exception:
             pass
+
+
+async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_ids: list, bot: Bot):
+    """Notify existing players about a new crew member joining."""
+    try:
+        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+        player_name = str(new_player_id)  # Use player ID as name for now
+        notify_text = onboarding_msgs["new_player_joined"].format(
+            player_name=player_name,
+            role=profile.get("role", "Crew Member"),
+            role_description=profile.get("role_description", ""),
+        )
+
+        for other_id in other_player_ids:
+            try:
+                await bot.send_message(
+                    chat_id=other_id,
+                    text=notify_text,
+                    parse_mode="Markdown",
+                )
+                # Send avatar to other players too
+                avatar_url = profile.get("avatar_url")
+                if avatar_url:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            avatar_url,
+                            timeout=aiohttp.ClientTimeout(total=60),
+                        ) as resp:
+                            if resp.status == 200:
+                                photo_data = await resp.read()
+                                from aiogram.types import BufferedInputFile
+                                photo = BufferedInputFile(photo_data, filename="avatar.png")
+                                await bot.send_photo(
+                                    chat_id=other_id,
+                                    photo=photo,
+                                    caption=f"👆 {player_name} — {profile.get('role', '')}",
+                                )
+            except Exception as e:
+                logger.warning(f"Failed to notify player {other_id}: {e}")
+    except Exception as e:
+        logger.error(f"Broadcast new player failed: {e}")
+
+
+async def _broadcast_game_started(new_player_id: int, profile: dict, other_player_ids: list, bot: Bot):
+    """Notify all players that the game has started (the new player triggered >= 3 players)."""
+    try:
+        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+        player_name = str(new_player_id)
+
+        # Notify the new player that the game started
+        await bot.send_message(
+            chat_id=new_player_id,
+            text=onboarding_msgs["game_already_started"],
+        )
+
+        # Notify existing players that the game is now starting
+        for other_id in other_player_ids:
+            try:
+                await bot.send_message(
+                    chat_id=other_id,
+                    text=f"🚀 Игра начинается! {player_name} присоединился, и команда в полном составе.\n\n{onboarding_msgs['new_player_joined'].format(player_name=player_name, role=profile.get('role', ''), role_description=profile.get('role_description', ''))}",
+                    parse_mode="Markdown",
+                )
+                # Send avatar to other players
+                avatar_url = profile.get("avatar_url")
+                if avatar_url:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            avatar_url,
+                            timeout=aiohttp.ClientTimeout(total=60),
+                        ) as resp:
+                            if resp.status == 200:
+                                photo_data = await resp.read()
+                                from aiogram.types import BufferedInputFile
+                                photo = BufferedInputFile(photo_data, filename="avatar.png")
+                                await bot.send_photo(
+                                    chat_id=other_id,
+                                    photo=photo,
+                                    caption=f"👆 {player_name} — {profile.get('role', '')}",
+                                )
+            except Exception as e:
+                logger.warning(f"Failed to notify player {other_id} about game start: {e}")
+    except Exception as e:
+        logger.error(f"Broadcast game started failed: {e}")
 
 
 def wrap_text(text: str, width: int = 35) -> str:
@@ -769,16 +910,6 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 f"Onboarding completed for player {player_id}: role={profile['role']}"
             )
 
-            await message.answer(
-                onboarding_msgs["onboarding_complete"].format(
-                    role=profile["role"],
-                    role_description=profile.get("role_description", ""),
-                    traits="\n- ".join(profile.get("personality_traits", [])),
-                ),
-                parse_mode="Markdown",
-                reply_markup=create_main_menu_keyboard(),
-            )
-
             try:
                 verify_profile = await api_request(
                     "GET", f"/players/{player_id}/profile"
@@ -794,6 +925,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             await state.clear()
             update_player_state(player_id, onboarding_session_id=None)
 
+            # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             asyncio.create_task(
                 _generate_and_send_avatar(player_id, session_id, message.bot)
             )

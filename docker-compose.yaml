@@ -6,6 +6,7 @@ services:
   # ComfyUI - Image/Video/3D generation backend
   comfyui:
     image: comfyui:spark-full
+    user: "${UID:-1000}:${GID:-1000}"
     environment:
       - HF_XET_HIGH_PERFORMANCE=1
       - HF_HOME=/root/.cache/huggingface
@@ -20,6 +21,7 @@ services:
       - ./comfyui/output/:/opt/ComfyUI/output
       - ./comfyui/input/:/opt/ComfyUI/input
       - ./comfyui/web_custom_versions/:/opt/ComfyUI/web_custom_versions/
+      - ./comfyui/temp/:/opt/ComfyUI/temp
     command:
       - "/opt/ComfyUI/.venv/bin/python3"
       - "main.py"

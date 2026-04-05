@@ -43,6 +43,9 @@ from database import (
     get_role_by_key,
     update_game_title,
     get_game_title,
+    is_game_started,
+    start_game,
+    get_player_count_in_game,
 )
 
 # Configure logging
@@ -528,10 +531,27 @@ async def complete_onboarding(session_id: str):
         logger.error(f"Avatar generation failed: {e}")
         # Continue without avatar URL
 
+    # Check player count and start game if >= 3
+    game_id = session.get("game_id", "default_game")
+    player_count = get_player_count_in_game(game_id)
+    game_was_started = False
+    if player_count >= 3:
+        game_was_started = start_game(game_id)
+
+    game_started = is_game_started(game_id)
+
+    # Get all other players in the game (for notification)
+    all_players = get_players_in_game(game_id)
+    other_players = [p for p in all_players if p != player_id]
+
     return {
         "status": "completed",
         "profile": profile,
         "avatar_url": profile.get("avatar_url"),
+        "game_started": game_started,
+        "game_just_started": game_was_started,
+        "player_count": player_count,
+        "other_player_ids": other_players,
     }
 
 
@@ -616,6 +636,14 @@ async def get_game_title_endpoint(game_id: str = "default_game"):
 async def get_game_state_endpoint():
     """Get current game state"""
     return get_game_state()
+
+
+@app.get("/game/started")
+async def get_game_started_endpoint(game_id: str = "default_game"):
+    """Check if game has started (>= 3 players joined)"""
+    started = is_game_started(game_id)
+    player_count = get_player_count_in_game(game_id)
+    return {"game_id": game_id, "started": started, "player_count": player_count}
 
 
 @app.get("/game/day/{day_num}")

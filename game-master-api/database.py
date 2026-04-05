@@ -148,6 +148,18 @@ MIGRATIONS = [
     )
     """,
     ),
+    (
+        10,
+        """
+    ALTER TABLE games ADD COLUMN started INTEGER DEFAULT 0
+    """,
+    ),
+    (
+        11,
+        """
+    ALTER TABLE games ADD COLUMN started_at TEXT DEFAULT NULL
+    """,
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -927,3 +939,41 @@ def get_game_title(game_id: str) -> Optional[str]:
     conn.close()
 
     return row["name"] if row else None
+
+
+def is_game_started(game_id: str = "default_game") -> bool:
+    """Check if the game has officially started (>= 3 players)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT started FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return False
+    return bool(row["started"])
+
+
+def start_game(game_id: str = "default_game") -> bool:
+    """Mark the game as started (when >= 3 players join)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET started = 1, started_at = ? WHERE game_id = ? AND started = 0",
+        (datetime.now().isoformat(), game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def get_player_count_in_game(game_id: str = "default_game") -> int:
+    """Get the number of players in a game"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) as cnt FROM player_profiles WHERE game_id = ?", (game_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row["cnt"] if row else 0

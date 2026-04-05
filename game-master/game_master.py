@@ -59,22 +59,22 @@ class GameMasterScheduler:
         """Validate that game is still active (ship and crew alive)"""
         try:
             state = await self.check_game_state()
-            
-            if not state.get("ship_alive", False):
-                logger.warning("Game ended - ship destroyed, stopping generation")
-                return False
-            
-            if state.get("crew_health", 100) <= 0:
-                logger.warning("Game ended - crew health depleted, stopping generation")
-                return False
-            
-            if state.get("status") != "active":
-                logger.warning(f"Game status is {state.get('status')}, not active")
-                return False
-            
-            return True
+            return state.get("status") == "active" and state.get("ship_alive", True) and state.get("crew_health", 0) > 0
         except Exception as e:
-            logger.error(f"Failed to validate game state: {e}")
+            logger.error(f"Failed to validate game active: {e}")
+            return False
+
+    async def is_game_started(self, game_id: str = "default_game") -> bool:
+        """Check if game has officially started (>= 3 players joined)"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.api_url}/game/started", params={"game_id": game_id}) as resp:
+                    if resp.status != 200:
+                        return False
+                    data = await resp.json()
+                    return data.get("started", False)
+        except Exception as e:
+            logger.error(f"Failed to check game started status: {e}")
             return False
 
     async def get_previous_day_actions(self, day: int) -> List[Dict[str, Any]]:
@@ -283,6 +283,12 @@ class GameMasterScheduler:
         """Generate new daily episode with full game loop validation"""
         logger.info(f"=== DAILY EPISODE GENERATION STARTED ===")
         logger.info(f"Language: {self.language}")
+
+        # Step 0: Check if game has started (>= 3 players)
+        game_started = await self.is_game_started()
+        if not game_started:
+            logger.info("Game not started yet - waiting for more players (need at least 3)")
+            return {"status": "game_not_started", "message": "Game has not started yet, waiting for more players"}
 
         # Step 1: Validate game state before generation
         is_active = await self.validate_game_active()

@@ -155,6 +155,8 @@ ONBOARDING_QUESTIONS_SCHEMA = {
             "properties": {
                 "questions": {
                     "type": "array",
+                    "minItems": 5,
+                    "maxItems": 5,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -164,6 +166,8 @@ ONBOARDING_QUESTIONS_SCHEMA = {
                             },
                             "options": {
                                 "type": "array",
+                                "minItems": 2,
+                                "maxItems": 3,
                                 "items": {
                                     "type": "object",
                                     "properties": {
@@ -486,7 +490,11 @@ class GameMasterAgent:
                 "ПРИМЕР правильных вариантов: 'Бежать в машинное отделение и попытаться починить варп-двигатель', "
                 "'Активировать аварийные щиты и вызвать подкрепление'. "
                 "НЕПРАВИЛЬНО: 'Инженер — технический специалист', 'Учёный – смелый, ищущий прорыв'. "
+                "НЕПРАВИЛЬНО: 'A', 'B', 'C' — метки вариантов должны быть ПОЛНЫМИ описаниями действий! "
                 "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
+                "Каждый вариант (label) должен быть развёрнутым предложением минимум из 5-7 слов, описывающим конкретное действие. "
+                "КРИТИЧНО: Все варианты ответа в одном вопросе должны быть РАЗЛИЧНЫМИ и описывать РАЗНЫЕ действия. "
+                "Не допускай одинаковых или очень похожих вариантов — каждый должен представлять уникальный подход. "
                 "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
                 "исследование неизвестного, принятие решений в кризисе. "
                 "Все тексты на русском языке."
@@ -500,7 +508,11 @@ class GameMasterAgent:
                 "CORRECT example: 'Run to engineering and try to repair the warp drive', "
                 "'Activate emergency shields and call for backup'. "
                 "INCORRECT: 'Engineer - technical specialist', 'Scientist - bold, seeking breakthrough'. "
+                "INCORRECT: 'A', 'B', 'C' — option labels must be FULL action descriptions, NOT single letters! "
                 "NEVER include role names or personality types in options — only actions. "
+                "Each option label must be a detailed sentence of at least 5-7 words describing a specific action. "
+                "CRITICAL: All options within a question MUST BE DISTINCT and describe DIFFERENT actions. "
+                "Do NOT generate duplicate or very similar options — each must represent a unique approach. "
                 "Questions should cover: reaction to danger, working with technology, crew interaction, "
                 "exploring the unknown, crisis decision-making. "
                 "All text in English."
@@ -513,6 +525,31 @@ class GameMasterAgent:
         )
 
         questions = result.get("questions", [])
+        
+        # Validate and fix duplicate options within each question
+        for q in questions:
+            options = q.get("options", [])
+            seen_labels = set()
+            unique_options = []
+            for opt in options:
+                label = opt.get("label", "")
+                # Skip duplicate labels
+                if label in seen_labels:
+                    continue
+                # Skip overly short labels (single letters, "A", "B", etc.)
+                if len(label.strip()) < 5:
+                    logger.warning(f"Skipping short option label: '{label}' in question: {q.get('text', '')[:50]}")
+                    continue
+                seen_labels.add(label)
+                unique_options.append(opt)
+
+            # If we filtered out too many, keep original options
+            if len(unique_options) < 2 and len(options) >= 2:
+                logger.warning(f"Question had invalid options, using original: {q.get('text', '')[:50]}")
+                unique_options = options
+
+            q["options"] = unique_options
+        
         for i, q in enumerate(questions, start=1):
             q["id"] = i
 

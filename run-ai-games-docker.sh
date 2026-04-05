@@ -10,5 +10,10 @@ if [[ "0" == $(docker image ls | grep -c -E "comfyui.+spark-full") ]]; then
   ./build-comfyui-docker.sh
 fi
 
-echo "Running docker-compose up..."
+# Export current user's UID and GID for ComfyUI container
+# This ensures generated files have correct ownership
+export UID=$(id -u)
+export GID=$(id -g)
+
+echo "Running docker-compose up with UID=$UID, GID=$GID..."
 docker compose up -d
