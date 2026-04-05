@@ -1,93 +1,289 @@
 """
-Comic Generator - Integration with Pixelle-MCP for comic generation
+Image Generator - Direct ComfyUI API integration for image generation
+
+Calls ComfyUI /prompt API directly instead of going through Pixelle-MCP.
+Uses Z-Image Turbo model for text-to-image generation.
+
+Model combination (verified working):
+  UNET: z_image_turbo_bf16.safetensors
+  CLIP: qwen_3_4b.safetensors (type: lumina2)
+  VAE:  ae.safetensors
 """
 
 import os
+import json
+import uuid
 import logging
+import random
 import aiohttp
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 
-class ComicPanel(BaseModel):
-    """A single panel in a comic"""
-    description: str
-    character_focus: str  # Which character is the focus
-    emotion: str
-    setting: str
+# ============== ComfyUI Workflow Templates ==============
 
 
-class ComicGenerationRequest(BaseModel):
-    """Request for comic generation"""
-    story: str
-    player_role: str
-    player_traits: List[str]
-    npc_dialogues: List[Dict[str, str]]
-    panels: List[ComicPanel]
+def _build_zimage_turbo_workflow(
+    prompt: str,
+    width: int = 1024,
+    height: int = 1024,
+    seed: int = 0,
+    filename_prefix: str = "ComfyUI",
+) -> Dict[str, Any]:
+    """Build a Z-Image Turbo text-to-image workflow for ComfyUI API.
 
-
-class ComicGenerator:
+    Uses the correct model combination:
+      UNET: z_image_turbo_bf16.safetensors (distilled, 8 steps)
+      CLIP: qwen_3_4b.safetensors, type=lumina2 (produces 2560-dim embeddings)
+      VAE:  ae.safetensors
+      ConditioningZeroOut for negative (required by Z-Image Turbo)
     """
-    Generates personalized comics using Pixelle-MCP and ComfyUI workflows.
+    if seed == 0:
+        seed = random.randint(0, 2**63)
+
+    return {
+        # Load UNET model
+        "28": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "z_image_turbo_bf16.safetensors",
+                "weight_dtype": "default",
+            },
+        },
+        # Load CLIP text encoder - MUST use qwen_3_4b with type lumina2
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen_3_4b.safetensors",
+                "type": "lumina2",
+            },
+        },
+        # Load VAE
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {
+                "vae_name": "ae.safetensors",
+            },
+        },
+        # Encode positive prompt
+        "27": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": prompt,
+                "clip": ["30", 0],
+            },
+        },
+        # Create empty latent image
+        "13": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "batch_size": 1,
+            },
+        },
+        # Apply AuraFlow sampling (shift=3, required for Z-Image Turbo)
+        "11": {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {
+                "model": ["28", 0],
+                "shift": 3.0,
+            },
+        },
+        # KSampler - Z-Image Turbo is distilled, 8 steps is optimal
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 8,
+                "cfg": 1.0,
+                "sampler_name": "res_multistep",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["11", 0],
+                "positive": ["27", 0],
+                "negative": ["33", 0],
+                "latent_image": ["13", 0],
+            },
+        },
+        # ConditioningZeroOut for negative (required by Z-Image Turbo)
+        "33": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": {
+                "conditioning": ["27", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": ["3", 0],
+                "vae": ["29", 0],
+            },
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": filename_prefix,
+                "images": ["8", 0],
+            },
+        },
+    }
+
+
+class ImageGenerator:
+    """
+    Generates images using ComfyUI API directly via Z-Image Turbo model.
     """
 
     def __init__(self):
-        self.pixelle_mcp_url = os.getenv("PIXELLE_MCP_URL", "http://pixelle-mcp:9004/pixelle/mcp")
         self.comfyui_url = os.getenv("COMFYUI_URL", "http://comfyui:8188")
+        self.client_id = str(uuid.uuid4())
 
-        # Workflow templates for different content types
-        self.workflows = {
-            "comic_single": "i2i_by_flux_kontext_pro.json",  # Image-to-image for panel editing
-            "comic_merge": "i_merge.json",  # Merge multiple images into comic strip
-            "character": "t2i_qwen_image.json",  # Text-to-image for character generation
-            "scene": "t2i_Z_image.json",  # Text-to-image for scene generation
+    async def _queue_prompt(self, workflow: Dict[str, Any]) -> str:
+        """Submit a workflow to ComfyUI /prompt endpoint and return the prompt_id."""
+        payload = {
+            "prompt": workflow,
+            "client_id": self.client_id,
         }
 
-    def _generate_panel_prompts(
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.comfyui_url}/prompt",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise Exception(
+                        f"ComfyUI /prompt error {resp.status}: {error_text}"
+                    )
+                result = await resp.json()
+                prompt_id = result.get("prompt_id")
+                logger.info(f"ComfyUI prompt queued: {prompt_id}")
+                return prompt_id
+
+    async def _wait_for_completion(
+        self, prompt_id: str, timeout: int = 300
+    ) -> Dict[str, Any]:
+        """Wait for ComfyUI to finish processing a prompt via /history endpoint."""
+        import asyncio
+
+        start = asyncio.get_event_loop().time()
+        while (asyncio.get_event_loop().time() - start) < timeout:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.comfyui_url}/history/{prompt_id}",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        history = await resp.json()
+                        if prompt_id in history:
+                            status = history[prompt_id].get("status", {})
+                            if (
+                                status.get("completed", False)
+                                or status.get("status_str") == "success"
+                            ):
+                                outputs = history[prompt_id].get("outputs", {})
+                                logger.info(f"ComfyUI prompt {prompt_id} completed")
+                                return outputs
+                            elif status.get("status_str") == "error":
+                                raise Exception(f"ComfyUI execution error: {status}")
+            await asyncio.sleep(2)
+
+        raise TimeoutError(f"ComfyUI prompt {prompt_id} timed out after {timeout}s")
+
+    def _extract_image_url(self, outputs: Dict[str, Any]) -> Optional[str]:
+        """Extract image URL from ComfyUI outputs."""
+        for node_id, node_output in outputs.items():
+            images = node_output.get("images", [])
+            if images:
+                img = images[0]
+                filename = img.get("filename", "")
+                subfolder = img.get("subfolder", "")
+                img_type = img.get("type", "output")
+                return f"{self.comfyui_url}/view?filename={filename}&subfolder={subfolder}&type={img_type}"
+        return None
+
+    async def generate_image(
         self,
-        story: str,
-        player_role: str,
-        player_traits: List[str],
-        npc_dialogues: List[Dict[str, str]],
-    ) -> List[ComicPanel]:
-        """Generate panel descriptions based on story and player profile"""
+        prompt: str,
+        filename_prefix: str = "ComfyUI",
+        width: int = 1024,
+        height: int = 1024,
+    ) -> Optional[str]:
+        """Generate an image via ComfyUI using Z-Image Turbo.
 
-        panels = [
-            ComicPanel(
-                description=f"Establishing shot: {story[:100]}... showing the crew in their workspace",
-                character_focus="ensemble",
-                emotion="curious",
-                setting="spaceship interior",
-            ),
-            ComicPanel(
-                description=f"Close-up on {player_role} reacting to the situation with determination",
-                character_focus=player_role,
-                emotion="determined" if "решительный" in player_traits else "thoughtful",
-                setting="spaceship bridge",
-            ),
-            ComicPanel(
-                description="NPC team discussing options, showing their distinct personalities",
-                character_focus="npcs",
-                emotion="concerned",
-                setting="conference room",
-            ),
-            ComicPanel(
-                description=f"{player_role} making a critical decision, showing the weight of responsibility",
-                character_focus=player_role,
-                emotion="decisive",
-                setting="command center",
-            ),
-            ComicPanel(
-                description="The immediate consequence of the decision unfolding",
-                character_focus="ensemble",
-                emotion="surprised",
-                setting="varies by outcome",
-            ),
-        ]
+        Args:
+            prompt: Detailed image generation prompt (English)
+            filename_prefix: Prefix for output filename
+            width: Image width (multiple of 16)
+            height: Image height (multiple of 16)
 
-        return panels
+        Returns:
+            URL of the generated image, or None on failure
+        """
+        logger.info(f"[IMAGE] Generating image via Z-Image Turbo")
+        logger.info(f"[IMAGE] Prompt: {prompt[:100]}...")
+        logger.info(f"[IMAGE] Size: {width}x{height}")
+
+        try:
+            workflow = _build_zimage_turbo_workflow(
+                prompt=prompt,
+                width=width,
+                height=height,
+                filename_prefix=filename_prefix,
+            )
+
+            prompt_id = await self._queue_prompt(workflow)
+            outputs = await self._wait_for_completion(prompt_id, timeout=180)
+            image_url = self._extract_image_url(outputs)
+
+            if image_url:
+                logger.info(f"[IMAGE] Image generated: {image_url}")
+            else:
+                logger.warning("[IMAGE] No image in ComfyUI output")
+
+            return image_url
+
+        except Exception as e:
+            logger.error(f"[IMAGE] Image generation failed: {e}")
+            return None
+
+    async def generate_avatar_image(
+        self,
+        prompt: str,
+        filename_prefix: str = "avatar",
+        width: int = 768,
+        height: int = 1024,
+    ) -> Optional[str]:
+        """Generate a character avatar image via ComfyUI.
+
+        Alias for generate_image with portrait-oriented defaults.
+        """
+        return await self.generate_image(
+            prompt=prompt,
+            filename_prefix=filename_prefix,
+            width=width,
+            height=height,
+        )
+
+    async def generate_scene_image(
+        self,
+        prompt: str,
+        filename_prefix: str = "scene",
+        width: int = 1024,
+        height: int = 1024,
+    ) -> Optional[str]:
+        """Generate a scene image via ComfyUI."""
+        return await self.generate_image(
+            prompt=prompt,
+            filename_prefix=filename_prefix,
+            width=width,
+            height=height,
+        )
 
     async def generate_character_image(
         self,
@@ -96,135 +292,19 @@ class ComicGenerator:
         traits: List[str],
         scene_description: str = "",
     ) -> Optional[str]:
-        """Generate a character image using ComfyUI"""
-
-        prompt = f"""
-        Sci-fi character portrait: {character_name}, {role}.
-        Personality traits: {', '.join(traits)}.
-        {scene_description}
-        Futuristic uniform, detailed face, cinematic lighting, 4K quality.
-        Space opera style, Star Trek aesthetic.
-        """
-
-        try:
-            # Call Pixelle-MCP to trigger character generation
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.pixelle_mcp_url}/generate/image",
-                    json={
-                        "prompt": prompt,
-                        "workflow": self.workflows["character"],
-                        "output_format": "webp",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=120),
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result.get("image_url", result.get("path", ""))
-                    else:
-                        logger.error(f"Character generation failed: {resp.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Character generation error: {e}")
-            return None
-
-    async def generate_scene_image(
-        self,
-        scene_description: str,
-        characters: List[str] = None,
-    ) -> Optional[str]:
-        """Generate a scene image using ComfyUI"""
-
-        prompt = f"""
-        Sci-fi scene: {scene_description}.
-        {f'Characters present: {", ".join(characters)}' if characters else ''}
-        Cinematic composition, detailed environment, atmospheric lighting.
-        Space opera style, 4K quality.
-        """
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.pixelle_mcp_url}/generate/image",
-                    json={
-                        "prompt": prompt,
-                        "workflow": self.workflows["scene"],
-                        "output_format": "webp",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=120),
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result.get("image_url", result.get("path", ""))
-                    else:
-                        logger.error(f"Scene generation failed: {resp.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Scene generation error: {e}")
-            return None
-
-    async def generate_comic_strip(
-        self,
-        request: ComicGenerationRequest,
-    ) -> Optional[str]:
-        """
-        Generate a complete comic strip for a game day.
-
-        Process:
-        1. Generate individual panel images
-        2. Merge panels into a comic strip
-        3. Add speech bubbles with NPC dialogue
-        """
-
-        panels = self._generate_panel_prompts(
-            request.story,
-            request.player_role,
-            request.player_traits,
-            request.npc_dialogues,
+        """Generate a character image (backward compatible interface)."""
+        prompt = (
+            f"Sci-fi character portrait: {character_name}, {role}. "
+            f"Personality traits: {', '.join(traits)}. "
+            f"{scene_description} "
+            f"Futuristic uniform, detailed face, cinematic lighting, 4K quality. "
+            f"Space opera style, Star Trek aesthetic. Portrait, upper body."
         )
 
-        logger.info(f"Generating comic with {len(panels)} panels")
-
-        # Generate panel images
-        panel_images = []
-        for i, panel in enumerate(panels):
-            logger.info(f"Generating panel {i + 1}/{len(panels)}")
-
-            image_url = await self.generate_scene_image(
-                scene_description=f"{panel.description}. {panel.character_focus} showing {panel.emotion} expression",
-                characters=[panel.character_focus] if panel.character_focus != "ensemble" else None,
-            )
-
-            if image_url:
-                panel_images.append(image_url)
-            else:
-                # Fallback: use placeholder
-                panel_images.append(f"/content/panels/day_{i}.placeholder.webp")
-
-        # Merge panels into comic strip
-        if len(panel_images) > 1:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{self.pixelle_mcp_url}/generate/comic",
-                        json={
-                            "panel_images": panel_images,
-                            "npc_dialogues": request.npc_dialogues,
-                            "workflow": self.workflows["comic_merge"],
-                            "layout": "vertical",  # or "horizontal", "grid"
-                        },
-                        timeout=aiohttp.ClientTimeout(total=180),
-                    ) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            return result.get("comic_url", result.get("path", ""))
-                        else:
-                            logger.error(f"Comic merge failed: {resp.status}")
-            except Exception as e:
-                logger.error(f"Comic merge error: {e}")
-
-        # Return first panel as fallback
-        return panel_images[0] if panel_images else None
+        return await self.generate_avatar_image(
+            prompt=prompt,
+            filename_prefix=f"char_{character_name.replace(' ', '_')}",
+        )
 
     async def generate_personalized_comic(
         self,
@@ -233,32 +313,42 @@ class ComicGenerator:
         player_profile: Dict[str, Any],
         npc_dialogues: List[Dict[str, str]],
     ) -> str:
-        """
-        Generate a personalized comic for a player.
+        """Generate a personalized comic/scene for a player.
 
-        This is the main entry point called by Game Master.
+        For now generates a single key scene image.
+        Full multi-panel comic strip can be added later.
         """
+        role = player_profile.get("role", "Crew Member")
+        traits = player_profile.get("personality_traits", [])
 
-        request = ComicGenerationRequest(
-            story=story,
-            player_role=player_profile.get("role", "Crew Member"),
-            player_traits=player_profile.get("personality_traits", []),
-            npc_dialogues=npc_dialogues,
-            panels=[],
+        prompt = (
+            f"Sci-fi comic book panel: {role} in action during a space mission. "
+            f"Story: {story[:200]}. "
+            f"Character traits: {', '.join(traits)}. "
+            f"Dynamic action pose, dramatic lighting, detailed environment. "
+            f"Space opera comic book style, vibrant colors, 4K quality."
         )
 
-        comic_url = await self.generate_comic_strip(request)
+        image_url = await self.generate_scene_image(
+            prompt=prompt,
+            filename_prefix=f"comic_day{day}_{role.replace(' ', '_')}",
+        )
 
-        if comic_url:
-            logger.info(f"Generated comic for day {day}: {comic_url}")
-            return comic_url
+        if image_url:
+            logger.info(f"Generated comic for day {day}: {image_url}")
+            return image_url
         else:
-            # Return placeholder path if generation fails
             logger.warning(f"Comic generation failed for day {day}, using placeholder")
             return f"/content/comics/day_{day}_placeholder.webp"
 
 
-# Factory function
-def create_comic_generator() -> ComicGenerator:
-    """Create and configure ComicGenerator instance"""
-    return ComicGenerator()
+# Backward compatibility alias
+ComicGenerator = ImageGenerator
+
+
+# ============== Factory Function ==============
+
+
+def create_comic_generator() -> ImageGenerator:
+    """Create and configure ImageGenerator instance"""
+    return ImageGenerator()

@@ -41,16 +41,17 @@ from database import (
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
 # ============== Pydantic Models ==============
 
+
 class OnboardingQuestion(BaseModel):
     """A single onboarding question"""
+
     id: int
     text: str
     options: List[Dict[str, str]]
@@ -58,12 +59,14 @@ class OnboardingQuestion(BaseModel):
 
 class OnboardingAnswer(BaseModel):
     """Player's answer to an onboarding question"""
+
     question_id: int
     answer: str
 
 
 class GameInfo(BaseModel):
     """Game information for available games list"""
+
     game_id: str
     name: str
     description: str
@@ -73,12 +76,14 @@ class GameInfo(BaseModel):
 
 class JoinGameRequest(BaseModel):
     """Request to join a game"""
+
     player_id: int
     game_id: str
 
 
 class StartOnboardingRequest(BaseModel):
     """Request to start onboarding"""
+
     player_id: int
     game_id: str = "default_game"
     language: str = "en"
@@ -86,6 +91,7 @@ class StartOnboardingRequest(BaseModel):
 
 class GameMessageRequest(BaseModel):
     """Request to send a game message"""
+
     player_id: int
     message: str
     message_type: str = "text"
@@ -93,6 +99,7 @@ class GameMessageRequest(BaseModel):
 
 class PlayerActionRequest(BaseModel):
     """Request to submit player action"""
+
     player_id: int
     day: int
     action_id: str
@@ -101,6 +108,7 @@ class PlayerActionRequest(BaseModel):
 
 class PollResponse(BaseModel):
     """Response from game polling endpoint"""
+
     new_game_day: Optional[Dict[str, Any]] = None
     pending_actions: List[Dict[str, Any]] = []
     messages_from_gm: List[Dict[str, Any]] = []
@@ -108,41 +116,62 @@ class PollResponse(BaseModel):
     avatar_url: Optional[str] = None
 
 
-# ============== Onboarding Questions ==============
+# ============== Static Onboarding Questions (fallback) ==============
 
 STATIC_ONBOARDING_QUESTIONS = [
     OnboardingQuestion(
         id=1,
         text="Корабль обнаружил неизвестный сигнал. Ваши действия?",
         options=[
-            {"value": "cautious", "label": "Изучить сигнал с осторожностью, отправить разведывательный зонд"},
-            {"value": "bold", "label": "Немедленно подойти ближе и попробовать установить контакт"},
-        ]
+            {
+                "value": "cautious",
+                "label": "Изучить сигнал с осторожностью, отправить разведывательный зонд",
+            },
+            {
+                "value": "bold",
+                "label": "Немедленно подойти ближе и попробовать установить контакт",
+            },
+        ],
     ),
     OnboardingQuestion(
         id=2,
         text="Важный член экипажа предлагает рискованный план. Что вы сделаете?",
         options=[
-            {"value": "supportive", "label": "Поддержать коллегу и помочь в реализации"},
-            {"value": "analytical", "label": "Тщательно проанализировать план на предмет слабых мест"},
-        ]
+            {
+                "value": "supportive",
+                "label": "Поддержать коллегу и помочь в реализации",
+            },
+            {
+                "value": "analytical",
+                "label": "Тщательно проанализировать план на предмет слабых мест",
+            },
+        ],
     ),
     OnboardingQuestion(
         id=3,
         text="Экипаж столкнулся с моральной дилеммой. Как вы поступите?",
         options=[
-            {"value": "empathetic", "label": "Выслушать всех и найти решение, которое учтёт чувства людей"},
-            {"value": "logical", "label": "Принять решение на основе логики и пользы для миссии"},
-        ]
+            {
+                "value": "empathetic",
+                "label": "Выслушать всех и найти решение, которое учтёт чувства людей",
+            },
+            {
+                "value": "logical",
+                "label": "Принять решение на основе логики и пользы для миссии",
+            },
+        ],
     ),
     OnboardingQuestion(
         id=4,
         text="Ваша специализация на корабле?",
         options=[
-            {"value": "technical", "label": "Технические системы, инженерия, технологии"},
+            {
+                "value": "technical",
+                "label": "Технические системы, инженерия, технологии",
+            },
             {"value": "diplomatic", "label": "Коммуникация, переговоры, координация"},
             {"value": "exploration", "label": "Исследование, наука, анализ"},
-        ]
+        ],
     ),
     OnboardingQuestion(
         id=5,
@@ -150,7 +179,7 @@ STATIC_ONBOARDING_QUESTIONS = [
         options=[
             {"value": "collaborative", "label": "Обсуждение и поиск компромисса"},
             {"value": "decisive", "label": "Быстрое принятие решения и действие"},
-        ]
+        ],
     ),
 ]
 
@@ -162,67 +191,47 @@ def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
     return STATIC_ONBOARDING_QUESTIONS[current_question]
 
 
-async def generate_dynamic_onboarding_questions(language: str = "en") -> List[OnboardingQuestion]:
-    """Generate 2-3 dynamic onboarding questions based on game setting"""
-    logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
+def generate_dynamic_onboarding_questions(
+    language: str = "en",
+) -> List[OnboardingQuestion]:
+    """Generate 2-3 dynamic onboarding questions using LLM with json_schema."""
+    logger.info(
+        f"=== Generating dynamic onboarding questions for language: {language} ==="
+    )
     start_time = datetime.now()
     try:
-        game_master = await create_game_master_agent(language=language)
+        game_master = create_game_master_agent(language=language)
         logger.info("Game Master agent created successfully")
 
-        prompt_template = get_llm_prompt("onboarding_questions", language)
-        lang_directive = get_llm_directive("onboarding_questions", language)
+        raw_questions = game_master.generate_onboarding_questions()
+        logger.info(f"LLM returned {len(raw_questions)} questions")
 
-        prompt = f"""{prompt_template}
+        if not raw_questions:
+            logger.warning("No questions returned, using static fallback")
+            return STATIC_ONBOARDING_QUESTIONS[:3]
 
-{lang_directive}
-"""
-
-        logger.info("Sending prompt to LLM agent...")
-        response = game_master.agent(prompt)
-        logger.info(f"LLM response received: {response}")
-        response_str = str(response)
-        
-        # Try to parse JSON
-        import json
-        import re
-
-        try:
-            questions = json.loads(response_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            # Try to extract JSON block - remove markdown code blocks first
-            cleaned_response = re.sub(r'```json\s*|\s*```', '', response_str, flags=re.IGNORECASE)
-            cleaned_response = re.sub(r'```\s*|\s*```', '', cleaned_response, flags=re.IGNORECASE)
-
-            # Try to extract JSON array
-            json_match = re.search(r'\[.*\]', cleaned_response, re.DOTALL)
-            if json_match:
-                try:
-                    questions = json.loads(json_match.group())
-                except json.JSONDecodeError as e2:
-                    logger.error(f"Failed to parse extracted JSON: {e2}")
-                    raise ValueError(f"Failed to parse JSON from LLM response. Raw: {cleaned_response[:200]}...")
-            else:
-                raise ValueError(f"Failed to find JSON array in LLM response. Cleaned: {cleaned_response[:200]}...")
-        
-        # Convert to OnboardingQuestion objects
         result = []
-        for i, q in enumerate(questions, start=1):
-            result.append(OnboardingQuestion(
-                id=i,
-                text=q.get("text", f"Question {i}"),
-                options=q.get("options", [])
-            ))
-        
+        for i, q in enumerate(raw_questions):
+            result.append(
+                OnboardingQuestion(
+                    id=q.get("id", i + 1),
+                    text=q.get("text", f"Question {i + 1}"),
+                    options=q.get("options", []),
+                )
+            )
+
+        gen_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Question generation took {gen_time:.2f} seconds")
         return result if result else STATIC_ONBOARDING_QUESTIONS[:3]
-        
+
     except Exception as e:
         logger.error(f"Failed to generate dynamic questions, using static: {e}")
         return STATIC_ONBOARDING_QUESTIONS[:3]
 
 
-def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str], game_id: str = "default_game") -> Dict[str, Any]:
+def generate_player_profile_from_answers(
+    player_id: int, answers: Dict[int, str], game_id: str = "default_game"
+) -> Dict[str, Any]:
     """Generate player profile based on onboarding answers"""
     role_mapping = {
         "technical": {
@@ -272,6 +281,7 @@ def generate_player_profile_from_answers(player_id: int, answers: Dict[int, str]
 
 # ============== FastAPI App ==============
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
@@ -286,7 +296,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Game Master API",
     description="API for AI-powered cooperative game with Telegram bot interface",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -302,9 +312,10 @@ app.add_middleware(
 
 # ============== API Endpoints ==============
 
+
 @app.get("/")
 async def root():
-    return {"service": "AI Game Master API", "status": "running"}
+    return {"service": "AI Game Master API", "status": "running", "version": "2.0.0"}
 
 
 @app.get("/health")
@@ -312,7 +323,9 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
-# Onboarding endpoints
+# ============== Onboarding endpoints ==============
+
+
 @app.get("/onboarding/questions")
 async def get_onboarding_questions():
     """Get all static onboarding questions (backward compatibility)"""
@@ -326,7 +339,6 @@ async def generate_static_onboarding_questions(game_id: str = "default_game"):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # Generate static questions based on game setting
     dynamic_questions = [
         OnboardingQuestion(
             id=101,
@@ -334,7 +346,7 @@ async def generate_static_onboarding_questions(game_id: str = "default_game"):
             options=[
                 {"value": "cautious", "label": "Investigate cautiously with sensors"},
                 {"value": "bold", "label": "Approach directly and attempt contact"},
-            ]
+            ],
         ),
         OnboardingQuestion(
             id=102,
@@ -343,7 +355,7 @@ async def generate_static_onboarding_questions(game_id: str = "default_game"):
                 {"value": "safety", "label": "Crew safety above all else"},
                 {"value": "discovery", "label": "Knowledge and discovery"},
                 {"value": "mission", "label": "Complete the mission objectives"},
-            ]
+            ],
         ),
         OnboardingQuestion(
             id=103,
@@ -351,7 +363,7 @@ async def generate_static_onboarding_questions(game_id: str = "default_game"):
             options=[
                 {"value": "empathetic", "label": "Consider everyone's feelings"},
                 {"value": "logical", "label": "Follow logic and rules"},
-            ]
+            ],
         ),
     ]
 
@@ -363,7 +375,9 @@ async def start_onboarding(request: StartOnboardingRequest):
     """Start a new onboarding session for a player"""
     start_time = datetime.now()
     logger.info(f"=== START ONBOARDING ===")
-    logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
+    logger.info(
+        f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}"
+    )
 
     # Check if player already has a profile
     existing_profile = get_player_profile(request.player_id)
@@ -372,26 +386,28 @@ async def start_onboarding(request: StartOnboardingRequest):
         logger.warning(f"Player {request.player_id} already has a profile")
         raise HTTPException(status_code=400, detail="Player already has a profile")
 
-    # Generate dynamic questions ONCE and save to session
-    logger.info("Calling generate_dynamic_onboarding_questions...")
-    dynamic_questions = await generate_dynamic_onboarding_questions(language=request.language)
+    # Generate dynamic questions ONCE and save to session (now synchronous)
+    logger.info("Generating dynamic onboarding questions...")
+    dynamic_questions = generate_dynamic_onboarding_questions(language=request.language)
     logger.info(f"Generated {len(dynamic_questions)} questions")
 
     # Create session with pre-generated questions
     session = create_onboarding_session(
-        request.player_id, 
+        request.player_id,
         request.language,
-        questions=[q.model_dump() for q in dynamic_questions]
+        questions=[q.model_dump() for q in dynamic_questions],
     )
     logger.info(f"Onboarding session created: {session['session_id']}")
 
     # Log generation time
     gen_time = (datetime.now() - start_time).total_seconds()
-    logger.info(f"Question generation took {gen_time:.2f} seconds")
+    logger.info(f"Total onboarding start took {gen_time:.2f} seconds")
 
     next_question = dynamic_questions[0] if dynamic_questions else None
     if next_question:
-        logger.info(f"First question: id={next_question.id}, text={next_question.text[:50]}...")
+        logger.info(
+            f"First question: id={next_question.id}, text={next_question.text[:50]}..."
+        )
 
     result = {
         "session_id": session["session_id"],
@@ -403,7 +419,9 @@ async def start_onboarding(request: StartOnboardingRequest):
 
 
 @app.post("/onboarding/{session_id}/answer")
-async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, language: str = "en"):
+async def submit_onboarding_answer(
+    session_id: str, answer: OnboardingAnswer, language: str = "en"
+):
     """Submit an answer to an onboarding question"""
     session = get_onboarding_session(session_id)
     if not session:
@@ -421,13 +439,18 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
 
     # Get questions from session (pre-generated, no need to regenerate)
     session_questions = session.get("questions", [])
-    
+
     # Convert dict questions to OnboardingQuestion objects
     from pydantic import TypeAdapter
-    question_adapter = TypeAdapter(list[OnboardingQuestion])
-    dynamic_questions = question_adapter.validate_python(session_questions) if session_questions else []
 
-    update_onboarding_session(session_id, current_question, answers, completed, effective_language)
+    question_adapter = TypeAdapter(list[OnboardingQuestion])
+    dynamic_questions = (
+        question_adapter.validate_python(session_questions) if session_questions else []
+    )
+
+    update_onboarding_session(
+        session_id, current_question, answers, completed, effective_language
+    )
 
     next_question = None
     if not completed:
@@ -442,7 +465,9 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
 
     if completed:
         # Generate profile from answers
-        profile_data = generate_player_profile_from_answers(session["player_id"], answers)
+        profile_data = generate_player_profile_from_answers(
+            session["player_id"], answers
+        )
         profile_data["game_id"] = session.get("game_id", "default_game")
         create_player_profile(profile_data)
         result["profile"] = profile_data
@@ -461,28 +486,34 @@ async def complete_onboarding(session_id: str):
         raise HTTPException(status_code=400, detail="Onboarding not completed yet")
 
     player_id = session["player_id"]
-    
+
     # Get player profile
     profile = get_player_profile(player_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found")
 
-    # Generate avatar using comic_generator
+    # Generate avatar using ComfyUI directly
     try:
-        comic_generator = create_comic_generator()
-        
-        avatar_url = await comic_generator.generate_character_image(
-            character_name=profile["role"],
+        game_master = create_game_master_agent(language=session.get("language", "en"))
+
+        # Use LLM to generate a detailed avatar prompt
+        avatar_prompt = game_master.generate_avatar_prompt(
             role=profile["role"],
             traits=profile["personality_traits"],
-            scene_description=profile.get("avatar_description", "")
+            avatar_description=profile.get("avatar_description", ""),
         )
-        
+
+        # Call ComfyUI directly to generate the avatar
+        comic_generator = create_comic_generator()
+        avatar_url = await comic_generator.generate_avatar_image(
+            prompt=avatar_prompt, filename_prefix=f"avatar_{player_id}"
+        )
+
         # Update profile with avatar URL
         if avatar_url:
             update_player_profile_avatar(player_id, avatar_url)
             profile["avatar_url"] = avatar_url
-            
+
     except Exception as e:
         logger.error(f"Avatar generation failed: {e}")
         # Continue without avatar URL
@@ -490,7 +521,7 @@ async def complete_onboarding(session_id: str):
     return {
         "status": "completed",
         "profile": profile,
-        "avatar_url": profile.get("avatar_url")
+        "avatar_url": profile.get("avatar_url"),
     }
 
 
@@ -501,7 +532,7 @@ def update_player_profile_avatar(player_id: int, avatar_url: str) -> bool:
 
     cursor.execute(
         """UPDATE player_profiles SET avatar_url = ? WHERE player_id = ?""",
-        (avatar_url, player_id)
+        (avatar_url, player_id),
     )
 
     conn.commit()
@@ -522,9 +553,10 @@ async def get_onboarding_status(session_id: str, language: str = "en"):
         session_questions = session.get("questions", [])
         if session_questions:
             from pydantic import TypeAdapter
+
             question_adapter = TypeAdapter(list[OnboardingQuestion])
             dynamic_questions = question_adapter.validate_python(session_questions)
-            remaining_questions = dynamic_questions[session["current_question"]:]
+            remaining_questions = dynamic_questions[session["current_question"] :]
             next_question = remaining_questions[0] if remaining_questions else None
 
     return {
@@ -536,27 +568,31 @@ async def get_onboarding_status(session_id: str, language: str = "en"):
     }
 
 
-# Player profile endpoints
+# ============== Player profile endpoints ==============
+
+
 @app.get("/players/{player_id}/profile")
 async def get_player_profile_endpoint(player_id: int):
     """Get player profile"""
     try:
         profile = get_player_profile(player_id)
         if not profile:
-            raise HTTPException(status_code=404, detail="Player profile not found. Complete onboarding first.")
+            raise HTTPException(
+                status_code=404,
+                detail="Player profile not found. Complete onboarding first.",
+            )
         return profile
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid player ID format: {str(e)}")
-    
-    # Return profile with avatar_url and game_id
-    return {
-        **profile,
-        "avatar_url": profile.get("avatar_url"),
-        "game_id": profile.get("game_id"),
-    }
+        raise HTTPException(
+            status_code=400, detail=f"Invalid player ID format: {str(e)}"
+        )
 
 
-# Game state endpoints
+# ============== Game state endpoints ==============
+
+
 @app.get("/game/state")
 async def get_game_state_endpoint():
     """Get current game state"""
@@ -591,19 +627,19 @@ async def poll_game_updates(player_id: int, since: Optional[str] = None):
 
     # Get last poll timestamp
     last_poll = since or profile.get("last_poll")
-    
+
     updates = {
         "new_game_day": None,
         "pending_actions": [],
         "messages_from_gm": [],
-        "npc_messages": []
+        "npc_messages": [],
     }
 
     try:
         # Check for current day with pending actions
         state = get_game_state()
         day = get_game_day(state["day"])
-        
+
         if day and day.get("player_actions"):
             # Check if player has already selected action
             player_actions = get_player_actions(player_id, day["day"])
@@ -612,7 +648,7 @@ async def poll_game_updates(player_id: int, since: Optional[str] = None):
                 updates["new_game_day"] = {
                     "day": day["day"],
                     "story": day["story"],
-                    "npc_dialogues": day["npc_dialogues"]
+                    "npc_dialogues": day["npc_dialogues"],
                 }
 
         # Get recent messages from Game Master
@@ -630,7 +666,9 @@ async def poll_game_updates(player_id: int, since: Optional[str] = None):
     return updates
 
 
-# Player action endpoints
+# ============== Player action endpoints ==============
+
+
 @app.post("/game/actions")
 async def submit_player_action(request: PlayerActionRequest):
     """Submit player's action selection"""
@@ -642,54 +680,57 @@ async def submit_player_action(request: PlayerActionRequest):
     if request.action_id not in valid_actions:
         raise HTTPException(status_code=400, detail="Invalid action ID")
 
-    result = save_player_action(request.player_id, request.day, request.action_id, request.choice)
+    result = save_player_action(
+        request.player_id, request.day, request.action_id, request.choice
+    )
     return {"status": "accepted", "action": result}
 
 
-# Message endpoints
+# ============== Message endpoints ==============
+
+
 @app.post("/game/messages")
 async def submit_game_message(request: GameMessageRequest):
     """Submit a message to the game master and get response"""
-    add_game_message(request.player_id, request.message, request.message_type)
+    player_id = request.player_id
+    message = request.message
+
+    add_game_message(player_id, message, request.message_type)
 
     # Get player profile
-    profile = get_player_profile(request.player_id)
+    profile = get_player_profile(player_id)
     if not profile:
         profile_data = {
             "role": "Crew Member",
             "personality_traits": [],
-            "player_id": request.player_id
+            "player_id": player_id,
         }
     else:
         profile_data = {
             "role": profile["role"],
             "personality_traits": profile["personality_traits"],
-            "player_id": player_id
+            "player_id": player_id,
         }
 
     # Generate response from game master
     try:
-        language = "ru" if any(c in message for c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя') else "en"
-        game_master = await create_game_master_agent(language=language)
+        language = (
+            "ru"
+            if any(c in message for c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
+            else "en"
+        )
+        game_master = create_game_master_agent(language=language)
 
-        response = await game_master.process_player_message(
-            player_id=player_id,
-            message=message,
-            player_profile=profile_data
+        response = game_master.process_player_message(
+            player_id=player_id, message=message, player_profile=profile_data
         )
 
         add_game_message(player_id, response, "text_response")
 
-        return {
-            "status": "processed",
-            "response": response
-        }
+        return {"status": "processed", "response": response}
     except Exception as e:
         logger.error(f"Failed to generate game master response: {e}")
-        return {
-            "status": "received",
-            "error": str(e)
-        }
+        return {"status": "received", "error": str(e)}
 
 
 @app.get("/game/actions/{player_id}/{day}")
@@ -715,9 +756,16 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
     return {"messages": messages}
 
 
-# Admin endpoints
+# ============== Admin endpoints ==============
+
+
 @app.post("/admin/generate-day")
-async def generate_daily_episode(language: str = "en", previous_actions: list = None, team_assembly_status: dict = None):
+async def generate_daily_episode(
+    language: str = "en",
+    previous_actions: Optional[List[Dict[str, Any]]] = None,
+    previous_summary: Optional[str] = None,
+    team_assembly_status: Optional[Dict[str, Any]] = None,
+):
     """Generate a new daily episode (called by game master scheduler)"""
     state = get_game_state()
     day_num = state["day"]
@@ -725,44 +773,46 @@ async def generate_daily_episode(language: str = "en", previous_actions: list = 
     logger.info(f"=== GENERATE DAY STARTED ===")
     logger.info(f"Day number: {day_num}")
     logger.info(f"Language: {language}")
-    logger.info(f"Previous actions count: {len(previous_actions) if previous_actions else 0}")
-    logger.info(f"Team assembly status: {team_assembly_status}")
+    logger.info(
+        f"Previous actions count: {len(previous_actions) if previous_actions else 0}"
+    )
 
-    game_master = await create_game_master_agent(language=language)
+    game_master = create_game_master_agent(language=language)
 
     player_role = "Crew Member" if language != "ru" else "Член экипажа"
     logger.info(f"Player role: {player_role}")
-    
+
     # Generate previous day summary from actions for story consistency
-    previous_summary = ""
-    if previous_actions:
+    summary = previous_summary or ""
+    if not summary and previous_actions:
         action_summaries = []
         for action in previous_actions:
-            action_summaries.append(f"Day {action.get('day', 0)}: Player chose '{action.get('choice')}'")
-        previous_summary = " | ".join(action_summaries)
-    
-    story = await game_master.generate_daily_story(
+            action_summaries.append(
+                f"Day {action.get('day', 0)}: Player chose '{action.get('choice')}'"
+            )
+        summary = " | ".join(action_summaries)
+
+    story = game_master.generate_daily_story(
         day=day_num,
-        previous_summary=previous_summary or state["last_updated"],
-        player_role=player_role
+        previous_summary=summary or state["last_updated"],
+        player_role=player_role,
     )
 
     logger.info(f"Generating NPC dialogues...")
-    dialogues = await game_master.generate_npc_dialogues(
-        story=story,
-        player_role=player_role
-    )
+    dialogues = game_master.generate_npc_dialogues(story=story, player_role=player_role)
 
     new_day = {
         "day": day_num,
         "story": story.narrative,
-        "npc_dialogues": [{"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues],
+        "npc_dialogues": [
+            {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
+        ],
         "player_actions": story.decision_points,
         "generated_content": {
             "image": f"/content/day_{day_num}/scene.jpg",
             "comic": f"/content/day_{day_num}/comic.webp",
         },
-        "previous_day_summary": previous_summary,
+        "previous_day_summary": summary,
     }
 
     create_game_day(new_day)
@@ -811,7 +861,5 @@ async def generate_personalized_comic(player_id: int, day: Optional[int] = None)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
 
-# Add aiohttp import at module level for avatar generation
-import aiohttp
+    uvicorn.run(app, host="0.0.0.0", port=8000)

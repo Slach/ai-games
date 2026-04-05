@@ -105,6 +105,38 @@ LLM_PROMPTS = {
 
 Важно: НЕ используй markdown блоки (```json), НЕ добавляй никаких пояснений. ТОЛЬКО чистый JSON.
 """,
+        "avatar_prompt": """
+Ты генерируешь промпт для AI генерации изображения персонажа.
+На основе роли, черт характера и описания аватара, создай детальный промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации портрета персонажа в sci-fi стиле.
+
+Роль: {role}
+Черты характера: {traits}
+Описание аватара: {avatar_description}
+
+Промпт должен содержать:
+- Внешность персонажа (лицо, волосы, глаза)
+- Одежду (космическая униформа, детали)
+- Окружение (мостик корабля, лаборатория, и т.д.)
+- Освещение и стиль (кинематографичное, детализированное)
+- Качество (4K, high quality, detailed)
+
+Ответь ТОЛЬКО промптом на английском языке, без пояснений. Одним абзацем.
+""",
+        "scene_prompt": """
+Создай промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации sci-fi сцены.
+
+Сцена: {scene_description}
+Персонажи: {characters}
+Атмосфера: {mood}
+
+Промпт должен описывать:
+- Детальное окружение (космический корабль, планета, и т.д.)
+- Действие или момент
+- Освещение и цветовую палитру
+- Стиль (space opera, cinematic, 4K)
+
+Ответь ТОЛЬКО промптом на английском языке, без пояснений. Одним абзацем.
+""",
     },
     LANGUAGE_EN: {
         "onboarding_questions": """
@@ -126,6 +158,38 @@ Structure:
 ]
 
 Important: DO NOT use markdown code blocks (```json), DO NOT add any explanations. ONLY pure JSON.
+""",
+        "avatar_prompt": """
+Generate an image generation prompt for a sci-fi character portrait.
+Based on the role, personality traits, and avatar description, create a detailed prompt for generating a character portrait.
+
+Role: {role}
+Personality traits: {traits}
+Avatar description: {avatar_description}
+
+The prompt must include:
+- Character appearance (face, hair, eyes)
+- Clothing (space uniform, details)
+- Environment (ship bridge, laboratory, etc.)
+- Lighting and style (cinematic, detailed)
+- Quality (4K, high quality, detailed)
+
+Respond with ONLY the prompt text. No explanations. Single paragraph.
+""",
+        "scene_prompt": """
+Create an image generation prompt for a sci-fi scene.
+
+Scene: {scene_description}
+Characters: {characters}
+Mood: {mood}
+
+The prompt must describe:
+- Detailed environment (spaceship, planet, etc.)
+- Action or moment
+- Lighting and color palette
+- Style (space opera, cinematic, 4K)
+
+Respond with ONLY the prompt text. No explanations. Single paragraph.
 """,
     },
 }

@@ -1,0 +1,84 @@
+{
+  "prompt": {
+    "3": {
+      "inputs": {
+        "seed": 42,
+        "steps": 4,
+        "cfg": 4,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 1,
+        "model": ["66", 0],
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "latent_image": ["58", 0]
+      },
+      "class_type": "KSampler"
+    },
+    "6": {
+      "inputs": {
+        "text": "a cute cat astronaut, sci-fi portrait, cinematic lighting",
+        "clip": ["38", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "7": {
+      "inputs": {
+        "text": " ",
+        "clip": ["38", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "8": {
+      "inputs": {
+        "samples": ["3", 0],
+        "vae": ["39", 0]
+      },
+      "class_type": "VAEDecode"
+    },
+    "37": {
+      "inputs": {
+        "unet_name": "z_image_turbo_bf16.safetensors",
+        "weight_dtype": "default"
+      },
+      "class_type": "UNETLoader"
+    },
+    "38": {
+      "inputs": {
+        "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "type": "qwen_image",
+        "device": "default"
+      },
+      "class_type": "CLIPLoader"
+    },
+    "39": {
+      "inputs": {
+        "vae_name": "qwen_image_vae.safetensors"
+      },
+      "class_type": "VAELoader"
+    },
+    "58": {
+      "inputs": {
+        "width": 512,
+        "height": 512,
+        "batch_size": 1
+      },
+      "class_type": "EmptySD3LatentImage"
+    },
+    "60": {
+      "inputs": {
+        "filename_prefix": "test_v6",
+        "images": ["8", 0]
+      },
+      "class_type": "SaveImage"
+    },
+    "66": {
+      "inputs": {
+        "shift": 3.5,
+        "model": ["37", 0]
+      },
+      "class_type": "ModelSamplingAuraFlow"
+    }
+  },
+  "client_id": "test-v6"
+}
