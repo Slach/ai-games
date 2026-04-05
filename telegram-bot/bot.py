@@ -589,6 +589,24 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     msgs = lang.get_onboarding(BOT_LANGUAGE)
 
+    # Check if player already has an active onboarding session in memory
+    player_state = get_player_state(player_id)
+    if player_state.get("onboarding_session_id"):
+        logger.info(
+            f"Player {player_id} already has active onboarding session: {player_state['onboarding_session_id']}"
+        )
+        current_options = player_state.get("current_options", [])
+        keyboard = (
+            create_onboarding_keyboard(current_options, player_state.get("current_question_id", 1))
+            if current_options
+            else create_main_menu_keyboard()
+        )
+        await message.answer(
+            "Вы уже проходите онбординг. Пожалуйста, ответьте на текущий вопрос.",
+            reply_markup=keyboard,
+        )
+        return
+
     # Check if player already has a profile
     try:
         profile = await check_player_game_status(player_id)
@@ -655,7 +673,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     current_options=question["options"],
                 )
                 update_player_state(
-                    player_id, onboarding_session_id=session_id, game_id=game_id
+                    player_id,
+                    onboarding_session_id=session_id,
+                    game_id=game_id,
+                    current_question_id=question["id"],
+                    current_options=question["options"],
                 )
 
                 if question:
@@ -918,7 +940,12 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 )
 
             await state.clear()
-            update_player_state(player_id, onboarding_session_id=None)
+            update_player_state(
+                player_id,
+                onboarding_session_id=None,
+                current_question_id=None,
+                current_options=None,
+            )
 
             # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             asyncio.create_task(
@@ -930,6 +957,11 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             if next_question:
                 # Store next question data in state for matching
                 await state.update_data(
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                )
+                update_player_state(
+                    player_id,
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
                 )
