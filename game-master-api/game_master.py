@@ -277,6 +277,52 @@ AVATAR_PROMPT_SCHEMA = {
     },
 }
 
+ROLE_ASSIGNMENT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "role_assignment",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "role_key": {
+                    "type": "string",
+                    "description": "The role_key of the best matching role from the available roles list",
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Brief explanation of why this role matches the player's answers",
+                },
+            },
+            "required": ["role_key", "reasoning"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+GAME_TITLE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "game_title",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "A creative game title (ship name + mission tagline)",
+                },
+                "welcome_text": {
+                    "type": "string",
+                    "description": "An atmospheric welcome message in the starship setting",
+                },
+            },
+            "required": ["title", "welcome_text"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 # ============== Game Master Agent ==============
 
@@ -434,19 +480,29 @@ class GameMasterAgent:
         if self.language == "ru":
             system = "Ты — дизайнер игр. Генерируй вопросы для онбординга в космической игре."
             user = (
-                "Сгенерируй 3 вопроса для онбординга в игре про космические исследования. "
-                "Каждый вопрос — это ситуация с выбором из 2-3 вариантов. "
-                "Вопросы помогают определить роль игрока (инженер, офицер связи, учёный) "
-                "и черты его личности (осторожный/смелый, логичный/эмпатичный и т.д.). "
+                "Сгенерируй 5 вопросов для онбординга в игре про космический экипаж звездного корабля. "
+                "Каждый вопрос — это конкретная ситуация на корабле или во время миссии с выбором из 2-3 вариантов ДЕЙСТВИЙ. "
+                "ВАЖНО: Каждый вариант ответа должен описывать КОНКРЕТНОЕ ДЕЙСТВИЕ, которое игрок совершает в этой ситуации. "
+                "ПРИМЕР правильных вариантов: 'Бежать в машинное отделение и попытаться починить варп-двигатель', "
+                "'Активировать аварийные щиты и вызвать подкрепление'. "
+                "НЕПРАВИЛЬНО: 'Инженер — технический специалист', 'Учёный – смелый, ищущий прорыв'. "
+                "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
+                "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
+                "исследование неизвестного, принятие решений в кризисе. "
                 "Все тексты на русском языке."
             )
         else:
             system = "You are a game designer. Generate onboarding questions for a space exploration game."
             user = (
-                "Generate 3 onboarding questions for a space exploration game. "
-                "Each question is a scenario with 2-3 choices. "
-                "Questions help determine player role (engineer, communications officer, scientist) "
-                "and personality traits (cautious/bold, logical/empathetic, etc). "
+                "Generate 5 onboarding questions for a starship crew game. "
+                "Each question is a specific situation aboard a ship or during a mission with 2-3 ACTION choices. "
+                "CRITICAL: Each option must describe a SPECIFIC ACTION the player would take in this situation. "
+                "CORRECT example: 'Run to engineering and try to repair the warp drive', "
+                "'Activate emergency shields and call for backup'. "
+                "INCORRECT: 'Engineer - technical specialist', 'Scientist - bold, seeking breakthrough'. "
+                "NEVER include role names or personality types in options — only actions. "
+                "Questions should cover: reaction to danger, working with technology, crew interaction, "
+                "exploring the unknown, crisis decision-making. "
                 "All text in English."
             )
 
@@ -457,12 +513,94 @@ class GameMasterAgent:
         )
 
         questions = result.get("questions", [])
-        # Add sequential IDs
         for i, q in enumerate(questions, start=1):
             q["id"] = i
 
         logger.info(f"Generated {len(questions)} onboarding questions")
         return questions
+
+    def assign_role_from_answers(
+        self, answers: Dict[int, str], available_roles: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Use LLM to assign the best matching role based on player's onboarding answers."""
+        logger.info(
+            f"[ROLE] Assigning role from {len(answers)} answers, {len(available_roles)} roles available"
+        )
+
+        if not available_roles:
+            raise ValueError("No roles available")
+
+        answers_text = "\n".join(
+            [f"  Question {qid}: player chose '{ans}'" for qid, ans in answers.items()]
+        )
+        roles_text = "\n".join(
+            [
+                f"  - {r['role_key']}: {r['role_name']} / {r['role_name_en']} — {r['role_description'][:100]}"
+                for r in available_roles
+            ]
+        )
+
+        if self.language == "ru":
+            system = "Ты — аналитик персонала космического корабля. По ответам игрока определяешь最适合ую роль в экипаже."
+            user = (
+                f"Ответы игрока на вопросы онбординга:\n{answers_text}\n\n"
+                f"Доступные роли:\n{roles_text}\n\n"
+                f"Выбери ОДНУ роль из списка доступных, которая лучше всего подходит игроку "
+                f"на основе его выбранных действий. Отвечай только ключ роли (role_key)."
+            )
+        else:
+            system = "You are a starship personnel analyst. You assign the best crew role based on a player's onboarding answers."
+            user = (
+                f"Player's onboarding answers:\n{answers_text}\n\n"
+                f"Available roles:\n{roles_text}\n\n"
+                f"Pick exactly ONE role from the available list that best matches the player "
+                f"based on their chosen actions. Return only the role_key."
+            )
+
+        result = self._call_llm(
+            system_prompt=system,
+            user_prompt=user,
+            response_schema=ROLE_ASSIGNMENT_SCHEMA,
+            temperature=0.3,
+        )
+
+        logger.info(
+            f"[ROLE] LLM assigned role_key={result.get('role_key')}, reasoning={result.get('reasoning', '')[:100]}"
+        )
+        return result
+
+    def generate_game_title(self) -> Dict[str, str]:
+        """Generate a creative game title and welcome message."""
+        logger.info("[TITLE] Generating game title")
+
+        if self.language == "ru":
+            system = "Ты — креативный писатель-фантаст. Придумываешь названия и описания для космических приключений."
+            user = (
+                "Придумай название для игры про экипаж звездного корабля и приветственное сообщение. "
+                "Название должно быть в формате: название корабля + подзаголовок миссии. "
+                "Пример стиля: «Звёздный Крейсер Аврора: За горизонтом известного». "
+                "Приветствие должно быть атмосферным — будто игрок заходит на борт корабля. "
+                "Все тексты на русском языке."
+            )
+        else:
+            system = "You are a creative sci-fi writer. You create titles and descriptions for space adventures."
+            user = (
+                "Create a title for a starship crew game and a welcome message. "
+                "Title format: ship name + mission tagline. "
+                "Example style: 'Star Cruiser Aurora: Beyond the Known Horizon'. "
+                "The welcome should be atmospheric — as if the player is stepping aboard the ship. "
+                "All text in English."
+            )
+
+        result = self._call_llm(
+            system_prompt=system,
+            user_prompt=user,
+            response_schema=GAME_TITLE_SCHEMA,
+            temperature=0.9,
+        )
+
+        logger.info(f"[TITLE] Generated: {result.get('title', '')}")
+        return result
 
     # ============== Daily Story ==============
 

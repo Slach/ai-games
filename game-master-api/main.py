@@ -16,6 +16,7 @@ from comic_generator import ComicGenerator, create_comic_generator
 from language import get_llm_prompt, get_llm_directive
 from database import (
     init_db,
+    run_migrations,
     create_onboarding_session,
     get_onboarding_session,
     update_onboarding_session,
@@ -37,6 +38,11 @@ from database import (
     get_player_actions,
     get_players_in_game,
     update_player_profile_last_poll,
+    get_available_roles,
+    take_role,
+    get_role_by_key,
+    update_game_title,
+    get_game_title,
 )
 
 # Configure logging
@@ -230,50 +236,72 @@ def generate_dynamic_onboarding_questions(
 
 
 def generate_player_profile_from_answers(
-    player_id: int, answers: Dict[int, str], game_id: str = "default_game"
+    player_id: int,
+    answers: Dict[int, str],
+    game_id: str = "default_game",
+    language: str = "ru",
 ) -> Dict[str, Any]:
-    """Generate player profile based on onboarding answers"""
-    role_mapping = {
-        "technical": {
-            "role": "Chief Engineer",
-            "description": "Вы отвечаете за техническое состояние корабля. Ваша способность быстро находить решения в критических ситуациях спасает экипаж.",
-            "avatar_description": "Техничный специалист в инженерном костюме, с инструментами и голографическими дисплеями вокруг",
-            "traits": ["технический", "практичный", "решительный"],
-        },
-        "diplomatic": {
-            "role": "XO (First Officer)",
-            "description": "Вы координируете действия экипажа и ведёте переговоры с внешними контактами. Ваше умение находить общий язык решает исход кризисов.",
-            "avatar_description": "Офицер связи в форменной униформе, с коммуникатором и уверенным взглядом",
-            "traits": ["коммуникабельный", "стратегический", "эмпатичный"],
-        },
-        "exploration": {
-            "role": "Science Officer",
-            "description": "Вы исследуете неизвестное и анализируете данные. Ваша способность видеть закономерности открывает новые возможности.",
-            "avatar_description": "Учёный в лабораторном халате, с сканером и научными приборами",
-            "traits": ["аналитический", "любопытный", "методичный"],
-        },
-    }
+    """Assign a role from the available ship roles based on onboarding answers using LLM."""
+    available = get_available_roles(game_id, language=language)
 
-    specialization = answers.get(4, "technical")
-    profile_data = role_mapping.get(specialization, role_mapping["technical"])
+    if not available:
+        raise ValueError("All crew positions are filled. No roles available.")
 
-    traits = profile_data["traits"].copy()
+    game_master = create_game_master_agent(language=language)
 
-    if answers.get(1) == "cautious":
-        traits.append("осторожный")
-    elif answers.get(1) == "bold":
-        traits.append("смелый")
+    role_result = game_master.assign_role_from_answers(answers, available)
 
-    if answers.get(3) == "empathetic":
-        traits.append("эмпатичный")
-    elif answers.get(3) == "logical":
-        traits.append("логичный")
+    assigned_key = role_result.get("role_key", "")
+
+    role_data = get_role_by_key(assigned_key, language=language)
+    if not role_data or role_data.get("taken_by") is not None:
+        logger.warning(
+            f"[ROLE] LLM suggested taken/invalid role '{assigned_key}', re-assigning from available"
+        )
+        available = get_available_roles(game_id, language=language)
+        if not available:
+            raise ValueError("All crew positions are filled while re-assigning.")
+        role_result = game_master.assign_role_from_answers(answers, available)
+        assigned_key = role_result.get("role_key", "")
+        role_data = get_role_by_key(assigned_key, language=language)
+
+    if not role_data:
+        role_data = available[0]
+        assigned_key = role_data["role_key"]
+
+    taken = take_role(assigned_key, player_id, game_id)
+    if not taken:
+        logger.warning(
+            f"[ROLE] Role {assigned_key} was taken between check and assignment, picking first available"
+        )
+        available = get_available_roles(game_id, language=language)
+        if not available:
+            raise ValueError("All crew positions are filled.")
+        role_data = available[0]
+        take_role(role_data["role_key"], player_id, game_id)
+
+    traits = role_data["personality_traits"].copy()
+    for ans in answers.values():
+        if ans in ("cautious", "caution"):
+            traits.append("осторожный")
+        elif ans in ("bold", "aggressive"):
+            traits.append("смелый")
+        elif ans == "empathetic":
+            traits.append("эмпатичный")
+        elif ans == "logical":
+            traits.append("логичный")
+    traits = list(dict.fromkeys(traits))
+
+    logger.info(
+        f"[ROLE] Player {player_id} assigned role: {role_data['role_name']} ({assigned_key})"
+    )
 
     return {
         "player_id": player_id,
-        "avatar_description": profile_data["avatar_description"],
-        "role": profile_data["role"],
-        "role_description": profile_data["description"],
+        "avatar_description": role_data["avatar_description"],
+        "role": role_data["role_name"],
+        "role_name_en": role_data["role_name_en"],
+        "role_description": role_data["role_description"],
         "personality_traits": traits,
         "game_id": game_id,
     }
@@ -391,6 +419,28 @@ async def start_onboarding(request: StartOnboardingRequest):
     dynamic_questions = generate_dynamic_onboarding_questions(language=request.language)
     logger.info(f"Generated {len(dynamic_questions)} questions")
 
+    game_title_data = {}
+    try:
+        gm = create_game_master_agent(language=request.language)
+        game_title_data = gm.generate_game_title()
+        
+        # Save game title to database
+        if game_title_data.get("title"):
+            update_game_title(request.game_id, game_title_data["title"])
+            logger.info(f"Game title saved to DB: {game_title_data['title']}")
+    except Exception as e:
+        logger.warning(f"Game title generation failed: {e}")
+        game_title_data = {
+            "title": "Звёздный Крейсер «Рассвет»: За горизонтом известного"
+            if request.language == "ru"
+            else "Star Cruiser «Dawn»: Beyond the Known Horizon",
+            "welcome_text": "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд."
+            if request.language == "ru"
+            else "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.",
+        }
+        # Save fallback title to database
+        update_game_title(request.game_id, game_title_data["title"])
+
     # Create session with pre-generated questions
     session = create_onboarding_session(
         request.player_id,
@@ -413,6 +463,8 @@ async def start_onboarding(request: StartOnboardingRequest):
         "session_id": session["session_id"],
         "game_id": request.game_id,
         "question": next_question.model_dump() if next_question else None,
+        "game_title": game_title_data.get("title", ""),
+        "welcome_message": game_title_data.get("welcome_text", ""),
     }
     logger.info(f"=== START ONBOARDING COMPLETED ===")
     return result
@@ -434,19 +486,16 @@ async def submit_onboarding_answer(
     answers[answer.question_id] = answer.answer
     current_question = session["current_question"] + 1
 
-    # Check if all questions answered (3 dynamic questions)
-    completed = current_question >= 3
-
-    # Get questions from session (pre-generated, no need to regenerate)
     session_questions = session.get("questions", [])
 
-    # Convert dict questions to OnboardingQuestion objects
     from pydantic import TypeAdapter
 
     question_adapter = TypeAdapter(list[OnboardingQuestion])
     dynamic_questions = (
         question_adapter.validate_python(session_questions) if session_questions else []
     )
+
+    completed = current_question >= len(dynamic_questions)
 
     update_onboarding_session(
         session_id, current_question, answers, completed, effective_language
@@ -464,9 +513,8 @@ async def submit_onboarding_answer(
     }
 
     if completed:
-        # Generate profile from answers
         profile_data = generate_player_profile_from_answers(
-            session["player_id"], answers
+            session["player_id"], answers, language=effective_language
         )
         profile_data["game_id"] = session.get("game_id", "default_game")
         create_player_profile(profile_data)
@@ -591,6 +639,15 @@ async def get_player_profile_endpoint(player_id: int):
 
 
 # ============== Game state endpoints ==============
+
+
+@app.get("/game/title")
+async def get_game_title_endpoint(game_id: str = "default_game"):
+    """Get game title"""
+    title = get_game_title(game_id)
+    if not title:
+        raise HTTPException(status_code=404, detail="Game title not found")
+    return {"game_id": game_id, "title": title}
 
 
 @app.get("/game/state")
