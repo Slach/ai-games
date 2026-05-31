@@ -19,10 +19,10 @@ from unittest.mock import patch, MagicMock, AsyncMock
 # Add parent dir to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from comic_generator import (
+from image_generator import (
     _build_zimage_turbo_workflow,
     ImageGenerator,
-    create_comic_generator,
+    create_image_generator,
 )
 
 
@@ -157,7 +157,7 @@ class TestImageGeneratorUnit(unittest.TestCase):
 
     def test_factory_function(self):
         """create_comic_generator() should return ImageGenerator."""
-        gen = create_comic_generator()
+        gen = create_image_generator()
         self.assertIsInstance(gen, ImageGenerator)
 
     def test_default_comfyui_url(self):

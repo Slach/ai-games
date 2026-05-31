@@ -21,6 +21,20 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+# Default fallback splash image URL (user can place a manually generated image in ComfyUI output)
+# Place a file named 'splash_default.png' in comfyui/output/ directory
+COMFYUI_BASE_URL = os.getenv("COMFYUI_URL", "http://comfyui:8188")
+DEFAULT_SPLASH_FALLBACK_URL = os.getenv(
+    "DEFAULT_SPLASH_FALLBACK_URL",
+    f"{COMFYUI_BASE_URL}/view?filename=splash_default.png&type=output",
+)
+
+# Default fallback loading image URL (user can place a manually generated image in ComfyUI output)
+# Place a file named 'loading_default.png' in comfyui/output/ directory
+DEFAULT_LOADING_FALLBACK_URL = os.getenv(
+    "DEFAULT_LOADING_FALLBACK_URL",
+    f"{COMFYUI_BASE_URL}/view?filename=loading_default.png&type=output",
+)
 
 # ============== ComfyUI Workflow Templates ==============
 
@@ -254,49 +268,72 @@ class ImageGenerator:
         filename_prefix: str = "ComfyUI",
         width: int = 1024,
         height: int = 1024,
+        max_retries: int = 3,
     ) -> Optional[str]:
-        """Generate an image via ComfyUI using Z-Image Turbo.
+        """Generate an image via ComfyUI using Z-Image Turbo with retry.
+
+        On each retry the seed is randomized, so a transient failure or
+        bad output will produce a different image on the next attempt.
 
         Args:
             prompt: Detailed image generation prompt (English)
             filename_prefix: Prefix for output filename
             width: Image width (multiple of 16)
             height: Image height (multiple of 16)
+            max_retries: Number of generation attempts before giving up (default: 3)
 
         Returns:
             URL of the generated image, or None on failure
         """
         logger.info(f"[IMAGE] Generating image via Z-Image Turbo")
         logger.info(f"[IMAGE] Prompt: {prompt[:100]}...")
-        logger.info(f"[IMAGE] Size: {width}x{height}")
+        logger.info(f"[IMAGE] Size: {width}x{height}, max_retries={max_retries}")
 
-        try:
-            workflow = _build_zimage_turbo_workflow(
-                prompt=prompt,
-                width=width,
-                height=height,
-                filename_prefix=filename_prefix,
-            )
+        for attempt in range(1, max_retries + 1):
+            try:
+                workflow = _build_zimage_turbo_workflow(
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    filename_prefix=filename_prefix,
+                )
 
-            prompt_id = await self._queue_prompt(workflow)
-            outputs = await self._wait_for_completion(prompt_id, timeout=180)
-            image_url = self._extract_image_url(outputs)
+                prompt_id = await self._queue_prompt(workflow)
+                outputs = await self._wait_for_completion(prompt_id, timeout=180)
+                image_url = self._extract_image_url(outputs)
 
-            if image_url:
-                logger.info(f"[IMAGE] Image generated: {image_url}")
-            else:
-                logger.warning("[IMAGE] No image in ComfyUI output")
+                if image_url:
+                    logger.info(f"[IMAGE] Image generated: {image_url}")
+                    return image_url
+                elif attempt < max_retries:
+                    logger.warning(
+                        f"[IMAGE] No image in ComfyUI output (attempt {attempt}/{max_retries}), retrying..."
+                    )
+                else:
+                    logger.warning(
+                        f"[IMAGE] No image in ComfyUI output after {max_retries} attempts, giving up"
+                    )
 
-            return image_url
+            except Exception as e:
+                logger.error(
+                    f"[IMAGE] Generation attempt {attempt}/{max_retries} failed: {e}"
+                )
+                if attempt < max_retries:
+                    wait = 2 ** attempt  # 2s, 4s, 8s backoff
+                    logger.info(f"[IMAGE] Retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(
+                        f"[IMAGE] All {max_retries} attempts exhausted, giving up"
+                    )
 
-        except Exception as e:
-            logger.error(f"[IMAGE] Image generation failed: {e}")
-            return None
+        return None
 
     async def generate_avatar_image(
         self,
         prompt: str,
         filename_prefix: str = "avatar",
+        game_id: str = "default_game",
         width: int = 768,
         height: int = 1024,
     ) -> Optional[str]:
@@ -382,14 +419,124 @@ class ImageGenerator:
             logger.warning(f"Comic generation failed for day {day}, using placeholder")
             return f"/content/comics/day_{day}_placeholder.webp"
 
+    # ============== Batch Image Generation ==============
 
-# Backward compatibility alias
-ComicGenerator = ImageGenerator
+    LOADING_IMAGE_PROMPTS = [
+        "Starship bridge main computer console glowing with holographic star charts, 'SYSTEM BOOT' text display, blue neon lights, Star Trek style, cinematic shot from captain's chair perspective, 4K",
+        "Starship computer core room with towering data pillars, energy conduits pulsing with blue light, holographic displays flickering to life, 'INITIALIZING...' floating text, sci-fi interior",
+        "Captain's chair on starship bridge viewed from behind, panoramic viewscreen showing starfield, consoles powering up, amber and blue indicator lights, 'LOADING SYSTEMS' hologram",
+        "Starship engineering room warp core pulsing with blue energy, LCARS displays booting up, holographic status readouts, 'POWERING UP' text on screens, cinematic lighting",
+        "Starship navigation console with interactive star map hologram, tactical display panels activating, 'CALIBRATING SENSORS' overlay, sci-fi UI elements, glowing buttons",
+        "View from starship observation deck windows showing nebula, holographic data streams reflecting on glass, ambient blue lighting, 'WELCOME ABOARD' floating interface prompt",
+        "Starship AI core chamber with crystalline data storage, floating light particles, neural interface glowing patterns, 'NEURAL LINK ESTABLISHED' text, ethereal blue-white lighting",
+        "Helm station on starship bridge, holographic flight path projections, warp engine status displays, 'NAVIGATION SYSTEMS ONLINE' readout, amber alert glow",
+        "Starship medical bay with biobeds, holographic patient scans, 'MEDICAL SYSTEMS INITIALIZING' display, clean white-blue lighting, futuristic medical equipment",
+        "Starship armory or security station with weapon lockers, tactical holographic map, 'SECURITY SYSTEMS ARMED' display, red-blue alert lighting, sci-fi interior",
+    ]
+
+    async def generate_loading_images(
+        self,
+        count: int = 10,
+        start_index: int = 0,
+        filename_prefix: str = "loading",
+        game_id: str = "default_game",
+        width: int = 768,
+        height: int = 768,
+    ) -> List[str]:
+        """Generate N loading screen images for /start display.
+        
+        Args:
+            count: Number of images to generate
+            start_index: Starting index in LOADING_IMAGE_PROMPTS (for resuming)
+            filename_prefix: Prefix for output files
+            game_id: Game ID to scope generated filenames
+            width: Image width
+            height: Image height
+        
+        Returns:
+            List of generated image URLs.
+        """
+        logger.info(f"[IMAGE] Generating {count} loading images (start={start_index})")
+        urls = []
+
+        for offset in range(count):
+            i = start_index + offset
+            prompt = self.LOADING_IMAGE_PROMPTS[i % len(self.LOADING_IMAGE_PROMPTS)]
+            try:
+                url = await self.generate_image(
+                    prompt=prompt,
+                    filename_prefix=f"{filename_prefix}_{game_id}_{i+1}",
+                    width=width,
+                    height=height,
+                    max_retries=2,
+                )
+                if url:
+                    urls.append(url)
+                    logger.info(f"[IMAGE] Loading image #{i+1} generated: {url[:60]}...")
+                else:
+                    logger.warning(f"[IMAGE] Loading image #{i+1} failed to generate")
+            except Exception as e:
+                logger.error(f"[IMAGE] Loading image #{i+1} error: {e}")
+
+        logger.info(f"[IMAGE] Generated {len(urls)}/{count} loading images")
+        return urls
+
+    async def generate_splash_images(
+        self,
+        game_title: str,
+        welcome_text: str,
+        count: int = 3,
+        filename_prefix: str = "splash",
+        game_id: str = "default_game",
+        width: int = 1024,
+        height: int = 768,
+    ) -> List[str]:
+        """Generate N splash images based on game title and description.
+        
+        Args:
+            game_title: The generated game/ship title
+            welcome_text: The atmospheric welcome description
+            count: Number of splash images to generate
+            filename_prefix: Prefix for output files
+            game_id: Game ID to scope generated filenames
+        
+        Returns:
+            List of generated image URLs.
+        """
+        logger.info(f"[IMAGE] Generating {count} splash images for: {game_title[:60]}...")
+
+        prompts = [
+            f"Epic establishing shot of {game_title[:150]}. {welcome_text[:150]}. Wide-angle view of starship exterior, nebula background, Star Trek style, cinematic lighting, 4K quality, space opera aesthetic.",
+            f"Starship bridge interior scene for: {game_title[:150]}. {welcome_text[:150]}. Crew at stations, holographic displays, warm interior light through viewport showing stars, cinematic composition.",
+            f"Dramatic space scene: {game_title[:150]}. {welcome_text[:150]}. Starship flying through cosmic phenomenon, lens flare, starfield, deep space colors, epic sci-fi art style, 4K.",
+        ]
+
+        urls = []
+        for i in range(count):
+            prompt = prompts[i] if i < len(prompts) else prompts[0]
+            try:
+                url = await self.generate_image(
+                    prompt=prompt,
+                    filename_prefix=f"{filename_prefix}_{game_id}_{i+1}",
+                    width=width,
+                    height=height,
+                    max_retries=2,
+                )
+                if url:
+                    urls.append(url)
+                    logger.info(f"[IMAGE] Splash image {i+1}/{count} generated: {url[:60]}...")
+                else:
+                    logger.warning(f"[IMAGE] Splash image {i+1}/{count} failed")
+            except Exception as e:
+                logger.error(f"[IMAGE] Splash image {i+1}/{count} error: {e}")
+
+        logger.info(f"[IMAGE] Generated {len(urls)}/{count} splash images")
+        return urls
 
 
 # ============== Factory Function ==============
 
 
-def create_comic_generator() -> ImageGenerator:
+def create_image_generator() -> ImageGenerator:
     """Create and configure ImageGenerator instance"""
     return ImageGenerator()

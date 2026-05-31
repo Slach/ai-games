@@ -160,9 +160,269 @@ MIGRATIONS = [
     ALTER TABLE games ADD COLUMN started_at TEXT DEFAULT NULL
     """,
     ),
+    (
+        12,
+        """
+    ALTER TABLE player_profiles ADD COLUMN species TEXT DEFAULT NULL
+    """,
+    ),
+    (
+        13,
+        """
+    ALTER TABLE player_profiles ADD COLUMN gender TEXT DEFAULT NULL
+    """,
+    ),
+    (
+        14,
+        """
+    ALTER TABLE player_profiles ADD COLUMN species_description TEXT DEFAULT NULL
+    """,
+    ),
+    (
+        15,
+        """
+    CREATE TABLE IF NOT EXISTS game_images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        game_id TEXT DEFAULT 'default_game',
+        day INTEGER,
+        image_url TEXT NOT NULL,
+        prompt TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """,
+    ),
+    (
+        16,
+        """
+    CREATE TABLE IF NOT EXISTS npc_profiles (
+        npc_key TEXT PRIMARY KEY,
+        role_key TEXT NOT NULL,
+        npc_name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        role_description TEXT DEFAULT '',
+        personality_traits TEXT DEFAULT '[]',
+        species TEXT DEFAULT 'Human',
+        gender TEXT DEFAULT 'Male',
+        avatar_description TEXT DEFAULT '',
+        game_id TEXT DEFAULT 'default_game',
+        is_active INTEGER DEFAULT 1,
+        replaces_player_id INTEGER DEFAULT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    ),
+    (
+        17,
+        """
+    CREATE TABLE IF NOT EXISTS player_kicks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kicked_player_id INTEGER NOT NULL,
+        replaced_by_npc_key TEXT,
+        reason TEXT DEFAULT '',
+        kicked_at TEXT NOT NULL
+    )
+    """,
+    ),
+    (
+        18,
+        """
+    CREATE TABLE IF NOT EXISTS player_briefings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day INTEGER NOT NULL,
+        player_id INTEGER,
+        npc_key TEXT,
+        is_npc INTEGER DEFAULT 0,
+        briefing TEXT NOT NULL,
+        choices TEXT DEFAULT '[]',
+        selected_action_id TEXT DEFAULT NULL,
+        choice_rationale TEXT DEFAULT '',
+        consequence_result TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL
+    )
+    """,
+    ),
+    (
+        19,
+        """
+    ALTER TABLE game_days ADD COLUMN global_circumstances TEXT DEFAULT ''
+    """,
+    ),
+    (
+        20,
+        """
+    ALTER TABLE game_days ADD COLUMN combined_outcome TEXT DEFAULT ''
+    """,
+    ),
+    (
+        21,
+        """
+    CREATE TABLE game_state_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        day INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'active',
+        ship_alive INTEGER DEFAULT 1,
+        crew_health INTEGER DEFAULT 100,
+        last_updated TEXT NOT NULL
+    );
+
+    INSERT INTO game_state_v2 (game_id, day, status, ship_alive, crew_health, last_updated)
+    SELECT 'default_game', day, status, ship_alive, crew_health, last_updated
+    FROM game_state;
+
+    DROP TABLE IF EXISTS game_state;
+    ALTER TABLE game_state_v2 RENAME TO game_state;
+    """,
+    ),
+    (
+        22,
+        """
+    ALTER TABLE game_days ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game'
+    """,
+    ),
+    (
+        23,
+        """
+    ALTER TABLE player_briefings ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game'
+    """,
+    ),
+    (
+        24,
+        """
+    CREATE TABLE IF NOT EXISTS game_days_v2 (
+        day INTEGER NOT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        story TEXT NOT NULL,
+        npc_dialogues TEXT DEFAULT '[]',
+        player_actions TEXT DEFAULT '[]',
+        generated_content TEXT DEFAULT '{}',
+        teaser TEXT,
+        ship_alive INTEGER DEFAULT 1,
+        crew_status TEXT DEFAULT '{}',
+        previous_day_summary TEXT,
+        global_circumstances TEXT DEFAULT '',
+        combined_outcome TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (day, game_id)
+    );
+
+    INSERT INTO game_days_v2 (day, game_id, story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at)
+    SELECT day, COALESCE(game_id, 'default_game'), story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at FROM game_days;
+
+    DROP TABLE IF EXISTS game_days;
+    ALTER TABLE game_days_v2 RENAME TO game_days;
+    """,
+    ),
+    (
+        25,
+        """
+    CREATE TABLE IF NOT EXISTS ship_roles_v2 (
+        role_key TEXT NOT NULL,
+        taken_by INTEGER DEFAULT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        PRIMARY KEY (role_key, game_id)
+    );
+
+    INSERT INTO ship_roles_v2 (role_key, taken_by, game_id)
+    SELECT role_key, taken_by, COALESCE(game_id, 'default_game') FROM ship_roles;
+
+    DROP TABLE IF EXISTS ship_roles;
+    ALTER TABLE ship_roles_v2 RENAME TO ship_roles;
+    """,
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
+
+# Recovery SQL for critical tables (final schema with all columns from CREATE + ALTER).
+# Used when migrations table says version >= N but the actual table is missing
+# (e.g., 0-byte db file through Docker bind mount).
+_CRITICAL_TABLE_RECOVERY: Dict[str, str] = {
+    "games": """CREATE TABLE IF NOT EXISTS games (
+        game_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        setting TEXT DEFAULT 'starship',
+        status TEXT DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        max_players INTEGER DEFAULT 10,
+        started INTEGER DEFAULT 0,
+        started_at TEXT DEFAULT NULL
+    )""",
+    "ship_roles": """CREATE TABLE IF NOT EXISTS ship_roles (
+        role_key TEXT NOT NULL,
+        taken_by INTEGER DEFAULT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        PRIMARY KEY (role_key, game_id)
+    )""",
+    "game_state": """CREATE TABLE IF NOT EXISTS game_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        day INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'active',
+        ship_alive INTEGER DEFAULT 1,
+        crew_health INTEGER DEFAULT 100,
+        last_updated TEXT NOT NULL
+    )""",
+    "onboarding_sessions": """CREATE TABLE IF NOT EXISTS onboarding_sessions (
+        session_id TEXT PRIMARY KEY,
+        player_id INTEGER NOT NULL,
+        current_question INTEGER DEFAULT 0,
+        answers TEXT DEFAULT '{}',
+        completed INTEGER DEFAULT 0,
+        language TEXT DEFAULT 'en',
+        questions TEXT DEFAULT '[]',
+        created_at TEXT NOT NULL
+    )""",
+    "player_profiles": """CREATE TABLE IF NOT EXISTS player_profiles (
+        player_id INTEGER PRIMARY KEY,
+        avatar_url TEXT,
+        avatar_description TEXT,
+        role TEXT NOT NULL,
+        role_description TEXT,
+        personality_traits TEXT DEFAULT '[]',
+        game_id TEXT,
+        last_poll TEXT,
+        created_at TEXT NOT NULL,
+        species TEXT DEFAULT NULL,
+        gender TEXT DEFAULT NULL,
+        species_description TEXT DEFAULT NULL
+    )""",
+    "game_days": """CREATE TABLE IF NOT EXISTS game_days (
+        day INTEGER NOT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        story TEXT NOT NULL,
+        npc_dialogues TEXT DEFAULT '[]',
+        player_actions TEXT DEFAULT '[]',
+        generated_content TEXT DEFAULT '{}',
+        teaser TEXT,
+        ship_alive INTEGER DEFAULT 1,
+        crew_status TEXT DEFAULT '{}',
+        previous_day_summary TEXT,
+        global_circumstances TEXT DEFAULT '',
+        combined_outcome TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (day, game_id)
+    )""",
+    "player_actions": """CREATE TABLE IF NOT EXISTS player_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL,
+        day INTEGER NOT NULL,
+        action_id TEXT NOT NULL,
+        choice TEXT NOT NULL,
+        consequence_result TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (player_id) REFERENCES player_profiles(player_id)
+    )""",
+    "game_messages": """CREATE TABLE IF NOT EXISTS game_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        message_type TEXT DEFAULT 'text',
+        timestamp TEXT NOT NULL
+    )""",
+}
 
 
 def get_current_schema_version(conn: sqlite3.Connection) -> int:
@@ -191,15 +451,21 @@ def run_migrations():
             )
             conn.commit()
     
-    # Ensure critical tables exist regardless of migration tracking
+    # Verify ALL critical tables exist after migrations.
     # This handles cases where the database file persisted but tables were lost
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='onboarding_sessions'"
-    )
-    if cursor.fetchone() is None:
-        logger.warning("onboarding_sessions table missing, recreating...")
-        cursor.executescript(MIGRATIONS[1][1])  # Migration 2 creates onboarding_sessions
-        conn.commit()
+    # (e.g. 0-byte game_master.db from Docker bind mount, or partial corruption).
+    for table_name, create_sql in _CRITICAL_TABLE_RECOVERY.items():
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        )
+        if cursor.fetchone() is None:
+            logger.warning(
+                "Critical table '%s' missing after migrations, re-creating...",
+                table_name,
+            )
+            cursor.executescript(create_sql)
+            conn.commit()
     
     conn.close()
 
@@ -210,7 +476,18 @@ def init_db():
     cursor = conn.cursor()
 
     # Initialize default game if not exists
-    cursor.execute("SELECT COUNT(*) FROM games")
+    # Belt-and-suspenders: if games table is somehow still missing after
+    # run_migrations() recovery (e.g. partial write), rebuild and retry.
+    try:
+        cursor.execute("SELECT COUNT(*) FROM games")
+    except sqlite3.OperationalError:
+        logger.warning("games table missing in init_db, re-running migrations...")
+        conn.close()
+        run_migrations()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM games")
+
     if cursor.fetchone()[0] == 0:
         cursor.execute(
             """INSERT INTO games (game_id, name, description, setting, status, created_at, max_players)
@@ -226,32 +503,41 @@ def init_db():
             ),
         )
 
-    # Initialize game state if not exists
-    cursor.execute("SELECT COUNT(*) FROM game_state")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute(
-            "INSERT INTO game_state (id, day, status, ship_alive, crew_health, last_updated) VALUES (1, 1, 'active', 1, 100, ?)",
-            (datetime.now().isoformat(),),
-        )
-
     conn.commit()
     conn.close()
-    _init_ship_roles()
+    _ensure_game_state("default_game")
+    _init_ship_roles("default_game")
     logger.info("Database initialized successfully")
 
 
-def _init_ship_roles():
+def _init_ship_roles(game_id: str = "default_game"):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM ship_roles")
+    cursor.execute("SELECT COUNT(*) FROM ship_roles WHERE game_id = ?", (game_id,))
     if cursor.fetchone()[0] == 0:
         for role_key in SHIP_ROLE_KEYS:
             cursor.execute(
-                "INSERT INTO ship_roles (role_key, taken_by, game_id) VALUES (?, NULL, 'default_game')",
-                (role_key,),
+                "INSERT OR IGNORE INTO ship_roles (role_key, taken_by, game_id) VALUES (?, NULL, ?)",
+                (role_key, game_id),
             )
         conn.commit()
-        logger.info(f"Initialized {len(SHIP_ROLE_KEYS)} ship roles")
+        logger.info(f"Initialized {len(SHIP_ROLE_KEYS)} ship roles for game {game_id}")
+    conn.close()
+
+
+def _ensure_game_state(game_id: str):
+    """Ensure a game_state row exists for the provided game_id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM game_state WHERE game_id = ? LIMIT 1", (game_id,))
+    row = cursor.fetchone()
+    if row is None:
+        cursor.execute(
+            """INSERT INTO game_state (game_id, day, status, ship_alive, crew_health, last_updated)
+               VALUES (?, 1, 'active', 1, 100, ?)""",
+            (game_id, datetime.now().isoformat()),
+        )
+        conn.commit()
     conn.close()
 
 
@@ -323,12 +609,15 @@ def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> b
 
 
 def get_role_by_key(
-    role_key: str, language: str = LANGUAGE_RU
+    role_key: str,
+    language: str = LANGUAGE_RU,
+    game_id: str = "default_game",
 ) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT role_key, taken_by FROM ship_roles WHERE role_key = ?", (role_key,)
+        "SELECT role_key, taken_by FROM ship_roles WHERE role_key = ? AND game_id = ?",
+        (role_key, game_id),
     )
     row = cursor.fetchone()
     conn.close()
@@ -492,8 +781,9 @@ def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any
 
     cursor.execute(
         """INSERT OR REPLACE INTO player_profiles
-           (player_id, avatar_url, avatar_description, role, role_description, personality_traits, game_id, last_poll, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (player_id, avatar_url, avatar_description, role, role_description, personality_traits,
+            game_id, last_poll, created_at, species, gender, species_description)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             player_data["player_id"],
             player_data.get("avatar_url"),
@@ -504,6 +794,9 @@ def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any
             player_data.get("game_id"),
             None,  # last_poll initialized to None
             datetime.now().isoformat(),
+            player_data.get("species"),
+            player_data.get("gender"),
+            player_data.get("species_description"),
         ),
     )
 
@@ -535,21 +828,26 @@ def get_player_profile(player_id: int) -> Optional[Dict[str, Any]]:
         "game_id": row["game_id"],
         "last_poll": row["last_poll"],
         "created_at": row["created_at"],
+        "species": row["species"],
+        "gender": row["gender"],
+        "species_description": row["species_description"],
     }
 
 
 # ============== Game Days ==============
 
 
-def create_game_day(day_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def create_game_day(
+    day_data: Dict[str, Any], game_id: str = "default_game"
+) -> Optional[Dict[str, Any]]:
     """Create a new game day"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """INSERT OR REPLACE INTO game_days
-           (day, story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (day, story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at, game_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             day_data["day"],
             day_data["story"],
@@ -560,22 +858,25 @@ def create_game_day(day_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             day_data.get("ship_alive", 1),
             json.dumps(day_data.get("crew_status", {})),
             day_data.get("previous_day_summary"),
+            day_data.get("global_circumstances", ""),
+            day_data.get("combined_outcome", ""),
             datetime.now().isoformat(),
+            game_id,
         ),
     )
 
     conn.commit()
     conn.close()
 
-    return get_game_day(day_data["day"])
+    return get_game_day(day_data["day"], game_id)
 
 
-def get_game_day(day: int) -> Optional[Dict[str, Any]]:
+def get_game_day(day: int, game_id: str = "default_game") -> Optional[Dict[str, Any]]:
     """Get a game day by number"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM game_days WHERE day = ?", (day,))
+    cursor.execute("SELECT * FROM game_days WHERE day = ? AND game_id = ?", (day, game_id))
     row = cursor.fetchone()
     conn.close()
 
@@ -593,6 +894,9 @@ def get_game_day(day: int) -> Optional[Dict[str, Any]]:
         "crew_status": json.loads(row["crew_status"] or "{}"),
         "previous_day_summary": row["previous_day_summary"],
         "created_at": row["created_at"],
+        "global_circumstances": row["global_circumstances"] or "",
+        "combined_outcome": row["combined_outcome"] or "",
+        "game_id": row["game_id"],
     }
 
 
@@ -604,7 +908,7 @@ def save_player_action(
     day: int,
     action_id: str,
     choice: str,
-    consequence_result: Dict[str, Any] = None,
+    consequence_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Save a player action"""
     conn = get_db_connection()
@@ -720,12 +1024,13 @@ def get_game_messages(player_id: int, limit: int = 10) -> List[Dict[str, Any]]:
 # ============== Game State ==============
 
 
-def get_game_state() -> Dict[str, Any]:
+def get_game_state(game_id: str = "default_game") -> Dict[str, Any]:
     """Get current game state"""
+    _ensure_game_state(game_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM game_state WHERE id = 1")
+    cursor.execute("SELECT * FROM game_state WHERE game_id = ?", (game_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -739,49 +1044,62 @@ def get_game_state() -> Dict[str, Any]:
 
 
 def update_game_state(
-    day: int, status: str = "active", ship_alive: bool = True, crew_health: int = 100
+    day: int,
+    status: str = "active",
+    ship_alive: bool = True,
+    crew_health: int = 100,
+    game_id: str = "default_game",
 ) -> Dict[str, Any]:
     """Update game state"""
+    _ensure_game_state(game_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """UPDATE game_state
            SET day = ?, status = ?, ship_alive = ?, crew_health = ?, last_updated = ?
-           WHERE id = 1""",
-        (day, status, 1 if ship_alive else 0, crew_health, datetime.now().isoformat()),
+           WHERE game_id = ?""",
+        (
+            day,
+            status,
+            1 if ship_alive else 0,
+            crew_health,
+            datetime.now().isoformat(),
+            game_id,
+        ),
     )
 
     conn.commit()
     conn.close()
 
-    return get_game_state()
+    return get_game_state(game_id)
 
 
-def is_game_active() -> bool:
+def is_game_active(game_id: str = "default_game") -> bool:
     """Check if game is still active (ship and crew alive)"""
-    state = get_game_state()
+    state = get_game_state(game_id)
     return (
         state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
     )
 
 
-def end_game(reason: str = "game_over") -> Dict[str, Any]:
+def end_game(reason: str = "game_over", game_id: str = "default_game") -> Dict[str, Any]:
     """End the game by setting ship destroyed and crew health to 0"""
+    _ensure_game_state(game_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """UPDATE game_state
            SET status = ?, ship_alive = 0, crew_health = 0, last_updated = ?
-           WHERE id = 1""",
-        (reason, datetime.now().isoformat()),
+           WHERE game_id = ?""",
+        (reason, datetime.now().isoformat(), game_id),
     )
 
     conn.commit()
     conn.close()
 
-    return get_game_state()
+    return get_game_state(game_id)
 
 
 # ============== Games ==============
@@ -808,6 +1126,9 @@ def create_game(game_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     conn.commit()
     conn.close()
+
+    _ensure_game_state(game_data["game_id"])
+    _init_ship_roles(game_data["game_id"])
 
     return get_game(game_data["game_id"])
 
@@ -988,3 +1309,439 @@ def get_player_count_in_game(game_id: str = "default_game") -> int:
     row = cursor.fetchone()
     conn.close()
     return row["cnt"] if row else 0
+
+
+# ============== Game Images (loading / splash) ==============
+
+
+def save_game_image(
+    type: str,
+    image_url: str,
+    game_id: str = "default_game",
+    day: Optional[int] = None,
+    prompt: str = "",
+) -> Optional[int]:
+    """Save a game image URL (loading or splash) to the database.
+    
+    Args:
+        type: 'splash' or 'loading'
+        image_url: ComfyUI URL for the image
+        game_id: Game identifier
+        day: Game day (None for loading or splash images)
+        prompt: Generation prompt used
+    
+    Returns:
+        The ID of the inserted row, or None on failure.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO game_images (type, game_id, day, image_url, prompt, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (type, game_id, day, image_url, prompt, datetime.now().isoformat()),
+        )
+        row_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        logger.info(f"[IMAGE] Saved {type} image #{row_id}: {image_url[:60]}...")
+        return row_id
+    except Exception as e:
+        logger.error(f"[IMAGE] Failed to save {type} image: {e}")
+        return None
+
+
+def get_random_game_image(
+    type: str,
+    game_id: str = "default_game",
+    day: Optional[int] = None,
+) -> Optional[str]:
+    """Get a random game image URL by type.
+    
+    Args:
+        type: 'splash' or 'loading'
+        game_id: Game identifier
+        day: Game day filter (only for 'splash' type)
+    
+    Returns:
+        Random image URL, or None if none exist.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if day is not None:
+            cursor.execute(
+                """SELECT image_url FROM game_images
+                   WHERE type = ? AND game_id = ? AND day = ?
+                   ORDER BY RANDOM() LIMIT 1""",
+                (type, game_id, day),
+            )
+        else:
+            cursor.execute(
+                """SELECT image_url FROM game_images
+                   WHERE type = ? AND game_id = ?
+                   ORDER BY RANDOM() LIMIT 1""",
+                (type, game_id),
+            )
+        row = cursor.fetchone()
+        conn.close()
+        return row["image_url"] if row else None
+    except Exception as e:
+        logger.error(f"[IMAGE] Failed to get random {type} image: {e}")
+        return None
+
+
+def get_game_image_count(
+    type: str,
+    game_id: str = "default_game",
+    day: Optional[int] = None,
+) -> int:
+    """Count images of a given type."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if day is not None:
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM game_images WHERE type = ? AND game_id = ? AND day = ?",
+                (type, game_id, day),
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM game_images WHERE type = ? AND game_id = ?",
+                (type, game_id),
+            )
+        row = cursor.fetchone()
+        conn.close()
+        return row["cnt"] if row else 0
+    except Exception as e:
+        logger.error(f"[IMAGE] Failed to count {type} images: {e}")
+        return 0
+
+
+# ============== NPC Profiles ==============
+
+
+def create_npc_profile(npc_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Create a persistent NPC profile."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT OR REPLACE INTO npc_profiles
+           (npc_key, role_key, npc_name, role, role_description, personality_traits,
+            species, gender, avatar_description, game_id, is_active, replaces_player_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            npc_data["npc_key"],
+            npc_data.get("role_key", ""),
+            npc_data["npc_name"],
+            npc_data["role"],
+            npc_data.get("role_description", ""),
+            json.dumps(npc_data.get("personality_traits", [])),
+            npc_data.get("species", "Human"),
+            npc_data.get("gender", "Male"),
+            npc_data.get("avatar_description", ""),
+            npc_data.get("game_id", "default_game"),
+            1 if npc_data.get("is_active", True) else 0,
+            npc_data.get("replaces_player_id"),
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_npc_profile(npc_data["npc_key"])
+
+
+def get_npc_profile(npc_key: str) -> Optional[Dict[str, Any]]:
+    """Get an NPC profile by key."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM npc_profiles WHERE npc_key = ?", (npc_key,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "npc_key": row["npc_key"],
+        "role_key": row["role_key"],
+        "npc_name": row["npc_name"],
+        "role": row["role"],
+        "role_description": row["role_description"],
+        "personality_traits": json.loads(row["personality_traits"] or "[]"),
+        "species": row["species"],
+        "gender": row["gender"],
+        "avatar_description": row["avatar_description"],
+        "game_id": row["game_id"],
+        "is_active": bool(row["is_active"]),
+        "replaces_player_id": row["replaces_player_id"],
+        "created_at": row["created_at"],
+    }
+
+
+def get_all_active_npcs(game_id: str = "default_game") -> List[Dict[str, Any]]:
+    """Get all active NPCs in a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM npc_profiles WHERE game_id = ? AND is_active = 1 ORDER BY created_at",
+        (game_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_npc_by_role(role_key: str, game_id: str = "default_game") -> Optional[Dict[str, Any]]:
+    """Find an active NPC by role key."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM npc_profiles WHERE role_key = ? AND game_id = ? AND is_active = 1 LIMIT 1",
+        (role_key, game_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return dict(row)
+
+
+def deactivate_npc(npc_key: str) -> bool:
+    """Deactivate an NPC profile."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE npc_profiles SET is_active = 0 WHERE npc_key = ?",
+        (npc_key,),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+# ============== Player Kicks ==============
+
+
+def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "") -> Dict[str, Any]:
+    """Record a player kick."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO player_kicks (kicked_player_id, replaced_by_npc_key, reason, kicked_at)
+           VALUES (?, ?, ?, ?)""",
+        (kicked_player_id, replaced_by_npc_key, reason, datetime.now().isoformat()),
+    )
+    kick_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return {
+        "id": kick_id,
+        "kicked_player_id": kicked_player_id,
+        "replaced_by_npc_key": replaced_by_npc_key,
+        "reason": reason,
+    }
+
+
+def get_kicked_players() -> List[Dict[str, Any]]:
+    """Get all kicked players."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM player_kicks ORDER BY kicked_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def is_player_kicked(player_id: int) -> bool:
+    """Check if a player has been kicked."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) as cnt FROM player_kicks WHERE kicked_player_id = ?",
+        (player_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row["cnt"] > 0 if row else False
+
+
+# ============== Player Briefings (per-player game day content) ==============
+
+
+def save_player_briefing(
+    briefing_data: Dict[str, Any], game_id: str = "default_game"
+) -> Optional[Dict[str, Any]]:
+    """Save a per-player daily briefing with choices and consequences."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO player_briefings
+           (day, player_id, npc_key, is_npc, briefing, choices,
+            selected_action_id, choice_rationale, consequence_result, created_at, game_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            briefing_data["day"],
+            briefing_data.get("player_id"),
+            briefing_data.get("npc_key"),
+            1 if briefing_data.get("is_npc", False) else 0,
+            briefing_data["briefing"],
+            json.dumps(briefing_data.get("choices", [])),
+            briefing_data.get("selected_action_id"),
+            briefing_data.get("choice_rationale", ""),
+            json.dumps(briefing_data.get("consequence_result", {})),
+            datetime.now().isoformat(),
+            game_id,
+        ),
+    )
+    briefing_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    briefing_data["id"] = briefing_id
+    briefing_data["game_id"] = game_id
+    return briefing_data
+
+
+def get_player_briefing(
+    day: int, player_id: int, game_id: str = "default_game"
+) -> Optional[Dict[str, Any]]:
+    """Get a player's briefing for a specific day."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM player_briefings WHERE day = ? AND player_id = ? AND game_id = ? AND is_npc = 0",
+        (day, player_id, game_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "day": row["day"],
+        "player_id": row["player_id"],
+        "npc_key": row["npc_key"],
+        "is_npc": bool(row["is_npc"]),
+        "briefing": row["briefing"],
+        "choices": json.loads(row["choices"] or "[]"),
+        "selected_action_id": row["selected_action_id"],
+        "choice_rationale": row["choice_rationale"],
+        "consequence_result": json.loads(row["consequence_result"] or "{}"),
+        "created_at": row["created_at"],
+        "game_id": row["game_id"],
+    }
+
+
+def get_all_briefings_for_day(
+    day: int, game_id: str = "default_game"
+) -> List[Dict[str, Any]]:
+    """Get all briefings (player + NPC) for a specific day."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM player_briefings WHERE day = ? AND game_id = ? ORDER BY is_npc, created_at",
+        (day, game_id),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        result.append({
+            "id": row["id"],
+            "day": row["day"],
+            "player_id": row["player_id"],
+            "npc_key": row["npc_key"],
+            "is_npc": bool(row["is_npc"]),
+            "briefing": row["briefing"],
+            "choices": json.loads(row["choices"] or "[]"),
+            "selected_action_id": row["selected_action_id"],
+            "choice_rationale": row["choice_rationale"],
+            "consequence_result": json.loads(row["consequence_result"] or "{}"),
+            "created_at": row["created_at"],
+            "game_id": row["game_id"],
+        })
+    return result
+
+
+def update_briefing_choice(
+    briefing_id: int,
+    selected_action_id: str,
+    choice_rationale: str = "",
+    consequence_result: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Update a briefing with the player/NPC's choice."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE player_briefings
+           SET selected_action_id = ?, choice_rationale = ?, consequence_result = ?
+           WHERE id = ?""",
+        (
+            selected_action_id,
+            choice_rationale,
+            json.dumps(consequence_result or {}),
+            briefing_id,
+        ),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def get_players_who_need_to_choose(
+    day: int, game_id: str = "default_game"
+) -> List[Dict[str, Any]]:
+    """Get real players who haven't made their choice for the day yet."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT * FROM player_briefings
+           WHERE day = ? AND game_id = ? AND is_npc = 0 AND selected_action_id IS NULL
+           ORDER BY created_at""",
+        (day, game_id),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        result.append({
+            "id": row["id"],
+            "day": row["day"],
+            "player_id": row["player_id"],
+            "briefing": row["briefing"],
+            "choices": json.loads(row["choices"] or "[]"),
+            "game_id": row["game_id"],
+        })
+    return result
+
+
+def update_game_day_outcome(
+    day: int, combined_outcome: str, game_id: str = "default_game"
+) -> bool:
+    """Update the combined outcome for a game day after all choices are analyzed."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE game_days SET combined_outcome = ? WHERE day = ? AND game_id = ?",
+        (combined_outcome, day, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def update_game_day_global_circumstances(
+    day: int, circumstances: str, game_id: str = "default_game"
+) -> bool:
+    """Update global circumstances for a game day."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE game_days SET global_circumstances = ? WHERE day = ? AND game_id = ?",
+        (circumstances, day, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated

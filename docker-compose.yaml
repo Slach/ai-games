@@ -60,7 +60,10 @@ services:
       - LLM_URL=${LLM_URL:-http://llama.cpp:8090/v1}
       - LLM_API_KEY=${LLM_API_KEY:-placeholder-key-for-llama-cpp}
       - LLM_MODEL=${LLM_MODEL:-unsloth/Qwen3.5-27B}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-32768}
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
+      - ONBOARDING_QUESTIONS_COUNT=${ONBOARDING_QUESTIONS_COUNT:-5}
+      - ONBOARDING_OPTIONS_COUNT=${ONBOARDING_OPTIONS_COUNT:-5}
     depends_on:
       comfyui:
         condition: service_healthy
@@ -84,6 +87,7 @@ services:
       context: telegram-bot/
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_BOT_GAME_MASTER_ID=${TELEGRAM_BOT_GAME_MASTER_ID:-}
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
       - AI_FSM_DB=/app/bot_storage.db
       - TELEGRAM_SOCKS_PROXY=${TELEGRAM_SOCKS_PROXY:-}
@@ -113,6 +117,7 @@ services:
       - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
       - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
       - GAME_LANGUAGE=${GAME_LANGUAGE:-ru}
+      - GAME_ID=${GAME_ID:-default_game}
     networks:
       - spark-network
     restart: unless-stopped

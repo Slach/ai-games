@@ -3,15 +3,224 @@ LLM prompt constants for Game Master API
 All prompt strings organized by language (ru/en)
 """
 
-from language import LANGUAGE_RU, LANGUAGE_EN
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel
+
+from language import LANGUAGE_RU, LANGUAGE_EN, get_species_questions_data, get_gender_questions_data
+
+
+class OnboardingQuestion(BaseModel):
+    """A single onboarding question"""
+
+    id: int
+    text: str
+    options: List[Dict[str, Any]]
+    image_url: Optional[str] = None
+
+
+def build_species_gender_questions(language: str = LANGUAGE_RU) -> list:
+    """Build static species and gender questions with tags from language data."""
+    questions = []
+    next_id = 1
+    species_data = get_species_questions_data(language)
+    for i, q_data in enumerate(species_data, start=next_id):
+        options = []
+        for opt in q_data["options"]:
+            option = {
+                "value": opt["value"],
+                "label": opt["label"],
+                "role_scores": {},
+                "species_tags": opt.get("species_tags", []),
+            }
+            options.append(option)
+        questions.append(
+            OnboardingQuestion(id=i, text=q_data["text"], options=options)
+        )
+    next_id = len(questions) + 1
+    gender_data = get_gender_questions_data(language)
+    for i, q_data in enumerate(gender_data, start=next_id):
+        options = []
+        for opt in q_data["options"]:
+            option = {
+                "value": opt["value"],
+                "label": opt["label"],
+                "role_scores": {},
+                "gender_tags": opt.get("gender_tags", []),
+            }
+            options.append(option)
+        questions.append(
+            OnboardingQuestion(id=i, text=q_data["text"], options=options)
+        )
+    return questions
+
+
+# Static onboarding questions (fallback when LLM generation fails)
+STATIC_ONBOARDING_QUESTIONS = [
+    OnboardingQuestion(
+        id=1,
+        text="Корабль обнаружил неизвестный сигнал. Ваши действия?",
+        options=[
+            {
+                "value": "repair_systems",
+                "label": "Проверить все системы корабля и подготовить оборудование к возможным перегрузкам",
+                "role_scores": {"chief_engineer": 3, "tactical_officer": 1, "quartermaster": 1, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "analyze_signal",
+                "label": "Начать детальный анализ сигнала и собрать данные о его происхождении",
+                "role_scores": {"science_officer": 3, "xenobiologist": 2, "communications_officer": 1, "chief_engineer": 0, "tactical_officer": 0, "quartermaster": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "pilot": 0},
+            },
+            {
+                "value": "hail_signal",
+                "label": "Немедленно установить контакт и начать переговоры с источником сигнала",
+                "role_scores": {"communications_officer": 3, "xenobiologist": 1, "security_chief": 0, "chief_engineer": 0, "science_officer": 0, "tactical_officer": 0, "quartermaster": 0, "navigator": 0, "medical_officer": 0, "pilot": 0},
+            },
+            {
+                "value": "secure_perimeter",
+                "label": "Активировать боевой режим, поднять щиты и подготовить оружие к бою",
+                "role_scores": {"security_chief": 3, "tactical_officer": 3, "navigator": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "quartermaster": 0, "medical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "emergency_medical",
+                "label": "Подготовить медицинский отсек к приёму пострадавших и проверить запасы медикаментов",
+                "role_scores": {"medical_officer": 3, "quartermaster": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+        ],
+    ),
+    OnboardingQuestion(
+        id=2,
+        text="Во время высадки на планету вы оказались в зоне обвала. Что вы сделаете?",
+        options=[
+            {
+                "value": "fly_out",
+                "label": "Запрыгнуть в шаттл и совершить рискованный манёвр чтобы вырваться из зоны обвала",
+                "role_scores": {"pilot": 3, "navigator": 2, "tactical_officer": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+            },
+            {
+                "value": "build_shelter",
+                "label": "Использовать обломки пород чтобы построить временное укрытие и усилить конструкцию",
+                "role_scores": {"chief_engineer": 3, "quartermaster": 2, "security_chief": 1, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "triage_injured",
+                "label": "Немедленно оказать первую помощь раненым и распределить ресурсы для выживания",
+                "role_scores": {"medical_officer": 3, "quartermaster": 2, "communications_officer": 1, "chief_engineer": 0, "science_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "study_cave",
+                "label": "Исследовать пещеру — возможно обвал открыл проход к неизвестным пещерным формациям",
+                "role_scores": {"xenobiologist": 3, "science_officer": 2, "navigator": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+            },
+            {
+                "value": "coordinate_rescue",
+                "label": "Связаться с кораблём и координировать спасательную операцию с других членов экипажа",
+                "role_scores": {"communications_officer": 3, "security_chief": 2, "tactical_officer": 1, "chief_engineer": 0, "science_officer": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0},
+            },
+        ],
+    ),
+    OnboardingQuestion(
+        id=3,
+        text="На борту вспыхнул конфликт между двумя членами экипажа. Как вы поступите?",
+        options=[
+            {
+                "value": "negotiate",
+                "label": "Поговорить с обоими, выслушать каждую сторону и найти компромисс",
+                "role_scores": {"communications_officer": 3, "medical_officer": 1, "xenobiologist": 1, "chief_engineer": 0, "science_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+            },
+            {
+                "value": "data_driven",
+                "label": "Собрать все данные о ситуации и предложить решение на основе анализа фактов",
+                "role_scores": {"science_officer": 3, "quartermaster": 1, "chief_engineer": 1, "communications_officer": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "enforce_order",
+                "label": "Немедленно разнять конфликтующих и установить порядок силой если необходимо",
+                "role_scores": {"security_chief": 3, "tactical_officer": 2, "pilot": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+            },
+            {
+                "value": "check_resources",
+                "label": "Проверить не вызван ли конфликт дефицитом ресурсов и перераспределить запасы",
+                "role_scores": {"quartermaster": 3, "chief_engineer": 1, "medical_officer": 1, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "diagnose_cause",
+                "label": "Проверить нет ли медицинской или психологической причины — возможно кто-то болен",
+                "role_scores": {"medical_officer": 3, "xenobiologist": 1, "science_officer": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+            },
+        ],
+    ),
+    OnboardingQuestion(
+        id=4,
+        text="Вы обнаружили инопланетный артефакт неизвестного происхождения. Ваши действия?",
+        options=[
+            {
+                "value": "dissect_device",
+                "label": "Аккуратно разобрать артефакт чтобы понять его внутреннее устройство",
+                "role_scores": {"chief_engineer": 3, "science_officer": 2, "xenobiologist": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+            },
+            {
+                "value": "contain_sample",
+                "label": "Поместить артефакт в карантинную камеру и изучить его биологические свойства",
+                "role_scores": {"xenobiologist": 3, "medical_officer": 2, "science_officer": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+            },
+            {
+                "value": "secure_artifact",
+                "label": "Оцепить зону и обеспечить безопасность при работе с неизвестным объектом",
+                "role_scores": {"security_chief": 3, "tactical_officer": 2, "quartermaster": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "signal_analysis",
+                "label": "Попытаться расшифровать сигналы артефакта и установить коммуникацию",
+                "role_scores": {"communications_officer": 3, "navigator": 1, "science_officer": 1, "chief_engineer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "plot_course",
+                "label": "Вычислить координаты происхождения артефакта и проложить курс к его источнику",
+                "role_scores": {"navigator": 3, "pilot": 2, "science_officer": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+            },
+        ],
+    ),
+    OnboardingQuestion(
+        id=5,
+        text="Корабль получил серьёзные повреждения в бою. Что вы сделаете в первую очередь?",
+        options=[
+            {
+                "value": "emergency_repair",
+                "label": "Возглавить ремонтную команду и лично чинить критические системы",
+                "role_scores": {"chief_engineer": 3, "quartermaster": 1, "security_chief": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "tactical_retreat",
+                "label": "Рассчитать манёвр уклонения и увести корабль из зоны обстрела",
+                "role_scores": {"pilot": 3, "navigator": 2, "tactical_officer": 2, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+            },
+            {
+                "value": "return_fire",
+                "label": "Сосредоточить огонь на слабом месте противника и подавить его орудия",
+                "role_scores": {"tactical_officer": 3, "security_chief": 2, "pilot": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+            },
+            {
+                "value": "treat_wounded",
+                "label": "Организовать сортировку раненых и начать массовую медицинскую помощь",
+                "role_scores": {"medical_officer": 3, "communications_officer": 1, "quartermaster": 1, "chief_engineer": 0, "science_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+            },
+            {
+                "value": "call_backup",
+                "label": "Отправить экстренный сигнал координатам и запросить подкрепление",
+                "role_scores": {"communications_officer": 3, "navigator": 1, "science_officer": 1, "chief_engineer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0},
+            },
+        ],
+    ),
+] + build_species_gender_questions(LANGUAGE_RU)
+
 
 # LLM prompts for dynamic content generation (legacy format — used by main.py)
 LLM_PROMPTS = {
     LANGUAGE_RU: {
         "onboarding_questions": """
-Сгенерируй 2-3 вопроса для онбординга в игре про космические исследования.
-Вопросы должны быть о "что бы ты сделал в этой ситуации" или "А или Б выбор".
-Вопросы помогают определить роль игрока и черты его личности.
+Сгенерируй вопросы для онбординга в игре про космические исследования.
+Вопросы должны быть конкретные сценарии с вариантами действий.
+Каждый вариант содержит role_scores — очки для ролей.
 
 Верни ТОЛЬКО валидный JSON без каких-либо дополнительных текстов, markdown кода или комментариев.
 Структура:
@@ -20,13 +229,20 @@ LLM_PROMPTS = {
         "id": 1,
         "text": "текст вопроса",
         "options": [
-            {{"value": "значение_варианта_1", "label": "Отображаемый текст варианта 1"}},
-            {{"value": "значение_варианта_2", "label": "Отображаемый текст варианта 2"}}
+            {{
+                "value": "значение_варианта",
+                "label": "Полное описание действия",
+                "role_scores": {{
+                    "chief_engineer": 0, "science_officer": 0, "communications_officer": 0,
+                    "security_chief": 0, "navigator": 0, "medical_officer": 0,
+                    "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0
+                }}
+            }}
         ]
     }}
 ]
 
-Важно: НЕ используй markdown блоки (```json), НЕ добавляй никаких пояснений. ТОЛЬКО чистый JSON.
+Важно: НЕ используй markdown блоки, НЕ добавляй пояснений. ТОЛЬКО чистый JSON.
 """,
         "avatar_prompt": """
 Ты генерируешь промпт для AI генерации изображения персонажа.
@@ -36,9 +252,17 @@ LLM_PROMPTS = {
 Черты характера: {traits}
 Описание аватара: {avatar_description}
 
+ВАЖНО: Описание аватара — это ОКОНЧАТЕЛЬНЫЙ источник внешности персонажа.
+Определи вид персонажа по описанию и подбери соответствующее описание внешности:
+- Человек / Гуманоид → лицо, волосы, униформа, портрет верхней части тела
+- Негуманоид → реальная альен-анатомия (щупальца, панцирь, экзоскелет), БЕЗ человеческих черт, полный рост
+- Энергетическая форма → свечение, плазма, частоты, нет твёрдого тела, полный рост
+- Кибернетическая форма → механическое тело, схемы, металл, синтетика, полный рост
+- Симбиотическая форма → составное тело из нескольких организмов, полный рост
+
 Промпт должен содержать:
-- Внешность персонажа (лицо, волосы, глаза)
-- Одежду (космическая униформа, детали)
+- Внешность персонажа строго по описанию (человеческая ИЛИ нечеловеческая анатомия)
+- Одежду / оболочку / естественное покрытие (униформа, панцирь, свечение, кристаллы)
 - Окружение (мостик корабля, лаборатория, и т.д.)
 - Освещение и стиль (кинематографичное, детализированное)
 - Качество (4K, high quality, detailed)
@@ -63,9 +287,9 @@ LLM_PROMPTS = {
     },
     LANGUAGE_EN: {
         "onboarding_questions": """
-Generate 2-3 onboarding questions for a space exploration game.
-Questions should be about "what would you do in this situation" or "A or B preference".
-Questions help determine player role and personality traits.
+Generate onboarding questions for a space exploration game.
+Questions should be specific scenarios with action choices.
+Each option contains role_scores — points for roles reflecting how characteristic the action is.
 
 Return ONLY valid JSON without any additional text, markdown code blocks, or comments.
 Structure:
@@ -74,13 +298,20 @@ Structure:
         "id": 1,
         "text": "question text",
         "options": [
-            {{"value": "option_value_1", "label": "Option 1 display text"}},
-            {{"value": "option_value_2", "label": "Option 2 display text"}}
+            {{
+                "value": "option_value",
+                "label": "Full action description",
+                "role_scores": {{
+                    "chief_engineer": 0, "science_officer": 0, "communications_officer": 0,
+                    "security_chief": 0, "navigator": 0, "medical_officer": 0,
+                    "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0
+                }}
+            }}
         ]
     }}
 ]
 
-Important: DO NOT use markdown code blocks (```json), DO NOT add any explanations. ONLY pure JSON.
+Important: DO NOT use markdown code blocks, DO NOT add any explanations. ONLY pure JSON.
 """,
         "avatar_prompt": """
 Generate an image generation prompt for a sci-fi character portrait.
@@ -90,9 +321,17 @@ Role: {role}
 Personality traits: {traits}
 Avatar description: {avatar_description}
 
+IMPORTANT: The avatar description is the DEFINITIVE source for the character's appearance.
+Determine the species type from the description and adapt the visual focus accordingly:
+- Human / Humanoid → face, hair, uniform, portrait upper body
+- Non-Humanoid → actual alien anatomy (tentacles, carapace, exoskeleton), NO human features, full body
+- Energy Being → glow, plasma, frequencies, no solid body, full body
+- Cybernetic → mechanical body, circuits, metal, synthetic, full body
+- Symbiotic → composite body of multiple organisms, full body
+
 The prompt must include:
-- Character appearance (face, hair, eyes)
-- Clothing (space uniform, details)
+- Character appearance exactly as described (human OR non-human anatomy)
+- Clothing / shell / natural covering (uniform, carapace, glow, crystals)
 - Environment (ship bridge, laboratory, etc.)
 - Lighting and style (cinematic, detailed)
 - Quality (4K, high quality, detailed)
@@ -141,25 +380,19 @@ PROMPTS = {
         "onboarding_questions": {
             "system": "Ты — дизайнер игр. Генерируешь вопросы для онбординга в космической игре.",
             "user": (
-                "Сгенерируй 5 вопросов для онбординга в игре про космический экипаж звездного корабля. "
-                "Каждый вопрос — это конкретная ситуация на корабле или во время миссии с выбором из 2-3 вариантов ДЕЙСТВИЙ. "
-                "ВАЖНО: Каждый вариант ответа должен описывать КОНКРЕТНОЕ ДЕЙСТВИЕ, которое игрок совершает в этой ситуации. "
-                "ПРИМЕР правильных вариантов: 'Бежать в машинное отделение и попытаться починить варп-двигатель', "
-                "'Активировать аварийные щиты и вызвать подкрепление'. "
-                "НЕПРАВИЛЬНО: 'Инженер — технический специалист', 'Учёный – смелый, ищущий прорыв'. "
-                "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
-                "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
-                "исследование неизвестного, принятие решений в кризисе. "
+                "Сгенерируй вопросы для онбординга в игре про космический экипаж звездного корабля. "
+                "Каждый вопрос — это конкретная ситуация на корабле или во время миссии с вариантами ДЕЙСТВИЙ. "
+                "Каждый вариант содержит role_scores — очки для ролей. "
+                "Каждому варианту назначь 1-3 роли с очками 1-3, остальные 0. "
+                "Варианты в одном вопросе должны давать очки РАЗНЫМ ролям. "
                 "Все тексты на русском языке."
             ),
         },
         "role_assignment": {
-            "system": "Ты — аналитик персонала космического корабля. По ответам игрока определяешь подходящую роль в экипаже.",
+            "system": "Роль определяется по сумме очков из ответов на вопросы. Анализ LLM не требуется.",
             "user": (
-                "Ответы игрока на вопросы онбординга:\n{answers_text}\n\n"
-                "Доступные роли:\n{roles_text}\n\n"
-                "Выбери ОДНУ роль из списка доступных, которая лучше всего подходит игроку "
-                "на основе его выбранных действий. Отвечай только ключ роли (role_key)."
+                "Ответы игрока уже содержат role_scores. "
+                "Роль выбирается детерминированно по максимальной сумме очков."
             ),
         },
         "game_title": {
@@ -207,25 +440,19 @@ PROMPTS = {
         "onboarding_questions": {
             "system": "You are a game designer. Generate onboarding questions for a space exploration game.",
             "user": (
-                "Generate 5 onboarding questions for a starship crew game. "
-                "Each question is a specific situation aboard a ship or during a mission with 2-3 ACTION choices. "
-                "CRITICAL: Each option must describe a SPECIFIC ACTION the player would take in this situation. "
-                "CORRECT example: 'Run to engineering and try to repair the warp drive', "
-                "'Activate emergency shields and call for backup'. "
-                "INCORRECT: 'Engineer - technical specialist', 'Scientist - bold, seeking breakthrough'. "
-                "NEVER include role names or personality types in options — only actions. "
-                "Questions should cover: reaction to danger, working with technology, crew interaction, "
-                "exploring the unknown, crisis decision-making. "
+                "Generate onboarding questions for a starship crew game. "
+                "Each question is a specific situation aboard a ship or during a mission with ACTION choices. "
+                "Each option contains role_scores — points for roles. "
+                "For each option, assign 1-3 roles with points 1-3, rest 0. "
+                "Options within a question should give points to DIFFERENT roles. "
                 "All text in English."
             ),
         },
         "role_assignment": {
-            "system": "You are a starship personnel analyst. You assign the best crew role based on a player's onboarding answers.",
+            "system": "Role is determined by sum of points from question answers. LLM analysis not required.",
             "user": (
-                "Player's onboarding answers:\n{answers_text}\n\n"
-                "Available roles:\n{roles_text}\n\n"
-                "Pick exactly ONE role from the available list that best matches the player "
-                "based on their chosen actions. Return only the role_key."
+                "Player answers already contain role_scores. "
+                "Role is selected deterministically by highest point sum."
             ),
         },
         "game_title": {

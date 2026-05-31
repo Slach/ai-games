@@ -30,6 +30,7 @@ GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-master-api:8
 GAME_SCHEDULE_TIME = os.getenv("GAME_SCHEDULE_TIME", "08:00")  # 24h format
 GAME_LANGUAGE = os.getenv("GAME_LANGUAGE", "en")  # "en" or "ru"
 AUTO_ACTION_TIMEOUT_HOURS = int(os.getenv("AUTO_ACTION_TIMEOUT_HOURS", "24"))  # Hours before auto-selection
+GAME_ID = os.getenv("GAME_ID", "default_game")
 
 
 class GameMasterScheduler:
@@ -40,6 +41,7 @@ class GameMasterScheduler:
     def __init__(self):
         self.api_url = GAME_MASTER_API_URL
         self.language = GAME_LANGUAGE
+        self.game_id = GAME_ID
         self.last_generation = None
         self.team_assembly_start = None  # Track when first crew member joined
 
@@ -47,7 +49,10 @@ class GameMasterScheduler:
         """Check current game state and verify ship/crew are alive"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.api_url}/game/state") as resp:
+                async with session.get(
+                    f"{self.api_url}/game/state",
+                    params={"game_id": self.game_id}
+                ) as resp:
                     if resp.status != 200:
                         raise Exception(f"API error: {resp.status}")
                     return await resp.json()
@@ -77,7 +82,7 @@ class GameMasterScheduler:
             logger.error(f"Failed to check game started status: {e}")
             return False
 
-    async def get_previous_day_actions(self, day: int) -> List[Dict[str, Any]]:
+    async def get_previous_day_actions(self, day: int, game_id: str = "default_game") -> List[Dict[str, Any]]:
         """Get all player actions from previous day with consequences"""
         try:
             async with aiohttp.ClientSession() as session:
@@ -92,7 +97,10 @@ class GameMasterScheduler:
                     return []
                 
                 # Fetch previous day data from API
-                async with session.get(f"{self.api_url}/game/day/{prev_day}") as resp:
+                async with session.get(
+                    f"{self.api_url}/game/day/{prev_day}",
+                    params={"game_id": game_id}
+                ) as resp:
                     if resp.status != 200:
                         logger.warning(f"Could not fetch previous day {prev_day}")
                         return []
@@ -144,11 +152,14 @@ class GameMasterScheduler:
                 logger.info(f"Generating personalized comic for player {player_id}")
                 
                 async with aiohttp.ClientSession() as session:
-                    url = f"{self.api_url}/admin/generate-comic/{player_id}"
+                    params: Dict[str, Any] = {"game_id": game_id}
                     if day_num:
-                        url += f"?day={day_num}"
-                    
-                    async with session.post(url) as resp:
+                        params["day"] = day_num
+
+                    async with session.post(
+                        f"{self.api_url}/admin/generate-comic/{player_id}",
+                        params=params
+                    ) as resp:
                         if resp.status == 200:
                             result = await resp.json()
                             comics_generated.append({
@@ -233,7 +244,7 @@ class GameMasterScheduler:
         """Check for players who haven't selected actions within timeout and auto-select for them"""
         try:
             # Get all players in game
-            player_ids = await self.get_players_in_game()
+            player_ids = await self.get_players_in_game(self.game_id)
             
             if not player_ids:
                 logger.info("No players found in game")
@@ -285,7 +296,7 @@ class GameMasterScheduler:
         logger.info(f"Language: {self.language}")
 
         # Step 0: Check if game has started (>= 3 players)
-        game_started = await self.is_game_started()
+        game_started = await self.is_game_started(self.game_id)
         if not game_started:
             logger.info("Game not started yet - waiting for more players (need at least 3)")
             return {"status": "game_not_started", "message": "Game has not started yet, waiting for more players"}
@@ -303,7 +314,7 @@ class GameMasterScheduler:
         logger.info(f"Generating Day {current_day}")
         
         # Step 3: Get previous day actions for story consistency
-        previous_actions = await self.get_previous_day_actions(current_day - 1)
+        previous_actions = await self.get_previous_day_actions(current_day - 1, self.game_id)
         previous_summary = ""
         if previous_actions:
             consequences = [a.get("consequence_result", {}) for a in previous_actions]
@@ -311,7 +322,7 @@ class GameMasterScheduler:
             logger.info(f"Incorporating {len(previous_actions)} previous actions into story")
 
         # Step 4: Check team assembly status
-        team_status = await self.get_team_assembly_status()
+        team_status = await self.get_team_assembly_status(self.game_id)
         if not team_status.get("team_assembled"):
             bot_npcs = team_status.get("bot_npcs_needed", [])
             logger.info(f"Team not fully assembled, adding {len(bot_npcs)} NPC bots")
@@ -320,6 +331,7 @@ class GameMasterScheduler:
         try:
             async with aiohttp.ClientSession() as session:
                 payload = {
+                    "game_id": self.game_id,
                     "language": self.language,
                     "previous_actions": previous_actions,
                     "previous_summary": previous_summary,
@@ -338,7 +350,7 @@ class GameMasterScheduler:
                     # Step 6: Generate personalized comics for all players
                     if result.get("day"):
                         logger.info("Generating personalized comics for all players")
-                        comics = await self.generate_personalized_comics(result)
+                        comics = await self.generate_personalized_comics(result, self.game_id)
                         result["comics_generated"] = comics
                     
                     # Step 7: Check and auto-select actions for inactive players
@@ -359,7 +371,7 @@ class GameMasterScheduler:
         """Generate personalized comics for all players in the game"""
         try:
             # Get all players in current game
-            players = await self.get_players_in_game()
+            players = await self.get_players_in_game(self.game_id)
             
             if not players:
                 logger.info("No players found in game")
@@ -383,11 +395,14 @@ class GameMasterScheduler:
 
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{self.api_url}/admin/generate-comic/{player_id}"
+                params: Dict[str, Any] = {"game_id": self.game_id}
                 if day:
-                    url += f"?day={day}"
+                    params["day"] = day
 
-                async with session.post(url) as resp:
+                async with session.post(
+                    f"{self.api_url}/admin/generate-comic/{player_id}",
+                    params=params
+                ) as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
                         logger.error(f"API error: {resp.status} - {error_text}")
@@ -408,7 +423,7 @@ class GameMasterScheduler:
             current_day = state.get("day", 1)
             
             # Get all players in game
-            players = await self.get_players_in_game()
+            players = await self.get_players_in_game(self.game_id)
             
             pending = []
             for player_id in players:
@@ -508,42 +523,16 @@ class GameMasterScheduler:
         """Get current game state from API"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.api_url}/game/state") as resp:
+                async with session.get(
+                    f"{self.api_url}/game/state",
+                    params={"game_id": self.game_id}
+                ) as resp:
                     if resp.status != 200:
                         raise Exception(f"API error: {resp.status}")
                     return await resp.json()
         except Exception as e:
             logger.error(f"Failed to get game state: {e}")
             raise
-
-    async def run_scheduled_loop(self):
-        """Run the daily generation on a schedule with full game loop"""
-        logger.info(f"Starting scheduled loop. Daily generation at {GAME_SCHEDULE_TIME}")
-
-        while True:
-            try:
-                # Calculate time until next run
-                next_run = self.get_next_run_time()
-                wait_seconds = (next_run - datetime.now()).total_seconds()
-
-                logger.info(f"Next generation scheduled for {next_run.isoformat()} (in {wait_seconds/3600:.1f} hours)")
-
-                # Wait until next run time
-                await asyncio.sleep(wait_seconds)
-
-                # Generate daily episode with full game loop validation
-                result = await self.generate_daily_episode()
-                
-                if result.get("status") == "game_ended":
-                    logger.info("Game has ended, stopping scheduled generation")
-                    break
-                
-                logger.info(f"Generation completed: Day {result.get('day')}")
-
-            except Exception as e:
-                logger.error(f"Error in scheduled loop: {e}")
-                # Wait 1 hour before retrying on error
-                await asyncio.sleep(3600)
 
     def get_next_run_time(self) -> datetime:
         """Calculate next run time based on schedule"""
