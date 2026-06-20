@@ -12,6 +12,8 @@ comfyui/web_custom_versions/
 .qwen/
 .opencode/
 .omc/
+.sisyphus/
+.pi-lens/
 __pycache__/
 *.db
 *.pyc
