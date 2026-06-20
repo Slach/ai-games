@@ -2,7 +2,7 @@
 
 ## Base URL
 ```
-http://game-master-api:8000
+http://game-server-api:8000
 ```
 
 ## Endpoints

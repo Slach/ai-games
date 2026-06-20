@@ -8,12 +8,17 @@ Compatible with llama.cpp / vLLM / any OpenAI-compatible endpoint.
 import os
 import logging
 import json
-import uuid
 import re
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, cast
 
 from openai import OpenAI
+from openai.types.chat import (
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
+)
+from openai.types.shared_params.response_format_json_schema import (
+    ResponseFormatJSONSchema,
+)
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -358,7 +363,11 @@ SPECIES_GENDER_DESC_SCHEMA = {
                     "description": "A combined 2-3 sentence narrative blending species and gender into one cohesive character concept",
                 },
             },
-            "required": ["species_description", "gender_description", "combined_description"],
+            "required": [
+                "species_description",
+                "gender_description",
+                "combined_description",
+            ],
             "additionalProperties": False,
         },
     },
@@ -508,7 +517,12 @@ COMBINED_OUTCOME_SCHEMA = {
                     "description": "A teaser or hook for the next day's story",
                 },
             },
-            "required": ["outcome_narrative", "ship_status_change", "crew_morale_change", "next_day_hook"],
+            "required": [
+                "outcome_narrative",
+                "ship_status_change",
+                "crew_morale_change",
+                "next_day_hook",
+            ],
             "additionalProperties": False,
         },
     },
@@ -588,10 +602,28 @@ class GameMasterAgent:
         """
         if max_tokens is None:
             max_tokens = self.llm_max_tokens
-        messages = [
+        messages: list[
+            ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam
+        ] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+        # Log full LLM request
+        logger.info("=== LLM REQUEST (structured) ===")
+        logger.info(f"Model: {self.llm_model}")
+        logger.info(f"Temperature: {temperature}")
+        logger.info(f"Max tokens: {max_tokens}")
+        logger.info(
+            f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}"
+        )
+        logger.info("--- SYSTEM PROMPT ---")
+        for line in system_prompt.split("\n"):
+            logger.info(line)
+        logger.info("--- USER PROMPT ---")
+        for line in user_prompt.split("\n"):
+            logger.info(line)
+        logger.info("=== END LLM REQUEST ===")
 
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
         response = None
@@ -602,11 +634,24 @@ class GameMasterAgent:
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format=response_schema,
+                response_format=cast(ResponseFormatJSONSchema, response_schema),
                 extra_body=extra_body,
             )
             content = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
+
+            # Log full LLM response
+            logger.info("=== LLM RESPONSE (structured) ===")
+            logger.info(f"Finish reason: {finish_reason}")
+            if response.usage:
+                logger.info(
+                    f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}"
+                )
+            logger.info("--- RESPONSE CONTENT ---")
+            for line in (content or "").split("\n"):
+                logger.info(line)
+            logger.info("=== END LLM RESPONSE ===")
+
             if content is None:
                 raise ValueError(
                     f"LLM returned content=None. Finish reason: {finish_reason}. "
@@ -636,6 +681,14 @@ class GameMasterAgent:
                 "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no code blocks, no explanation. "
                 "Pure JSON only."
             )
+
+            # Log fallback request (with json instruction appended)
+            logger.info("=== LLM REQUEST (fallback text) ===")
+            logger.info("--- USER PROMPT (with JSON instruction) ---")
+            for line in (user_prompt + json_instruction).split("\n"):
+                logger.info(line)
+            logger.info("=== END LLM REQUEST (fallback) ===")
+
             messages[1]["content"] = user_prompt + json_instruction
 
             response = self.client.chat.completions.create(
@@ -647,6 +700,15 @@ class GameMasterAgent:
             )
             content = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
+
+            # Log full fallback response
+            logger.info("=== LLM RESPONSE (fallback text) ===")
+            logger.info(f"Finish reason: {finish_reason}")
+            logger.info("--- RESPONSE CONTENT ---")
+            for line in (content or "").split("\n"):
+                logger.info(line)
+            logger.info("=== END LLM RESPONSE (fallback) ===")
+
             if content is None or content.strip() == "":
                 raise ValueError(
                     f"LLM returned empty content on fallback call. "
@@ -675,10 +737,25 @@ class GameMasterAgent:
         max_tokens: int = 2048,
     ) -> str:
         """Call LLM and return raw text response (for free-form text)."""
-        messages = [
+        messages: list[
+            ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam
+        ] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+        # Log full LLM request
+        logger.info("=== LLM REQUEST (text) ===")
+        logger.info(f"Model: {self.llm_model}")
+        logger.info(f"Temperature: {temperature}")
+        logger.info(f"Max tokens: {max_tokens}")
+        logger.info("--- SYSTEM PROMPT ---")
+        for line in system_prompt.split("\n"):
+            logger.info(line)
+        logger.info("--- USER PROMPT ---")
+        for line in user_prompt.split("\n"):
+            logger.info(line)
+        logger.info("=== END LLM REQUEST ===")
 
         response = self.client.chat.completions.create(
             model=self.llm_model,
@@ -687,7 +764,23 @@ class GameMasterAgent:
             max_tokens=max_tokens,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
-        return response.choices[0].message.content.strip()
+
+        content = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason
+
+        # Log full LLM response
+        logger.info("=== LLM RESPONSE (text) ===")
+        logger.info(f"Finish reason: {finish_reason}")
+        if response.usage:
+            logger.info(
+                f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}"
+            )
+        logger.info("--- RESPONSE CONTENT ---")
+        for line in content.split("\n"):
+            logger.info(line)
+        logger.info("=== END LLM RESPONSE ===")
+
+        return content.strip()
 
     @staticmethod
     def _strip_json_block(text: str) -> str:
@@ -777,7 +870,7 @@ class GameMasterAgent:
         )
 
         questions = result.get("questions", [])
-        
+
         # Validate and fix duplicate options within each question
         for q in questions:
             options = q.get("options", [])
@@ -790,18 +883,22 @@ class GameMasterAgent:
                     continue
                 # Skip overly short labels (single letters, "A", "B", etc.)
                 if len(label.strip()) < 5:
-                    logger.warning(f"Skipping short option label: '{label}' in question: {q.get('text', '')[:50]}")
+                    logger.warning(
+                        f"Skipping short option label: '{label}' in question: {q.get('text', '')[:50]}"
+                    )
                     continue
                 seen_labels.add(label)
                 unique_options.append(opt)
 
             # If we filtered out too many, keep original options
             if len(unique_options) < 2 and len(options) >= 2:
-                logger.warning(f"Question had invalid options, using original: {q.get('text', '')[:50]}")
+                logger.warning(
+                    f"Question had invalid options, using original: {q.get('text', '')[:50]}"
+                )
                 unique_options = options
 
             q["options"] = unique_options
-        
+
         for i, q in enumerate(questions, start=1):
             q["id"] = i
 
@@ -846,16 +943,25 @@ class GameMasterAgent:
 
             for question_id, selected_label in answers.items():
                 # Answers dict keys are strings after json.loads from DB (SQLite JSON stores all keys as strings)
-                qid = int(question_id) if not isinstance(question_id, int) else question_id
+                qid = (
+                    int(question_id)
+                    if not isinstance(question_id, int)
+                    else question_id
+                )
                 q_data = question_map.get(qid)
                 if not q_data:
-                    logger.warning(f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data")
+                    logger.warning(
+                        f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data"
+                    )
                     continue
 
                 # Find the selected option by matching label
                 selected_option = None
                 for opt in q_data.get("options", []):
-                    if opt.get("label") == selected_label or opt.get("value") == selected_label:
+                    if (
+                        opt.get("label") == selected_label
+                        or opt.get("value") == selected_label
+                    ):
                         selected_option = opt
                         break
 
@@ -875,14 +981,18 @@ class GameMasterAgent:
         available_keys = {r["role_key"] for r in available_roles}
         scored_available = [
             (key, role_points.get(key, 0))
-            for key in sorted(role_points.keys(), key=lambda k: role_points[k], reverse=True)
+            for key in sorted(
+                role_points.keys(), key=lambda k: role_points[k], reverse=True
+            )
             if key in available_keys
         ]
 
         if not scored_available:
             # Fallback: pick first available
             best_key = available_roles[0]["role_key"]
-            logger.warning(f"[ROLE] No scored roles available, falling back to {best_key}")
+            logger.warning(
+                f"[ROLE] No scored roles available, falling back to {best_key}"
+            )
         else:
             best_key, best_score = scored_available[0]
 
@@ -890,9 +1000,7 @@ class GameMasterAgent:
         top_roles = sorted(role_points.items(), key=lambda x: x[1], reverse=True)[:5]
         reasoning = "Points: " + ", ".join(f"{k}={v}" for k, v in top_roles)
 
-        logger.info(
-            f"[ROLE] Point-based assignment: role_key={best_key}, {reasoning}"
-        )
+        logger.info(f"[ROLE] Point-based assignment: role_key={best_key}, {reasoning}")
 
         return {"role_key": best_key, "reasoning": reasoning}
 
@@ -1141,31 +1249,88 @@ class GameMasterAgent:
 
         # Species type keywords ordered by specificity (more specific first)
         categories = [
-            ("energy", [
-                "energy being", "энергетическая", "energy being", "plasma",
-                "energy field", "gaseous", "frequency", "resonance", "light being",
-                "energy pattern", "field of energy", "electromagnetic",
-            ]),
-            ("cybernetic", [
-                "cybernetic", "кибернетическая", "robotic", "mechanical",
-                "synthetic", "machine", "android", "construct", "digital",
-                "cyborg", "prosthetic", "circuit", "processor",
-            ]),
-            ("symbiotic", [
-                "symbiotic", "симбиотическая", "symbiont", "composite",
-                "multiple beings", "host", "union", "collective",
-                "союз существ", "коллектив", "симбионт",
-            ]),
-            ("non_humanoid", [
-                "non_humanoid", "негуманоид", "tentacle", "carapace",
-                "exoskeleton", "crystalline", "no face", "no head",
-                "slime", "amorphous", "щупальца", "панцирь",
-                "экзоскелет", "кристаллический", "бесформенный",
-                "without face", "without head", "no humanoid form",
-            ]),
-            ("humanoid", [
-                "humanoid", "гуманоид", "humanoid with",
-            ]),
+            (
+                "energy",
+                [
+                    "energy being",
+                    "энергетическая",
+                    "energy being",
+                    "plasma",
+                    "energy field",
+                    "gaseous",
+                    "frequency",
+                    "resonance",
+                    "light being",
+                    "energy pattern",
+                    "field of energy",
+                    "electromagnetic",
+                ],
+            ),
+            (
+                "cybernetic",
+                [
+                    "cybernetic",
+                    "кибернетическая",
+                    "robotic",
+                    "mechanical",
+                    "synthetic",
+                    "machine",
+                    "android",
+                    "construct",
+                    "digital",
+                    "cyborg",
+                    "prosthetic",
+                    "circuit",
+                    "processor",
+                ],
+            ),
+            (
+                "symbiotic",
+                [
+                    "symbiotic",
+                    "симбиотическая",
+                    "symbiont",
+                    "composite",
+                    "multiple beings",
+                    "host",
+                    "union",
+                    "collective",
+                    "союз существ",
+                    "коллектив",
+                    "симбионт",
+                ],
+            ),
+            (
+                "non_humanoid",
+                [
+                    "non_humanoid",
+                    "негуманоид",
+                    "tentacle",
+                    "carapace",
+                    "exoskeleton",
+                    "crystalline",
+                    "no face",
+                    "no head",
+                    "slime",
+                    "amorphous",
+                    "щупальца",
+                    "панцирь",
+                    "экзоскелет",
+                    "кристаллический",
+                    "бесформенный",
+                    "without face",
+                    "without head",
+                    "no humanoid form",
+                ],
+            ),
+            (
+                "humanoid",
+                [
+                    "humanoid",
+                    "гуманоид",
+                    "humanoid with",
+                ],
+            ),
         ]
 
         for category, keywords in categories:
@@ -1185,39 +1350,39 @@ class GameMasterAgent:
             "humanoid": {
                 "intro": "humanoid alien character avatar",
                 "appearance": "- Character appearance: humanoid anatomy with subtle alien features "
-                              "(unusual skin/hair/eye color, distinct ears/ridges, etc.)",
+                "(unusual skin/hair/eye color, distinct ears/ridges, etc.)",
                 "framing": "- Portrait style, upper body",
             },
             "non_humanoid": {
                 "intro": "non-humanoid alien character",
                 "appearance": "- The character's ACTUAL physical form from the description — "
-                              "alien anatomy (tentacles, carapace, exoskeleton, multiple limbs, etc.)\n"
-                              "- Do NOT add human features (face, hair, eyes) unless explicitly described",
+                "alien anatomy (tentacles, carapace, exoskeleton, multiple limbs, etc.)\n"
+                "- Do NOT add human features (face, hair, eyes) unless explicitly described",
                 "framing": "- Full body or 3/4 view showing the alien physiology",
             },
             "energy": {
                 "intro": "energy being character",
                 "appearance": "- The character's form as a being of energy, plasma, or light — "
-                              "no solid physical body\n"
-                              "- Describe the visual signature: glow, frequency patterns, luminosity, \
+                "no solid physical body\n"
+                "- Describe the visual signature: glow, frequency patterns, luminosity, \
 spatial presence\n"
-                              "- Do NOT add human features or solid anatomy unless explicitly described",
+                "- Do NOT add human features or solid anatomy unless explicitly described",
                 "framing": "- Full body showing the energy form in its environment",
             },
             "cybernetic": {
                 "intro": "cybernetic / synthetic character",
                 "appearance": "- The character's mechanical/cybernetic body — "
-                              "metal, circuits, synthetic components, digital displays\n"
-                              "- If part-organic, highlight the blend of biological and mechanical\n"
-                              "- Describe the technological aesthetic of their form",
+                "metal, circuits, synthetic components, digital displays\n"
+                "- If part-organic, highlight the blend of biological and mechanical\n"
+                "- Describe the technological aesthetic of their form",
                 "framing": "- Full body or 3/4 view showing the mechanical/cybernetic anatomy",
             },
             "symbiotic": {
                 "intro": "symbiotic / composite character",
                 "appearance": "- The character as a composite of multiple organisms or entities — "
-                              "describe how the different parts coexist in one form\n"
-                              "- Highlight the hybrid nature: textures, connections, shared biology\n"
-                              "- Do NOT default to a single humanoid body unless described that way",
+                "describe how the different parts coexist in one form\n"
+                "- Highlight the hybrid nature: textures, connections, shared biology\n"
+                "- Do NOT default to a single humanoid body unless described that way",
                 "framing": "- Full body view showing the composite/symbiotic nature",
             },
         }
@@ -1239,7 +1404,7 @@ spatial presence\n"
             "CRITICAL RULE: The character description below is the DEFINITIVE source for the "
             "character's appearance. If it describes an alien, non-humanoid, energy, cybernetic, "
             "or symbiotic being — describe their ACTUAL form, NOT human anatomy.\n"
-            "Never default to \"face, hair, eyes, upper body\" for non-human characters."
+            'Never default to "face, hair, eyes, upper body" for non-human characters.'
         )
 
         user = (
@@ -1265,22 +1430,22 @@ spatial presence\n"
         )
 
         avatar_prompt = parsed.get("avatar_prompt", "")
-        logger.info(f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt[:100]}...")
+        logger.info(
+            f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt[:100]}..."
+        )
         return avatar_prompt
 
     # ============== Species and Gender ==============
 
     @staticmethod
-    def calculate_species_from_answers(
+    def _count_tags_from_answers(
         answers: Dict[int, str],
+        tag_key: str,
         questions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Calculate species type by counting species_tags across answers.
-
-        Returns dict with primary species, secondary (for tie/hybrid), and hybrid flag.
-        """
+    ) -> Dict[str, int]:
+        """Count occurrences of a given tag type across all answered questions."""
         if not questions:
-            return {"primary": "", "secondary": "", "hybrid": False}
+            return {}
 
         question_map = {q.get("id"): q for q in questions}
         tag_counts: Dict[str, int] = {}
@@ -1292,15 +1457,32 @@ spatial presence\n"
                 continue
             selected_option = None
             for opt in q_data.get("options", []):
-                if opt.get("value") == selected_value or opt.get("label") == selected_value:
+                if (
+                    opt.get("value") == selected_value
+                    or opt.get("label") == selected_value
+                ):
                     selected_option = opt
                     break
             if not selected_option:
                 continue
-            tags = selected_option.get("species_tags", [])
+            tags = selected_option.get(tag_key, [])
             for tag in tags:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
+        return tag_counts
+
+    @staticmethod
+    def calculate_species_from_answers(
+        answers: Dict[int, str],
+        questions: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Calculate species type by counting species_tags across answers.
+
+        Returns dict with primary species, secondary (for tie/hybrid), and hybrid flag.
+        """
+        tag_counts = GameMasterAgent._count_tags_from_answers(
+            answers, "species_tags", questions
+        )
         if not tag_counts:
             return {"primary": "", "secondary": "", "hybrid": False}
 
@@ -1321,28 +1503,9 @@ spatial presence\n"
         questions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Calculate gender type by counting gender_tags across answers."""
-        if not questions:
-            return {"primary": "", "secondary": "", "hybrid": False}
-
-        question_map = {q.get("id"): q for q in questions}
-        tag_counts: Dict[str, int] = {}
-
-        for question_id, selected_value in answers.items():
-            qid = int(question_id) if not isinstance(question_id, int) else question_id
-            q_data = question_map.get(qid)
-            if not q_data:
-                continue
-            selected_option = None
-            for opt in q_data.get("options", []):
-                if opt.get("value") == selected_value or opt.get("label") == selected_value:
-                    selected_option = opt
-                    break
-            if not selected_option:
-                continue
-            tags = selected_option.get("gender_tags", [])
-            for tag in tags:
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
+        tag_counts = GameMasterAgent._count_tags_from_answers(
+            answers, "gender_tags", questions
+        )
         if not tag_counts:
             return {"primary": "", "secondary": "", "hybrid": False}
 
@@ -1418,7 +1581,9 @@ spatial presence\n"
             return combined
         except Exception as e:
             logger.warning(f"[SPECIES] LLM description failed, using fallback: {e}")
-            return self._fallback_species_gender_description(species_display, gender_display, hybrid, secondary, role)
+            return self._fallback_species_gender_description(
+                species_display, gender_display, hybrid, secondary, role
+            )
 
     def _fallback_species_gender_description(
         self,
@@ -1436,9 +1601,14 @@ spatial presence\n"
                 "non_humanoid": "Твоя форма далека от человеческой — панцирь, щупальца или иная необычная биология.",
                 "energy": "Ты — энергетическая форма жизни. Твоё сознание существует как устойчивый резонансный узор.",
                 "cybernetic": "Ты — кибернетическая форма жизни. Части тебя можно чинить, улучшать и переносить.",
-                "symbiotic": "Ты — симбиотическая форма жизни. Твоё \"я\" рождается в союзе нескольких существ.",
+                "symbiotic": 'Ты — симбиотическая форма жизни. Твоё "я" рождается в союзе нескольких существ.',
             }
-            if hybrid and secondary and species_type in species_map and secondary in species_map:
+            if (
+                hybrid
+                and secondary
+                and species_type in species_map
+                and secondary in species_map
+            ):
                 base = f"{species_map.get(species_type, species_type)} В тебе также есть черты: {species_map.get(secondary, secondary).lower()}"
             else:
                 base = species_map.get(species_type, f"Твой вид — {species_type}.")
@@ -1451,9 +1621,14 @@ spatial presence\n"
                 "non_humanoid": "Your form is far from human — a carapace, tentacles, or other unusual biology.",
                 "energy": "You are an energy being. Your consciousness exists as a stable resonance pattern.",
                 "cybernetic": "You are a cybernetic life form. Parts of you can be repaired, upgraded, and transferred.",
-                "symbiotic": "You are a symbiotic life form. Your \"self\" is born from the union of several beings.",
+                "symbiotic": 'You are a symbiotic life form. Your "self" is born from the union of several beings.',
             }
-            if hybrid and secondary and species_type in species_map and secondary in species_map:
+            if (
+                hybrid
+                and secondary
+                and species_type in species_map
+                and secondary in species_map
+            ):
                 base = f"{species_map.get(species_type, species_type)} You also bear traits of: {species_map.get(secondary, secondary)}."
             else:
                 base = species_map.get(species_type, f"Your species is {species_type}.")
@@ -1470,7 +1645,9 @@ spatial presence\n"
         The NPC only sees the action text IDs and descriptions — no consequences.
         This ensures NPC decisions are role-played in-character.
         """
-        logger.info(f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')}")
+        logger.info(
+            f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')}"
+        )
 
         npc_name = npc_profile.get("npc_name", "Unknown")
         npc_role = npc_profile.get("role", "Crew Member")
@@ -1479,10 +1656,12 @@ spatial presence\n"
         # Strip consequences from choices before passing to NPC
         clean_choices = []
         for c in choices:
-            clean_choices.append({
-                "id": c.get("id", ""),
-                "text": c.get("text", ""),
-            })
+            clean_choices.append(
+                {
+                    "id": c.get("id", ""),
+                    "text": c.get("text", ""),
+                }
+            )
 
         # Build the choice text for the NPC
         choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
@@ -1550,7 +1729,7 @@ spatial presence\n"
         self,
         day: int,
         previous_summary: str = "",
-        player_profiles: List[Dict[str, Any]] = None,
+        player_profiles: list[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         """Generate the shared global circumstances for a game day.
 
@@ -1609,7 +1788,9 @@ spatial presence\n"
                 response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
                 max_tokens=4096,
             )
-            logger.info(f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))[:60]}...'")
+            logger.info(
+                f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))[:60]}...'"
+            )
             return parsed
         except Exception as e:
             logger.error(f"[DAY] Global circumstances generation failed: {e}")
@@ -1632,7 +1813,9 @@ spatial presence\n"
         - A personal briefing (their unique perspective on the situation)
         - 3-4 choices with visible descriptions and hidden consequences
         """
-        player_id = player_profile.get("player_id") or player_profile.get("npc_key", "?")
+        player_id = player_profile.get("player_id") or player_profile.get(
+            "npc_key", "?"
+        )
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
         logger.info(f"[DAY] Generating briefing for {player_id} ({player_role})")
@@ -1704,9 +1887,21 @@ spatial presence\n"
             return {
                 "briefing": f"As {player_role}, you assess the situation calmly.",
                 "choices": [
-                    {"id": "a1", "text": "Proceed with standard protocol", "consequence": "No significant change"},
-                    {"id": "a2", "text": "Consult with colleagues", "consequence": "Gather more information"},
-                    {"id": "a3", "text": "Wait and observe", "consequence": "Situation develops without your input"},
+                    {
+                        "id": "a1",
+                        "text": "Proceed with standard protocol",
+                        "consequence": "No significant change",
+                    },
+                    {
+                        "id": "a2",
+                        "text": "Consult with colleagues",
+                        "consequence": "Gather more information",
+                    },
+                    {
+                        "id": "a3",
+                        "text": "Wait and observe",
+                        "consequence": "Situation develops without your input",
+                    },
                 ],
             }
 
@@ -1722,7 +1917,9 @@ spatial presence\n"
         This is the third step — after all choices are made, the LLM
         synthesizes the results into a consistent story.
         """
-        logger.info(f"[DAY] Analyzing combined outcome from {len(all_decisions)} decisions")
+        logger.info(
+            f"[DAY] Analyzing combined outcome from {len(all_decisions)} decisions"
+        )
 
         decisions_text = ""
         for i, d in enumerate(all_decisions, 1):
@@ -1789,12 +1986,15 @@ spatial presence\n"
                 response_schema=COMBINED_OUTCOME_SCHEMA,
                 max_tokens=4096,
             )
-            logger.info(f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))[:80]}...")
+            logger.info(
+                f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))[:80]}..."
+            )
             return parsed
         except Exception as e:
             logger.error(f"[DAY] Combined outcome analysis failed: {e}")
             return {
-                "outcome_narrative": narrative or "The day passed without major incident.",
+                "outcome_narrative": narrative
+                or "The day passed without major incident.",
                 "ship_status_change": "No significant change.",
                 "crew_morale_change": "Stable.",
                 "next_day_hook": "Tomorrow brings new challenges.",

@@ -2,7 +2,7 @@
 Telegram Bot for AI Game Master - New Architecture
 
 Key Features:
-1. Onboarding via API - Questions fetched from game-master-api
+1. Onboarding via API - Questions fetched from game-server-api
 2. Multiple Games Support - Track which game each player participates in
 3. Polling Mechanism - Periodic polling for updates from API
 4. Enhanced Game Flow - Better state management and inline keyboards
@@ -13,7 +13,7 @@ Architecture:
 - Maintains existing language support (Russian/English)
 - Uses existing language.py for messages
 - Proper error handling and logging
-- Async HTTP calls to game-master-api
+- Async HTTP calls to game-server-api
 """
 
 import os
@@ -51,20 +51,20 @@ logger = logging.getLogger(__name__)
 
 def escape_markdown(text: str) -> str:
     """Escape special characters for Telegram parse_mode='Markdown' (legacy).
-    
+
     Escapes: _ * ` [ ] ( ) ~ > # + - = | { } . !
     These are treated as format entities by Telegram MarkdownV2.
     For legacy Markdown (parse_mode='Markdown'), the dangerous chars are: _ * ` [
     We escape all of them to be safe across both modes.
     """
-    special_chars = r'_*`['
-    return re.sub(f'([{re.escape(special_chars)}])', r'\\\1', text)
+    special_chars = r"_*`["
+    return re.sub(f"([{re.escape(special_chars)}])", r"\\\1", text)
 
 
 # ============== Configuration ==============
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-master-api:8000")
+GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
 BOT_LANGUAGE = os.getenv("BOT_LANGUAGE", "ru")
 POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # seconds between polls
 BOT_USERNAME: Optional[str] = None
@@ -157,7 +157,9 @@ def parse_proxy_url(proxy_url: str) -> tuple[str, int, Optional[str], Optional[s
     return (proxy_url, 9999, username, password)
 
 
-async def create_aiohttp_session(proxy_url: Optional[str] = None) -> aiohttp.ClientSession:
+async def create_aiohttp_session(
+    proxy_url: Optional[str] = None,
+) -> aiohttp.ClientSession:
     """Create an aiohttp ClientSession with Socks5 proxy support.
 
     Args:
@@ -275,8 +277,8 @@ async def send_image_from_api_url(
     caption: str = "",
     reply_markup=None,
 ) -> bool:
-    """Fetch an image from a URL (from game-master-api) and send as photo.
-    
+    """Fetch an image from a URL (from game-server-api) and send as photo.
+
     Returns True if sent successfully, False otherwise.
     """
     if not image_url:
@@ -292,7 +294,9 @@ async def send_image_from_api_url(
                     photo = BufferedInputFile(photo_data, filename="image.png")
                     if caption:
                         await bot_or_message.answer_photo(
-                            photo=photo, caption=caption, parse_mode="Markdown",
+                            photo=photo,
+                            caption=caption,
+                            parse_mode="Markdown",
                             reply_markup=reply_markup,
                         )
                     else:
@@ -305,13 +309,15 @@ async def send_image_from_api_url(
     return False
 
 
-async def send_random_loading_image(message: types.Message, caption_key: str = "loading_caption") -> bool:
+async def send_random_loading_image(
+    message: types.Message, caption_key: str = "loading_caption"
+) -> bool:
     """Fetch and send a random loading image from the API with a caption.
 
     Args:
         message: Telegram message context
         caption_key: Key in IMAGES dict for the caption text (default: "loading_caption")
-    
+
     Returns True if sent, False otherwise.
     """
     try:
@@ -325,21 +331,25 @@ async def send_random_loading_image(message: types.Message, caption_key: str = "
     return False
 
 
-async def send_random_splash_image(message: types.Message, caption: str = "", reply_markup=None) -> bool:
+async def send_random_splash_image(
+    message: types.Message, caption: str = "", reply_markup=None
+) -> bool:
     """Fetch and send a random splash image from the API with optional caption.
-    
+
     Args:
         message: Telegram message context
         caption: Caption text (e.g., game description) to include with the image
         reply_markup: Optional keyboard to show with the image
-    
+
     Returns True if sent, False otherwise.
     """
     try:
         result = await api_request("GET", "/content/splash-image")
         image_url = result.get("image_url") if result else None
         if image_url:
-            return await send_image_from_api_url(message, image_url, caption=caption, reply_markup=reply_markup)
+            return await send_image_from_api_url(
+                message, image_url, caption=caption, reply_markup=reply_markup
+            )
     except Exception as e:
         logger.warning(f"Failed to get/send splash image: {e}")
     return False
@@ -371,7 +381,9 @@ async def send_question_with_image(
                 ) as resp:
                     if resp.status == 200:
                         photo_data = await resp.read()
-                        photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
+                        photo = BufferedInputFile(
+                            photo_data, filename=f"q_{question['id']}.png"
+                        )
                         await bot_or_message.answer_photo(
                             photo=photo,
                             caption=question_text,
@@ -477,7 +489,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             timeout_total=300,
         )
         if result is None:
-            logger.error(f"Onboarding completion returned no result for player {player_id}")
+            logger.error(
+                f"Onboarding completion returned no result for player {player_id}"
+            )
             return
         avatar_url = result.get("avatar_url")
         profile = result.get("profile", {})
@@ -548,7 +562,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 invite_text = (
                     onboarding_msgs["invite_title"]
                     + "\n\n"
-                    + onboarding_msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
+                    + onboarding_msgs["invite_message"].format(
+                        invite_url=escape_markdown(invite_url)
+                    )
                 )
 
                 invite_keyboard = InlineKeyboardMarkup(
@@ -594,10 +610,14 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     profile = {}
                 text = onboarding_msgs["onboarding_complete"].format(
                     role=escape_markdown(profile.get("role", "Crew Member")),
-                    role_description=escape_markdown(profile.get("role_description", "")),
+                    role_description=escape_markdown(
+                        profile.get("role_description", "")
+                    ),
                     species=escape_markdown(profile.get("species", "Unknown")),
                     gender=escape_markdown(profile.get("gender", "Unknown")),
-                    traits=escape_markdown("\n- ".join(profile.get("personality_traits", []))),
+                    traits=escape_markdown(
+                        "\n- ".join(profile.get("personality_traits", []))
+                    ),
                 )
             except Exception:
                 text = onboarding_msgs["onboarding_complete"].format(
@@ -616,7 +636,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 )
             except Exception:
                 # Fallback: send without Markdown if parsing fails
-                plain_text = re.sub(r'[*_\[\]()`]', '', text)
+                plain_text = re.sub(r"[*_\[\]()`]", "", text)
                 await bot.send_message(
                     chat_id=player_id,
                     text=plain_text,
@@ -626,7 +646,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             pass
 
 
-async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_ids: list, bot: Bot):
+async def _broadcast_new_player(
+    new_player_id: int, profile: dict, other_player_ids: list, bot: Bot
+):
     """Notify existing players about a new crew member joining."""
     try:
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
@@ -644,29 +666,43 @@ async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_
                     text=notify_text,
                     parse_mode="Markdown",
                 )
-                # Send avatar to other players too
                 avatar_url = profile.get("avatar_url")
-                if avatar_url:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(
-                            avatar_url,
-                            timeout=aiohttp.ClientTimeout(total=60),
-                        ) as resp:
-                            if resp.status == 200:
-                                photo_data = await resp.read()
-                                photo = BufferedInputFile(photo_data, filename="avatar.png")
-                                await bot.send_photo(
-                                    chat_id=other_id,
-                                    photo=photo,
-                                    caption=f"👆 {player_name} — {profile.get('role', '')}",
-                                )
+                await _send_avatar_to_player(
+                    bot, other_id, avatar_url, player_name, profile
+                )
             except Exception as e:
                 logger.warning(f"Failed to notify player {other_id}: {e}")
     except Exception as e:
         logger.error(f"Broadcast new player failed: {e}")
 
 
-async def _broadcast_game_started(new_player_id: int, profile: dict, other_player_ids: list, bot: Bot):
+async def _send_avatar_to_player(
+    bot: Bot, chat_id: int, avatar_url: Optional[str], player_name: str, profile: dict
+):
+    """Fetch a player's avatar from its URL and send it as a photo to the given chat."""
+    if not avatar_url:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                avatar_url,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                if resp.status == 200:
+                    photo_data = await resp.read()
+                    photo = BufferedInputFile(photo_data, filename="avatar.png")
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        caption=f"👆 {player_name} — {profile.get('role', '')}",
+                    )
+    except Exception as e:
+        logger.warning(f"Failed to send avatar to {chat_id}: {e}")
+
+
+async def _broadcast_game_started(
+    new_player_id: int, profile: dict, other_player_ids: list, bot: Bot
+):
     """Notify all players that the game has started (the new player triggered >= 3 players)."""
     try:
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
@@ -680,29 +716,21 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
                     chat_id=other_id,
                     text=onboarding_msgs["game_starting_broadcast"].format(
                         player_name=player_name,
-                        role=escape_markdown(profile.get('role', '')),
-                        role_description=escape_markdown(profile.get('role_description', '')),
+                        role=escape_markdown(profile.get("role", "")),
+                        role_description=escape_markdown(
+                            profile.get("role_description", "")
+                        ),
                     ),
                     parse_mode="Markdown",
                 )
-                # Send avatar to other players
                 avatar_url = profile.get("avatar_url")
-                if avatar_url:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(
-                            avatar_url,
-                            timeout=aiohttp.ClientTimeout(total=60),
-                        ) as resp:
-                            if resp.status == 200:
-                                photo_data = await resp.read()
-                                photo = BufferedInputFile(photo_data, filename="avatar.png")
-                                await bot.send_photo(
-                                    chat_id=other_id,
-                                    photo=photo,
-                                    caption=f"👆 {player_name} — {profile.get('role', '')}",
-                                )
+                await _send_avatar_to_player(
+                    bot, other_id, avatar_url, player_name, profile
+                )
             except Exception as e:
-                logger.warning(f"Failed to notify player {other_id} about game start: {e}")
+                logger.warning(
+                    f"Failed to notify player {other_id} about game start: {e}"
+                )
     except Exception as e:
         logger.error(f"Broadcast game started failed: {e}")
 
@@ -748,8 +776,10 @@ def create_onboarding_keyboard(options: list, question_id: int) -> ReplyKeyboard
         labels.append(label)
         button = KeyboardButton(text=label)
         keyboard.append([button])
-    
-    logger.info(f"Created onboarding keyboard for question_id={question_id} with {len(labels)} buttons: {labels}")
+
+    logger.info(
+        f"Created onboarding keyboard for question_id={question_id} with {len(labels)} buttons: {labels}"
+    )
 
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -1014,6 +1044,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
 
 async def cmd_start(message: types.Message, state: FSMContext):
     """Handle /start command - Begin onboarding or join existing game"""
+    assert message.from_user is not None
     player_id = message.from_user.id
 
     msgs = lang.get_onboarding(BOT_LANGUAGE)
@@ -1026,7 +1057,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         current_options = player_state.get("current_options", [])
         keyboard = (
-            create_onboarding_keyboard(current_options, player_state.get("current_question_id", 1))
+            create_onboarding_keyboard(
+                current_options, player_state.get("current_question_id", 1)
+            )
             if current_options
             else create_main_menu_keyboard()
         )
@@ -1038,9 +1071,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     game_id = parse_game_id_from_start_command(message.text or "")
     if game_id:
-        logger.info(
-            f"Player {player_id} started with game_id={game_id} from deep link"
-        )
+        logger.info(f"Player {player_id} started with game_id={game_id} from deep link")
 
     # Check if player already has a profile
     try:
@@ -1066,12 +1097,16 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     invite_text = (
                         msgs.get("invite_title", "")
                         + "\n\n"
-                        + msgs.get("invite_message", "").format(invite_url=escape_markdown(invite_url))
+                        + msgs.get("invite_message", "").format(
+                            invite_url=escape_markdown(invite_url)
+                        )
                     )
                     try:
                         await message.answer(invite_text, parse_mode="Markdown")
                     except Exception as e:
-                        logger.warning(f"Failed to send invite to player {player_id}: {e}")
+                        logger.warning(
+                            f"Failed to send invite to player {player_id}: {e}"
+                        )
 
             # Update player state with game info
             update_player_state(
@@ -1094,6 +1129,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 async def cmd_profile(message: types.Message):
     """Show player profile with avatar"""
+    assert message.from_user is not None
     player_id = message.from_user.id
 
     try:
@@ -1107,8 +1143,12 @@ async def cmd_profile(message: types.Message):
         # Build profile message
         profile_text = f"{msgs['title']}\n\n"
         profile_text += f"{msgs['role'].format(role=profile['role'])}\n"
-        profile_text += f"{msgs['species'].format(species=profile.get('species', 'Unknown'))}\n"
-        profile_text += f"{msgs['gender'].format(gender=profile.get('gender', 'Unknown'))}\n\n"
+        profile_text += (
+            f"{msgs['species'].format(species=profile.get('species', 'Unknown'))}\n"
+        )
+        profile_text += (
+            f"{msgs['gender'].format(gender=profile.get('gender', 'Unknown'))}\n\n"
+        )
         profile_text += f"{msgs['description'].format(role_description=profile['role_description'])}\n\n"
         profile_text += f"{msgs['traits'].format(traits='\n- '.join(profile['personality_traits']))}"
 
@@ -1117,7 +1157,9 @@ async def cmd_profile(message: types.Message):
         avatar_description = profile.get("avatar_description")
 
         if avatar_url:
-            logger.info(f"Fetching avatar for profile of player {player_id}: {avatar_url}")
+            logger.info(
+                f"Fetching avatar for profile of player {player_id}: {avatar_url}"
+            )
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
@@ -1162,6 +1204,7 @@ async def cmd_profile(message: types.Message):
 
 async def cmd_today(message: types.Message):
     """Show current day's game episode"""
+    assert message.from_user is not None
     player_id = message.from_user.id
 
     try:
@@ -1173,7 +1216,8 @@ async def cmd_today(message: types.Message):
             state = await api_request("GET", "/game/state")
             current_day_num = state.get("day", 1) if state else 1
             briefing = await api_request(
-                "GET", f"/game/briefing/{player_id}/{current_day_num}",
+                "GET",
+                f"/game/briefing/{player_id}/{current_day_num}",
                 ignore_codes=(404,),
             )
         except Exception:
@@ -1189,9 +1233,12 @@ async def cmd_today(message: types.Message):
             )
 
             await message.answer(
-                msgs["title"].format(day=briefing["day"]) + "\n\n"
-                + msgs["briefing_header"].format(briefing=briefing["briefing"]) + "\n\n"
-                + msgs["actions"].format(actions=actions_text) + "\n\n"
+                msgs["title"].format(day=briefing["day"])
+                + "\n\n"
+                + msgs["briefing_header"].format(briefing=briefing["briefing"])
+                + "\n\n"
+                + msgs["actions"].format(actions=actions_text)
+                + "\n\n"
                 + msgs["select_action"],
                 parse_mode="Markdown",
                 reply_markup=keyboard,
@@ -1242,20 +1289,22 @@ async def cmd_today(message: types.Message):
 async def cmd_help(message: types.Message):
     """Show help information"""
     msgs = lang.get_help(BOT_LANGUAGE)
-    
+
     # Fetch game title dynamically from API
     game_title = "🎮 Game"
     try:
-        title_data = await api_request("GET", "/game/title", params={"game_id": "default_game"})
+        title_data = await api_request(
+            "GET", "/game/title", params={"game_id": "default_game"}
+        )
         if title_data and title_data.get("title"):
             game_title = f"🎮 {title_data['title']}"
     except Exception as e:
         logger.warning(f"Failed to fetch game title for help: {e}")
         # Fallback to generic title
         game_title = "🎮 Space Exploration Game"
-    
+
     help_title = f"**{game_title} — Help**"
-    
+
     await message.answer(
         f"{help_title}\n\n{msgs['commands']}\n\n{msgs['how_to_play']}",
         parse_mode="Markdown",
@@ -1267,6 +1316,7 @@ async def cmd_gm_start_game(message: types.Message):
     Usage: /gm-start-game <game_id>
     Only executable by the configured Game Master user.
     """
+    assert message.from_user is not None
     player_id = message.from_user.id
     gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
 
@@ -1285,7 +1335,9 @@ async def cmd_gm_start_game(message: types.Message):
         await message.answer(gm_msgs["start_game_usage"])
         return
 
-    await message.answer(gm_msgs["starting_game"].format(game_id=game_id), parse_mode="Markdown")
+    await message.answer(
+        gm_msgs["starting_game"].format(game_id=game_id), parse_mode="Markdown"
+    )
 
     try:
         result = await api_request(
@@ -1321,6 +1373,7 @@ async def cmd_gm_kick(message: types.Message):
     The kicked player receives a notification about being removed.
     Only executable by the configured Game Master user.
     """
+    assert message.from_user is not None
     player_id = message.from_user.id
     gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
 
@@ -1366,7 +1419,11 @@ async def cmd_gm_kick(message: types.Message):
             )
             await message.answer(msg, parse_mode="Markdown")
         else:
-            error_detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
+            error_detail = (
+                result.get("detail", gm_msgs["unknown_error"])
+                if result
+                else gm_msgs["no_api_response"]
+            )
             await message.answer(gm_msgs["kick_error"].format(error=error_detail))
     except Exception as e:
         logger.error(f"Failed to kick player: {e}")
@@ -1379,6 +1436,7 @@ async def cmd_gm_list_games(message: types.Message):
     Usage: /gm-list-games
     Only executable by the configured Game Master user.
     """
+    assert message.from_user is not None
     player_id = message.from_user.id
     gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
 
@@ -1398,9 +1456,13 @@ async def cmd_gm_list_games(message: types.Message):
         lines = [gm_msgs["games_list_header"], ""]
         for idx, game in enumerate(games, start=1):
             game_id = game.get("game_id", "unknown")
-            title = game.get("title") or game.get("name") or gm_msgs["default_game_title"]
+            title = (
+                game.get("title") or game.get("name") or gm_msgs["default_game_title"]
+            )
             player_count = game.get("player_count", 0)
-            status = game.get("status") or ("started" if game.get("started") else "waiting")
+            status = game.get("status") or (
+                "started" if game.get("started") else "waiting"
+            )
             status_icon = "🚀" if status == "started" else "⏳"
             lines.append(
                 gm_msgs["games_list_entry"].format(
@@ -1421,6 +1483,7 @@ async def cmd_gm_list_games(message: types.Message):
 
 async def handle_voice_message(message: types.Message):
     """Handle voice messages"""
+    assert message.from_user is not None
     player_id = message.from_user.id
 
     msgs = lang.get_messages(BOT_LANGUAGE)
@@ -1443,6 +1506,7 @@ async def handle_voice_message(message: types.Message):
 
 async def handle_text_message(message: types.Message):
     """Handle regular text messages (chat with Game Master)"""
+    assert message.from_user is not None
     player_id = message.from_user.id
 
     try:
@@ -1484,6 +1548,8 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
     Matches button text to option value and submits to API.
     """
+    assert message.from_user is not None
+    assert message.text is not None
     answer_text = message.text
     player_id = message.from_user.id
     error_msgs = lang.get_errors(BOT_LANGUAGE)
@@ -1508,7 +1574,9 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         return
 
     if not current_options:
-        logger.error(f"No current_options in state for player {player_id}, state_data={state_data}")
+        logger.error(
+            f"No current_options in state for player {player_id}, state_data={state_data}"
+        )
         await message.answer(error_msgs["invalid_format"])
         return
 
@@ -1559,8 +1627,6 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         )
         logger.info(f"Onboarding answer response: {result}")
 
-        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
-
         if result is None:
             raise Exception("No response from API when submitting onboarding answer")
 
@@ -1595,7 +1661,9 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
             # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             if message.bot is None:
-                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar")
+                logger.error(
+                    f"message.bot is None for player {player_id}, cannot generate avatar"
+                )
             else:
                 asyncio.create_task(
                     _generate_and_send_avatar(player_id, session_id, message.bot)
@@ -1604,34 +1672,36 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         else:
             next_question = result.get("next_question")
             if next_question:
+                logger.info(
+                    f"Next onboarding question: id={next_question['id']}, text={next_question['text'][:50]}..."
+                )
+                logger.info(
+                    f"Next question options: {[opt['label'][:80] for opt in next_question['options']]}"
+                )
+                if next_question.get("image_url"):
                     logger.info(
-                        f"Next onboarding question: id={next_question['id']}, text={next_question['text'][:50]}..."
+                        f"Next question has image: {next_question['image_url']}"
                     )
-                    logger.info(
-                        f"Next question options: {[opt['label'][:80] for opt in next_question['options']]}"
-                    )
-                    if next_question.get("image_url"):
-                        logger.info(f"Next question has image: {next_question['image_url']}")
-                    # Store next question data in state for matching
-                    logger.info(
-                        f"Storing next question in state: question_id={next_question['id']}, "
-                        f"options={[opt['label'][:60] for opt in next_question['options']]}"
-                    )
-                    await state.update_data(
-                        current_question_id=next_question["id"],
-                        current_options=next_question["options"],
-                    )
-                    update_player_state(
-                        player_id,
-                        current_question_id=next_question["id"],
-                        current_options=next_question["options"],
-                    )
-                    keyboard = create_onboarding_keyboard(
-                        next_question["options"], next_question["id"]
-                    )
-                    await send_question_with_image(
-                        message, next_question, keyboard, BOT_LANGUAGE
-                    )
+                # Store next question data in state for matching
+                logger.info(
+                    f"Storing next question in state: question_id={next_question['id']}, "
+                    f"options={[opt['label'][:60] for opt in next_question['options']]}"
+                )
+                await state.update_data(
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                )
+                update_player_state(
+                    player_id,
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                )
+                keyboard = create_onboarding_keyboard(
+                    next_question["options"], next_question["id"]
+                )
+                await send_question_with_image(
+                    message, next_question, keyboard, BOT_LANGUAGE
+                )
 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}")
@@ -1696,7 +1766,6 @@ async def refresh_game(callback: types.CallbackQuery):
         await callback.answer(lang.get_errors(BOT_LANGUAGE)["invalid_format"])
         return
 
-    game_id = parts[1]
     player_id = callback.from_user.id
 
     try:
@@ -1722,7 +1791,7 @@ async def refresh_game(callback: types.CallbackQuery):
                 [f"- {d['npc']}: {d['dialogue']}" for d in day["npc_dialogues"]]
             )
 
-        if callback.message:
+        if isinstance(callback.message, types.Message):
             await callback.message.edit_text(
                 msgs["title"].format(day=day["day"]) + "\n\n"
                 f"{msgs['story'].format(story=day['story'])}\n\n"
@@ -1828,7 +1897,9 @@ async def main():
     dp.message.register(handle_text_message, F.text & ~F.command)
 
     # Callback query handlers
-    dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
+    dp.callback_query.register(
+        game_selection_callback, F.data.startswith("select_game:")
+    )
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
 
@@ -1842,10 +1913,10 @@ async def main():
 
     # Clean up
     polling_task.cancel()
-    try:
+    from contextlib import suppress
+
+    with suppress(asyncio.CancelledError):
         await polling_task
-    except asyncio.CancelledError:
-        pass
 
 
 if __name__ == "__main__":

@@ -37,21 +37,21 @@ docker-compose up -d
 
 ```bash
 docker-compose ps
-docker-compose logs -f game-master-api
+docker-compose logs -f game-server-api
 docker-compose logs -f telegram-bot
 ```
 
 ## 5. Service Modes
 
-### Game Master API (game-master-api)
+### Game Master API (game-server-api)
 
 Runs as a REST API server:
 ```bash
 # In Docker
-docker-compose logs game-master-api
+docker-compose logs game-server-api
 
 # Locally for testing
-cd game-master-api
+cd game-server-api
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -73,7 +73,7 @@ python bot.py
 
 ### Game Master Scheduler (game-master)
 
-This service triggers generation daily at 08:00 (container time). It calls the game-master-api endpoints to generate content.
+This service triggers generation daily at 08:00 (container time). It calls the game-server-api endpoints to generate content.
 
 **Modes:**
 - `scheduled` (default) - runs daily generation on schedule based on GAME_SCHEDULE_TIME
@@ -182,7 +182,7 @@ docker-compose restart telegram-bot
          │
          ▼
 ┌───────────────────────────┐
-│    game-master-api        │  ← REST API, AI generation, database
+│    game-server-api        │  ← REST API, AI generation, database
 │  (FastAPI + STRANDS Agent)│
 └────────┬──────────────────┘
          ▲
@@ -197,7 +197,7 @@ docker-compose restart telegram-bot
 
 **Service Descriptions:**
 - **telegram-bot**: Player interface via Telegram commands and inline keyboards
-- **game-master-api**: FastAPI REST API with STRANDS-based Game Master agent, handles story generation, player profiles, actions, and messages
+- **game-server-api**: FastAPI REST API with STRANDS-based Game Master agent, handles story generation, player profiles, actions, and messages
 - **game-master**: Scheduler service that triggers daily episode generation (runs at configured time or manually)
 - **comfyui**: GPU-accelerated content generation backend with HuggingFace models
 
@@ -210,7 +210,7 @@ docker-compose restart telegram-bot
 | `LLM_API_KEY` | API key for LLM (any value for llama.cpp) | `placeholder-key-for-llama-cpp` |
 | `LLM_MODEL` | LLM model name | `unsloth/Qwen3.5-27B` |
 | `COMFYUI_URL` | ComfyUI backend endpoint | `http://comfyui:8188` |
-| `GAME_MASTER_API_URL` | Game Master API endpoint | `http://game-master-api:8000` |
+| `GAME_MASTER_API_URL` | Game Master API endpoint | `http://game-server-api:8000` |
 | `GAME_SCHEDULE_TIME` | Daily generation time (24h format) | `08:00` |
 | `GAME_MASTER_MODE` | Scheduler mode: `scheduled` or `single` | `scheduled` |
 | `GAME_LANGUAGE` | Game language for content generation | `ru` |

@@ -1,14 +1,10 @@
 {
-    "venvPath": ".",
+    "venvPath": "..",
     "venv": ".venv",
     "include": [
-        "game-server-api",
-        "game-master",
-        "telegram-bot"
+        "."
     ],
     "exclude": [
-        "comfyui",
-        "docs",
         "**/__pycache__",
         "**/.git", 
         "**/node_modules", 

@@ -49,11 +49,11 @@ services:
               capabilities: [gpu]
 
   # Game Master API - FastAPI service for game orchestration
-  game-master-api:
-    image: game-master-api:spark-full
+  game-server-api:
+    image: game-server-api:spark-full
     build:
       dockerfile: Dockerfile.spark
-      context: game-master-api/
+      context: game-server-api/
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -77,7 +77,7 @@ services:
       - spark-network
     restart: unless-stopped
     volumes:
-      - ./game-master-api/:/app/
+      - ./game-server-api/:/app/
 
   # Telegram Bot - Player interface via Telegram
   telegram-bot:
@@ -88,13 +88,13 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_GAME_MASTER_ID=${TELEGRAM_BOT_GAME_MASTER_ID:-}
-      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
+      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
       - AI_FSM_DB=/app/bot_storage.db
       - TELEGRAM_SOCKS_PROXY=${TELEGRAM_SOCKS_PROXY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      game-master-api:
+      game-server-api:
         condition: service_healthy
     networks:
       - spark-network
@@ -102,7 +102,7 @@ services:
     volumes:
       - ./telegram-bot/:/app/
 
-  # Game Master Scheduler - triggers daily generation via game-master-api
+  # Game Master Scheduler - triggers daily generation via game-server-api
   # Can be run manually for debugging: duxocker compose run --rm game-master
   game-master:
     image: game-master:spark-full
@@ -110,10 +110,10 @@ services:
       dockerfile: Dockerfile.spark
       context: game-master/
     depends_on:
-      game-master-api:
+      game-server-api:
         condition: service_healthy
     environment:
-      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-master-api:8000}
+      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
       - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
       - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
       - GAME_LANGUAGE=${GAME_LANGUAGE:-ru}

@@ -7,7 +7,7 @@ AI-powered cooperative game delivered through Telegram bot. Each day, an AI gene
 ```mermaid
 graph TD
     A[Telegram API] --> B[telegram-bot]
-    B --> C[game-master-api]
+    B --> C[game-server-api]
     D[game-master] --> C
     C --> E[comfyui]
     C --> G[llama.cpp<br/>external]
@@ -23,13 +23,15 @@ graph TD
 
 | Service | Port | Description |
 |---------|------|-------------|
-| game-master-api | 8000 | FastAPI backend with SQLite persistence |
+| game-server-api | 8000 | FastAPI backend with SQLite persistence |
 | telegram-bot | N/A | Telegram bot interface |
 | comfyui | 8188 | Image/Video generation backend |
 | game-master | N/A | Daily generation scheduler (run manually for debugging) |
 
-### Game Master API (`game-master-api/`)
+### Game Master API (`game-server-api/`)
+
 FastAPI service that orchestrates the game:
+
 - Player onboarding with behavioral testing
 - Daily story generation using STRANDS Agents SDK
 - NPC dialogue generation
@@ -41,6 +43,7 @@ FastAPI service that orchestrates the game:
 **Ports:** 8000
 
 **Key Endpoints:**
+
 - `POST /onboarding/start` - Start onboarding for a player
 - `POST /onboarding/{session_id}/answer` - Submit onboarding answer
 - `GET /players/{player_id}/profile` - Get player profile
@@ -51,7 +54,9 @@ FastAPI service that orchestrates the game:
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic
 
 ### Telegram Bot (`telegram-bot/`)
+
 Player interface via Telegram:
+
 - `/start` - Begin onboarding or return to game
 - `/profile` - Show player role and traits
 - `/today` - View current day episode
@@ -63,9 +68,11 @@ Player interface via Telegram:
 **Ports:** None (outbound Telegram API only)
 
 ### Game Master Scheduler (`game-master/`)
+
 Scheduled task runner that triggers daily episode generation. Can be run manually for debugging.
 
 **Usage:**
+
 ```bash
 # Run single generation cycle for testing
 GAME_MASTER_MODE=single docker compose run --rm game-master
@@ -74,6 +81,7 @@ GAME_MASTER_MODE=single docker compose run --rm game-master
 **Ports:** None
 
 ### ComfyUI (`comfyui/`)
+
 Image/video/3D generation backend. Requires GPU.
 
 **Ports:** 8188
@@ -81,6 +89,7 @@ Image/video/3D generation backend. Requires GPU.
 ## Setup
 
 ### Prerequisites
+
 - Docker and Docker Compose
 - NVIDIA GPU (for ComfyUI)
 - NVIDIA Container Toolkit
@@ -91,11 +100,13 @@ Image/video/3D generation backend. Requires GPU.
 ### Configuration
 
 1. Copy `.env.example` to `.env`:
+
 ```bash
 cp .env.example .env
 ```
 
-2. Edit `.env` and set your Telegram bot token:
+1. Edit `.env` and set your Telegram bot token:
+
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ```
@@ -103,17 +114,20 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 ### Running the Services
 
 1. Build and start services:
+
 ```bash
 docker compose up -d
 ```
 
-2. Check logs:
+1. Check logs:
+
 ```bash
-docker compose logs -f game-master-api
+docker compose logs -f game-server-api
 docker compose logs -f telegram-bot
 ```
 
-3. Run single generation cycle (for testing):
+1. Run single generation cycle (for testing):
+
 ```bash
 GAME_MASTER_MODE=single docker compose run --rm game-master
 ```
@@ -147,6 +161,7 @@ GAME_MASTER_MODE=single docker compose run --rm game-master
 ## NPC System
 
 The system generates NPC teams based on player role:
+
 - **Captain** - Always present, leads the crew
 - **Pilot** - Navigation and flight operations
 - **Engineer** - Technical systems maintenance
@@ -159,12 +174,14 @@ NPCs have distinct personalities and speech styles.
 ## Content Generation
 
 ### Personalized Comics
+
 - Generated per player based on their role and traits
 - 4-6 panel format
 - Includes player character prominently
 - Speech bubbles with NPC dialogue
 
 ### Image Generation
+
 - Scene images for story settings
 - Character portraits
 - 3D scene descriptions
@@ -175,7 +192,7 @@ NPCs have distinct personalities and speech styles.
 
 ```bash
 # Game Master API
-cd game-master-api
+cd game-server-api
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
@@ -199,13 +216,15 @@ Visit `http://localhost:8000/docs` for Swagger UI.
 
 ### API Connection Failed
 
-Check game-master-api health:
+Check game-server-api health:
+
 ```bash
 curl http://localhost:8000/health
-docker compose logs game-master-api
+docker compose logs game-server-api
 ```
 
 ### GPU Not Available
+
 ```bash
 docker compose logs comfyui
 # Check if NVIDIA runtime is configured
@@ -213,20 +232,21 @@ nvidia-smi
 ```
 
 ### Telegram Bot Not Responding
+
 ```bash
 # Check if bot token is set
 docker compose exec telegram-bot env | grep TELEGRAM
 # Verify API connectivity
-docker compose exec telegram-bot ping game-master-api
+docker compose exec telegram-bot ping game-server-api
 ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| LLM_URL | http://llama.cpp:8090/v1 | LLM endpoint |
+| LLM_URL | <http://llama.cpp:8090/v1> | LLM endpoint |
 | LLM_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
-| COMFYUI_URL | http://comfyui:8188 | Image gen endpoint |
+| COMFYUI_URL | <http://comfyui:8188> | Image gen endpoint |
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
 | GAME_SCHEDULE_TIME | 08:00 | Daily generation time |
 | GAME_MASTER_MODE | scheduled | single/simulation/scheduled |

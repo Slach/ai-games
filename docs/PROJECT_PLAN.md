@@ -69,7 +69,7 @@ Database: SQLite (game_master.db)
 - Generation of daily plot using LLM
 - NPC dialogue generation with personality templates
 - Content prompt generation for visual assets
-- Located in `game-master-api/game_master.py`
+- Located in `game-server-api/game_master.py`
 
 ### 2. Onboarding System - ✅ IMPLEMENTED
 - Multi-question onboarding flow via Telegram bot
@@ -136,7 +136,7 @@ Database: SQLite (game_master.db)
 ┌─────────────────────────────────────────────────────────────┐
 │  08:00  │  Game Master Scheduler triggers daily episode    │
 ├─────────┼───────────────────────────────────────────────────┤
-│  08:00+ │  Episode generated via game-master-api           │
+│  08:00+ │  Episode generated via game-server-api           │
 │         │  - Story with setting, conflict, narrative       │
 │         │  - NPC dialogues with personalities              │
 │         │  - Decision points for player actions            │

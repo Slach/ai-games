@@ -164,6 +164,15 @@ class ImageGenerator:
             "client_id": self.client_id,
         }
 
+        # Log full ComfyUI workflow JSON
+        logger.info("=== COMFYUI WORKFLOW ===")
+        logger.info(f"Endpoint: {self.comfyui_url}/prompt")
+        logger.info(f"Client ID: {self.client_id}")
+        logger.info(
+            f"Workflow JSON:\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
+        )
+        logger.info("=== END COMFYUI WORKFLOW ===")
+
         # Retry logic for transient failures (DNS, connection refused, etc.)
         max_retries = 3
         last_error = None
@@ -201,7 +210,7 @@ class ImageGenerator:
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 last_error = e
                 if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # 1s, 2s, 4s backoff
+                    wait_time = 2**attempt  # 1s, 2s, 4s backoff
                     logger.warning(
                         f"ComfyUI connection failed (attempt {attempt + 1}/{max_retries}): {e}. "
                         f"Retrying in {wait_time}s..."
@@ -211,8 +220,10 @@ class ImageGenerator:
                     logger.error(
                         f"ComfyUI connection failed after {max_retries} attempts: {last_error}"
                     )
-        
-        raise Exception(f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}")
+
+        raise Exception(
+            f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}"
+        )
 
     async def _wait_for_completion(
         self, prompt_id: str, timeout: int = 300
@@ -285,8 +296,17 @@ class ImageGenerator:
         Returns:
             URL of the generated image, or None on failure
         """
+        logger.info("=== IMAGE GENERATION REQUEST ===")
+        logger.info(f"Model: Z-Image Turbo (8-step distilled)")
+        logger.info(f"Size: {width}x{height}")
+        logger.info(f"Filename prefix: {filename_prefix}")
+        logger.info(f"Max retries: {max_retries}")
+        logger.info("--- PROMPT TEXT ---")
+        for line in prompt.split("\n"):
+            logger.info(line)
+        logger.info("=== END IMAGE GENERATION REQUEST ===")
+
         logger.info(f"[IMAGE] Generating image via Z-Image Turbo")
-        logger.info(f"[IMAGE] Prompt: {prompt[:100]}...")
         logger.info(f"[IMAGE] Size: {width}x{height}, max_retries={max_retries}")
 
         for attempt in range(1, max_retries + 1):
@@ -319,7 +339,7 @@ class ImageGenerator:
                     f"[IMAGE] Generation attempt {attempt}/{max_retries} failed: {e}"
                 )
                 if attempt < max_retries:
-                    wait = 2 ** attempt  # 2s, 4s, 8s backoff
+                    wait = 2**attempt  # 2s, 4s, 8s backoff
                     logger.info(f"[IMAGE] Retrying in {wait}s...")
                     await asyncio.sleep(wait)
                 else:
@@ -444,7 +464,7 @@ class ImageGenerator:
         height: int = 768,
     ) -> List[str]:
         """Generate N loading screen images for /start display.
-        
+
         Args:
             count: Number of images to generate
             start_index: Starting index in LOADING_IMAGE_PROMPTS (for resuming)
@@ -452,7 +472,7 @@ class ImageGenerator:
             game_id: Game ID to scope generated filenames
             width: Image width
             height: Image height
-        
+
         Returns:
             List of generated image URLs.
         """
@@ -465,18 +485,20 @@ class ImageGenerator:
             try:
                 url = await self.generate_image(
                     prompt=prompt,
-                    filename_prefix=f"{filename_prefix}_{game_id}_{i+1}",
+                    filename_prefix=f"{filename_prefix}_{game_id}_{i + 1}",
                     width=width,
                     height=height,
                     max_retries=2,
                 )
                 if url:
                     urls.append(url)
-                    logger.info(f"[IMAGE] Loading image #{i+1} generated: {url[:60]}...")
+                    logger.info(
+                        f"[IMAGE] Loading image #{i + 1} generated: {url[:60]}..."
+                    )
                 else:
-                    logger.warning(f"[IMAGE] Loading image #{i+1} failed to generate")
+                    logger.warning(f"[IMAGE] Loading image #{i + 1} failed to generate")
             except Exception as e:
-                logger.error(f"[IMAGE] Loading image #{i+1} error: {e}")
+                logger.error(f"[IMAGE] Loading image #{i + 1} error: {e}")
 
         logger.info(f"[IMAGE] Generated {len(urls)}/{count} loading images")
         return urls
@@ -492,18 +514,20 @@ class ImageGenerator:
         height: int = 768,
     ) -> List[str]:
         """Generate N splash images based on game title and description.
-        
+
         Args:
             game_title: The generated game/ship title
             welcome_text: The atmospheric welcome description
             count: Number of splash images to generate
             filename_prefix: Prefix for output files
             game_id: Game ID to scope generated filenames
-        
+
         Returns:
             List of generated image URLs.
         """
-        logger.info(f"[IMAGE] Generating {count} splash images for: {game_title[:60]}...")
+        logger.info(
+            f"[IMAGE] Generating {count} splash images for: {game_title[:60]}..."
+        )
 
         prompts = [
             f"Epic establishing shot of {game_title[:150]}. {welcome_text[:150]}. Wide-angle view of starship exterior, nebula background, Star Trek style, cinematic lighting, 4K quality, space opera aesthetic.",
@@ -517,18 +541,20 @@ class ImageGenerator:
             try:
                 url = await self.generate_image(
                     prompt=prompt,
-                    filename_prefix=f"{filename_prefix}_{game_id}_{i+1}",
+                    filename_prefix=f"{filename_prefix}_{game_id}_{i + 1}",
                     width=width,
                     height=height,
                     max_retries=2,
                 )
                 if url:
                     urls.append(url)
-                    logger.info(f"[IMAGE] Splash image {i+1}/{count} generated: {url[:60]}...")
+                    logger.info(
+                        f"[IMAGE] Splash image {i + 1}/{count} generated: {url[:60]}..."
+                    )
                 else:
-                    logger.warning(f"[IMAGE] Splash image {i+1}/{count} failed")
+                    logger.warning(f"[IMAGE] Splash image {i + 1}/{count} failed")
             except Exception as e:
-                logger.error(f"[IMAGE] Splash image {i+1}/{count} error: {e}")
+                logger.error(f"[IMAGE] Splash image {i + 1}/{count} error: {e}")
 
         logger.info(f"[IMAGE] Generated {len(urls)}/{count} splash images")
         return urls

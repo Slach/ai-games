@@ -5,6 +5,6 @@ This module implements the complete Daily Game Play Loop as specified in PROJECT
 using strands-agents/sdk-python for orchestration.
 """
 
-from .game_master import GameMasterAgent, create_game_master_agent
+from .game_master import GameMasterScheduler
 
-__all__ = ["GameMasterAgent", "create_game_master_agent"]
+__all__ = ["GameMasterScheduler"]

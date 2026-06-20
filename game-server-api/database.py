@@ -450,7 +450,7 @@ def run_migrations():
                 (version, datetime.now().isoformat()),
             )
             conn.commit()
-    
+
     # Verify ALL critical tables exist after migrations.
     # This handles cases where the database file persisted but tables were lost
     # (e.g. 0-byte game_master.db from Docker bind mount, or partial corruption).
@@ -466,7 +466,7 @@ def run_migrations():
             )
             cursor.executescript(create_sql)
             conn.commit()
-    
+
     conn.close()
 
 
@@ -876,7 +876,9 @@ def get_game_day(day: int, game_id: str = "default_game") -> Optional[Dict[str, 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM game_days WHERE day = ? AND game_id = ?", (day, game_id))
+    cursor.execute(
+        "SELECT * FROM game_days WHERE day = ? AND game_id = ?", (day, game_id)
+    )
     row = cursor.fetchone()
     conn.close()
 
@@ -1083,7 +1085,9 @@ def is_game_active(game_id: str = "default_game") -> bool:
     )
 
 
-def end_game(reason: str = "game_over", game_id: str = "default_game") -> Dict[str, Any]:
+def end_game(
+    reason: str = "game_over", game_id: str = "default_game"
+) -> Dict[str, Any]:
     """End the game by setting ship destroyed and crew health to 0"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1322,14 +1326,14 @@ def save_game_image(
     prompt: str = "",
 ) -> Optional[int]:
     """Save a game image URL (loading or splash) to the database.
-    
+
     Args:
         type: 'splash' or 'loading'
         image_url: ComfyUI URL for the image
         game_id: Game identifier
         day: Game day (None for loading or splash images)
         prompt: Generation prompt used
-    
+
     Returns:
         The ID of the inserted row, or None on failure.
     """
@@ -1357,12 +1361,12 @@ def get_random_game_image(
     day: Optional[int] = None,
 ) -> Optional[str]:
     """Get a random game image URL by type.
-    
+
     Args:
         type: 'splash' or 'loading'
         game_id: Game identifier
         day: Game day filter (only for 'splash' type)
-    
+
     Returns:
         Random image URL, or None if none exist.
     """
@@ -1490,7 +1494,9 @@ def get_all_active_npcs(game_id: str = "default_game") -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def get_npc_by_role(role_key: str, game_id: str = "default_game") -> Optional[Dict[str, Any]]:
+def get_npc_by_role(
+    role_key: str, game_id: str = "default_game"
+) -> Optional[Dict[str, Any]]:
     """Find an active NPC by role key."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1522,7 +1528,9 @@ def deactivate_npc(npc_key: str) -> bool:
 # ============== Player Kicks ==============
 
 
-def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "") -> Dict[str, Any]:
+def record_kick(
+    kicked_player_id: int, replaced_by_npc_key: str, reason: str = ""
+) -> Dict[str, Any]:
     """Record a player kick."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1615,6 +1623,11 @@ def get_player_briefing(
     conn.close()
     if not row:
         return None
+    return _briefing_row_to_dict(row)
+
+
+def _briefing_row_to_dict(row) -> Dict[str, Any]:
+    """Convert a player_briefings row from the database to a dict."""
     return {
         "id": row["id"],
         "day": row["day"],
@@ -1645,20 +1658,7 @@ def get_all_briefings_for_day(
     conn.close()
     result = []
     for row in rows:
-        result.append({
-            "id": row["id"],
-            "day": row["day"],
-            "player_id": row["player_id"],
-            "npc_key": row["npc_key"],
-            "is_npc": bool(row["is_npc"]),
-            "briefing": row["briefing"],
-            "choices": json.loads(row["choices"] or "[]"),
-            "selected_action_id": row["selected_action_id"],
-            "choice_rationale": row["choice_rationale"],
-            "consequence_result": json.loads(row["consequence_result"] or "{}"),
-            "created_at": row["created_at"],
-            "game_id": row["game_id"],
-        })
+        result.append(_briefing_row_to_dict(row))
     return result
 
 
@@ -1704,14 +1704,16 @@ def get_players_who_need_to_choose(
     conn.close()
     result = []
     for row in rows:
-        result.append({
-            "id": row["id"],
-            "day": row["day"],
-            "player_id": row["player_id"],
-            "briefing": row["briefing"],
-            "choices": json.loads(row["choices"] or "[]"),
-            "game_id": row["game_id"],
-        })
+        result.append(
+            {
+                "id": row["id"],
+                "day": row["day"],
+                "player_id": row["player_id"],
+                "briefing": row["briefing"],
+                "choices": json.loads(row["choices"] or "[]"),
+                "game_id": row["game_id"],
+            }
+        )
     return result
 
 

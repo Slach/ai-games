@@ -2,6 +2,7 @@
 .venv
 *.so
 .idea/
+node_modules/
 .vscode/
 comfyui/user/
 comfyui/output/
