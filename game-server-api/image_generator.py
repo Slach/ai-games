@@ -265,8 +265,11 @@ class ImageGenerator:
                             status.get("completed", False)
                             or status.get("status_str") == "success"
                         ):
+                            elapsed = asyncio.get_event_loop().time() - start
                             outputs = history[prompt_id].get("outputs", {})
-                            logger.info(f"ComfyUI prompt {prompt_id} completed")
+                            logger.info(
+                                f"ComfyUI prompt {prompt_id} completed in {elapsed:.1f}s"
+                            )
                             return outputs
                         elif status.get("status_str") == "error":
                             raise Exception(f"ComfyUI execution error: {status}")

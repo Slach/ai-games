@@ -45,13 +45,15 @@ ONBOARDING = {
 HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
-        "commands": "**Команды:**\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/help - Эта справка\n\n**Команды Game Master:**\n/gm_start_game <id> - Запустить игру\n/gm_kick <id> <роль> - Изгнать игрока\n/gm_list_games - Список игр",
-        "how_to_play": "**Как играть:**\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
+        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/help - Эта справка",
+        "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр",
+        "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
-        "commands": "**Commands:**\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/help - This help\n\n**Game Master Commands:**\n/gm_start_game <id> - Start a game\n/gm_kick <id> <role> - Kick a player\n/gm_list_games - List all games",
-        "how_to_play": "**How to play:**\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
+        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/help - This help",
+        "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games",
+        "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
 }
 
@@ -87,7 +89,7 @@ CURRENT_DAY = {
         "npc_dialogues": "*NPC диалоги:*",
         "actions": "*Ваши варианты действий:*\n{actions}",
         "select_action": "Выберите действие ниже:",
-        "briefing_header": "*Ваша личная вводная:*\n{briefing}",
+        "briefing_header": "{briefing}",
         "error": "Не удалось получить информацию о текущем ходе: {error}",
     },
     LANGUAGE_EN: {
@@ -96,7 +98,7 @@ CURRENT_DAY = {
         "npc_dialogues": "*NPC dialogues:*",
         "actions": "*Your action choices:*\n{actions}",
         "select_action": "Select an action below:",
-        "briefing_header": "*Your personal briefing:*\n{briefing}",
+        "briefing_header": "{briefing}",
         "error": "Could not get information about the current turn: {error}",
     },
 }

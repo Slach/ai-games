@@ -803,32 +803,84 @@ async def _send_avatar_to_player(
 
 
 async def _broadcast_game_started(
-    new_player_id: int, profile: dict, other_player_ids: list, bot: Bot
+    new_player_id: int, profile: dict, other_player_ids: list[int], bot: Bot
 ):
-    """Notify all players that the game has started (the new player triggered >= 3 players)."""
+    """Notify all players that the game has started (the new player triggered >= 3 players).
+
+    Also sends bridge image + mission info to all existing players.
+    """
     try:
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+        bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
         player_name = str(new_player_id)
 
-        # Notify existing players that the game is now starting
-        # Note: new player already received game_already_started in their onboarding message
-        for other_id in other_player_ids:
+        # Fetch bridge image and mission info once for all players
+        mission = None
+        bridge = None
+        from contextlib import suppress
+
+        with suppress(Exception):
+            mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+        with suppress(Exception):
+            bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
+
+        # Notify ALL players (new + existing) that the game has started
+        # Send to existing players AND the new player who triggered start
+        all_recipients = other_player_ids + [new_player_id]
+        for other_id in all_recipients:
             try:
-                await bot.send_message(
-                    chat_id=other_id,
-                    text=onboarding_msgs["game_starting_broadcast"].format(
-                        player_name=player_name,
-                        role=escape_markdown(profile.get("role", "")),
-                        role_description=escape_markdown(
-                            profile.get("role_description", "")
+                # Only send text notification to existing players (new player
+                # already got onboarding-complete message)
+                if other_id != new_player_id:
+                    await bot.send_message(
+                        chat_id=other_id,
+                        text=onboarding_msgs["game_starting_broadcast"].format(
+                            player_name=player_name,
+                            role=escape_markdown(profile.get("role", "")),
+                            role_description=escape_markdown(
+                                profile.get("role_description", "")
+                            ),
                         ),
-                    ),
-                    parse_mode="Markdown",
-                )
-                avatar_url = profile.get("avatar_url")
-                await _send_avatar_to_player(
-                    bot, other_id, avatar_url, player_name, profile
-                )
+                        parse_mode="Markdown",
+                    )
+                    avatar_url = profile.get("avatar_url")
+                    await _send_avatar_to_player(
+                        bot, other_id, avatar_url, player_name, profile
+                    )
+                # Send bridge image with mission info to all
+                if bridge and bridge.get("image_url"):
+                    caption = bridge_msgs["title"]
+                    if mission:
+                        caption += "\n\n" + bridge_msgs["mission_header"].format(
+                            name=mission.get("name", "")
+                        )
+                        caption += "\n\n" + bridge_msgs["mission_desc"].format(
+                            description=mission.get("description", "")
+                        )
+                    # Fetch and send bridge photo directly to this chat
+                    try:
+                        async with (
+                            aiohttp.ClientSession() as session,
+                            session.get(
+                                bridge["image_url"],
+                                timeout=aiohttp.ClientTimeout(total=30),
+                            ) as img_resp,
+                        ):
+                            if img_resp.status == 200:
+                                photo_data = await img_resp.read()
+                                photo = BufferedInputFile(
+                                    photo_data, filename="bridge.png"
+                                )
+                                await bot.send_photo(
+                                    chat_id=other_id,
+                                    photo=photo,
+                                    caption=caption,
+                                    parse_mode="Markdown",
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to send bridge image to player {other_id}: {e}"
+                        )
             except Exception as e:
                 logger.warning(
                     f"Failed to notify player {other_id} about game start: {e}"
@@ -907,6 +959,7 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
 
     Buttons show numbers [1] [2] [3] etc. instead of full action text.
     Full action text is displayed in the message as a numbered list.
+    Arranged in 2 columns for compact display.
     """
     builder = InlineKeyboardBuilder()
     for idx, action in enumerate(actions, start=1):
@@ -915,7 +968,8 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
                 text=f"[{idx}]", callback_data=f"action:{action['id']}"
             )
         )
-    builder.adjust(1)
+    # All actions in a single row for maximum compactness
+    builder.adjust(len(actions))
     return builder.as_markup()
 
 
@@ -1485,39 +1539,19 @@ async def cmd_help(message: types.Message):
         # Fallback to generic title
         game_title = "🎮 Space Exploration Game"
 
-    help_title = f"**{escape_markdown(game_title)} — Help**"
-
-    # Only show GM commands if the requesting user is the configured Game Master
-    is_gm = GAME_MASTER_ID > 0 and player_id == GAME_MASTER_ID
-
-    if is_gm:
-        # Include GM commands in help text
-        help_text = f"{help_title}\n\n{msgs['commands']}\n\n{msgs['how_to_play']}"
-    else:
-        # Show only regular commands (no /gm_* commands)
-        if BOT_LANGUAGE == "ru":
-            commands_only = (
-                "**Команды:**\n"
-                "/start - Начать или продолжить игру\n"
-                "/profile - Показать ваш профиль\n"
-                "/today - Текущий ход игры\n"
-                "/bridge - Картинка рубки и миссия\n"
-                "/help - Эта справка"
-            )
-        else:
-            commands_only = (
-                "**Commands:**\n"
-                "/start - Start or continue the game\n"
-                "/profile - Show your profile\n"
-                "/today - Current game turn\n"
-                "/bridge - Bridge image and mission\n"
-                "/help - This help"
-            )
-        help_text = f"{help_title}\n\n{commands_only}\n\n{msgs['how_to_play']}"
+    # Build help text from components
+    parts = [game_title]
+    parts.append("")
+    parts.append(msgs["regular_commands"])
+    if GAME_MASTER_ID > 0 and player_id == GAME_MASTER_ID:
+        parts.append("")
+        parts.append(msgs["gm_commands"])
+    parts.append("")
+    parts.append(msgs["how_to_play"])
+    help_text = "\n".join(parts)
 
     await message.answer(
         help_text,
-        parse_mode="Markdown",
     )
 
 
@@ -2407,8 +2441,36 @@ async def _process_game_update_for_player(
         choices = personal_briefing.get("choices", actions)
         day_num = day.get("day", "")
         comic_url = personal_briefing.get("comic_url")
+        briefing_image_url = personal_briefing.get("briefing_image_url")
 
-        # Send comic image first, if available
+        # Send briefing image first, if available
+        if briefing_image_url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    resp = await session.get(
+                        briefing_image_url,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    )
+                    if resp.status == 200:
+                        photo_data = await resp.read()
+                        photo = BufferedInputFile(photo_data, filename="briefing.png")
+                        await bot.send_photo(
+                            chat_id=player_id,
+                            photo=photo,
+                        )
+                        logger.info(
+                            f"Sent briefing image to player {player_id} for day {day_num}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to download briefing image: {resp.status}"
+                        )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to send briefing image to player {player_id}: {e}"
+                )
+
+        # Send comic image, if available (after briefing image)
         if comic_url:
             try:
                 async with aiohttp.ClientSession() as session:

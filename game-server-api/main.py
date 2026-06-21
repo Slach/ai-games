@@ -5,6 +5,7 @@ Game Master API - FastAPI service for AI Game Master
 import asyncio
 import json
 import logging
+import os
 import random
 import string
 import traceback
@@ -624,7 +625,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1267,10 +1268,15 @@ async def poll_game_updates(player_id: int, since: str | None = None):
             # Player has a briefing with choices — check if they already chose
             if not briefing.get("selected_action_id"):
                 # Player hasn't chosen yet — return their briefing
+                # Get scene image for this day
+                scene_url = get_random_game_image(
+                    type="scene", day=current_day_num, game_id=game_id
+                )
                 updates["personal_briefing"] = {
                     "briefing": briefing["briefing"],
                     "choices": briefing["choices"],
                     "comic_url": briefing.get("comic_url"),
+                    "briefing_image_url": scene_url,
                 }
                 updates["pending_actions"] = briefing["choices"]
                 updates["new_game_day"] = {
@@ -2130,51 +2136,105 @@ async def admin_start_game(request: StartGameRequest):
         game_id,
     )
 
-    # Step B: Generate per-player briefings and choices
-    all_briefings = []
-    for participant in all_participants:
-        gm_profile = {
-            "player_id": participant.get("player_id"),
-            "npc_key": participant.get("npc_key"),
-            "role": participant["role"],
-            "personality_traits": participant.get("personality_traits", []),
-            "role_description": participant.get("role_description", ""),
-        }
-        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile)
-        briefing = briefing_data.get("briefing", "")
-        choices = briefing_data.get("choices", [])
-
-        if participant["type"] == "npc":
-            # NPCs decide immediately without seeing consequences
-            npc_profile = get_npc_profile(participant["npc_key"]) or participant
-            npc_decision = gm.generate_npc_choice(choices, npc_profile)
-            selected_id = npc_decision.get("action_id", "")
-            rationale = npc_decision.get("rationale", "")
-
-            # Find the consequence for the chosen action
-            chosen_consequence = ""
-            for c in choices:
-                if c.get("id") == selected_id:
-                    chosen_consequence = c.get("consequence", "")
-                    break
-
-            saved = save_player_briefing(
-                {
-                    "day": day_num,
-                    "player_id": None,
-                    "npc_key": participant["npc_key"],
-                    "is_npc": True,
-                    "briefing": briefing,
-                    "choices": choices,
-                    "selected_action_id": selected_id,
-                    "choice_rationale": rationale,
-                    "consequence_result": {"consequence": chosen_consequence},
-                },
-                game_id,
+    # Step A2: Generate scene image for this turn's briefing
+    scene_url = None
+    try:
+        scene_prompt = (
+            f"Sci-fi scene: {global_circ.get('setting', '')}. "
+            f"{global_narrative[:500]} "
+            f"Cinematic starship interior, crew interacting with holographic displays, "
+            f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+        )
+        image_gen = create_image_generator()
+        scene_url = await image_gen.generate_scene_image(
+            prompt=scene_prompt,
+            filename_prefix=f"scene_day{day_num}_{game_id}",
+        )
+        if scene_url:
+            save_game_image(
+                type="scene",
+                image_url=scene_url,
+                game_id=game_id,
+                day=day_num,
+                prompt=scene_prompt,
             )
-            if saved:
-                all_briefings.append(
+            logger.info(
+                f"[SCENE] Turn scene image saved for day {day_num}: {scene_url}"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[SCENE] Failed to generate turn scene image for day {day_num}: {e}"
+        )
+
+    # Step B: Generate per-player briefings and choices IN PARALLEL
+    llm_parallel = int(os.getenv("LLM_PARALLEL", "2"))
+    sem = asyncio.Semaphore(llm_parallel)
+
+    async def _process_participant(
+        participant: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Generate briefing for one participant (player or NPC) under semaphore."""
+        async with sem:
+            gm_profile = {
+                "player_id": participant.get("player_id"),
+                "npc_key": participant.get("npc_key"),
+                "role": participant["role"],
+                "personality_traits": participant.get("personality_traits", []),
+                "role_description": participant.get("role_description", ""),
+            }
+            try:
+                # LLM call — run in thread pool to avoid blocking the event loop
+                briefing_data = await asyncio.to_thread(
+                    gm.generate_player_briefing_and_choices, global_circ, gm_profile
+                )
+            except Exception as e:
+                logger.error(
+                    f"[BRIEFING] Failed to generate briefing for {participant.get('role', '?')}: {e}"
+                )
+                return None
+
+            briefing = briefing_data.get("briefing", "")
+            choices = briefing_data.get("choices", [])
+
+            if participant["type"] == "npc":
+                # NPCs decide immediately without seeing consequences
+                npc_profile = get_npc_profile(participant["npc_key"]) or participant
+                try:
+                    npc_decision = await asyncio.to_thread(
+                        gm.generate_npc_choice, choices, npc_profile
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[NPC] Failed to generate choice for {participant.get('npc_key', '?')}: {e}"
+                    )
+                    return None
+
+                selected_id = npc_decision.get("action_id", "")
+                rationale = npc_decision.get("rationale", "")
+
+                # Find the consequence for the chosen action
+                chosen_consequence = ""
+                for c in choices:
+                    if c.get("id") == selected_id:
+                        chosen_consequence = c.get("consequence", "")
+                        break
+
+                saved = save_player_briefing(
                     {
+                        "day": day_num,
+                        "player_id": None,
+                        "npc_key": participant["npc_key"],
+                        "is_npc": True,
+                        "briefing": briefing,
+                        "choices": choices,
+                        "selected_action_id": selected_id,
+                        "choice_rationale": rationale,
+                        "consequence_result": {"consequence": chosen_consequence},
+                    },
+                    game_id,
+                )
+                if saved:
+                    return {
                         **saved,
                         "name": participant.get("npc_name", participant["npc_key"]),
                         "role": participant["role"],
@@ -2183,31 +2243,38 @@ async def admin_start_game(request: StartGameRequest):
                             "",
                         ),
                     }
-                )
-        else:
-            # Real players — save briefing without choice (they'll choose later)
-            saved = save_player_briefing(
-                {
-                    "day": day_num,
-                    "player_id": participant["player_id"],
-                    "npc_key": None,
-                    "is_npc": False,
-                    "briefing": briefing,
-                    "choices": choices,
-                    "selected_action_id": None,
-                    "choice_rationale": "",
-                    "consequence_result": {},
-                },
-                game_id,
-            )
-            if saved:
-                all_briefings.append(
+            else:
+                # Real players — save briefing without choice (they'll choose later)
+                saved = save_player_briefing(
                     {
+                        "day": day_num,
+                        "player_id": participant["player_id"],
+                        "npc_key": None,
+                        "is_npc": False,
+                        "briefing": briefing,
+                        "choices": choices,
+                        "selected_action_id": None,
+                        "choice_rationale": "",
+                        "consequence_result": {},
+                    },
+                    game_id,
+                )
+                if saved:
+                    return {
                         **saved,
                         "name": str(participant["player_id"]),
                         "role": participant["role"],
                     }
-                )
+            return None
+
+    # Run all participant briefings in parallel with semaphore limiting concurrency
+    tasks = [_process_participant(p) for p in all_participants]
+    results = await asyncio.gather(*tasks)
+    all_briefings = [r for r in results if r]
+
+    logger.info(
+        f"[BRIEFING] Generated {len(all_briefings)}/{len(all_participants)} briefings"
+    )
 
     # Step C: Analyze NPC choices (real players haven't chosen yet)
     npc_decisions = [b for b in all_briefings if b.get("is_npc")]
