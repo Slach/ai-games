@@ -23,6 +23,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime objects."""
+
+    def default(self, o):
+        if isinstance(o, datetime):
+            return o.isoformat()
+        return super().default(o)
+
+
 DB_PATH = os.getenv("PLAYER_STATE_DB", "/app/player_states.db")
 
 # ---------------------------------------------------------------------------
@@ -179,7 +189,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
             if key == "last_poll" and isinstance(value, datetime):
                 value = value.isoformat()
             elif key in ("pending_updates", "current_options") and value is not None:
-                value = json.dumps(value)
+                value = json.dumps(value, cls=DateTimeEncoder)
 
             set_parts.append(f"{key} = ?")
             values.append(value)

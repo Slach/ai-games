@@ -381,6 +381,12 @@ MIGRATIONS = [
     ALTER TABLE player_profiles ADD COLUMN is_spectator INTEGER DEFAULT 0
     """,
     ),
+    (
+        32,
+        """
+    ALTER TABLE player_briefings ADD COLUMN comic_url TEXT DEFAULT NULL
+    """,
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -713,7 +719,7 @@ def create_onboarding_session(
             session_id,
             player_id,
             language,
-            json.dumps(questions) if questions else "[]",
+            json.dumps(questions, ensure_ascii=False) if questions else "[]",
             shuffle_seed,
             created_at,
         ),
@@ -781,10 +787,10 @@ def update_onboarding_session(
                WHERE session_id = ?""",
             (
                 current_question,
-                json.dumps(answers),
+                json.dumps(answers, ensure_ascii=False),
                 1 if completed else 0,
                 language,
-                json.dumps(questions),
+                json.dumps(questions, ensure_ascii=False),
                 session_id,
             ),
         )
@@ -795,7 +801,7 @@ def update_onboarding_session(
                WHERE session_id = ?""",
             (
                 current_question,
-                json.dumps(answers),
+                json.dumps(answers, ensure_ascii=False),
                 1 if completed else 0,
                 language,
                 session_id,
@@ -808,9 +814,9 @@ def update_onboarding_session(
                WHERE session_id = ?""",
             (
                 current_question,
-                json.dumps(answers),
+                json.dumps(answers, ensure_ascii=False),
                 1 if completed else 0,
-                json.dumps(questions),
+                json.dumps(questions, ensure_ascii=False),
                 session_id,
             ),
         )
@@ -819,7 +825,12 @@ def update_onboarding_session(
             """UPDATE onboarding_sessions
                SET current_question = ?, answers = ?, completed = ?
                WHERE session_id = ?""",
-            (current_question, json.dumps(answers), 1 if completed else 0, session_id),
+            (
+                current_question,
+                json.dumps(answers, ensure_ascii=False),
+                1 if completed else 0,
+                session_id,
+            ),
         )
 
     conn.commit()
@@ -848,7 +859,7 @@ def create_player_profile(player_data: dict[str, Any]) -> dict[str, Any] | None:
             player_data.get("avatar_description"),
             player_data["role"],
             player_data.get("role_description"),
-            json.dumps(player_data.get("personality_traits", [])),
+            json.dumps(player_data.get("personality_traits", []), ensure_ascii=False),
             player_data.get("game_id"),
             None,  # last_poll initialized to None
             datetime.now().isoformat(),
@@ -917,12 +928,12 @@ def create_game_day(
         (
             day_data["day"],
             day_data["story"],
-            json.dumps(day_data.get("npc_dialogues", [])),
-            json.dumps(day_data.get("player_actions", [])),
-            json.dumps(day_data.get("generated_content", {})),
+            json.dumps(day_data.get("npc_dialogues", []), ensure_ascii=False),
+            json.dumps(day_data.get("player_actions", []), ensure_ascii=False),
+            json.dumps(day_data.get("generated_content", {}), ensure_ascii=False),
             day_data.get("teaser"),
             day_data.get("ship_alive", 1),
-            json.dumps(day_data.get("crew_status", {})),
+            json.dumps(day_data.get("crew_status", {}), ensure_ascii=False),
             day_data.get("previous_day_summary"),
             day_data.get("global_circumstances", ""),
             day_data.get("combined_outcome", ""),
@@ -990,7 +1001,7 @@ def save_player_action(
             day,
             action_id,
             choice,
-            json.dumps(consequence_result or {}),
+            json.dumps(consequence_result or {}, ensure_ascii=False),
             datetime.now().isoformat(),
         ),
     )
@@ -1504,7 +1515,7 @@ def create_npc_profile(npc_data: dict[str, Any]) -> dict[str, Any] | None:
             npc_data["npc_name"],
             npc_data["role"],
             npc_data.get("role_description", ""),
-            json.dumps(npc_data.get("personality_traits", [])),
+            json.dumps(npc_data.get("personality_traits", []), ensure_ascii=False),
             npc_data.get("species", "Human"),
             npc_data.get("gender", "Male"),
             npc_data.get("avatar_description", ""),
@@ -1649,18 +1660,19 @@ def save_player_briefing(
     cursor.execute(
         """INSERT INTO player_briefings
            (day, player_id, npc_key, is_npc, briefing, choices,
-            selected_action_id, choice_rationale, consequence_result, created_at, game_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            selected_action_id, choice_rationale, consequence_result, comic_url, created_at, game_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             briefing_data["day"],
             briefing_data.get("player_id"),
             briefing_data.get("npc_key"),
             1 if briefing_data.get("is_npc", False) else 0,
             briefing_data["briefing"],
-            json.dumps(briefing_data.get("choices", [])),
+            json.dumps(briefing_data.get("choices", []), ensure_ascii=False),
             briefing_data.get("selected_action_id"),
             briefing_data.get("choice_rationale", ""),
-            json.dumps(briefing_data.get("consequence_result", {})),
+            json.dumps(briefing_data.get("consequence_result", {}), ensure_ascii=False),
+            briefing_data.get("comic_url"),
             datetime.now().isoformat(),
             game_id,
         ),
@@ -1703,6 +1715,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
         "selected_action_id": row["selected_action_id"],
         "choice_rationale": row["choice_rationale"],
         "consequence_result": json.loads(row["consequence_result"] or "{}"),
+        "comic_url": row["comic_url"],
         "created_at": row["created_at"],
         "game_id": row["game_id"],
     }
@@ -1742,9 +1755,23 @@ def update_briefing_choice(
         (
             selected_action_id,
             choice_rationale,
-            json.dumps(consequence_result or {}),
+            json.dumps(consequence_result or {}, ensure_ascii=False),
             briefing_id,
         ),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def update_briefing_comic_url(briefing_id: int, comic_url: str | None) -> bool:
+    """Store a comic URL in a player's briefing."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE player_briefings SET comic_url = ? WHERE id = ?",
+        (comic_url, briefing_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()
@@ -1830,8 +1857,8 @@ def create_mission(
             game_id,
             mission_data["name"],
             mission_data["description"],
-            json.dumps(mission_data.get("objectives", [])),
-            json.dumps(mission_data.get("stage_progress", {})),
+            json.dumps(mission_data.get("objectives", []), ensure_ascii=False),
+            json.dumps(mission_data.get("stage_progress", {}), ensure_ascii=False),
             mission_data.get("current_stage", 0),
             mission_data.get("total_stages", 1),
             datetime.now().isoformat(),
@@ -1891,7 +1918,7 @@ def update_mission_stage_progress(
            SET stage_progress = ?, current_stage = ?, completed = ?
            WHERE game_id = ? AND id = (SELECT id FROM game_missions WHERE game_id = ? ORDER BY created_at DESC LIMIT 1)""",
         (
-            json.dumps(stage_progress),
+            json.dumps(stage_progress, ensure_ascii=False),
             current_stage,
             1 if completed else 0,
             game_id,

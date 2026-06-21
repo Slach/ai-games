@@ -72,6 +72,7 @@ from database import (
     start_game,
     take_role,
     update_briefing_choice,
+    update_briefing_comic_url,
     update_game_day_global_circumstances,
     update_game_day_outcome,
     update_game_state,
@@ -911,8 +912,17 @@ async def complete_onboarding(session_id: str):
         game_master = create_game_master_agent(language=session.get("language", "en"))
 
         species_desc = profile.get("species_description") or ""
-        if species_desc:
-            avatar_description_combined = f"{profile.get('avatar_description', '')}\nSpecies/Gender: {species_desc}"
+        species_type = profile.get("species", "") or ""
+        gender_type = profile.get("gender", "") or ""
+        if species_desc or species_type or gender_type:
+            parts = [profile.get("avatar_description", "")]
+            if species_type:
+                parts.append(f"Species type: {species_type}")
+            if gender_type:
+                parts.append(f"Gender type: {gender_type}")
+            if species_desc:
+                parts.append(f"Appearance: {species_desc}")
+            avatar_description_combined = "\n".join(parts)
         else:
             avatar_description_combined = profile.get("avatar_description", "")
 
@@ -931,15 +941,19 @@ async def complete_onboarding(session_id: str):
     if not avatar_prompt:
         traits_str = ", ".join(profile.get("personality_traits", []))
         species_desc = profile.get("species_description", "")
+        species_type = profile.get("species", "") or ""
+        gender_type = profile.get("gender", "") or ""
         avatar_desc = profile.get("avatar_description", "")
-        combined_desc = f"{avatar_desc} {species_desc}".lower()
+        combined_desc = (
+            f"{avatar_desc} {species_type} {gender_type} {species_desc}".lower()
+        )
 
         # Detect species category from available text
         species_cat = "human"
         cat_keywords = {
             "energy": [
                 "energy being",
-                "энергетическая",
+                "энергетическ",
                 "plasma",
                 "energy field",
                 "gaseous",
@@ -949,7 +963,7 @@ async def complete_onboarding(session_id: str):
             ],
             "cybernetic": [
                 "cybernetic",
-                "кибернетическая",
+                "кибернетическ",
                 "robotic",
                 "mechanical",
                 "synthetic",
@@ -960,7 +974,7 @@ async def complete_onboarding(session_id: str):
             ],
             "symbiotic": [
                 "symbiotic",
-                "симбиотическая",
+                "симбиотическ",
                 "symbiont",
                 "composite",
                 "multiple beings",
@@ -975,8 +989,14 @@ async def complete_onboarding(session_id: str):
                 "carapace",
                 "exoskeleton",
                 "crystalline",
-                "no face",
+                "кристаллическ",
+                "щупальц",
+                "панцирь",
+                "экзоскелет",
+                "бесформенн",
                 "amorphous",
+                "alien anatomy",
+                "multiple limb",
             ],
             "humanoid": ["humanoid", "гуманоид"],
         }
@@ -1250,6 +1270,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
                 updates["personal_briefing"] = {
                     "briefing": briefing["briefing"],
                     "choices": briefing["choices"],
+                    "comic_url": briefing.get("comic_url"),
                 }
                 updates["pending_actions"] = briefing["choices"]
                 updates["new_game_day"] = {
@@ -1821,6 +1842,11 @@ async def generate_personalized_comic(
         prompt=prompt,
         filename_prefix=f"comic_day{game_day}_{game_id}_{role.replace(' ', '_')}",
     )
+
+    # Store comic_url in player's briefing for this day (if briefing exists)
+    briefing = get_player_briefing(game_day, player_id, game_id=game_id)
+    if briefing:
+        update_briefing_comic_url(briefing["id"], comic_url)
 
     return {
         "player_id": player_id,

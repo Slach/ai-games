@@ -1452,14 +1452,13 @@ class GameMasterAgent:
         """
         t = text.lower()
 
-        # Species type keywords ordered by specificity (more specific first)
+        # Species type keywords (use stems for Russian morphology variants)
         categories = [
             (
                 "energy",
                 [
                     "energy being",
-                    "энергетическая",
-                    "energy being",
+                    "энергетическ",  # covers энергетический, энергетическая, энергетическое
                     "plasma",
                     "energy field",
                     "gaseous",
@@ -1469,13 +1468,18 @@ class GameMasterAgent:
                     "energy pattern",
                     "field of energy",
                     "electromagnetic",
+                    "plasma being",
+                    "non corporeal",
+                    "incorporeal",
+                    "ethereal",
+                    "gaseous being",
                 ],
             ),
             (
                 "cybernetic",
                 [
                     "cybernetic",
-                    "кибернетическая",
+                    "кибернетическ",  # covers кибернетический, кибернетическая
                     "robotic",
                     "mechanical",
                     "synthetic",
@@ -1487,13 +1491,17 @@ class GameMasterAgent:
                     "prosthetic",
                     "circuit",
                     "processor",
+                    "mech",
+                    "artificial intelligence",
+                    "artificial being",
                 ],
             ),
             (
                 "symbiotic",
                 [
                     "symbiotic",
-                    "симбиотическая",
+                    "симбиотическ",  # covers симбиотический, симбиотическая, симбиотическое
+                    "симбионт",
                     "symbiont",
                     "composite",
                     "multiple beings",
@@ -1502,7 +1510,13 @@ class GameMasterAgent:
                     "collective",
                     "союз существ",
                     "коллектив",
-                    "симбионт",
+                    "несколько существ",
+                    "hive mind",
+                    "shared consciousness",
+                    "multiple consciousness",
+                    "two beings",
+                    "joined",
+                    "merged",
                 ],
             ),
             (
@@ -1514,18 +1528,26 @@ class GameMasterAgent:
                     "carapace",
                     "exoskeleton",
                     "crystalline",
+                    "кристаллическ",  # covers кристаллический, кристаллические, кристаллическая
+                    "панцирь",
+                    "щупальц",  # covers щупальца, щупальце
+                    "экзоскелет",
+                    "бесформенн",  # covers бесформенный, бесформенная
                     "no face",
                     "no head",
                     "slime",
                     "amorphous",
-                    "щупальца",
-                    "панцирь",
-                    "экзоскелет",
-                    "кристаллический",
-                    "бесформенный",
                     "without face",
                     "without head",
                     "no humanoid form",
+                    "multiple limbs",
+                    "multiple leg",
+                    "alien anatomy",
+                    "non human",
+                    "silicon based",
+                    "gelatinous",
+                    "multi legged",
+                    "non humanoid",
                 ],
             ),
             (
@@ -1534,6 +1556,7 @@ class GameMasterAgent:
                     "humanoid",
                     "гуманоид",
                     "humanoid with",
+                    "humanoid alien",
                 ],
             ),
         ]
@@ -1803,9 +1826,9 @@ spatial presence\n"
                 temperature=0.8,
                 max_tokens=1024,
             )
-            combined = parsed.get("combined_description", "")
-            logger.info(f"[SPECIES] Description generated: {combined}...")
-            return combined
+            species_desc = parsed.get("species_description", "")
+            logger.info(f"[SPECIES] Description generated: {species_desc}...")
+            return species_desc
         except Exception as e:
             logger.warning(f"[SPECIES] LLM description failed, using fallback: {e}")
             return self._fallback_species_gender_description(
@@ -2523,7 +2546,7 @@ spatial presence\n"
             [
                 f"  - {p.get('role', '?')} ({p.get('type', '?')}): "
                 f"species={p.get('species', '?')}, "
-                f"traits={p.get('personality_traits', [])}"
+                f"traits={', '.join(p.get('personality_traits', []))}"
                 for p in all_participants
             ]
         )
@@ -2593,7 +2616,7 @@ spatial presence\n"
         roles_text = "\n".join(
             [
                 f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} - "
-                f"{r.get('avatar_description', '')} - traits: {r.get('personality_traits', [])}"
+                f"{r.get('avatar_description', '')} - traits: {', '.join(r.get('personality_traits', []))}"
                 for r in npc_roles
             ]
         )

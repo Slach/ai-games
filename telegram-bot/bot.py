@@ -116,6 +116,18 @@ class GameSelectionState(StatesGroup):
 # flow can resume where they left off.
 
 
+# Track last briefing day sent per player to avoid duplicate messages on poll
+_last_sent_briefing_day: dict[int, int | None] = {}
+
+
+def _get_player_briefing_day(result: dict) -> int | None:
+    """Extract the day number from a poll result, if any."""
+    day = result.get("new_game_day", {})
+    if isinstance(day, dict):
+        return day.get("day")
+    return None
+
+
 # ============== Helper Functions ==============
 
 
@@ -495,29 +507,45 @@ async def poll_game_updates(player_id: int):
         last_poll = profile.get("last_poll") if profile else None
 
         # Poll for updates using the new endpoint
-        params = {"last_poll": last_poll} if last_poll is not None else {}
+        params = {"since": last_poll} if last_poll is not None else {}
         result = await api_request("GET", f"/game/poll/{player_id}", params=params)
         if result is None:
             return
 
-        # Process updates
-        if result.get("new_game_day"):
-            state["pending_updates"].append(
-                {
-                    "type": "new_day",
-                    "day": result["new_game_day"],
-                    "timestamp": datetime.now(),
-                }
-            )
+        # Consolidate all updates from this poll into a single pending entry
+        new_game_day = result.get("new_game_day")
+        pending_actions = result.get("pending_actions", [])
+        personal_briefing = result.get("personal_briefing")
+        messages_from_gm = result.get("messages_from_gm", [])
 
-        if result.get("pending_actions"):
-            state["pending_updates"].append(
-                {
-                    "type": "pending_actions",
-                    "actions": result["pending_actions"],
-                    "timestamp": datetime.now(),
-                }
-            )
+        has_updates = new_game_day or pending_actions or messages_from_gm
+
+        if has_updates:
+            # Deduplicate: skip if we already sent briefing for this day
+            day_num = _get_player_briefing_day(result)
+            if day_num is not None:
+                last_sent = _last_sent_briefing_day.get(player_id)
+                if last_sent == day_num:
+                    logger.debug(
+                        f"Skipping duplicate briefing for player {player_id}, day {day_num}"
+                    )
+                    has_updates = False
+
+        if has_updates:
+            entry = {
+                "type": "game_update",
+                "timestamp": datetime.now().isoformat(),
+            }
+            if new_game_day:
+                entry["day"] = new_game_day
+            if pending_actions:
+                entry["actions"] = pending_actions
+            if personal_briefing:
+                entry["personal_briefing"] = personal_briefing
+            if messages_from_gm:
+                entry["messages_from_gm"] = messages_from_gm
+
+            state["pending_updates"].append(entry)
 
         # Update last poll time and persist to DB
         state["last_poll"] = datetime.now()
@@ -1457,7 +1485,7 @@ async def cmd_help(message: types.Message):
         # Fallback to generic title
         game_title = "🎮 Space Exploration Game"
 
-    help_title = f"**{game_title} — Help**"
+    help_title = f"**{escape_markdown(game_title)} — Help**"
 
     # Only show GM commands if the requesting user is the configured Game Master
     is_gm = GAME_MASTER_ID > 0 and player_id == GAME_MASTER_ID
@@ -1776,7 +1804,7 @@ async def cmd_gm_regenerate_turn(message: types.Message):
 async def cmd_gm_restart_game(message: types.Message):
     """GM command: Reset game state and restart from turn 1.
 
-    Shows a confirmation prompt first. Use /gm_restart_game_confirm to proceed.
+    Immediately restarts the game, deleting all content.
     Usage: /gm_restart_game <game_id>
     Only executable by the configured Game Master user.
     """
@@ -1799,53 +1827,31 @@ async def cmd_gm_restart_game(message: types.Message):
         await message.answer(gm_msgs["restart_game_usage"])
         return
 
-    # Show confirmation prompt
-    await message.answer(
-        gm_msgs["confirm_restart"].format(game_id=game_id),
-        parse_mode="Markdown",
-    )
-
-
-async def cmd_gm_restart_game_confirm(message: types.Message):
-    """GM command: Confirm and execute game restart.
-
-    Usage: /gm_restart_game_confirm <game_id>
-    Only executable by the configured Game Master user.
-    """
-    assert message.from_user is not None
-    player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
-
-    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(
-            f"Unauthorized /gm_restart_game_confirm attempt by user {player_id}"
-        )
-        await message.answer(gm_msgs["unauthorized"])
-        return
-
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer(gm_msgs["need_confirm"])
-        return
-
-    game_id = parts[1].strip()
-    if not game_id:
-        await message.answer(gm_msgs["restart_game_usage"])
-        return
-
     await message.answer(
         gm_msgs["restarting_game"].format(game_id=game_id),
         parse_mode="Markdown",
     )
 
     try:
+        # Step 1: Reset game state
         result = await api_request(
             "POST",
             "/admin/restart-game",
             params={"game_id": game_id, "language": BOT_LANGUAGE},
             timeout_total=120,
         )
-        if result and result.get("status") == "success":
+        if not result or result.get("status") != "success":
+            await message.answer(gm_msgs["restart_game_error"].format(error=result))
+            return
+
+        # Step 2: Immediately start the game (generate Day 1)
+        start_result = await api_request(
+            "POST",
+            "/admin/start-game",
+            data={"game_id": game_id, "language": BOT_LANGUAGE},
+            timeout_total=600,
+        )
+        if start_result and start_result.get("status") == "success":
             msg = gm_msgs["game_restarted"].format(
                 game_id=game_id,
                 deleted_days=result.get("deleted_days", 0),
@@ -1853,10 +1859,20 @@ async def cmd_gm_restart_game_confirm(message: types.Message):
                 deleted_actions=result.get("deleted_actions", 0),
                 deleted_messages=result.get("deleted_messages", 0),
                 deleted_mission=result.get("deleted_mission", False),
+                day_num=start_result.get("day", 1),
+                player_count=start_result.get("player_count", 0),
+                npc_count=start_result.get("npc_count", 0),
             )
+            if start_result.get("briefings"):
+                msg += gm_msgs["briefings_sent"]
             await message.answer(msg, parse_mode="Markdown")
         else:
-            await message.answer(gm_msgs["restart_game_error"].format(error=result))
+            # Game was reset but start failed
+            await message.answer(
+                gm_msgs["restart_game_error"].format(
+                    error="Сброс выполнен, но запуск не удался: " + str(start_result)
+                )
+            )
     except Exception as e:
         logger.error(f"Failed to restart game {game_id}: {e}")
         await message.answer(gm_msgs["restart_game_error"].format(error=e))
@@ -2374,6 +2390,136 @@ async def refresh_game(callback: types.CallbackQuery):
 # ============== Polling Loop ==============
 
 
+async def _process_game_update_for_player(
+    player_id: int, update: dict, bot: Bot
+) -> None:
+    """Send game updates (briefings, actions, messages) to the player via Telegram."""
+    day = update.get("day", {})
+    actions = update.get("actions", [])
+    personal_briefing = update.get("personal_briefing")
+    messages_from_gm = update.get("messages_from_gm", [])
+
+    msgs = lang.get_current_day(BOT_LANGUAGE)
+
+    if personal_briefing and actions:
+        # New personal-briefing system: send briefing + action choices
+        briefing_text = personal_briefing.get("briefing", "")
+        choices = personal_briefing.get("choices", actions)
+        day_num = day.get("day", "")
+        comic_url = personal_briefing.get("comic_url")
+
+        # Send comic image first, if available
+        if comic_url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    resp = await session.get(
+                        comic_url,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    )
+                    if resp.status == 200:
+                        photo_data = await resp.read()
+                        photo = BufferedInputFile(photo_data, filename="comic.png")
+                        await bot.send_photo(
+                            chat_id=player_id,
+                            photo=photo,
+                        )
+                        logger.info(
+                            f"Sent comic to player {player_id} for day {day_num}"
+                        )
+                    else:
+                        logger.warning(f"Failed to download comic: {resp.status}")
+            except Exception as e:
+                logger.warning(f"Failed to send comic to player {player_id}: {e}")
+
+        actions_text = "\n\n".join(
+            [
+                f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
+                for i, a in enumerate(choices)
+            ]
+        )
+
+        text = (
+            msgs["title"].format(day=day_num)
+            + "\n\n"
+            + msgs["briefing_header"].format(briefing=briefing_text)
+            + "\n\n"
+            + msgs["actions"].format(actions=actions_text)
+            + "\n\n"
+            + msgs["select_action"]
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=player_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=create_action_keyboard(choices),
+            )
+            logger.info(f"Sent briefing to player {player_id} for day {day_num}")
+        except Exception as e:
+            logger.error(f"Failed to send briefing to player {player_id}: {e}")
+
+    elif day and actions and not personal_briefing:
+        # Legacy system: send story + actions
+        story_text = day.get("story", day.get("briefing", ""))
+        npc_dialogues = day.get("npc_dialogues", [])
+        day_num = day.get("day", "")
+
+        actions_text = "\n\n".join(
+            [
+                f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
+                for i, a in enumerate(actions)
+            ]
+        )
+
+        npc_text = ""
+        if npc_dialogues:
+            npc_text = "\n".join(
+                [
+                    f"- {d.get('npc', 'NPC')}: {d.get('dialogue', '')}"
+                    for d in npc_dialogues
+                ]
+            )
+            npc_text = "\n\n" + msgs["npc_dialogues"] + "\n" + npc_text
+
+        text = (
+            msgs["title"].format(day=day_num)
+            + "\n\n"
+            + msgs["story"].format(story=story_text)
+            + npc_text
+            + "\n\n"
+            + msgs["actions"].format(actions=actions_text)
+            + "\n\n"
+            + msgs["select_action"]
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=player_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=create_action_keyboard(actions),
+            )
+            logger.info(f"Sent legacy briefing to player {player_id} for day {day_num}")
+        except Exception as e:
+            logger.error(f"Failed to send legacy briefing to player {player_id}: {e}")
+
+    # Forward GM messages
+    for gm_msg in messages_from_gm:
+        msg_text = gm_msg.get("message", gm_msg.get("text", ""))
+        if msg_text:
+            try:
+                await bot.send_message(
+                    chat_id=player_id,
+                    text=f"📨 *Сообщение от Game Master:*\n\n{escape_markdown(msg_text)}"
+                    if BOT_LANGUAGE == "ru"
+                    else f"📨 *Message from Game Master:*\n\n{escape_markdown(msg_text)}",
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.error(f"Failed to send GM message to player {player_id}: {e}")
+
+
 async def polling_loop(bot: Bot):
     """Background polling loop for checking updates"""
     logger.info("Starting polling loop")
@@ -2392,14 +2538,22 @@ async def polling_loop(bot: Bot):
                 ).total_seconds() >= POLLING_INTERVAL:
                     await poll_game_updates(player_id)
 
+                    # RE-READ state after poll_game_updates saved new entries to DB
+                    # (poll_game_updates gets its own state reference internally)
+                    state = get_player_state(player_id)
+
                     # Process pending updates
                     for update in state.get("pending_updates", []):
-                        if update["type"] == "new_day":
-                            day = update["day"]
-                            # Could send notification to player here
-                            logger.info(
-                                f"New game day available for player {player_id}: Day {day['day']}"
+                        if update["type"] == "game_update":
+                            await _process_game_update_for_player(
+                                player_id, update, bot
                             )
+                            # Track last sent briefing day for dedup
+                            day_data = update.get("day", {})
+                            if isinstance(day_data, dict):
+                                day_num = day_data.get("day")
+                                if day_num is not None:
+                                    _last_sent_briefing_day[player_id] = day_num
 
                     # Clear processed updates
                     state["pending_updates"] = []
@@ -2453,7 +2607,6 @@ async def main():
     dp.message.register(cmd_gm_continue_game, Command("gm_continue_game"))
     dp.message.register(cmd_gm_regenerate_turn, Command("gm_regenerate_turn"))
     dp.message.register(cmd_gm_restart_game, Command("gm_restart_game"))
-    dp.message.register(cmd_gm_restart_game_confirm, Command("gm_restart_game_confirm"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Onboarding answer handler - must be registered BEFORE general text handlers
