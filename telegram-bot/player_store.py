@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sqlite3
+from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
@@ -69,11 +70,17 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
             current_options     TEXT,
             last_poll           TEXT,
             pending_updates     TEXT     DEFAULT '[]',
+            last_briefing_day_sent INTEGER DEFAULT NULL,
             created_at          TEXT     DEFAULT (datetime('now')),
             updated_at          TEXT     DEFAULT (datetime('now'))
         )
         """
     )
+    # Add column if it doesn't exist (for databases created before this migration)
+    with suppress(sqlite3.OperationalError):
+        conn.execute(
+            "ALTER TABLE player_states ADD COLUMN last_briefing_day_sent INTEGER DEFAULT NULL"
+        )
     conn.commit()
 
 
@@ -154,6 +161,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
             "current_options": current_options,
             "last_poll": last_poll,
             "pending_updates": pending_list,
+            "last_briefing_day_sent": row["last_briefing_day_sent"],
         }
     finally:
         conn.close()
@@ -181,6 +189,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
                 "current_options",
                 "last_poll",
                 "pending_updates",
+                "last_briefing_day_sent",
             ):
                 logger.warning("Unknown player_state key '%s' — skipping", key)
                 continue

@@ -28,20 +28,48 @@ def get_db_connection():
     return conn
 
 
-# Migration management
-MIGRATIONS = [
-    (
-        1,
+MIGRATIONS: list[tuple[int, str]] = []
+
+SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
+
+
+def init_db():
+    """Initialize database: create all tables, apply pending migrations, seed defaults."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    conn.execute("PRAGMA journal_mode=WAL")
+    cursor.executescript(
         """
     CREATE TABLE IF NOT EXISTS migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        2,
-        """
+    );
+    CREATE TABLE IF NOT EXISTS games (
+        game_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        setting TEXT DEFAULT 'starship',
+        status TEXT DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        max_players INTEGER DEFAULT 10,
+        started INTEGER DEFAULT 0,
+        started_at TEXT DEFAULT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ship_roles (
+        role_key TEXT NOT NULL,
+        taken_by INTEGER DEFAULT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        PRIMARY KEY (role_key, game_id)
+    );
+    CREATE TABLE IF NOT EXISTS game_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        day INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'active',
+        ship_alive INTEGER DEFAULT 1,
+        crew_health INTEGER DEFAULT 100,
+        last_updated TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS onboarding_sessions (
         session_id TEXT PRIMARY KEY,
         player_id INTEGER NOT NULL,
@@ -50,13 +78,9 @@ MIGRATIONS = [
         completed INTEGER DEFAULT 0,
         language TEXT DEFAULT 'en',
         questions TEXT DEFAULT '[]',
+        shuffle_seed INTEGER DEFAULT 0,
         created_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        3,
-        """
+    );
     CREATE TABLE IF NOT EXISTS player_profiles (
         player_id INTEGER PRIMARY KEY,
         avatar_url TEXT,
@@ -66,30 +90,31 @@ MIGRATIONS = [
         personality_traits TEXT DEFAULT '[]',
         game_id TEXT,
         last_poll TEXT,
-        created_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        4,
-        """
+        created_at TEXT NOT NULL,
+        species TEXT DEFAULT NULL,
+        gender TEXT DEFAULT NULL,
+        species_description TEXT DEFAULT NULL,
+        species_secondary TEXT DEFAULT NULL,
+        gender_secondary TEXT DEFAULT NULL,
+        is_dead INTEGER DEFAULT 0,
+        is_spectator INTEGER DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS game_days (
-        day INTEGER PRIMARY KEY,
+        day INTEGER NOT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
         story TEXT NOT NULL,
-        npc_dialogues TEXT DEFAULT '[]',
+        crew_dialogues TEXT DEFAULT '[]',
         player_actions TEXT DEFAULT '[]',
         generated_content TEXT DEFAULT '{}',
         teaser TEXT,
         ship_alive INTEGER DEFAULT 1,
         crew_status TEXT DEFAULT '{}',
         previous_day_summary TEXT,
-        created_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        5,
-        """
+        global_circumstances TEXT DEFAULT '',
+        combined_outcome TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (day, game_id)
+    );
     CREATE TABLE IF NOT EXISTS player_actions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         player_id INTEGER NOT NULL,
@@ -99,91 +124,14 @@ MIGRATIONS = [
         consequence_result TEXT DEFAULT '{}',
         created_at TEXT NOT NULL,
         FOREIGN KEY (player_id) REFERENCES player_profiles(player_id)
-    )
-    """,
-    ),
-    (
-        6,
-        """
+    );
     CREATE TABLE IF NOT EXISTS game_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         player_id INTEGER NOT NULL,
         message TEXT NOT NULL,
         message_type TEXT DEFAULT 'text',
         timestamp TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        7,
-        """
-    CREATE TABLE IF NOT EXISTS game_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        day INTEGER DEFAULT 1,
-        status TEXT DEFAULT 'active',
-        ship_alive INTEGER DEFAULT 1,
-        crew_health INTEGER DEFAULT 100,
-        last_updated TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        8,
-        """
-    CREATE TABLE IF NOT EXISTS games (
-        game_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        setting TEXT DEFAULT 'starship',
-        status TEXT DEFAULT 'active',
-        created_at TEXT NOT NULL,
-        max_players INTEGER DEFAULT 10
-    )
-    """,
-    ),
-    (
-        9,
-        """
-    CREATE TABLE IF NOT EXISTS ship_roles (
-        role_key TEXT PRIMARY KEY,
-        taken_by INTEGER DEFAULT NULL,
-        game_id TEXT DEFAULT 'default_game'
-    )
-    """,
-    ),
-    (
-        10,
-        """
-    ALTER TABLE games ADD COLUMN started INTEGER DEFAULT 0
-    """,
-    ),
-    (
-        11,
-        """
-    ALTER TABLE games ADD COLUMN started_at TEXT DEFAULT NULL
-    """,
-    ),
-    (
-        12,
-        """
-    ALTER TABLE player_profiles ADD COLUMN species TEXT DEFAULT NULL
-    """,
-    ),
-    (
-        13,
-        """
-    ALTER TABLE player_profiles ADD COLUMN gender TEXT DEFAULT NULL
-    """,
-    ),
-    (
-        14,
-        """
-    ALTER TABLE player_profiles ADD COLUMN species_description TEXT DEFAULT NULL
-    """,
-    ),
-    (
-        15,
-        """
+    );
     CREATE TABLE IF NOT EXISTS game_images (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         type TEXT NOT NULL,
@@ -192,12 +140,7 @@ MIGRATIONS = [
         image_url TEXT NOT NULL,
         prompt TEXT DEFAULT '',
         created_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        16,
-        """
+    );
     CREATE TABLE IF NOT EXISTS npc_profiles (
         npc_key TEXT PRIMARY KEY,
         role_key TEXT NOT NULL,
@@ -212,24 +155,14 @@ MIGRATIONS = [
         is_active INTEGER DEFAULT 1,
         replaces_player_id INTEGER DEFAULT NULL,
         created_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        17,
-        """
+    );
     CREATE TABLE IF NOT EXISTS player_kicks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         kicked_player_id INTEGER NOT NULL,
         replaced_by_npc_key TEXT,
         reason TEXT DEFAULT '',
         kicked_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        18,
-        """
+    );
     CREATE TABLE IF NOT EXISTS player_briefings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         day INTEGER NOT NULL,
@@ -241,120 +174,10 @@ MIGRATIONS = [
         selected_action_id TEXT DEFAULT NULL,
         choice_rationale TEXT DEFAULT '',
         consequence_result TEXT DEFAULT '{}',
+        comic_url TEXT DEFAULT NULL,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
         created_at TEXT NOT NULL
-    )
-    """,
-    ),
-    (
-        19,
-        """
-    ALTER TABLE game_days ADD COLUMN global_circumstances TEXT DEFAULT ''
-    """,
-    ),
-    (
-        20,
-        """
-    ALTER TABLE game_days ADD COLUMN combined_outcome TEXT DEFAULT ''
-    """,
-    ),
-    (
-        21,
-        """
-    CREATE TABLE game_state_v2 (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        game_id TEXT NOT NULL DEFAULT 'default_game',
-        day INTEGER DEFAULT 1,
-        status TEXT DEFAULT 'active',
-        ship_alive INTEGER DEFAULT 1,
-        crew_health INTEGER DEFAULT 100,
-        last_updated TEXT NOT NULL
     );
-
-    INSERT INTO game_state_v2 (game_id, day, status, ship_alive, crew_health, last_updated)
-    SELECT 'default_game', day, status, ship_alive, crew_health, last_updated
-    FROM game_state;
-
-    DROP TABLE IF EXISTS game_state;
-    ALTER TABLE game_state_v2 RENAME TO game_state;
-    """,
-    ),
-    (
-        22,
-        """
-    ALTER TABLE game_days ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game'
-    """,
-    ),
-    (
-        23,
-        """
-    ALTER TABLE player_briefings ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game'
-    """,
-    ),
-    (
-        24,
-        """
-    CREATE TABLE IF NOT EXISTS game_days_v2 (
-        day INTEGER NOT NULL,
-        game_id TEXT NOT NULL DEFAULT 'default_game',
-        story TEXT NOT NULL,
-        npc_dialogues TEXT DEFAULT '[]',
-        player_actions TEXT DEFAULT '[]',
-        generated_content TEXT DEFAULT '{}',
-        teaser TEXT,
-        ship_alive INTEGER DEFAULT 1,
-        crew_status TEXT DEFAULT '{}',
-        previous_day_summary TEXT,
-        global_circumstances TEXT DEFAULT '',
-        combined_outcome TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (day, game_id)
-    );
-
-    INSERT INTO game_days_v2 (day, game_id, story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at)
-    SELECT day, COALESCE(game_id, 'default_game'), story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at FROM game_days;
-
-    DROP TABLE IF EXISTS game_days;
-    ALTER TABLE game_days_v2 RENAME TO game_days;
-    """,
-    ),
-    (
-        25,
-        """
-    CREATE TABLE IF NOT EXISTS ship_roles_v2 (
-        role_key TEXT NOT NULL,
-        taken_by INTEGER DEFAULT NULL,
-        game_id TEXT NOT NULL DEFAULT 'default_game',
-        PRIMARY KEY (role_key, game_id)
-    );
-
-    INSERT INTO ship_roles_v2 (role_key, taken_by, game_id)
-    SELECT role_key, taken_by, COALESCE(game_id, 'default_game') FROM ship_roles;
-
-    DROP TABLE IF EXISTS ship_roles;
-    ALTER TABLE ship_roles_v2 RENAME TO ship_roles;
-    """,
-    ),
-    (
-        26,
-        """
-    ALTER TABLE onboarding_sessions ADD COLUMN shuffle_seed INTEGER DEFAULT 0
-    """,
-    ),
-    (
-        27,
-        """
-    ALTER TABLE player_profiles ADD COLUMN species_secondary TEXT DEFAULT NULL
-    """,
-    ),
-    (
-        28,
-        """
-    ALTER TABLE player_profiles ADD COLUMN gender_secondary TEXT DEFAULT NULL
-    """,
-    ),
-    (
-        29,
-        """
     CREATE TABLE IF NOT EXISTS game_missions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_id TEXT NOT NULL DEFAULT 'default_game',
@@ -366,141 +189,11 @@ MIGRATIONS = [
         total_stages INTEGER DEFAULT 1,
         completed INTEGER DEFAULT 0,
         created_at TEXT NOT NULL
+    );
+    """
     )
-    """,
-    ),
-    (
-        30,
-        """
-    ALTER TABLE player_profiles ADD COLUMN is_dead INTEGER DEFAULT 0
-    """,
-    ),
-    (
-        31,
-        """
-    ALTER TABLE player_profiles ADD COLUMN is_spectator INTEGER DEFAULT 0
-    """,
-    ),
-    (
-        32,
-        """
-    ALTER TABLE player_briefings ADD COLUMN comic_url TEXT DEFAULT NULL
-    """,
-    ),
-]
-
-SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
-
-# Recovery SQL for critical tables (final schema with all columns from CREATE + ALTER).
-# Used when migrations table says version >= N but the actual table is missing
-# (e.g., 0-byte db file through Docker bind mount).
-_CRITICAL_TABLE_RECOVERY: dict[str, str] = {
-    "games": """CREATE TABLE IF NOT EXISTS games (
-        game_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        setting TEXT DEFAULT 'starship',
-        status TEXT DEFAULT 'active',
-        created_at TEXT NOT NULL,
-        max_players INTEGER DEFAULT 10,
-        started INTEGER DEFAULT 0,
-        started_at TEXT DEFAULT NULL
-    )""",
-    "ship_roles": """CREATE TABLE IF NOT EXISTS ship_roles (
-        role_key TEXT NOT NULL,
-        taken_by INTEGER DEFAULT NULL,
-        game_id TEXT NOT NULL DEFAULT 'default_game',
-        PRIMARY KEY (role_key, game_id)
-    )""",
-    "game_state": """CREATE TABLE IF NOT EXISTS game_state (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        game_id TEXT NOT NULL DEFAULT 'default_game',
-        day INTEGER DEFAULT 1,
-        status TEXT DEFAULT 'active',
-        ship_alive INTEGER DEFAULT 1,
-        crew_health INTEGER DEFAULT 100,
-        last_updated TEXT NOT NULL
-    )""",
-    "onboarding_sessions": """CREATE TABLE IF NOT EXISTS onboarding_sessions (
-        session_id TEXT PRIMARY KEY,
-        player_id INTEGER NOT NULL,
-        current_question INTEGER DEFAULT 0,
-        answers TEXT DEFAULT '{}',
-        completed INTEGER DEFAULT 0,
-        language TEXT DEFAULT 'en',
-        questions TEXT DEFAULT '[]',
-        shuffle_seed INTEGER DEFAULT 0,
-        created_at TEXT NOT NULL
-    )""",
-    "player_profiles": """CREATE TABLE IF NOT EXISTS player_profiles (
-        player_id INTEGER PRIMARY KEY,
-        avatar_url TEXT,
-        avatar_description TEXT,
-        role TEXT NOT NULL,
-        role_description TEXT,
-        personality_traits TEXT DEFAULT '[]',
-        game_id TEXT,
-        last_poll TEXT,
-        created_at TEXT NOT NULL,
-        species TEXT DEFAULT NULL,
-        gender TEXT DEFAULT NULL,
-        species_description TEXT DEFAULT NULL,
-        species_secondary TEXT DEFAULT NULL,
-        gender_secondary TEXT DEFAULT NULL
-    )""",
-    "game_days": """CREATE TABLE IF NOT EXISTS game_days (
-        day INTEGER NOT NULL,
-        game_id TEXT NOT NULL DEFAULT 'default_game',
-        story TEXT NOT NULL,
-        npc_dialogues TEXT DEFAULT '[]',
-        player_actions TEXT DEFAULT '[]',
-        generated_content TEXT DEFAULT '{}',
-        teaser TEXT,
-        ship_alive INTEGER DEFAULT 1,
-        crew_status TEXT DEFAULT '{}',
-        previous_day_summary TEXT,
-        global_circumstances TEXT DEFAULT '',
-        combined_outcome TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (day, game_id)
-    )""",
-    "player_actions": """CREATE TABLE IF NOT EXISTS player_actions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        player_id INTEGER NOT NULL,
-        day INTEGER NOT NULL,
-        action_id TEXT NOT NULL,
-        choice TEXT NOT NULL,
-        consequence_result TEXT DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (player_id) REFERENCES player_profiles(player_id)
-    )""",
-    "game_messages": """CREATE TABLE IF NOT EXISTS game_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        player_id INTEGER NOT NULL,
-        message TEXT NOT NULL,
-        message_type TEXT DEFAULT 'text',
-        timestamp TEXT NOT NULL
-    )""",
-}
-
-
-def get_current_schema_version(conn: sqlite3.Connection) -> int:
-    cursor = conn.cursor()
-    # Check if migrations table exists
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='migrations'"
-    )
-    if cursor.fetchone() is None:
-        return 0
     cursor.execute("SELECT MAX(version) FROM migrations")
-    row = cursor.fetchone()
-    return row[0] if row[0] is not None else 0
-
-
-def run_migrations():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    current_version = get_current_schema_version(conn)
+    current_version = cursor.fetchone()[0] or 0
     for version, sql in MIGRATIONS:
         if version > current_version:
             cursor.executescript(sql)
@@ -509,44 +202,7 @@ def run_migrations():
                 (version, datetime.now().isoformat()),
             )
             conn.commit()
-
-    # Verify ALL critical tables exist after migrations.
-    # This handles cases where the database file persisted but tables were lost
-    # (e.g. 0-byte game_master.db from Docker bind mount, or partial corruption).
-    for table_name, create_sql in _CRITICAL_TABLE_RECOVERY.items():
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,),
-        )
-        if cursor.fetchone() is None:
-            logger.warning(
-                "Critical table '%s' missing after migrations, re-creating...",
-                table_name,
-            )
-            cursor.executescript(create_sql)
-            conn.commit()
-
-    conn.close()
-
-
-def init_db():
-    """Initialize database with default data if needed"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Initialize default game if not exists
-    # Belt-and-suspenders: if games table is somehow still missing after
-    # run_migrations() recovery (e.g. partial write), rebuild and retry.
-    try:
-        cursor.execute("SELECT COUNT(*) FROM games")
-    except sqlite3.OperationalError:
-        logger.warning("games table missing in init_db, re-running migrations...")
-        conn.close()
-        run_migrations()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM games")
-
+    cursor.execute("SELECT COUNT(*) FROM games")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
             """INSERT INTO games (game_id, name, description, setting, status, created_at, max_players)
@@ -561,7 +217,6 @@ def init_db():
                 10,
             ),
         )
-
     conn.commit()
     conn.close()
     _ensure_game_state("default_game")
@@ -923,12 +578,12 @@ def create_game_day(
 
     cursor.execute(
         """INSERT OR REPLACE INTO game_days
-           (day, story, npc_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at, game_id)
+           (day, story, crew_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at, game_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             day_data["day"],
             day_data["story"],
-            json.dumps(day_data.get("npc_dialogues", []), ensure_ascii=False),
+            json.dumps(day_data.get("crew_dialogues", []), ensure_ascii=False),
             json.dumps(day_data.get("player_actions", []), ensure_ascii=False),
             json.dumps(day_data.get("generated_content", {}), ensure_ascii=False),
             day_data.get("teaser"),
@@ -965,7 +620,7 @@ def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | No
     return {
         "day": row["day"],
         "story": row["story"],
-        "npc_dialogues": json.loads(row["npc_dialogues"] or "[]"),
+        "crew_dialogues": json.loads(row["crew_dialogues"] or "[]"),
         "player_actions": json.loads(row["player_actions"] or "[]"),
         "generated_content": json.loads(row["generated_content"] or "{}"),
         "teaser": row["teaser"],

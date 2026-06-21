@@ -251,7 +251,7 @@ ONBOARDING_QUESTIONS_SCHEMA = _build_onboarding_questions_schema()
 NPC_DIALOGUE_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
-        "name": "npc_dialogue",
+        "name": "crew_dialogue",
         "strict": True,
         "schema": {
             "type": "object",
@@ -516,7 +516,10 @@ PLAYER_BRIEFING_CHOICES_SCHEMA = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {"type": "string"},
+                            "id": {
+                                "type": "string",
+                                "description": "Short unique identifier for this action, e.g. 'action_1', 'scan_hull', 'retreat'",
+                            },
                             "text": {
                                 "type": "string",
                                 "description": "Action description visible to the player",
@@ -1305,7 +1308,7 @@ class GameMasterAgent:
 
     # ============== NPC Dialogues ==============
 
-    def generate_npc_dialogues(
+    def generate_crew_dialogues(
         self, story: GameStory, player_role: str
     ) -> list[NPCDialogue]:
         """Generate NPC dialogues for the day."""
@@ -2242,6 +2245,14 @@ spatial presence\n"
                 max_tokens=4096,
             )
             logger.info(f"[DAY] Briefing generated for {player_id}")
+
+            # Override action IDs with guaranteed non-empty values —
+            # LLM sometimes returns empty/missing IDs which breaks NPC choice logic.
+            choices = parsed.get("choices", [])
+            for idx, choice in enumerate(choices, start=1):
+                choice["id"] = f"action_{idx}"
+            parsed["choices"] = choices
+
             return parsed
         except Exception as e:
             logger.error(f"[DAY] Briefing generation failed for {player_id}: {e}")

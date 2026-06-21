@@ -86,7 +86,7 @@ CURRENT_DAY = {
     LANGUAGE_RU: {
         "title": "🎯 **Ход {day}**",
         "story": "*Общая вводная:*\n{story}",
-        "npc_dialogues": "*NPC диалоги:*",
+        "crew_dialogues": "*NPC диалоги:*",
         "actions": "*Ваши варианты действий:*\n{actions}",
         "select_action": "Выберите действие ниже:",
         "briefing_header": "{briefing}",
@@ -95,7 +95,7 @@ CURRENT_DAY = {
     LANGUAGE_EN: {
         "title": "🎯 **Turn {day}**",
         "story": "*Global scenario:*\n{story}",
-        "npc_dialogues": "*NPC dialogues:*",
+        "crew_dialogues": "*NPC dialogues:*",
         "actions": "*Your action choices:*\n{actions}",
         "select_action": "Select an action below:",
         "briefing_header": "{briefing}",

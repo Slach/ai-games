@@ -49,7 +49,7 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Game Master API - FastAPI service for game orchestration
+  # Game Server API - FastAPI service for game orchestration
   game-server-api:
     image: game-server-api:spark-full
     build:

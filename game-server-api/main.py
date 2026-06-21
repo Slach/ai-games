@@ -66,7 +66,6 @@ from database import (
     record_kick,
     reset_game_state_to_day1,
     reset_roles,
-    run_migrations,
     save_game_image,
     save_player_action,
     save_player_briefing,
@@ -604,7 +603,6 @@ async def _generate_loading_images():
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     logger.info("Game Master API starting up")
-    run_migrations()
     init_db()
     logger.info("Database initialized and migrations run")
 
@@ -1288,17 +1286,21 @@ async def poll_game_updates(player_id: int, since: str | None = None):
                 scene_url = get_random_game_image(
                     type="scene", day=current_day_num, game_id=game_id
                 )
+                # Also fetch NPC dialogues for crew behavior context
+                day_record = get_game_day(current_day_num, game_id=game_id)
+                crew_dialogues = day_record["crew_dialogues"] if day_record else []
                 updates["personal_briefing"] = {
                     "briefing": briefing["briefing"],
                     "choices": briefing["choices"],
                     "comic_url": briefing.get("comic_url"),
                     "briefing_image_url": scene_url,
+                    "crew_dialogues": crew_dialogues,
                 }
                 updates["pending_actions"] = briefing["choices"]
                 updates["new_game_day"] = {
                     "day": current_day_num,
                     "briefing": briefing["briefing"],
-                    "npc_dialogues": [],
+                    "crew_dialogues": [],
                 }
         else:
             # Fall back to legacy game_days player_actions
@@ -1310,7 +1312,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
                     updates["new_game_day"] = {
                         "day": day["day"],
                         "story": day.get("global_circumstances") or day["story"],
-                        "npc_dialogues": day["npc_dialogues"],
+                        "crew_dialogues": day["crew_dialogues"],
                     }
 
         # Get recent messages from Game Master
@@ -1459,6 +1461,7 @@ async def get_player_briefing_endpoint(player_id: int, day: int):
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
         "day": briefing["day"],
+        "comic_url": briefing.get("comic_url"),
     }
 
 
@@ -1477,6 +1480,7 @@ async def get_current_briefing_endpoint(player_id: int):
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
         "day": briefing["day"],
+        "comic_url": briefing.get("comic_url"),
     }
 
 
@@ -1806,12 +1810,14 @@ async def generate_daily_episode(
     )
 
     logger.info("Generating NPC dialogues...")
-    dialogues = game_master.generate_npc_dialogues(story=story, player_role=player_role)
+    dialogues = game_master.generate_crew_dialogues(
+        story=story, player_role=player_role
+    )
 
     new_day = {
         "day": day_num,
         "story": story.narrative,
-        "npc_dialogues": [
+        "crew_dialogues": [
             {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
         ],
         "player_actions": story.decision_points,
@@ -2081,7 +2087,7 @@ async def admin_start_game(request: StartGameRequest):
         f"Total participants: {len(all_participants)} ({real_player_count} players + {len(npcs_created)} NPCs)"
     )
 
-    # 6a. Generate NPC avatars (simplified, no interview)
+    # 6a. Generate NPC avatars (only for NPCs without an existing avatar)
     npc_roles_for_avatar = [
         {
             "role_key": npc.get("role_key", ""),
@@ -2090,6 +2096,7 @@ async def admin_start_game(request: StartGameRequest):
             "personality_traits": npc.get("personality_traits", []),
         }
         for npc in npcs_created
+        if not npc.get("avatar_description", "").startswith("avatar_url=")
     ]
     if npc_roles_for_avatar:
         try:
@@ -2220,7 +2227,7 @@ async def admin_start_game(request: StartGameRequest):
         "day": day_num,
         "story": global_narrative,
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
-        "npc_dialogues": [],
+        "crew_dialogues": [],
         "player_actions": [],
         "generated_content": {
             "image": f"/content/day_{day_num}/scene.jpg",
@@ -2365,22 +2372,22 @@ async def admin_start_game(request: StartGameRequest):
         decision_points=[],
     )
     try:
-        dialogues = gm.generate_npc_dialogues(
+        dialogues = gm.generate_crew_dialogues(
             story=dialog_story, player_role=player_role
         )
-        npc_dialogues_list = [
+        crew_dialogues_list = [
             {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
         ]
     except Exception as e:
         logger.warning(f"NPC dialogue generation failed: {e}")
-        npc_dialogues_list = []
+        crew_dialogues_list = []
 
     # Step E: Create the game day record
     new_day = {
         "day": day_num,
         "story": global_narrative,
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
-        "npc_dialogues": npc_dialogues_list,
+        "crew_dialogues": crew_dialogues_list,
         "player_actions": all_briefings[0].get("choices", []) if all_briefings else [],
         "generated_content": {
             "image": f"/content/day_{day_num}/scene.jpg",
@@ -2434,7 +2441,7 @@ async def admin_start_game(request: StartGameRequest):
         "total_participants": len(all_participants),
         "global_circumstances": global_circ,
         "briefings": briefings_for_response,
-        "npc_dialogues": npc_dialogues_list,
+        "crew_dialogues": crew_dialogues_list,
         "mission": mission_info,
         "bridge_image_url": bridge_url,
     }
@@ -2753,7 +2760,7 @@ async def admin_continue_game(
         "day": day_num,
         "story": global_circ.get("narrative", ""),
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
-        "npc_dialogues": [],
+        "crew_dialogues": [],
         "player_actions": [],
         "generated_content": {
             "image": f"/content/day_{day_num}/scene.jpg",
@@ -2861,22 +2868,22 @@ async def admin_continue_game(
         decision_points=[],
     )
     try:
-        dialogues = gm.generate_npc_dialogues(
+        dialogues = gm.generate_crew_dialogues(
             story=dialog_story, player_role=player_role
         )
-        npc_dialogues_list = [
+        crew_dialogues_list = [
             {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
         ]
     except Exception as e:
         logger.warning(f"NPC dialogue generation failed: {e}")
-        npc_dialogues_list = []
+        crew_dialogues_list = []
 
     # Step E: Create game day record
     new_day = {
         "day": day_num,
         "story": global_circ.get("narrative", ""),
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
-        "npc_dialogues": npc_dialogues_list,
+        "crew_dialogues": crew_dialogues_list,
         "player_actions": all_briefings[0].get("choices", []) if all_briefings else [],
         "generated_content": {
             "image": f"/content/day_{day_num}/scene.jpg",
@@ -2897,7 +2904,7 @@ async def admin_continue_game(
         "total_participants": len(all_participants),
         "players": len(player_ids),
         "npcs": len(npcs),
-        "npc_dialogues": npc_dialogues_list,
+        "crew_dialogues": crew_dialogues_list,
     }
 
 

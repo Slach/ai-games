@@ -430,7 +430,7 @@ class ImageGenerator:
         day: int,
         story: str,
         player_profile: dict[str, Any],
-        npc_dialogues: list[dict[str, str]],
+        crew_dialogues: list[dict[str, str]],
     ) -> str:
         """Generate a personalized comic/scene for a player.
 
