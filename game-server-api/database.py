@@ -2,17 +2,20 @@
 SQLite database storage for Game Master API
 """
 
-import sqlite3
 import json
 import logging
+import os
+import sqlite3
 from datetime import datetime
-from typing import Optional, List, Dict, Any
 from pathlib import Path
+from typing import Any
 
-from language import SHIP_ROLES_I18N, LANGUAGE_RU, LANGUAGE_EN, get_ship_role_i18n
-
+from language import LANGUAGE_EN, LANGUAGE_RU, SHIP_ROLES_I18N, get_ship_role_i18n
 
 logger = logging.getLogger(__name__)
+
+# Minimum live players to start a game
+GAME_START_MIN_PLAYERS = int(os.getenv("GAME_START_MIN_PLAYERS", "3"))
 
 # Database path
 DB_PATH = Path(__file__).parent / "game_master.db"
@@ -349,6 +352,35 @@ MIGRATIONS = [
     ALTER TABLE player_profiles ADD COLUMN gender_secondary TEXT DEFAULT NULL
     """,
     ),
+    (
+        29,
+        """
+    CREATE TABLE IF NOT EXISTS game_missions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id TEXT NOT NULL DEFAULT 'default_game',
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        objectives TEXT DEFAULT '[]',
+        stage_progress TEXT DEFAULT '{}',
+        current_stage INTEGER DEFAULT 0,
+        total_stages INTEGER DEFAULT 1,
+        completed INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+    )
+    """,
+    ),
+    (
+        30,
+        """
+    ALTER TABLE player_profiles ADD COLUMN is_dead INTEGER DEFAULT 0
+    """,
+    ),
+    (
+        31,
+        """
+    ALTER TABLE player_profiles ADD COLUMN is_spectator INTEGER DEFAULT 0
+    """,
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -356,7 +388,7 @@ SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
 # Recovery SQL for critical tables (final schema with all columns from CREATE + ALTER).
 # Used when migrations table says version >= N but the actual table is missing
 # (e.g., 0-byte db file through Docker bind mount).
-_CRITICAL_TABLE_RECOVERY: Dict[str, str] = {
+_CRITICAL_TABLE_RECOVERY: dict[str, str] = {
     "games": """CREATE TABLE IF NOT EXISTS games (
         game_id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -563,8 +595,8 @@ def _ensure_game_state(game_id: str):
 
 
 def _enrich_role_with_i18n(
-    role_key: str, taken_by: Optional[int] = None, language: str = LANGUAGE_RU
-) -> Dict[str, Any]:
+    role_key: str, taken_by: int | None = None, language: str = LANGUAGE_RU
+) -> dict[str, Any]:
     ru = get_ship_role_i18n(role_key, LANGUAGE_RU)
     en = get_ship_role_i18n(role_key, LANGUAGE_EN)
     localized = get_ship_role_i18n(role_key, language)
@@ -588,7 +620,7 @@ def _enrich_role_with_i18n(
 
 def get_available_roles(
     game_id: str = "default_game", language: str = LANGUAGE_RU
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -602,7 +634,7 @@ def get_available_roles(
 
 def get_all_roles(
     game_id: str = "default_game", language: str = LANGUAGE_RU
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -633,7 +665,7 @@ def get_role_by_key(
     role_key: str,
     language: str = LANGUAGE_RU,
     game_id: str = "default_game",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -663,9 +695,9 @@ def reset_roles(game_id: str = "default_game"):
 def create_onboarding_session(
     player_id: int,
     language: str = "en",
-    questions: Optional[List[Dict[str, Any]]] = None,
+    questions: list[dict[str, Any]] | None = None,
     shuffle_seed: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -703,7 +735,7 @@ def create_onboarding_session(
     }
 
 
-def get_onboarding_session(session_id: str) -> Optional[Dict[str, Any]]:
+def get_onboarding_session(session_id: str) -> dict[str, Any] | None:
     """Get an onboarding session by ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -725,7 +757,7 @@ def get_onboarding_session(session_id: str) -> Optional[Dict[str, Any]]:
         "completed": bool(row["completed"]),
         "language": row["language"] or "en",
         "questions": json.loads(row["questions"] or "[]"),
-        "shuffle_seed": row.get("shuffle_seed", 0),
+        "shuffle_seed": row["shuffle_seed"] or 0,
         "created_at": row["created_at"],
     }
 
@@ -733,11 +765,11 @@ def get_onboarding_session(session_id: str) -> Optional[Dict[str, Any]]:
 def update_onboarding_session(
     session_id: str,
     current_question: int,
-    answers: Dict[int, str],
+    answers: dict[int, str],
     completed: bool = False,
-    language: Optional[str] = None,
-    questions: Optional[list] = None,
-) -> Optional[Dict[str, Any]]:
+    language: str | None = None,
+    questions: list | None = None,
+) -> dict[str, Any] | None:
     """Update an onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -799,7 +831,7 @@ def update_onboarding_session(
 # ============== Player Profiles ==============
 
 
-def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def create_player_profile(player_data: dict[str, Any]) -> dict[str, Any] | None:
     """Create or update a player profile"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -834,7 +866,7 @@ def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any
     return get_player_profile(player_data["player_id"])
 
 
-def get_player_profile(player_id: int) -> Optional[Dict[str, Any]]:
+def get_player_profile(player_id: int) -> dict[str, Any] | None:
     """Get a player profile by ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -859,8 +891,12 @@ def get_player_profile(player_id: int) -> Optional[Dict[str, Any]]:
         "species": row["species"],
         "gender": row["gender"],
         "species_description": row["species_description"],
-        "species_secondary": row.get("species_secondary"),
-        "gender_secondary": row.get("gender_secondary"),
+        "species_secondary": row["species_secondary"],
+        "gender_secondary": row["gender_secondary"],
+        "is_dead": bool(row["is_dead"]) if row["is_dead"] is not None else False,
+        "is_spectator": bool(row["is_spectator"])
+        if row["is_spectator"] is not None
+        else False,
     }
 
 
@@ -868,8 +904,8 @@ def get_player_profile(player_id: int) -> Optional[Dict[str, Any]]:
 
 
 def create_game_day(
-    day_data: Dict[str, Any], game_id: str = "default_game"
-) -> Optional[Dict[str, Any]]:
+    day_data: dict[str, Any], game_id: str = "default_game"
+) -> dict[str, Any] | None:
     """Create a new game day"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -901,7 +937,7 @@ def create_game_day(
     return get_game_day(day_data["day"], game_id)
 
 
-def get_game_day(day: int, game_id: str = "default_game") -> Optional[Dict[str, Any]]:
+def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | None:
     """Get a game day by number"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -940,8 +976,8 @@ def save_player_action(
     day: int,
     action_id: str,
     choice: str,
-    consequence_result: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    consequence_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Save a player action"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -973,9 +1009,7 @@ def save_player_action(
     }
 
 
-def get_player_actions(
-    player_id: int, day: Optional[int] = None
-) -> List[Dict[str, Any]]:
+def get_player_actions(player_id: int, day: int | None = None) -> list[dict[str, Any]]:
     """Get player actions, optionally filtered by day"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1010,7 +1044,7 @@ def get_player_actions(
 
 def add_game_message(
     player_id: int, message: str, message_type: str = "text"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Add a game message"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1034,7 +1068,7 @@ def add_game_message(
     }
 
 
-def get_game_messages(player_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+def get_game_messages(player_id: int, limit: int = 10) -> list[dict[str, Any]]:
     """Get recent game messages for a player"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1056,7 +1090,7 @@ def get_game_messages(player_id: int, limit: int = 10) -> List[Dict[str, Any]]:
 # ============== Game State ==============
 
 
-def get_game_state(game_id: str = "default_game") -> Dict[str, Any]:
+def get_game_state(game_id: str = "default_game") -> dict[str, Any]:
     """Get current game state"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1081,7 +1115,7 @@ def update_game_state(
     ship_alive: bool = True,
     crew_health: int = 100,
     game_id: str = "default_game",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Update game state"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1117,7 +1151,7 @@ def is_game_active(game_id: str = "default_game") -> bool:
 
 def end_game(
     reason: str = "game_over", game_id: str = "default_game"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """End the game by setting ship destroyed and crew health to 0"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1139,7 +1173,7 @@ def end_game(
 # ============== Games ==============
 
 
-def create_game(game_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def create_game(game_data: dict[str, Any]) -> dict[str, Any] | None:
     """Create a new game"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1167,7 +1201,7 @@ def create_game(game_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return get_game(game_data["game_id"])
 
 
-def get_game(game_id: str) -> Optional[Dict[str, Any]]:
+def get_game(game_id: str) -> dict[str, Any] | None:
     """Get a game by ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1190,7 +1224,7 @@ def get_game(game_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def get_available_games() -> List[Dict[str, Any]]:
+def get_available_games() -> list[dict[str, Any]]:
     """Get all available games"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1237,7 +1271,7 @@ def join_game(game_id: str, player_id: int) -> bool:
     return True
 
 
-def get_players_in_game(game_id: str) -> List[int]:
+def get_players_in_game(game_id: str) -> list[int]:
     """Get list of player IDs in a game"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1295,7 +1329,7 @@ def update_game_title(game_id: str, title: str) -> bool:
     return True
 
 
-def get_game_title(game_id: str) -> Optional[str]:
+def get_game_title(game_id: str) -> str | None:
     """Get game title from the games table"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1352,9 +1386,9 @@ def save_game_image(
     type: str,
     image_url: str,
     game_id: str = "default_game",
-    day: Optional[int] = None,
+    day: int | None = None,
     prompt: str = "",
-) -> Optional[int]:
+) -> int | None:
     """Save a game image URL (loading or splash) to the database.
 
     Args:
@@ -1388,8 +1422,8 @@ def save_game_image(
 def get_random_game_image(
     type: str,
     game_id: str = "default_game",
-    day: Optional[int] = None,
-) -> Optional[str]:
+    day: int | None = None,
+) -> str | None:
     """Get a random game image URL by type.
 
     Args:
@@ -1428,7 +1462,7 @@ def get_random_game_image(
 def get_game_image_count(
     type: str,
     game_id: str = "default_game",
-    day: Optional[int] = None,
+    day: int | None = None,
 ) -> int:
     """Count images of a given type."""
     try:
@@ -1455,7 +1489,7 @@ def get_game_image_count(
 # ============== NPC Profiles ==============
 
 
-def create_npc_profile(npc_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def create_npc_profile(npc_data: dict[str, Any]) -> dict[str, Any] | None:
     """Create a persistent NPC profile."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1485,7 +1519,7 @@ def create_npc_profile(npc_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return get_npc_profile(npc_data["npc_key"])
 
 
-def get_npc_profile(npc_key: str) -> Optional[Dict[str, Any]]:
+def get_npc_profile(npc_key: str) -> dict[str, Any] | None:
     """Get an NPC profile by key."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1511,7 +1545,7 @@ def get_npc_profile(npc_key: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def get_all_active_npcs(game_id: str = "default_game") -> List[Dict[str, Any]]:
+def get_all_active_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
     """Get all active NPCs in a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1526,7 +1560,7 @@ def get_all_active_npcs(game_id: str = "default_game") -> List[Dict[str, Any]]:
 
 def get_npc_by_role(
     role_key: str, game_id: str = "default_game"
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Find an active NPC by role key."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1560,7 +1594,7 @@ def deactivate_npc(npc_key: str) -> bool:
 
 def record_kick(
     kicked_player_id: int, replaced_by_npc_key: str, reason: str = ""
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Record a player kick."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1580,7 +1614,7 @@ def record_kick(
     }
 
 
-def get_kicked_players() -> List[Dict[str, Any]]:
+def get_kicked_players() -> list[dict[str, Any]]:
     """Get all kicked players."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1607,8 +1641,8 @@ def is_player_kicked(player_id: int) -> bool:
 
 
 def save_player_briefing(
-    briefing_data: Dict[str, Any], game_id: str = "default_game"
-) -> Optional[Dict[str, Any]]:
+    briefing_data: dict[str, Any], game_id: str = "default_game"
+) -> dict[str, Any] | None:
     """Save a per-player daily briefing with choices and consequences."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1641,7 +1675,7 @@ def save_player_briefing(
 
 def get_player_briefing(
     day: int, player_id: int, game_id: str = "default_game"
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Get a player's briefing for a specific day."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1656,7 +1690,7 @@ def get_player_briefing(
     return _briefing_row_to_dict(row)
 
 
-def _briefing_row_to_dict(row) -> Dict[str, Any]:
+def _briefing_row_to_dict(row) -> dict[str, Any]:
     """Convert a player_briefings row from the database to a dict."""
     return {
         "id": row["id"],
@@ -1676,7 +1710,7 @@ def _briefing_row_to_dict(row) -> Dict[str, Any]:
 
 def get_all_briefings_for_day(
     day: int, game_id: str = "default_game"
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get all briefings (player + NPC) for a specific day."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1696,7 +1730,7 @@ def update_briefing_choice(
     briefing_id: int,
     selected_action_id: str,
     choice_rationale: str = "",
-    consequence_result: Optional[Dict[str, Any]] = None,
+    consequence_result: dict[str, Any] | None = None,
 ) -> bool:
     """Update a briefing with the player/NPC's choice."""
     conn = get_db_connection()
@@ -1720,7 +1754,7 @@ def update_briefing_choice(
 
 def get_players_who_need_to_choose(
     day: int, game_id: str = "default_game"
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get real players who haven't made their choice for the day yet."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1777,3 +1811,309 @@ def update_game_day_global_circumstances(
     conn.commit()
     conn.close()
     return updated
+
+
+# ============== Mission Management ==============
+
+
+def create_mission(
+    mission_data: dict[str, Any], game_id: str = "default_game"
+) -> dict[str, Any] | None:
+    """Create a mission for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO game_missions
+           (game_id, name, description, objectives, stage_progress, current_stage, total_stages, completed, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+        (
+            game_id,
+            mission_data["name"],
+            mission_data["description"],
+            json.dumps(mission_data.get("objectives", [])),
+            json.dumps(mission_data.get("stage_progress", {})),
+            mission_data.get("current_stage", 0),
+            mission_data.get("total_stages", 1),
+            datetime.now().isoformat(),
+        ),
+    )
+    mission_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return get_mission(mission_id, game_id)
+
+
+def get_mission(
+    mission_id: int | None = None, game_id: str = "default_game"
+) -> dict[str, Any] | None:
+    """Get the latest mission for a game, or a specific mission by ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if mission_id:
+        cursor.execute(
+            "SELECT * FROM game_missions WHERE id = ? AND game_id = ?",
+            (mission_id, game_id),
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM game_missions WHERE game_id = ? ORDER BY created_at DESC LIMIT 1",
+            (game_id,),
+        )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "game_id": row["game_id"],
+        "name": row["name"],
+        "description": row["description"],
+        "objectives": json.loads(row["objectives"] or "[]"),
+        "stage_progress": json.loads(row["stage_progress"] or "{}"),
+        "current_stage": row["current_stage"],
+        "total_stages": row["total_stages"],
+        "completed": bool(row["completed"]),
+        "created_at": row["created_at"],
+    }
+
+
+def update_mission_stage_progress(
+    stage_progress: dict[str, Any],
+    current_stage: int,
+    game_id: str = "default_game",
+    completed: bool = False,
+) -> bool:
+    """Update stage progress for a mission."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE game_missions
+           SET stage_progress = ?, current_stage = ?, completed = ?
+           WHERE game_id = ? AND id = (SELECT id FROM game_missions WHERE game_id = ? ORDER BY created_at DESC LIMIT 1)""",
+        (
+            json.dumps(stage_progress),
+            current_stage,
+            1 if completed else 0,
+            game_id,
+            game_id,
+        ),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def mark_player_dead(player_id: int, game_id: str = "default_game") -> bool:
+    """Mark a player as dead (crew member died)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE player_profiles
+           SET is_dead = 1, is_spectator = 1
+           WHERE player_id = ? AND game_id = ?""",
+        (player_id, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def get_dead_players(game_id: str = "default_game") -> list[int]:
+    """Get IDs of dead players in a game (spectators)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT player_id FROM player_profiles WHERE game_id = ? AND is_dead = 1",
+        (game_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [row["player_id"] for row in rows]
+
+
+def get_live_players(game_id: str = "default_game") -> list[int]:
+    """Get IDs of live (non-dead, non-spectator) players in a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT player_id FROM player_profiles WHERE game_id = ? AND (is_dead IS NULL OR is_dead = 0)",
+        (game_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [row["player_id"] for row in rows]
+
+
+def revive_player(player_id: int) -> bool:
+    """Revive a dead player (rejoin game in new role)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE player_profiles SET is_dead = 0, is_spectator = 0 WHERE player_id = ?",
+        (player_id,),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+# ============== Game Reset / Regeneration ==============
+
+
+def delete_game_state_for_game(game_id: str) -> bool:
+    """Delete game_state rows for a specific game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM game_state WHERE game_id = ?", (game_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
+
+
+def reset_game_state_to_day1(game_id: str = "default_game") -> dict[str, Any]:
+    """Reset game state back to day 1."""
+    _ensure_game_state(game_id)
+    return update_game_state(1, "active", True, 100, game_id)
+
+
+def delete_game_day(day: int, game_id: str = "default_game") -> bool:
+    """Delete a specific game day."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM game_days WHERE day = ? AND game_id = ?", (day, game_id)
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
+
+
+def delete_all_game_days(game_id: str = "default_game") -> int:
+    """Delete all game days for a specific game. Returns count deleted."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM game_days WHERE game_id = ?", (game_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def delete_player_briefings_for_day(day: int, game_id: str = "default_game") -> int:
+    """Delete all briefings (player + NPC) for a specific game day."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM player_briefings WHERE day = ? AND game_id = ?", (day, game_id)
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def delete_all_player_briefings(game_id: str = "default_game") -> int:
+    """Delete all player briefings for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM player_briefings WHERE game_id = ?", (game_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def delete_player_actions_for_day(day: int, game_id: str = "default_game") -> int:
+    """Delete player actions for a specific day.
+
+    This is tricky because player_actions doesn't have a game_id column.
+    We find actions by matching player_ids who belong to this game.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """DELETE FROM player_actions WHERE day = ? AND player_id IN (
+            SELECT player_id FROM player_profiles WHERE game_id = ?
+        )""",
+        (day, game_id),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def delete_all_player_actions(game_id: str = "default_game") -> int:
+    """Delete all player actions for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """DELETE FROM player_actions WHERE player_id IN (
+            SELECT player_id FROM player_profiles WHERE game_id = ?
+        )""",
+        (game_id,),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def delete_all_game_messages(game_id: str = "default_game") -> int:
+    """Delete all game messages for players in a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """DELETE FROM game_messages WHERE player_id IN (
+            SELECT player_id FROM player_profiles WHERE game_id = ?
+        )""",
+        (game_id,),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def clear_game_started(game_id: str = "default_game") -> bool:
+    """Mark the game as not started anymore."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET started = 0, started_at = NULL WHERE game_id = ?",
+        (game_id,),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def delete_mission(game_id: str = "default_game") -> bool:
+    """Delete the mission for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM game_missions WHERE game_id = ?", (game_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted > 0
+
+
+def delete_game_images(game_id: str = "default_game") -> int:
+    """Delete all images associated with a game (splash, bridge, etc.),
+    but preserve loading images since they are shared."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM game_images WHERE game_id = ? AND type != 'loading'", (game_id,)
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted

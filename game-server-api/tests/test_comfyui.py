@@ -8,20 +8,20 @@ Tests verify:
 4. Avatar prompt generation from LLM
 """
 
+import asyncio
 import json
 import os
 import sys
 import unittest
 import urllib.request
-import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 # Add parent dir to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from image_generator import (
-    _build_zimage_turbo_workflow,
     ImageGenerator,
+    _build_zimage_turbo_workflow,
     create_image_generator,
 )
 
@@ -135,7 +135,7 @@ class TestZImageTurboWorkflow(unittest.TestCase):
         all_node_ids = set(wf.keys())
 
         for node_id, node in wf.items():
-            for key, value in node["inputs"].items():
+            for _key, value in node["inputs"].items():
                 if isinstance(value, list) and len(value) == 2:
                     linked_node, slot = value
                     self.assertIn(
@@ -217,7 +217,7 @@ class TestImageGeneratorIntegration(unittest.TestCase):
     def _check_comfyui_available(self):
         """Skip test if ComfyUI is not running."""
         try:
-            resp = urllib.request.urlopen(f"{self.comfyui_url}/system_stats", timeout=5)
+            urllib.request.urlopen(f"{self.comfyui_url}/system_stats", timeout=5)
             return True
         except Exception:
             return False

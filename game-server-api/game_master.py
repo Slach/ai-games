@@ -5,11 +5,11 @@ Uses openai client with json_schema response_format for all LLM calls.
 Compatible with llama.cpp / vLLM / any OpenAI-compatible endpoint.
 """
 
-import os
-import logging
 import json
+import logging
+import os
 import re
-from typing import Optional, List, Dict, Any, cast
+from typing import Any, cast
 
 from openai import OpenAI
 from openai.types.chat import (
@@ -34,7 +34,7 @@ class GameStory(BaseModel):
     setting: str
     conflict: str
     narrative: str
-    decision_points: List[Dict[str, Any]]
+    decision_points: list[dict[str, Any]]
 
 
 class NPCDialogue(BaseModel):
@@ -58,7 +58,7 @@ class ContentPrompts(BaseModel):
 class OnboardingQuestions(BaseModel):
     """Structured onboarding questions"""
 
-    questions: List[Dict[str, Any]]
+    questions: list[dict[str, Any]]
 
 
 # ============== NPC Role Templates ==============
@@ -154,6 +154,16 @@ STORY_SCHEMA = {
 # Onboarding configuration from environment
 ONBOARDING_QUESTIONS_COUNT = int(os.getenv("ONBOARDING_QUESTIONS_COUNT", "5"))
 ONBOARDING_OPTIONS_COUNT = int(os.getenv("ONBOARDING_OPTIONS_COUNT", "5"))
+
+# Minimum ratio of second-place tag count to first-place for hybrid detection.
+# E.g. 0.25 means if second species/gender tag has >= 25% of first-place votes,
+# the character is considered a hybrid. Range: 0.0 (always hybrid) to 1.0 (only tie).
+# Minimum ratio of second-place tag count to first-place for hybrid detection.
+# Range: 0.0 (always hybrid) to 1.0 (only tie).
+GAME_SPECIES_HYBRID_THRESHOLD = float(
+    os.getenv("GAME_SPECIES_HYBRID_THRESHOLD", "0.25")
+)
+GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
 
 # All valid ship role keys used for role_scores in onboarding options
 SHIP_ROLE_KEYS = [
@@ -390,10 +400,13 @@ SPECIES_OPTION_PROMPTS_SCHEMA = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "option_value": {"type": "string"},
+                            "option_value": {
+                                "type": "string",
+                                "description": "Exact option value from the question, returned AS-IS without any brackets, quotes, or extra formatting. Example: 's4_a' not '[s4_a]'",
+                            },
                             "prompt": {
                                 "type": "string",
-                                "description": "Short creative image prompt in English for Stable Diffusion, ~20-30 words, cinematic sci-fi style"
+                                "description": "Short creative image prompt in English for Stable Diffusion, ~20-30 words, cinematic sci-fi style",
                             },
                         },
                         "required": ["option_value", "prompt"],
@@ -551,13 +564,151 @@ COMBINED_OUTCOME_SCHEMA = {
                     "type": "string",
                     "description": "A teaser or hook for the next day's story",
                 },
+                "mission_progress": {
+                    "type": "object",
+                    "description": "Mission stage progress changes: {stage_number: points_added}",
+                    "additionalProperties": {"type": "integer"},
+                },
+                "dead_crew_members": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": [{"type": "string"}, {"type": "string"}],
+                        "description": "[name, role] of a dead crew member",
+                    },
+                    "description": "List of [name, role] who died this turn",
+                },
+                "ship_destroyed": {
+                    "type": "boolean",
+                    "description": "Whether the ship was destroyed",
+                },
             },
             "required": [
                 "outcome_narrative",
                 "ship_status_change",
                 "crew_morale_change",
                 "next_day_hook",
+                "mission_progress",
+                "dead_crew_members",
+                "ship_destroyed",
             ],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+MISSION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mission",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Mission name (e.g. 'First Contact at Proxima')",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Mission overview narrative (2-3 paragraphs)",
+                },
+                "objectives": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "stage": {"type": "integer", "description": "Stage number"},
+                            "name": {"type": "string", "description": "Stage name"},
+                            "description": {
+                                "type": "string",
+                                "description": "What needs to be accomplished",
+                            },
+                            "success_threshold": {
+                                "type": "integer",
+                                "description": "How many progress points needed (1-10)",
+                            },
+                        },
+                        "required": [
+                            "stage",
+                            "name",
+                            "description",
+                            "success_threshold",
+                        ],
+                        "additionalProperties": False,
+                    },
+                    "description": "Mission stages/objectives (2-4 stages)",
+                },
+            },
+            "required": ["name", "description", "objectives"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+BRIDGE_IMAGE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "bridge_image_prompt",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "bridge_prompt": {
+                    "type": "string",
+                    "description": "A detailed English image prompt for the starship bridge scene with the full crew at their stations",
+                },
+                "crew_descriptions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string"},
+                            "position_description": {
+                                "type": "string",
+                                "description": "Where this crew member is on the bridge and what they are doing",
+                            },
+                        },
+                        "required": ["role", "position_description"],
+                        "additionalProperties": False,
+                    },
+                    "description": "Descriptions of where each crew member is positioned on the bridge",
+                },
+            },
+            "required": ["bridge_prompt", "crew_descriptions"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+NPC_AVATAR_PROMPT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "npc_avatar_prompts",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "prompts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role_key": {"type": "string"},
+                            "prompt": {
+                                "type": "string",
+                                "description": "Detailed English image prompt for this NPC's avatar, randomized for variety",
+                            },
+                        },
+                        "required": ["role_key", "prompt"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["prompts"],
             "additionalProperties": False,
         },
     },
@@ -580,7 +731,7 @@ class GameMasterAgent:
         self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", "32768"))
         self.llm_max_avatar_tokens = int(os.getenv("LLM_MAX_AVATAR_TOKENS", "4096"))
         self.language = language
-        self.npcs: Dict[str, Dict[str, Any]] = {}
+        self.npcs: dict[str, dict[str, Any]] = {}
 
         self.client = OpenAI(
             api_key=self.llm_api_key,
@@ -602,7 +753,7 @@ class GameMasterAgent:
             "communications": NPC_TEMPLATES["communications"].copy(),
         }
 
-    def generate_team_npcs(self, player_role: str) -> Dict[str, Dict[str, Any]]:
+    def generate_team_npcs(self, player_role: str) -> dict[str, dict[str, Any]]:
         """Generate NPC team based on player's role"""
         team_npcs = {"captain": NPC_TEMPLATES["captain"].copy()}
 
@@ -625,10 +776,10 @@ class GameMasterAgent:
         self,
         system_prompt: str,
         user_prompt: str,
-        response_schema: Dict[str, Any],
+        response_schema: dict[str, Any],
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
         """
         Call LLM with json_schema structured output.
 
@@ -749,7 +900,7 @@ class GameMasterAgent:
                     f"LLM returned empty content on fallback call. "
                     f"Finish reason: {finish_reason}. "
                     f"Raw response:\n{str(response)}"
-                )
+                ) from e
 
             content = content.strip()
             # Clean and parse
@@ -834,7 +985,7 @@ class GameMasterAgent:
 
     # ============== Onboarding ==============
 
-    def generate_onboarding_questions(self) -> List[Dict[str, Any]]:
+    def generate_onboarding_questions(self) -> list[dict[str, Any]]:
         """Generate dynamic onboarding questions using LLM with json_schema."""
         logger.info(f"Generating onboarding questions, language: {self.language}")
 
@@ -961,10 +1112,10 @@ class GameMasterAgent:
 
     def assign_role_from_answers(
         self,
-        answers: Dict[int, str],
-        available_roles: List[Dict[str, Any]],
-        questions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+        answers: dict[int, str],
+        available_roles: list[dict[str, Any]],
+        questions: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Assign role based on accumulated points from onboarding answers.
 
         Each answer option contains role_scores (dict of role_key -> points).
@@ -989,7 +1140,7 @@ class GameMasterAgent:
             raise ValueError("No roles available")
 
         # Build role scores from answer selections
-        role_points: Dict[str, int] = {key: 0 for key in SHIP_ROLE_KEYS}
+        role_points: dict[str, int] = dict.fromkeys(SHIP_ROLE_KEYS, 0)
 
         if questions:
             # Build lookup: question_id -> question data
@@ -1058,7 +1209,7 @@ class GameMasterAgent:
 
         return {"role_key": best_key, "reasoning": reasoning}
 
-    def generate_game_title(self) -> Dict[str, str]:
+    def generate_game_title(self) -> dict[str, str]:
         """Generate a creative game title and welcome message."""
         logger.info("[TITLE] Generating game title")
 
@@ -1156,7 +1307,7 @@ class GameMasterAgent:
 
     def generate_npc_dialogues(
         self, story: GameStory, player_role: str
-    ) -> List[NPCDialogue]:
+    ) -> list[NPCDialogue]:
         """Generate NPC dialogues for the day."""
         logger.info(
             f"[NPC] Starting NPC dialogue generation, language: {self.language}"
@@ -1214,7 +1365,7 @@ class GameMasterAgent:
     # ============== Content Prompts ==============
 
     def generate_content_prompts(
-        self, story: GameStory, dialogues: List[NPCDialogue], player_role: str
+        self, story: GameStory, dialogues: list[NPCDialogue], player_role: str
     ) -> ContentPrompts:
         """Generate prompts for content generation (image, video, comic)."""
         logger.info(
@@ -1253,7 +1404,7 @@ class GameMasterAgent:
     # ============== Player Message ==============
 
     def process_player_message(
-        self, player_id: int, message: str, player_profile: Dict[str, Any]
+        self, player_id: int, message: str, player_profile: dict[str, Any]
     ) -> str:
         """Process a player message and generate Game Master response."""
         player_role = player_profile.get("role", "Crew Member")
@@ -1443,7 +1594,7 @@ spatial presence\n"
         return prompts.get(category, prompts["human"])
 
     def generate_avatar_prompt(
-        self, role: str, traits: List[str], avatar_description: str
+        self, role: str, traits: list[str], avatar_description: str
     ) -> str:
         """Generate an image prompt for player avatar using LLM with json_schema."""
         logger.info(f"[AVATAR] Generating avatar prompt for role: {role}")
@@ -1493,16 +1644,16 @@ spatial presence\n"
 
     @staticmethod
     def _count_tags_from_answers(
-        answers: Dict[int, str],
+        answers: dict[int, str],
         tag_key: str,
-        questions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, int]:
+        questions: list[dict[str, Any]] | None = None,
+    ) -> dict[str, int]:
         """Count occurrences of a given tag type across all answered questions."""
         if not questions:
             return {}
 
         question_map = {q.get("id"): q for q in questions}
-        tag_counts: Dict[str, int] = {}
+        tag_counts: dict[str, int] = {}
 
         for question_id, selected_value in answers.items():
             qid = int(question_id) if not isinstance(question_id, int) else question_id
@@ -1527,12 +1678,12 @@ spatial presence\n"
 
     @staticmethod
     def calculate_species_from_answers(
-        answers: Dict[int, str],
-        questions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+        answers: dict[int, str],
+        questions: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Calculate species type by counting species_tags across answers.
 
-        Returns dict with primary species, secondary (for tie/hybrid), and hybrid flag.
+        Returns dict with primary species, secondary (for hybrid), and hybrid flag.
         """
         tag_counts = GameMasterAgent._count_tags_from_answers(
             answers, "species_tags", questions
@@ -1545,21 +1696,24 @@ spatial presence\n"
         primary_count = sorted_tags[0][1]
         secondary = ""
         hybrid = False
-        if len(sorted_tags) > 1 and sorted_tags[1][1] == primary_count:
-            secondary = sorted_tags[1][0]
-            hybrid = True
+        if len(sorted_tags) > 1:
+            second_count = sorted_tags[1][1]
+            if second_count == primary_count or (
+                second_count >= max(2, primary_count * GAME_SPECIES_HYBRID_THRESHOLD)
+            ):
+                secondary = sorted_tags[1][0]
+                hybrid = True
 
         return {"primary": primary, "secondary": secondary, "hybrid": hybrid}
 
     @staticmethod
     def calculate_gender_from_answers(
-        answers: Dict[int, str],
-        questions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+        answers: dict[int, str],
+        questions: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Calculate gender type by counting gender_tags across answers.
 
-        Supports hybrids: if two gender tags have the same count,
-        returns hybrid=True with primary and secondary genders.
+        Returns dict with primary gender, secondary (for hybrid), and hybrid flag.
         """
         tag_counts = GameMasterAgent._count_tags_from_answers(
             answers, "gender_tags", questions
@@ -1572,16 +1726,20 @@ spatial presence\n"
         primary_count = sorted_tags[0][1]
         secondary = ""
         hybrid = False
-        if len(sorted_tags) > 1 and sorted_tags[1][1] == primary_count:
-            secondary = sorted_tags[1][0]
-            hybrid = True
+        if len(sorted_tags) > 1:
+            second_count = sorted_tags[1][1]
+            if second_count == primary_count or (
+                second_count >= max(2, primary_count * GAME_GENDER_HYBRID_THRESHOLD)
+            ):
+                secondary = sorted_tags[1][0]
+                hybrid = True
 
         return {"primary": primary, "secondary": secondary, "hybrid": hybrid}
 
     def generate_species_gender_description(
         self,
-        species_result: Dict[str, Any],
-        gender_result: Dict[str, Any],
+        species_result: dict[str, Any],
+        gender_result: dict[str, Any],
         role: str,
     ) -> str:
         """Generate a vivid narrative description of the player's species and gender using LLM."""
@@ -1708,10 +1866,10 @@ spatial presence\n"
 
     def generate_species_option_prompts(
         self,
-        question: Dict[str, Any],
-        accumulated_tags: Dict[str, int],
+        question: dict[str, Any],
+        accumulated_tags: dict[str, int],
         tag_type: str = "species_tags",
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Generate short creative image prompts for each option in a species/gender question.
 
         Each prompt shows the cumulative visual effect of ALL accumulated tags
@@ -1742,7 +1900,9 @@ spatial presence\n"
             opt_label = opt.get("label", "")
             tags = opt.get(tag_type, [])
             tag_str = ", ".join(tags)
-            options_text += f"  - [{opt_value}] {opt_label}; tags: {tag_str}\n"
+            options_text += (
+                f"  - value='{opt_value}' label='{opt_label}' tags: {tag_str}\n"
+            )
 
         if self.language == "ru":
             system = (
@@ -1759,7 +1919,7 @@ spatial presence\n"
                 "For EACH option, write a short English image prompt showing a "
                 "character with the accumulated traits AND the option's specific trait. "
                 "Each prompt MAX 30 words. "
-                "Output as JSON array: [{\"option_value\": ..., \"prompt\": ...}]."
+                'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
             )
         else:
             system = (
@@ -1776,7 +1936,7 @@ spatial presence\n"
                 "For EACH option, write a short English image prompt showing a "
                 "character with the accumulated traits AND the option's specific trait. "
                 "Each prompt MAX 30 words. "
-                "Output as JSON array: [{\"option_value\": ..., \"prompt\": ...}]."
+                'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
             )
 
         try:
@@ -1790,11 +1950,13 @@ spatial presence\n"
             prompts_list = result.get("prompts", [])
             prompts_dict = {}
             for entry in prompts_list:
-                opt_value = entry.get("option_value", "")
+                opt_value = entry.get("option_value", "").strip("[]")
                 prompt_text = entry.get("prompt", "")
                 if opt_value and prompt_text:
                     prompts_dict[opt_value] = prompt_text
-            logger.info(f"[OPTION_PROMPTS] Generated {len(prompts_dict)} option prompts")
+            logger.info(
+                f"[OPTION_PROMPTS] Generated {len(prompts_dict)} option prompts"
+            )
             return prompts_dict
         except Exception as e:
             logger.warning(f"[OPTION_PROMPTS] LLM failed, using fallback: {e}")
@@ -1814,8 +1976,8 @@ spatial presence\n"
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
     def generate_npc_choice(
-        self, choices: List[Dict[str, Any]], npc_profile: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, choices: list[dict[str, Any]], npc_profile: dict[str, Any]
+    ) -> dict[str, Any]:
         """NPC makes a choice using LLM without seeing the consequences.
 
         The NPC only sees the action text IDs and descriptions — no consequences.
@@ -1905,8 +2067,8 @@ spatial presence\n"
         self,
         day: int,
         previous_summary: str = "",
-        player_profiles: list[Dict[str, Any]] | None = None,
-    ) -> Dict[str, Any]:
+        player_profiles: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Generate the shared global circumstances for a game day.
 
         This is the first step — creates the setting, conflict, and key events
@@ -1979,9 +2141,9 @@ spatial presence\n"
 
     def generate_player_briefing_and_choices(
         self,
-        global_circumstances: Dict[str, Any],
-        player_profile: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        global_circumstances: dict[str, Any],
+        player_profile: dict[str, Any],
+    ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
 
@@ -2083,20 +2245,33 @@ spatial presence\n"
 
     def analyze_combined_outcome(
         self,
-        global_circumstances: Dict[str, Any],
-        all_decisions: List[Dict[str, Any]],
+        global_circumstances: dict[str, Any],
+        all_decisions: list[dict[str, Any]],
         previous_summary: str = "",
-    ) -> Dict[str, Any]:
+        mission_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Analyze all player and NPC choices together with their hidden consequences
         to produce a coherent combined outcome narrative.
 
-        This is the third step — after all choices are made, the LLM
-        synthesizes the results into a consistent story.
+        Player decisions are weighted MORE than NPC decisions.
+        Mission progress is tracked and non-linear.
+        Crew death is possible.
+
+        Args:
+            global_circumstances: Shared circumstances for the turn
+            all_decisions: All player and NPC decisions with consequences
+            previous_summary: Summary of previous turn for continuity
+            mission_context: Current mission state for progress tracking
+
+        Returns:
+            Dict with outcome_narrative, ship_status_change, crew_morale_change,
+            next_day_hook, mission_progress, dead_crew_members
         """
         logger.info(
             f"[DAY] Analyzing combined outcome from {len(all_decisions)} decisions"
         )
 
+        # Weight is indicated in the decision text passed to LLM
         decisions_text = ""
         for i, d in enumerate(all_decisions, 1):
             name = d.get("name", d.get("player_id", d.get("npc_key", f"Character {i}")))
@@ -2105,13 +2280,39 @@ spatial presence\n"
             action_text = d.get("action_text", "")
             consequence = d.get("consequence", "")
             rationale = d.get("rationale", "")
+            is_player = bool(d.get("player_id"))
+            weight = "HIGH (PLAYER)" if is_player else "NORMAL (NPC)"
             decisions_text += (
-                f"\n--- Decision {i} ---\n"
+                f"\n--- Decision {i} (Weight: {weight}) ---\n"
                 f"Character: {name} ({role})\n"
                 f"Chose: {action_text} ({action})\n"
                 f"Rationale: {rationale}\n"
                 f"HIDDEN CONSEQUENCE: {consequence}\n"
             )
+
+        # Mission context for progress tracking
+        mission_text = ""
+        if mission_context:
+            objectives = mission_context.get("objectives", [])
+            stage_progress = mission_context.get("stage_progress", {})
+            current_stage = mission_context.get("current_stage", 0)
+            mission_text = "\nMission context:\n"
+            for obj in objectives:
+                stage = obj.get("stage", 0)
+                name = obj.get("name", "")
+                desc = obj.get("description", "")
+                threshold = obj.get("success_threshold", 5)
+                progress = stage_progress.get(str(stage), 0)
+                status = (
+                    "COMPLETED"
+                    if stage < current_stage
+                    else ("CURRENT" if stage == current_stage else "UPCOMING")
+                )
+                mission_text += (
+                    f"  Stage {stage}: {name} - {desc}\n"
+                    f"    Progress: {progress}/{threshold}\n"
+                    f"    Status: {status}\n"
+                )
 
         setting = global_circumstances.get("setting", "")
         conflict = global_circumstances.get("conflict", "")
@@ -2121,38 +2322,62 @@ spatial presence\n"
             system = (
                 "Ты — Game Master космической игры. Ты анализируешь ВСЕ решения, принятые "
                 "игроками и NPC, вместе с их СКРЫТЫМИ последствиями, и создаёшь единый "
-                "связный результат дня."
+                "связный результат хода.\n\n"
+                "ВАЖНЫЕ ПРАВИЛА:\n"
+                "1. Решения ИГРОКОВ (Weight: HIGH) имеют БОЛЬШИЙ вес, чем решения NPC\n"
+                "2. Прогресс миссии нелинейный — правильные действия НАКАПЛИВАЮТСЯ\n"
+                "3. Возможна гибель членов экипажа\n"
+                "4. Возможна гибель корабля\n"
+                "5. Цели миссии должны проверяться"
             )
             user = (
                 f"Общие обстоятельства:\n"
                 f"Локация: {setting}\n"
                 f"Конфликт: {conflict}\n"
                 f"Описание: {narrative}\n\n"
-                f"Принятые решения (включая скрытые последствия):\n{decisions_text}\n\n"
-                "Проанализируй все решения вместе и создай единый связанный результат:\n"
-                "1. outcome_narrative — что на самом деле произошло в результате всех решений (2-3 абзаца)\n"
+                f"Статус миссии:\n{mission_text}\n\n"
+                f"Принятые решения (игроки имеют HIGH вес, NPC — NORMAL):\n{decisions_text}\n\n"
+                "Проанализируй все решения и создай единый связанный результат. "
+                "Учти, что решения ИГРОКОВ важнее решений NPC.\n\n"
+                "Верни JSON с полями:\n"
+                "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца)\n"
                 "2. ship_status_change — как изменилось состояние корабля\n"
                 "3. crew_morale_change — как изменился моральный дух экипажа\n"
-                "4. next_day_hook — зацепка для следующего дня\n\n"
+                "4. next_day_hook — зацепка для следующего хода\n"
+                "5. mission_progress — объект {{stage: points_added}} для каждого этапа миссии\n"
+                "6. dead_crew_members — список [[name, role]] погибших членов экипажа\n"
+                "7. ship_destroyed — true/false\n\n"
                 "Всё на русском языке."
             )
         else:
             system = (
                 "You are a Game Master. You analyze ALL decisions made by "
                 "players and NPCs together with their HIDDEN consequences, "
-                "and produce a single coherent day outcome."
+                "and produce a single coherent turn outcome.\n\n"
+                "IMPORTANT RULES:\n"
+                "1. PLAYER decisions (Weight: HIGH) matter MORE than NPC decisions\n"
+                "2. Mission progress is NON-LINEAR — correct actions ACCUMULATE\n"
+                "3. Crew members CAN die\n"
+                "4. The ship CAN be destroyed\n"
+                "5. Mission objectives should be checked"
             )
             user = (
                 f"Global circumstances:\n"
                 f"Setting: {setting}\n"
                 f"Conflict: {conflict}\n"
                 f"Narrative: {narrative}\n\n"
-                f"All decisions (including hidden consequences):\n{decisions_text}\n\n"
-                "Analyze all decisions together and create a coherent combined result:\n"
-                "1. outcome_narrative — what actually happened as a result (2-3 paragraphs)\n"
-                "2. ship_status_change — how the ship's condition changed\n"
-                "3. crew_morale_change — how crew morale shifted\n"
-                "4. next_day_hook — teaser for the next day\n"
+                f"Mission status:\n{mission_text}\n\n"
+                f"All decisions (players = HIGH weight, NPCs = NORMAL):\n{decisions_text}\n\n"
+                "Analyze all decisions together and create a coherent combined result. "
+                "Remember that PLAYER decisions matter more than NPC decisions.\n\n"
+                "Return JSON with fields:\n"
+                "1. outcome_narrative — what happened (2-3 paragraphs)\n"
+                "2. ship_status_change — ship condition change\n"
+                "3. crew_morale_change — morale shift\n"
+                "4. next_day_hook — teaser for the next turn\n"
+                "5. mission_progress — object {{stage: points_added}} for each mission stage\n"
+                "6. dead_crew_members — list of [name, role] who died\n"
+                "7. ship_destroyed — true/false\n"
             )
 
         try:
@@ -2174,13 +2399,256 @@ spatial presence\n"
                 "ship_status_change": "No significant change.",
                 "crew_morale_change": "Stable.",
                 "next_day_hook": "Tomorrow brings new challenges.",
+                "mission_progress": {},
+                "dead_crew_members": [],
+                "ship_destroyed": False,
             }
 
     # ============== Default Action ==============
 
+    # ============== Mission Generation ==============
+
+    def generate_mission(
+        self, all_participants: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Generate a mission with stages/objectives for the game.
+
+        Each stage has a success_threshold; progress accumulates non-linearly
+        from player/NPC actions across turns.
+        """
+        logger.info(
+            f"[MISSION] Generating mission for {len(all_participants)} participants"
+        )
+
+        crew_desc = "\n".join(
+            [
+                f"  - {p.get('role', '?')} ({p.get('type', '?')})"
+                for p in all_participants
+            ]
+        )
+
+        if self.language == "ru":
+            system = (
+                "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. "
+                "Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10."
+            )
+            user = (
+                f"Экипаж:\n{crew_desc}\n\n"
+                "Создай миссию с:\n"
+                "1. Название миссии (в формате 'Кодовое имя: описание')\n"
+                "2. Описание — что нужно сделать, 2-3 абзаца\n"
+                "3. 2-4 этапа с целями, каждый с success_threshold (1-10)\n"
+                "Этапы должны быть последовательными, но достижимыми нелинейно.\n"
+                "Всё на русском языке."
+            )
+        else:
+            system = (
+                "You are a Game Master. Create a mission for a starship crew. "
+                "The mission is divided into 2-4 stages, each with progress from 1 to 10."
+            )
+            user = (
+                f"Crew:\n{crew_desc}\n\n"
+                "Create a mission with:\n"
+                "1. Mission name (format: 'Code Name: description')\n"
+                "2. Description — what needs to be done, 2-3 paragraphs\n"
+                "3. 2-4 stages with objectives, each with success_threshold (1-10)\n"
+                "Stages should be sequential but achievable non-linearly."
+            )
+
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=MISSION_SCHEMA,
+                max_tokens=4096,
+                temperature=0.8,
+            )
+            logger.info(f"[MISSION] Generated: {result.get('name', '')}")
+            return result
+        except Exception as e:
+            logger.error(f"[MISSION] Generation failed: {e}")
+            fallback_name = (
+                "Миссия «Первый контакт»"
+                if self.language == "ru"
+                else "Mission 'First Contact'"
+            )
+            fallback_desc = (
+                "Исследовать неизвестный сигнал в секторе 7-Альфа. "
+                "Установить контакт с цивилизацией."
+            )
+            return {
+                "name": fallback_name,
+                "description": fallback_desc,
+                "objectives": [
+                    {
+                        "stage": 1,
+                        "name": "Разведка"
+                        if self.language == "ru"
+                        else "Reconnaissance",
+                        "description": "Приблизиться к источнику сигнала",
+                        "success_threshold": 3,
+                    },
+                    {
+                        "stage": 2,
+                        "name": "Контакт" if self.language == "ru" else "Contact",
+                        "description": "Установить коммуникацию",
+                        "success_threshold": 5,
+                    },
+                    {
+                        "stage": 3,
+                        "name": "Дипломатия" if self.language == "ru" else "Diplomacy",
+                        "description": "Достичь взаимопонимания",
+                        "success_threshold": 7,
+                    },
+                ],
+            }
+
+    # ============== Bridge Image Prompt Generation ==============
+
+    def generate_bridge_image_prompt(
+        self,
+        mission: dict[str, Any],
+        all_participants: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Generate a detailed prompt for the bridge scene image and crew positioning.
+
+        Uses crew roles, species/gender descriptions, and mission context
+        to create a cinematic scene with the full crew on the bridge.
+        """
+        logger.info(
+            f"[BRIDGE] Generating bridge image prompt for {len(all_participants)} crew"
+        )
+
+        crew_desc = "\n".join(
+            [
+                f"  - {p.get('role', '?')} ({p.get('type', '?')}): "
+                f"species={p.get('species', '?')}, "
+                f"traits={p.get('personality_traits', [])}"
+                for p in all_participants
+            ]
+        )
+
+        mission_name = mission.get("name", "Unknown mission")
+        mission_desc = mission.get("description", "")
+
+        system = (
+            "You are an expert cinematic prompt engineer for AI image generation. "
+            "Create detailed English prompts for a starship bridge scene with the full crew. "
+            "Focus on composition, lighting, crew positioning, and space opera aesthetic."
+        )
+        user = (
+            f"Mission: {mission_name}\n"
+            f"Mission description: {mission_desc}\n\n"
+            f"Crew on the bridge:\n{crew_desc}\n\n"
+            "Create:\n"
+            "1. A detailed English image prompt for the bridge scene — cinematic, "
+            "Star Trek style, showing the crew at their stations on the bridge, "
+            "holographic displays, stars visible through the viewport, dramatic lighting, 4K.\n"
+            "2. Position descriptions for each crew member — where they are "
+            "on the bridge and what they are doing at their station.\n\n"
+            "Write the prompt and descriptions in English."
+        )
+
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=BRIDGE_IMAGE_SCHEMA,
+                max_tokens=4096,
+                temperature=0.8,
+            )
+            logger.info(
+                f"[BRIDGE] Prompt generated: {str(result.get('bridge_prompt', ''))[:100]}..."
+            )
+            return result
+        except Exception as e:
+            logger.error(f"[BRIDGE] Generation failed: {e}")
+            return {
+                "bridge_prompt": (
+                    "Star Trek starship bridge interior, full crew at their stations, "
+                    "holographic displays glowing, viewport showing starfield and nebula, "
+                    "cinematic lighting, dramatic composition, 4K quality, space opera aesthetic."
+                ),
+                "crew_descriptions": [
+                    {
+                        "role": p.get("role", "?"),
+                        "position_description": "At their station on the bridge",
+                    }
+                    for p in all_participants
+                ],
+            }
+
+    # ============== NPC Avatar Prompts (simplified, random) ==============
+
+    def generate_npc_avatar_prompts(
+        self, npc_roles: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
+        """Generate simplified avatar prompts for NPCs at game start.
+
+        Unlike human players who go through full onboarding with species/gender interviews,
+        NPCs get randomized prompts for variety. No interview needed.
+        """
+        logger.info(f"[NPC_AVATAR] Generating avatar prompts for {len(npc_roles)} NPCs")
+
+        roles_text = "\n".join(
+            [
+                f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} - "
+                f"{r.get('avatar_description', '')} - traits: {r.get('personality_traits', [])}"
+                for r in npc_roles
+            ]
+        )
+
+        system = (
+            "You are a creative sci-fi character prompt writer. "
+            "Generate VARIED, DIVERSE character portrait prompts in English. "
+            "Each prompt should describe a DIFFERENT looking character — "
+            "vary species features (humanoid, alien, cybernetic, etc.), "
+            "body types, ages, and appearances. "
+            "Keep each prompt unique to avoid same-looking NPCs."
+        )
+        user = (
+            f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
+            "For EACH role, generate a unique, detailed English image prompt for a "
+            "Star Trek-style character portrait. RANDOMIZE species/gender/appearance "
+            "for variety. ~50 words per prompt. "
+            'Output as JSON array: [{"role_key": ..., "prompt": ...}]'
+        )
+
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=NPC_AVATAR_PROMPT_SCHEMA,
+                max_tokens=4096,
+                temperature=0.9,
+            )
+            prompts_list = result.get("prompts", [])
+            logger.info(f"[NPC_AVATAR] Generated {len(prompts_list)} prompts")
+            return prompts_list
+        except Exception as e:
+            logger.error(f"[NPC_AVATAR] Generation failed: {e}")
+            # Fallback: simple role-based prompts
+            fallback = []
+            species_options = ["human", "humanoid", "cybernetic", "non_humanoid"]
+            import random
+
+            for r in npc_roles:
+                sp = random.choice(species_options)
+                fallback.append(
+                    {
+                        "role_key": r.get("role_key", "?"),
+                        "prompt": (
+                            f"Star Trek character portrait of a {r.get('role_name', '?')}, "
+                            f"{sp} species, cinematic lighting, uniform, "
+                            f"4K quality, portrait, upper body. Unique appearance."
+                        ),
+                    }
+                )
+            return fallback
+
     def generate_default_action(
-        self, story: GameStory, player_profile: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, story: GameStory, player_profile: dict[str, Any]
+    ) -> dict[str, Any]:
         """Generate a default action when player doesn't choose"""
         traits = player_profile.get("personality_traits", [])
         actions = story.decision_points

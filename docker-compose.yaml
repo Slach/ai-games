@@ -1,3 +1,4 @@
+---
 # Docker Compose for AI Game Master
 # Environment variables are loaded from .env file
 # Note: Uses external spark-network and llama.cpp service
@@ -90,6 +91,7 @@ services:
       - TELEGRAM_BOT_GAME_MASTER_ID=${TELEGRAM_BOT_GAME_MASTER_ID:-}
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
       - AI_FSM_DB=/app/bot_storage.db
+      - PLAYER_STATE_DB=/app/player_states.db
       - TELEGRAM_SOCKS_PROXY=${TELEGRAM_SOCKS_PROXY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"

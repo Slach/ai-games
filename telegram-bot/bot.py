@@ -16,30 +16,37 @@ Architecture:
 - Async HTTP calls to game-server-api
 """
 
-import os
-import logging
 import asyncio
-import aiohttp
-from typing import Optional, Dict, Any
+import logging
+import os
+import re
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types, F
+from typing import Any
+
+import aiohttp
+import language as lang
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram_sqlite_storage.sqlitestore import SQLStorage
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    InlineKeyboardMarkup,
+    BufferedInputFile,
     InlineKeyboardButton,
-    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
+    ReactionTypeEmoji,
+    ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiohttp_socks import ProxyConnector
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import BufferedInputFile
-
-import language as lang
-import re
+from player_store import (
+    get_all_player_ids,
+    get_player_state,
+    update_player_state,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -67,7 +74,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
 BOT_LANGUAGE = os.getenv("BOT_LANGUAGE", "ru")
 POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # seconds between polls
-BOT_USERNAME: Optional[str] = None
+BOT_USERNAME: str | None = None
 
 # Game Master Telegram user ID — only this user can send GM commands
 GAME_MASTER_ID = int(os.getenv("TELEGRAM_BOT_GAME_MASTER_ID", "0"))
@@ -102,33 +109,17 @@ class GameSelectionState(StatesGroup):
 
 # ============== Player State Storage ==============
 
-# In-memory storage for player state (could be replaced with Redis in production)
-player_states: Dict[int, Dict[str, Any]] = {}
-
-
-def get_player_state(player_id: int) -> Dict[str, Any]:
-    """Get or create player state"""
-    if player_id not in player_states:
-        player_states[player_id] = {
-            "game_id": None,
-            "onboarding_session_id": None,
-            "current_question": 0,
-            "last_poll": datetime.now(),
-            "pending_updates": [],
-        }
-    return player_states[player_id]
-
-
-def update_player_state(player_id: int, **kwargs):
-    """Update player state with new values"""
-    state = get_player_state(player_id)
-    state.update(kwargs)
+# Persistent SQLite-backed player state storage.
+# Replaced the old in-memory dict. See player_store.py for implementation.
+# Exposes the same get_player_state / update_player_state API.
+# Survives bot restarts so the polling loop and onboarding
+# flow can resume where they left off.
 
 
 # ============== Helper Functions ==============
 
 
-def parse_proxy_url(proxy_url: str) -> tuple[str, int, Optional[str], Optional[str]]:
+def parse_proxy_url(proxy_url: str) -> tuple[str, int, str | None, str | None]:
     """Parse socks5 proxy URL into components.
 
     Expected format: host:port or user:pass@host:port
@@ -158,7 +149,7 @@ def parse_proxy_url(proxy_url: str) -> tuple[str, int, Optional[str], Optional[s
 
 
 async def create_aiohttp_session(
-    proxy_url: Optional[str] = None,
+    proxy_url: str | None = None,
 ) -> aiohttp.ClientSession:
     """Create an aiohttp ClientSession with Socks5 proxy support.
 
@@ -191,11 +182,11 @@ async def create_aiohttp_session(
 async def api_request(
     method: str,
     endpoint: str,
-    data: Optional[dict] = None,
-    params: Optional[dict] = None,
+    data: dict | None = None,
+    params: dict | None = None,
     timeout_total: int = 600,
     ignore_codes: tuple = (),
-) -> Optional[dict]:
+) -> dict | None:
     """Make a request to the Game Master API (direct connection, no proxy)
 
     Args:
@@ -236,7 +227,7 @@ async def api_request(
         await session.close()
 
 
-def create_bot_session(proxy_url: Optional[str] = None):
+def create_bot_session(proxy_url: str | None = None):
     """Create an AiohttpSession for aiogram Bot with SOCKS5 proxy support.
 
     Args:
@@ -285,25 +276,25 @@ async def send_image_from_api_url(
         return False
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
+            resp = await session.get(
                 image_url,
                 timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    photo_data = await resp.read()
-                    photo = BufferedInputFile(photo_data, filename="image.png")
-                    if caption:
-                        await bot_or_message.answer_photo(
-                            photo=photo,
-                            caption=caption,
-                            parse_mode="Markdown",
-                            reply_markup=reply_markup,
-                        )
-                    else:
-                        await bot_or_message.answer_photo(photo=photo)
-                    return True
+            )
+            if resp.status == 200:
+                photo_data = await resp.read()
+                photo = BufferedInputFile(photo_data, filename="image.png")
+                if caption:
+                    await bot_or_message.answer_photo(
+                        photo=photo,
+                        caption=caption,
+                        parse_mode="Markdown",
+                        reply_markup=reply_markup,
+                    )
                 else:
-                    logger.warning(f"Failed to download image: {resp.status}")
+                    await bot_or_message.answer_photo(photo=photo)
+                return True
+            else:
+                logger.warning(f"Failed to download image: {resp.status}")
     except Exception as e:
         logger.warning(f"Failed to send image from URL: {e}")
     return False
@@ -382,28 +373,76 @@ async def send_question_with_image(
     if image_url:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(
+                resp = await session.get(
                     image_url,
                     timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
+                )
+                if resp.status == 200:
+                    photo_data = await resp.read()
+                    photo = BufferedInputFile(
+                        photo_data, filename=f"q_{question['id']}.png"
+                    )
+                    await bot_or_message.answer_photo(
+                        photo=photo,
+                        caption=question_text,
+                        parse_mode="Markdown",
+                        reply_markup=keyboard,
+                    )
+                    return question_text
+                else:
+                    logger.warning(f"Failed to download question image: {resp.status}")
+        except Exception as e:
+            logger.warning(f"Failed to send question image: {e}")
+
+    # Check for option-level images (species/gender questions)
+    has_option_images = any(opt.get("image_url") for opt in options)
+
+    if has_option_images:
+        # Download all option images and send as a media group
+        media_group = []
+        for i, opt in enumerate(options):
+            opt_url = opt.get("image_url")
+            if not opt_url:
+                continue
+            try:
+                async with aiohttp.ClientSession() as session:
+                    resp = await session.get(
+                        opt_url,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    )
                     if resp.status == 200:
                         photo_data = await resp.read()
                         photo = BufferedInputFile(
-                            photo_data, filename=f"q_{question['id']}.png"
+                            photo_data, filename=f"opt_{question['id']}_{i}.png"
                         )
-                        await bot_or_message.answer_photo(
-                            photo=photo,
-                            caption=question_text,
-                            parse_mode="Markdown",
-                            reply_markup=keyboard,
+                        caption = f"{i + 1}. {opt['label']}"
+                        media_group.append(
+                            InputMediaPhoto(
+                                media=photo,
+                                caption=caption,
+                                parse_mode="Markdown",
+                            )
                         )
-                        return question_text
                     else:
                         logger.warning(
-                            f"Failed to download question image: {resp.status}"
+                            f"Failed to download option image {i}: {resp.status}"
                         )
-        except Exception as e:
-            logger.warning(f"Failed to send question image: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to download option image {i}: {e}")
+
+        if media_group:
+            try:
+                await bot_or_message.answer_media_group(media=media_group)
+            except Exception as e:
+                logger.warning(f"Failed to send option media group: {e}")
+
+        # Send question text + inline keyboard as separate message
+        await bot_or_message.answer(
+            question_text,
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+        return question_text
 
     # No image or download failed: send text only
     await bot_or_message.answer(
@@ -426,7 +465,7 @@ async def fetch_onboarding_questions() -> list:
         raise
 
 
-async def check_player_game_status(player_id: int) -> Optional[Dict[str, Any]]:
+async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
     """Check if player has an existing game profile"""
     try:
         profile = await api_request("GET", f"/players/{player_id}/profile")
@@ -480,8 +519,13 @@ async def poll_game_updates(player_id: int):
                 }
             )
 
-        # Update last poll time
+        # Update last poll time and persist to DB
         state["last_poll"] = datetime.now()
+        update_player_state(
+            player_id,
+            pending_updates=state["pending_updates"],
+            last_poll=state["last_poll"],
+        )
 
     except Exception as e:
         logger.error(f"Failed to poll game updates for player {player_id}: {e}")
@@ -504,7 +548,6 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         profile = result.get("profile", {})
         game_started = result.get("game_started", False)
         game_just_started = result.get("game_just_started", False)
-        player_count = result.get("player_count", 1)
         other_player_ids = result.get("other_player_ids", [])
 
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
@@ -516,12 +559,20 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         gender_secondary = profile.get("gender_secondary")
 
         if species_secondary:
-            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {species_primary} + {species_secondary}"
+            species_display = (
+                f"Гибрид: {species_primary} + {species_secondary}"
+                if BOT_LANGUAGE == "ru"
+                else f"Hybrid: {species_primary} + {species_secondary}"
+            )
         else:
             species_display = species_primary
 
         if gender_secondary:
-            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {gender_primary} + {gender_secondary}"
+            gender_display = (
+                f"Гибрид: {gender_primary} + {gender_secondary}"
+                if BOT_LANGUAGE == "ru"
+                else f"Hybrid: {gender_primary} + {gender_secondary}"
+            )
         else:
             gender_display = gender_primary
 
@@ -544,29 +595,29 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         if avatar_url:
             logger.info(f"Avatar generated for player {player_id}: {avatar_url}")
             async with aiohttp.ClientSession() as session:
-                async with session.get(
+                resp = await session.get(
                     avatar_url,
                     timeout=aiohttp.ClientTimeout(total=60),
-                ) as resp:
-                    if resp.status == 200:
-                        photo_data = await resp.read()
+                )
+                if resp.status == 200:
+                    photo_data = await resp.read()
 
-                        photo = BufferedInputFile(photo_data, filename="avatar.png")
-                        await bot.send_photo(
-                            chat_id=player_id,
-                            photo=photo,
-                            caption=onboarding_text,
-                            parse_mode="Markdown",
-                            reply_markup=create_main_menu_keyboard(),
-                        )
-                    else:
-                        logger.warning(f"Failed to download avatar: {resp.status}")
-                        await bot.send_message(
-                            chat_id=player_id,
-                            text=onboarding_text,
-                            parse_mode="Markdown",
-                            reply_markup=create_main_menu_keyboard(),
-                        )
+                    photo = BufferedInputFile(photo_data, filename="avatar.png")
+                    await bot.send_photo(
+                        chat_id=player_id,
+                        photo=photo,
+                        caption=onboarding_text,
+                        parse_mode="Markdown",
+                        reply_markup=create_main_menu_keyboard(),
+                    )
+                else:
+                    logger.warning(f"Failed to download avatar: {resp.status}")
+                    await bot.send_message(
+                        chat_id=player_id,
+                        text=onboarding_text,
+                        parse_mode="Markdown",
+                        reply_markup=create_main_menu_keyboard(),
+                    )
         else:
             logger.info(f"No avatar URL for player {player_id}")
             await bot.send_message(
@@ -700,25 +751,25 @@ async def _broadcast_new_player(
 
 
 async def _send_avatar_to_player(
-    bot: Bot, chat_id: int, avatar_url: Optional[str], player_name: str, profile: dict
+    bot: Bot, chat_id: int, avatar_url: str | None, player_name: str, profile: dict
 ):
     """Fetch a player's avatar from its URL and send it as a photo to the given chat."""
     if not avatar_url:
         return
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
+            resp = await session.get(
                 avatar_url,
                 timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.status == 200:
-                    photo_data = await resp.read()
-                    photo = BufferedInputFile(photo_data, filename="avatar.png")
-                    await bot.send_photo(
-                        chat_id=chat_id,
-                        photo=photo,
-                        caption=f"👆 {player_name} — {profile.get('role', '')}",
-                    )
+            )
+            if resp.status == 200:
+                photo_data = await resp.read()
+                photo = BufferedInputFile(photo_data, filename="avatar.png")
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=f"👆 {player_name} — {profile.get('role', '')}",
+                )
     except Exception as e:
         logger.warning(f"Failed to send avatar to {chat_id}: {e}")
 
@@ -852,7 +903,7 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 # ============== Handlers ==============
 
 
-def parse_game_id_from_start_command(text: str) -> Optional[str]:
+def parse_game_id_from_start_command(text: str) -> str | None:
     """Extract game_id from `/start game=...` command payload."""
     if not text:
         return None
@@ -1052,10 +1103,10 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             raise Exception("No game_id selected")
 
         # Remove selection keyboard to avoid duplicate taps
-        try:
+        from contextlib import suppress
+
+        with suppress(Exception):
             await message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
 
         await send_random_loading_image(message)
         await start_onboarding_flow(message, state, player_id, game_id)
@@ -1102,6 +1153,26 @@ async def cmd_start(message: types.Message, state: FSMContext):
         profile = await check_player_game_status(player_id)
 
         if profile:
+            # Check if player is dead (spectator)
+            if profile.get("is_dead") or profile.get("is_spectator"):
+                spectator_msgs = lang.get_spectator(BOT_LANGUAGE)
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🔄 Начать заново / Start Over",
+                                callback_data="select_game:new",
+                            )
+                        ],
+                    ]
+                )
+                await message.answer(
+                    spectator_msgs["still_watching"],
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
+                return
+
             # Player already has a profile - welcome back
             await send_random_loading_image(message)
             await message.answer(
@@ -1165,18 +1236,26 @@ async def cmd_profile(message: types.Message):
         msgs = lang.get_profile(BOT_LANGUAGE)
 
         # Build profile message with hybrid display support
-        species_primary = profile.get('species', 'Unknown') or 'Unknown'
-        species_secondary = profile.get('species_secondary')
-        gender_primary = profile.get('gender', 'Unknown') or 'Unknown'
-        gender_secondary = profile.get('gender_secondary')
+        species_primary = profile.get("species", "Unknown") or "Unknown"
+        species_secondary = profile.get("species_secondary")
+        gender_primary = profile.get("gender", "Unknown") or "Unknown"
+        gender_secondary = profile.get("gender_secondary")
 
         if species_secondary:
-            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {species_primary} + {species_secondary}"
+            species_display = (
+                f"Гибрид: {species_primary} + {species_secondary}"
+                if BOT_LANGUAGE == "ru"
+                else f"Hybrid: {species_primary} + {species_secondary}"
+            )
         else:
             species_display = species_primary
 
         if gender_secondary:
-            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {gender_primary} + {gender_secondary}"
+            gender_display = (
+                f"Гибрид: {gender_primary} + {gender_secondary}"
+                if BOT_LANGUAGE == "ru"
+                else f"Hybrid: {gender_primary} + {gender_secondary}"
+            )
         else:
             gender_display = gender_primary
 
@@ -1197,25 +1276,25 @@ async def cmd_profile(message: types.Message):
             )
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(
+                    resp = await session.get(
                         avatar_url,
                         timeout=aiohttp.ClientTimeout(total=60),
-                    ) as resp:
-                        if resp.status == 200:
-                            photo_data = await resp.read()
-                            photo = BufferedInputFile(photo_data, filename="avatar.png")
-                            if message.bot:
-                                await message.bot.send_photo(
-                                    chat_id=player_id,
-                                    photo=photo,
-                                    caption=profile_text,
-                                    parse_mode="Markdown",
-                                )
-                            return
-                        else:
-                            logger.warning(
-                                f"Failed to download avatar for profile: {resp.status}"
+                    )
+                    if resp.status == 200:
+                        photo_data = await resp.read()
+                        photo = BufferedInputFile(photo_data, filename="avatar.png")
+                        if message.bot:
+                            await message.bot.send_photo(
+                                chat_id=player_id,
+                                photo=photo,
+                                caption=profile_text,
+                                parse_mode="Markdown",
                             )
+                        return
+                    else:
+                        logger.warning(
+                            f"Failed to download avatar for profile: {resp.status}"
+                        )
             except Exception as avatar_err:
                 logger.warning(f"Error downloading avatar for profile: {avatar_err}")
 
@@ -1321,8 +1400,48 @@ async def cmd_today(message: types.Message):
         await message.answer(msgs["error"].format(error=str(e)))
 
 
+async def cmd_bridge(message: types.Message):
+    """Show the current bridge image and mission info."""
+    assert message.from_user is not None
+    player_id = message.from_user.id
+
+    try:
+        # Get mission info
+        from contextlib import suppress
+
+        mission = None
+        with suppress(Exception):
+            mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+
+        # Get bridge image
+        bridge = None
+        with suppress(Exception):
+            bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
+
+        bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
+
+        if bridge and bridge.get("image_url"):
+            caption = bridge_msgs["title"]
+            if mission:
+                caption += "\n\n" + bridge_msgs["mission_header"].format(
+                    name=mission.get("name", "")
+                )
+                caption += "\n\n" + bridge_msgs["mission_desc"].format(
+                    description=mission.get("description", "")
+                )
+            await send_image_from_api_url(message, bridge["image_url"], caption=caption)
+        else:
+            await message.answer(bridge_msgs["error"])
+    except Exception as e:
+        logger.error(f"Failed to get bridge image for player {player_id}: {e}")
+        await message.answer(str(e))
+
+
 async def cmd_help(message: types.Message):
     """Show help information"""
+    assert message.from_user is not None
+    player_id = message.from_user.id
+
     msgs = lang.get_help(BOT_LANGUAGE)
 
     # Fetch game title dynamically from API
@@ -1340,8 +1459,36 @@ async def cmd_help(message: types.Message):
 
     help_title = f"**{game_title} — Help**"
 
+    # Only show GM commands if the requesting user is the configured Game Master
+    is_gm = GAME_MASTER_ID > 0 and player_id == GAME_MASTER_ID
+
+    if is_gm:
+        # Include GM commands in help text
+        help_text = f"{help_title}\n\n{msgs['commands']}\n\n{msgs['how_to_play']}"
+    else:
+        # Show only regular commands (no /gm_* commands)
+        if BOT_LANGUAGE == "ru":
+            commands_only = (
+                "**Команды:**\n"
+                "/start - Начать или продолжить игру\n"
+                "/profile - Показать ваш профиль\n"
+                "/today - Текущий ход игры\n"
+                "/bridge - Картинка рубки и миссия\n"
+                "/help - Эта справка"
+            )
+        else:
+            commands_only = (
+                "**Commands:**\n"
+                "/start - Start or continue the game\n"
+                "/profile - Show your profile\n"
+                "/today - Current game turn\n"
+                "/bridge - Bridge image and mission\n"
+                "/help - This help"
+            )
+        help_text = f"{help_title}\n\n{commands_only}\n\n{msgs['how_to_play']}"
+
     await message.answer(
-        f"{help_title}\n\n{msgs['commands']}\n\n{msgs['how_to_play']}",
+        help_text,
         parse_mode="Markdown",
     )
 
@@ -1516,6 +1663,205 @@ async def cmd_gm_list_games(message: types.Message):
         await message.answer(gm_msgs["list_games_error"].format(error=e))
 
 
+async def cmd_gm_continue_game(message: types.Message):
+    """GM command: Generate the next turn for a game.
+
+    Usage: /gm_continue_game <game_id>
+    Only executable by the configured Game Master user.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(f"Unauthorized /gm_continue_game attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(gm_msgs["continue_game_usage"])
+        return
+
+    game_id = parts[1].strip()
+    if not game_id:
+        await message.answer(gm_msgs["continue_game_usage"])
+        return
+
+    await message.answer(
+        gm_msgs["continuing_game"].format(game_id=game_id), parse_mode="Markdown"
+    )
+
+    try:
+        result = await api_request(
+            "POST",
+            "/admin/continue-game",
+            params={"game_id": game_id, "language": BOT_LANGUAGE},
+            timeout_total=600,
+        )
+        if result and result.get("status") == "success":
+            day_num = result.get("day", 1)
+            players = result.get("players", 0)
+            npcs = result.get("npcs", 0)
+            total = result.get("total_participants", 0)
+            msg = gm_msgs["game_continued"].format(
+                day_num=day_num,
+                players=players,
+                npcs=npcs,
+                total=total,
+            )
+            await message.answer(msg, parse_mode="Markdown")
+        else:
+            await message.answer(gm_msgs["continue_game_error"].format(error=result))
+    except Exception as e:
+        logger.error(f"Failed to continue game {game_id}: {e}")
+        await message.answer(gm_msgs["continue_game_error"].format(error=e))
+
+
+async def cmd_gm_regenerate_turn(message: types.Message):
+    """GM command: Regenerate the current turn with state reset.
+
+    Deletes the current day's data and regenerates it fresh.
+    Usage: /gm_regenerate_turn <game_id>
+    Only executable by the configured Game Master user.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(f"Unauthorized /gm_regenerate_turn attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(gm_msgs["regenerate_turn_usage"])
+        return
+
+    game_id = parts[1].strip()
+    if not game_id:
+        await message.answer(gm_msgs["regenerate_turn_usage"])
+        return
+
+    await message.answer(
+        gm_msgs["regenerating_turn"].format(game_id=game_id),
+        parse_mode="Markdown",
+    )
+
+    try:
+        result = await api_request(
+            "POST",
+            "/admin/regenerate-turn",
+            params={"game_id": game_id, "language": BOT_LANGUAGE},
+            timeout_total=600,
+        )
+        if result and result.get("status") == "success":
+            day_num = result.get("day", 1)
+            players = result.get("players", 0)
+            npcs = result.get("npcs", 0)
+            msg = gm_msgs["turn_regenerated"].format(
+                day_num=day_num,
+                players=players,
+                npcs=npcs,
+            )
+            await message.answer(msg, parse_mode="Markdown")
+        else:
+            await message.answer(gm_msgs["regenerate_turn_error"].format(error=result))
+    except Exception as e:
+        logger.error(f"Failed to regenerate turn for game {game_id}: {e}")
+        await message.answer(gm_msgs["regenerate_turn_error"].format(error=e))
+
+
+async def cmd_gm_restart_game(message: types.Message):
+    """GM command: Reset game state and restart from turn 1.
+
+    Shows a confirmation prompt first. Use /gm_restart_game_confirm to proceed.
+    Usage: /gm_restart_game <game_id>
+    Only executable by the configured Game Master user.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(f"Unauthorized /gm_restart_game attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(gm_msgs["restart_game_usage"])
+        return
+
+    game_id = parts[1].strip()
+    if not game_id:
+        await message.answer(gm_msgs["restart_game_usage"])
+        return
+
+    # Show confirmation prompt
+    await message.answer(
+        gm_msgs["confirm_restart"].format(game_id=game_id),
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_gm_restart_game_confirm(message: types.Message):
+    """GM command: Confirm and execute game restart.
+
+    Usage: /gm_restart_game_confirm <game_id>
+    Only executable by the configured Game Master user.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(
+            f"Unauthorized /gm_restart_game_confirm attempt by user {player_id}"
+        )
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(gm_msgs["need_confirm"])
+        return
+
+    game_id = parts[1].strip()
+    if not game_id:
+        await message.answer(gm_msgs["restart_game_usage"])
+        return
+
+    await message.answer(
+        gm_msgs["restarting_game"].format(game_id=game_id),
+        parse_mode="Markdown",
+    )
+
+    try:
+        result = await api_request(
+            "POST",
+            "/admin/restart-game",
+            params={"game_id": game_id, "language": BOT_LANGUAGE},
+            timeout_total=120,
+        )
+        if result and result.get("status") == "success":
+            msg = gm_msgs["game_restarted"].format(
+                game_id=game_id,
+                deleted_days=result.get("deleted_days", 0),
+                deleted_briefings=result.get("deleted_briefings", 0),
+                deleted_actions=result.get("deleted_actions", 0),
+                deleted_messages=result.get("deleted_messages", 0),
+                deleted_mission=result.get("deleted_mission", False),
+            )
+            await message.answer(msg, parse_mode="Markdown")
+        else:
+            await message.answer(gm_msgs["restart_game_error"].format(error=result))
+    except Exception as e:
+        logger.error(f"Failed to restart game {game_id}: {e}")
+        await message.answer(gm_msgs["restart_game_error"].format(error=e))
+
+
 async def handle_voice_message(message: types.Message):
     """Handle voice messages"""
     assert message.from_user is not None
@@ -1628,6 +1974,20 @@ async def handle_onboarding_inline_answer(
     matched_label = current_options[option_idx]["label"]
     logger.info(f"Matched option: idx={option_idx}, label='{matched_label}'")
 
+    # Set reaction to show processing
+    if callback.bot is not None:
+        try:
+            await callback.bot.set_message_reaction(
+                chat_id=player_id,
+                message_id=msg.message_id,
+                reaction=[ReactionTypeEmoji(emoji="\U0001f440")],  # 👀 eyes
+                is_big=False,
+            )
+        except Exception as reaction_err:
+            logger.warning(
+                f"Failed to set reaction for player {player_id}: {reaction_err}"
+            )
+
     try:
         logger.info(
             f"Submitting onboarding answer (inline): session_id={session_id}, "
@@ -1643,6 +2003,24 @@ async def handle_onboarding_inline_answer(
 
         if result is None:
             raise Exception("No response from API when submitting onboarding answer")
+
+        # Answer processed successfully — update reaction to checkmark
+        if callback.bot is None:
+            logger.warning(
+                f"callback.bot is None for player {player_id}, cannot set reaction"
+            )
+        else:
+            try:
+                await callback.bot.set_message_reaction(
+                    chat_id=player_id,
+                    message_id=msg.message_id,
+                    reaction=[ReactionTypeEmoji(emoji="\U0001f44d")],  # 👍 thumbs up
+                    is_big=False,
+                )
+            except Exception as reaction_err:
+                logger.warning(
+                    f"Failed to update reaction for player {player_id}: {reaction_err}"
+                )
 
         if result.get("completed"):
             profile = result.get("profile") or {}
@@ -1768,6 +2146,20 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         await message.answer(error_msgs["invalid_format"])
         return
 
+    # Set reaction to show processing
+    if message.bot is not None:
+        try:
+            await message.bot.set_message_reaction(
+                chat_id=player_id,
+                message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="\U0001f440")],  # 👀 eyes
+                is_big=False,
+            )
+        except Exception as reaction_err:
+            logger.warning(
+                f"Failed to set reaction for player {player_id}: {reaction_err}"
+            )
+
     try:
         logger.info(
             f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, "
@@ -1783,6 +2175,20 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
         if result is None:
             raise Exception("No response from API when submitting onboarding answer")
+
+        # Answer processed successfully — update reaction to checkmark
+        if message.bot is not None:
+            try:
+                await message.bot.set_message_reaction(
+                    chat_id=player_id,
+                    message_id=message.message_id,
+                    reaction=[ReactionTypeEmoji(emoji="\U0001f44d")],  # 👍 thumbs up
+                    is_big=False,
+                )
+            except Exception as reaction_err:
+                logger.warning(
+                    f"Failed to update reaction for player {player_id}: {reaction_err}"
+                )
 
         if result.get("completed"):
             profile = result.get("profile") or {}
@@ -1975,7 +2381,7 @@ async def polling_loop(bot: Bot):
     while True:
         try:
             # Get all player IDs from state storage
-            player_ids = list(player_states.keys())
+            player_ids = get_all_player_ids()
 
             for player_id in player_ids:
                 state = get_player_state(player_id)
@@ -1997,6 +2403,7 @@ async def polling_loop(bot: Bot):
 
                     # Clear processed updates
                     state["pending_updates"] = []
+                    update_player_state(player_id, pending_updates=[])
 
             await asyncio.sleep(POLLING_INTERVAL)
 
@@ -2039,9 +2446,14 @@ async def main():
     dp.message.register(cmd_profile, Command("profile"))
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_help, Command("help"))
+    dp.message.register(cmd_bridge, Command("bridge"))
     dp.message.register(cmd_gm_start_game, Command("gm_start_game"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list_games, Command("gm_list_games"))
+    dp.message.register(cmd_gm_continue_game, Command("gm_continue_game"))
+    dp.message.register(cmd_gm_regenerate_turn, Command("gm_regenerate_turn"))
+    dp.message.register(cmd_gm_restart_game, Command("gm_restart_game"))
+    dp.message.register(cmd_gm_restart_game_confirm, Command("gm_restart_game_confirm"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Onboarding answer handler - must be registered BEFORE general text handlers

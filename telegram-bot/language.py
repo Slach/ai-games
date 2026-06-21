@@ -28,7 +28,7 @@ ONBOARDING = {
         "welcome_back": "Welcome back, {role}!\n\n{role_description}\nTraits: {traits}\n\nUse /today to view the current game day.",
         "question_prefix": "Situation {id}:\n\n{text}",
         "onboarding_complete": "🎉 Welcome aboard!\n\nYour role: **{role}**\n\n{role_description}\n\n**Species:** {species}\n**Gender:** {gender}\n\n**Traits:**\n- {traits}",
-        "game_already_started": "🚀 The game has already started, welcome aboard!",
+        "game_already_started": "🚀 The game has already started! The crew is assembled. Use /today for the current turn and /bridge to view the mission.",
         "game_waiting": "⏳ The game will start soon, we're waiting for more players.",
         "new_player_joined": "👋 A new crew member has joined us!\n\n**{player_name}** — **{role}**\n\n{role_description}",
         "select_game": "🎮 **Select a game to join or start a new one:**",
@@ -45,13 +45,13 @@ ONBOARDING = {
 HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
-        "commands": "**Команды:**\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий день игры\n/help - Эта справка\n\n**Команды Game Master:**\n/gm_start_game <id> - Запустить игру\n/gm_kick <id> <роль> - Изгнать игрока\n/gm_list_games - Список игр",
-        "how_to_play": "**Как играть:**\n1. Каждый день генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
+        "commands": "**Команды:**\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/help - Эта справка\n\n**Команды Game Master:**\n/gm_start_game <id> - Запустить игру\n/gm_kick <id> <роль> - Изгнать игрока\n/gm_list_games - Список игр",
+        "how_to_play": "**Как играть:**\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
-        "commands": "**Commands:**\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game day\n/help - This help\n\n**Game Master Commands:**\n/gm_start_game <id> - Start a game\n/gm_kick <id> <role> - Kick a player\n/gm_list_games - List all games",
-        "how_to_play": "**How to play:**\n1. A new story is generated every day\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
+        "commands": "**Commands:**\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/help - This help\n\n**Game Master Commands:**\n/gm_start_game <id> - Start a game\n/gm_kick <id> <role> - Kick a player\n/gm_list_games - List all games",
+        "how_to_play": "**How to play:**\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
 }
 
@@ -82,22 +82,22 @@ PROFILE = {
 # Current day messages
 CURRENT_DAY = {
     LANGUAGE_RU: {
-        "title": "📅 **День {day}**",
-        "story": "*Сюжет:*\n{story}",
+        "title": "🎯 **Ход {day}**",
+        "story": "*Общая вводная:*\n{story}",
         "npc_dialogues": "*NPC диалоги:*",
-        "actions": "*Ваши действия:*\n{actions}",
+        "actions": "*Ваши варианты действий:*\n{actions}",
         "select_action": "Выберите действие ниже:",
-        "briefing_header": "*Ваша вводная:*\n{briefing}",
-        "error": "Не удалось получить информацию о текущем дне: {error}",
+        "briefing_header": "*Ваша личная вводная:*\n{briefing}",
+        "error": "Не удалось получить информацию о текущем ходе: {error}",
     },
     LANGUAGE_EN: {
-        "title": "📅 **Day {day}**",
-        "story": "*Story:*\n{story}",
+        "title": "🎯 **Turn {day}**",
+        "story": "*Global scenario:*\n{story}",
         "npc_dialogues": "*NPC dialogues:*",
-        "actions": "*Your actions:*\n{actions}",
+        "actions": "*Your action choices:*\n{actions}",
         "select_action": "Select an action below:",
-        "briefing_header": "*Your briefing:*\n{briefing}",
-        "error": "Could not get information about the current day: {error}",
+        "briefing_header": "*Your personal briefing:*\n{briefing}",
+        "error": "Could not get information about the current turn: {error}",
     },
 }
 
@@ -155,6 +155,34 @@ IMAGES = {
     },
 }
 
+# Bridge image messages
+BRIDGE = {
+    LANGUAGE_RU: {
+        "title": "🚀 **Мостик корабля**",
+        "error": "Картинка рубки пока не сгенерирована. Дождитесь начала миссии.",
+        "mission_header": "**Миссия:** {name}",
+        "mission_desc": "{description}",
+    },
+    LANGUAGE_EN: {
+        "title": "🚀 **Bridge**",
+        "error": "Bridge image not yet generated. Wait for the mission to start.",
+        "mission_header": "**Mission:** {name}",
+        "mission_desc": "{description}",
+    },
+}
+
+# Spectator (dead player) messages
+SPECTATOR = {
+    LANGUAGE_RU: {
+        "player_dead": "💀 **Вы погибли при исполнении!**\n\nВаш персонаж пал в бою. Вы остаётесь зрителем и можете наблюдать за развитием сюжета.\n\nЧтобы присоединиться к новой игре или вернуться в текущую в новой роли, нажмите /start",
+        "still_watching": "👁 **Вы наблюдаете за развитием событий...**\n\nКак зритель, вы видите сюжет, но не можете влиять на него.\nНажмите /start чтобы присоединиться к новой игре или вернуться в новой роли.",
+    },
+    LANGUAGE_EN: {
+        "player_dead": "💀 **You died in the line of duty!**\n\nYour character fell in battle. You remain a spectator and can watch the story unfold.\n\nTo join a new game or return to the current one in a new role, press /start",
+        "still_watching": "👁 **You are watching the story unfold...**\n\nAs a spectator, you see the plot but cannot influence it.\nPress /start to join a new game or return in a new role.",
+    },
+}
+
 # Menu labels
 MENU = {
     LANGUAGE_RU: {
@@ -177,8 +205,22 @@ GM_COMMANDS = {
         "unauthorized": "⛔ У вас нет прав на использование этой команды.",
         "start_game_usage": "❌ Использование: /gm_start_game <game_id>\n\nПример: /gm_start_game abc123",
         "starting_game": "🚀 Запуск игры `{game_id}`...",
-        "game_started": "✅ **Игра `{game_id}` запущена!**\n\n📅 День: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC заменено: {npc_count}\n\nИстория дня сгенерирована.",
-        "briefings_sent": "\n\n📋 Вводные отправлены игрокам.",
+        "continue_game_usage": "❌ Использование: /gm_continue_game <game_id>\n\nПример: /gm_continue_game abc123",
+        "continuing_game": "🚀 Генерация следующего хода для игры `{game_id}`...",
+        "game_continued": "✅ **Следующий ход сгенерирован!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n🎭 Участников: {total}",
+        "continue_game_error": "❌ Ошибка генерации хода: {error}",
+        "regenerate_turn_usage": "❌ Использование: /gm_regenerate_turn <game_id>\n\nПример: /gm_regenerate_turn abc123",
+        "regenerating_turn": "🔄 Перегенерация текущего хода для игры `{game_id}`...",
+        "turn_regenerated": "✅ **Текущий ход перегенерирован!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {players}\n🤖 NPC: {npcs}",
+        "regenerate_turn_error": "❌ Ошибка перегенерации хода: {error}",
+        "restart_game_usage": "❌ Использование: /gm_restart_game <game_id>\n\nПример: /gm_restart_game abc123",
+        "confirm_restart": "⚠️ **Вы уверены, что хотите перезапустить игру `{game_id}`?**\n\nЭто удалит ВСЕ ходы, брифинги, действия, миссию и изображения. Профили игроков будут сохранены.\n\nНапишите /gm_restart_game_confirm {game_id} для подтверждения.",
+        "restarting_game": "🔄 Перезапуск игры `{game_id}`...",
+        "game_restarted": "✅ **Игра перезапущена!**\n\n🎮 Игра: `{game_id}`\n🗑 Удалено ходов: {deleted_days}\n🗑 Удалено брифингов: {deleted_briefings}\n🗑 Удалено действий: {deleted_actions}\n🗑 Удалено сообщений: {deleted_messages}\n🗑 Удалена миссия: {deleted_mission}\n✅ Состояние сброшено на День 1",
+        "restart_game_error": "❌ Ошибка перезапуска игры: {error}",
+        "need_confirm": "⚠️ Для подтверждения напишите /gm_restart_game_confirm {game_id}",
+        "game_started": "✅ **Игра `{game_id}` запущена!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC создано: {npc_count}\n🚀 Миссия сгенерирована\n🖼 Картинка рубки готова\n\nКоманда собрана, вводные разосланы!",
+        "briefings_sent": "",
         "start_game_error": "❌ Ошибка запуска игры: {error}",
         "kick_usage": "❌ Использование: /gm_kick <game_id> <role_key> [причина]\n\nПример: /gm_kick abc123 chief_engineer Неактивен более 3 дней",
         "default_kick_reason": "Не указана",
@@ -197,8 +239,22 @@ GM_COMMANDS = {
         "unauthorized": "⛔ You don't have permission to use this command.",
         "start_game_usage": "❌ Usage: /gm_start_game <game_id>\n\nExample: /gm_start_game abc123",
         "starting_game": "🚀 Starting game `{game_id}`...",
-        "game_started": "✅ **Game `{game_id}` started!**\n\n📅 Day: {day_num}\n👤 Players: {player_count}\n🤖 NPCs replaced: {npc_count}\n\nToday's story has been generated.",
-        "briefings_sent": "\n\n📋 Briefings sent to players.",
+        "continue_game_usage": "❌ Usage: /gm_continue_game <game_id>\n\nExample: /gm_continue_game abc123",
+        "continuing_game": "🚀 Generating next turn for game `{game_id}`...",
+        "game_continued": "✅ **Next turn generated!**\n\n🎯 Turn: {day_num}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n🎭 Total: {total}",
+        "continue_game_error": "❌ Error generating turn: {error}",
+        "regenerate_turn_usage": "❌ Usage: /gm_regenerate_turn <game_id>\n\nExample: /gm_regenerate_turn abc123",
+        "regenerating_turn": "🔄 Regenerating current turn for game `{game_id}`...",
+        "turn_regenerated": "✅ **Current turn regenerated!**\n\n🎯 Turn: {day_num}\n👤 Players: {players}\n🤖 NPCs: {npcs}",
+        "regenerate_turn_error": "❌ Error regenerating turn: {error}",
+        "restart_game_usage": "❌ Usage: /gm_restart_game <game_id>\n\nExample: /gm_restart_game abc123",
+        "confirm_restart": "⚠️ **Are you sure you want to restart game `{game_id}`?**\n\nThis will delete ALL turns, briefings, actions, mission, and images. Player profiles will be preserved.\n\nType /gm_restart_game_confirm {game_id} to confirm.",
+        "restarting_game": "🔄 Restarting game `{game_id}`...",
+        "game_restarted": "✅ **Game restarted!**\n\n🎮 Game: `{game_id}`\n🗑 Days deleted: {deleted_days}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n🗑 Messages deleted: {deleted_messages}\n🗑 Mission deleted: {deleted_mission}\n✅ State reset to Day 1",
+        "restart_game_error": "❌ Error restarting game: {error}",
+        "need_confirm": "⚠️ Please confirm by typing /gm_restart_game_confirm {game_id}",
+        "game_started": "✅ **Game `{game_id}` started!**\n\n🎯 Turn: {day_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated\n🖼 Bridge image ready\n\nCrew assembled, briefings sent!",
+        "briefings_sent": "",
         "start_game_error": "❌ Error starting game: {error}",
         "kick_usage": "❌ Usage: /gm_kick <game_id> <role_key> [reason]\n\nExample: /gm_kick abc123 chief_engineer Inactive for more than 3 days",
         "default_kick_reason": "Not specified",
@@ -264,3 +320,13 @@ def get_images(language: str = LANGUAGE_RU):
 def get_gm_commands(language: str = LANGUAGE_RU):
     """Get Game Master command response strings for a specific language"""
     return GM_COMMANDS.get(language, GM_COMMANDS[LANGUAGE_RU])
+
+
+def get_bridge(language: str = LANGUAGE_RU):
+    """Get bridge image messages for a specific language"""
+    return BRIDGE.get(language, BRIDGE[LANGUAGE_RU])
+
+
+def get_spectator(language: str = LANGUAGE_RU):
+    """Get spectator/dead player messages for a specific language"""
+    return SPECTATOR.get(language, SPECTATOR[LANGUAGE_RU])

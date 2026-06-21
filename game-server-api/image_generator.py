@@ -10,14 +10,15 @@ Model combination (verified working):
   VAE:  ae.safetensors
 """
 
-import os
-import json
-import uuid
-import logging
-import random
 import asyncio
+import json
+import logging
+import os
+import random
+import uuid
+from typing import Any
+
 import aiohttp
-from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def _build_zimage_turbo_workflow(
     height: int = 1024,
     seed: int = 0,
     filename_prefix: str = "ComfyUI",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a Z-Image Turbo text-to-image workflow for ComfyUI API.
 
     Uses the correct model combination:
@@ -165,7 +166,7 @@ class ImageGenerator:
         self.comfyui_url = os.getenv("COMFYUI_URL", "http://comfyui:8188")
         self.client_id = str(uuid.uuid4())
 
-    async def _queue_prompt(self, workflow: Dict[str, Any]) -> str:
+    async def _queue_prompt(self, workflow: dict[str, Any]) -> str:
         """Submit a workflow to ComfyUI /prompt endpoint and return the prompt_id."""
         payload = {
             "prompt": workflow,
@@ -186,35 +187,37 @@ class ImageGenerator:
         last_error = None
         for attempt in range(max_retries):
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
+                async with (
+                    aiohttp.ClientSession() as session,
+                    session.post(
                         f"{self.comfyui_url}/prompt",
                         json=payload,
                         timeout=aiohttp.ClientTimeout(total=30),
-                    ) as resp:
-                        if resp.status != 200:
-                            error_text = await resp.text()
-                            raise Exception(
-                                f"ComfyUI /prompt error {resp.status}: {error_text}"
-                            )
-                        response_text = await resp.text()
-                        if not response_text or not response_text.strip():
-                            raise Exception(
-                                f"ComfyUI /prompt returned empty response (status {resp.status})"
-                            )
-                        try:
-                            result = await resp.json()
-                        except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
-                            raise Exception(
-                                f"ComfyUI /prompt returned non-JSON response: {response_text}"
-                            ) from e
-                        prompt_id = result.get("prompt_id")
-                        if not prompt_id:
-                            raise Exception(
-                                f"ComfyUI /prompt response missing prompt_id: {result}"
-                            )
-                        logger.info(f"ComfyUI prompt queued: {prompt_id}")
-                        return prompt_id
+                    ) as resp,
+                ):
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        raise Exception(
+                            f"ComfyUI /prompt error {resp.status}: {error_text}"
+                        )
+                    response_text = await resp.text()
+                    if not response_text or not response_text.strip():
+                        raise Exception(
+                            f"ComfyUI /prompt returned empty response (status {resp.status})"
+                        )
+                    try:
+                        result = await resp.json()
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                        raise Exception(
+                            f"ComfyUI /prompt returned non-JSON response: {response_text}"
+                        ) from e
+                    prompt_id = result.get("prompt_id")
+                    if not prompt_id:
+                        raise Exception(
+                            f"ComfyUI /prompt response missing prompt_id: {result}"
+                        )
+                    logger.info(f"ComfyUI prompt queued: {prompt_id}")
+                    return prompt_id
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 last_error = e
                 if attempt < max_retries - 1:
@@ -235,43 +238,45 @@ class ImageGenerator:
 
     async def _wait_for_completion(
         self, prompt_id: str, timeout: int = 300
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Wait for ComfyUI to finish processing a prompt via /history endpoint."""
         start = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start) < timeout:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     f"{self.comfyui_url}/history/{prompt_id}",
                     timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status == 200:
-                        response_text = await resp.text()
-                        if not response_text or not response_text.strip():
-                            await asyncio.sleep(2)
-                            continue
-                        try:
-                            history = await resp.json()
-                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
-                            await asyncio.sleep(2)
-                            continue
-                        if prompt_id in history:
-                            status = history[prompt_id].get("status", {})
-                            if (
-                                status.get("completed", False)
-                                or status.get("status_str") == "success"
-                            ):
-                                outputs = history[prompt_id].get("outputs", {})
-                                logger.info(f"ComfyUI prompt {prompt_id} completed")
-                                return outputs
-                            elif status.get("status_str") == "error":
-                                raise Exception(f"ComfyUI execution error: {status}")
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    response_text = await resp.text()
+                    if not response_text or not response_text.strip():
+                        await asyncio.sleep(2)
+                        continue
+                    try:
+                        history = await resp.json()
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                        await asyncio.sleep(2)
+                        continue
+                    if prompt_id in history:
+                        status = history[prompt_id].get("status", {})
+                        if (
+                            status.get("completed", False)
+                            or status.get("status_str") == "success"
+                        ):
+                            outputs = history[prompt_id].get("outputs", {})
+                            logger.info(f"ComfyUI prompt {prompt_id} completed")
+                            return outputs
+                        elif status.get("status_str") == "error":
+                            raise Exception(f"ComfyUI execution error: {status}")
             await asyncio.sleep(2)
 
         raise TimeoutError(f"ComfyUI prompt {prompt_id} timed out after {timeout}s")
 
-    def _extract_image_url(self, outputs: Dict[str, Any]) -> Optional[str]:
+    def _extract_image_url(self, outputs: dict[str, Any]) -> str | None:
         """Extract image URL from ComfyUI outputs."""
-        for node_id, node_output in outputs.items():
+        for _node_id, node_output in outputs.items():
             images = node_output.get("images", [])
             if images:
                 img = images[0]
@@ -288,7 +293,7 @@ class ImageGenerator:
         width: int = 1024,
         height: int = 1024,
         max_retries: int = 3,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate an image via ComfyUI using Z-Image Turbo with retry.
 
         On each retry the seed is randomized, so a transient failure or
@@ -369,7 +374,7 @@ class ImageGenerator:
         game_id: str = "default_game",
         width: int = 768,
         height: int = 1024,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate a character avatar image via ComfyUI.
 
         Alias for generate_image with portrait-oriented defaults.
@@ -387,7 +392,7 @@ class ImageGenerator:
         filename_prefix: str = "scene",
         width: int = 1024,
         height: int = 1024,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate a scene image via ComfyUI."""
         return await self.generate_image(
             prompt=prompt,
@@ -400,9 +405,9 @@ class ImageGenerator:
         self,
         character_name: str,
         role: str,
-        traits: List[str],
+        traits: list[str],
         scene_description: str = "",
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate a character image (backward compatible interface)."""
         prompt = (
             f"Sci-fi character portrait: {character_name}, {role}. "
@@ -421,8 +426,8 @@ class ImageGenerator:
         self,
         day: int,
         story: str,
-        player_profile: Dict[str, Any],
-        npc_dialogues: List[Dict[str, str]],
+        player_profile: dict[str, Any],
+        npc_dialogues: list[dict[str, str]],
     ) -> str:
         """Generate a personalized comic/scene for a player.
 
@@ -456,14 +461,14 @@ class ImageGenerator:
 
     LOADING_IMAGE_PROMPTS = [
         "Starship bridge main computer console glowing with holographic star charts, 'SYSTEM BOOT' text display, blue neon lights, Star Trek style, cinematic shot from captain's chair perspective, 4K",
-        "Starship computer core room with towering data pillars, energy conduits pulsing with blue light, holographic displays flickering to life, 'INITIALIZING...' floating text, sci-fi interior",
+        "Starship computer core room with towering data pillars, energy conduits pulsing with blue light, holographic displays flickering to life, 'LOADING...' floating text, sci-fi interior",
         "Captain's chair on starship bridge viewed from behind, panoramic viewscreen showing starfield, consoles powering up, amber and blue indicator lights, 'LOADING SYSTEMS' hologram",
         "Starship engineering room warp core pulsing with blue energy, LCARS displays booting up, holographic status readouts, 'POWERING UP' text on screens, cinematic lighting",
         "Starship navigation console with interactive star map hologram, tactical display panels activating, 'CALIBRATING SENSORS' overlay, sci-fi UI elements, glowing buttons",
         "View from starship observation deck windows showing nebula, holographic data streams reflecting on glass, ambient blue lighting, 'WELCOME ABOARD' floating interface prompt",
         "Starship AI core chamber with crystalline data storage, floating light particles, neural interface glowing patterns, 'NEURAL LINK ESTABLISHED' text, ethereal blue-white lighting",
         "Helm station on starship bridge, holographic flight path projections, warp engine status displays, 'NAVIGATION SYSTEMS ONLINE' readout, amber alert glow",
-        "Starship medical bay with biobeds, holographic patient scans, 'MEDICAL SYSTEMS INITIALIZING' display, clean white-blue lighting, futuristic medical equipment",
+        "Starship medical bay with biobeds, holographic patient scans, 'MEDICAL SYSTEMS LOADING' display, clean white-blue lighting, futuristic medical equipment",
         "Starship armory or security station with weapon lockers, tactical holographic map, 'SECURITY SYSTEMS ARMED' display, red-blue alert lighting, sci-fi interior",
     ]
 
@@ -475,7 +480,7 @@ class ImageGenerator:
         game_id: str = "default_game",
         width: int = 768,
         height: int = 768,
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate N loading screen images for /start display.
 
         Args:
@@ -514,6 +519,58 @@ class ImageGenerator:
         logger.info(f"[IMAGE] Generated {len(urls)}/{count} loading images")
         return urls
 
+    async def generate_bridge_image(
+        self,
+        prompt: str,
+        crew_descriptions: list[dict[str, str]],
+        avatar_urls: list[str | None] | None = None,
+        filename_prefix: str = "bridge",
+        game_id: str = "default_game",
+        width: int = 1024,
+        height: int = 768,
+    ) -> str | None:
+        """Generate a bridge scene image with the crew.
+
+        Currently uses the standard Z-Image Turbo workflow with a detailed prompt.
+        When ComfyUI supports reference image features (ControlNet / IP-Adapter),
+        this will use avatar_urls as reference images for consistent crew appearance.
+
+        Args:
+            prompt: Detailed bridge scene prompt from LLM
+            crew_descriptions: Where each crew member is positioned
+            avatar_urls: Optional list of avatar image URLs for reference (future IP-Adapter)
+            filename_prefix: Prefix for output file
+            game_id: Game to scope the image to
+            width: Image width
+            height: Image height
+
+        Returns:
+            URL of the generated bridge image
+        """
+        logger.info("[BRIDGE] Generating bridge scene image")
+        if avatar_urls:
+            logger.info(
+                f"[BRIDGE] {len([u for u in avatar_urls if u])} avatar references available"
+            )
+
+        # Enhanced prompt with crew positioning details
+        enriched_prompt = prompt
+        if crew_descriptions:
+            positions = "; ".join(
+                [
+                    f"{d.get('role', '?')}: {d.get('position_description', '')}"
+                    for d in crew_descriptions
+                ]
+            )
+            enriched_prompt = f"{prompt}. Crew positions: {positions}"
+
+        return await self.generate_image(
+            prompt=enriched_prompt,
+            filename_prefix=f"{filename_prefix}_{game_id}",
+            width=width,
+            height=height,
+        )
+
     async def generate_splash_images(
         self,
         game_title: str,
@@ -523,7 +580,7 @@ class ImageGenerator:
         game_id: str = "default_game",
         width: int = 1024,
         height: int = 768,
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate N splash images based on game title and description.
 
         Args:

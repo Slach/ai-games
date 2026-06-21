@@ -8,77 +8,97 @@ import logging
 import random
 import string
 import traceback
-import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, TypeAdapter
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from typing import Any
 
-from game_master import create_game_master_agent, NPC_TEMPLATES
-from image_generator import (
-    create_image_generator,
-    DEFAULT_SPLASH_FALLBACK_URL,
-    DEFAULT_LOADING_FALLBACK_URL,
-)
-from language import (
-    get_species_type_name,
-    get_gender_type_name,
-    get_hybrid_species_name,
-)
-from prompts import (
-    OnboardingQuestion,
-    STATIC_ONBOARDING_QUESTIONS,
-    build_interleaved_species_gender_questions,
-)
+import uvicorn
 from database import (
-    init_db,
-    run_migrations,
-    create_onboarding_session,
-    get_onboarding_session,
-    update_onboarding_session,
-    create_player_profile,
-    get_player_profile,
-    create_game_day,
-    get_game_day,
-    save_player_action,
+    GAME_START_MIN_PLAYERS,
     add_game_message,
+    clear_game_started,
+    create_game,
+    create_game_day,
+    create_mission,
+    create_npc_profile,
+    create_onboarding_session,
+    create_player_profile,
+    delete_all_game_days,
+    delete_all_game_messages,
+    delete_all_player_actions,
+    delete_all_player_briefings,
+    delete_game_day,
+    delete_game_images,
+    delete_mission,
+    delete_player_actions_for_day,
+    delete_player_briefings_for_day,
+    end_game,
+    get_all_active_npcs,
+    get_all_briefings_for_day,
+    get_all_roles,
+    get_available_games,
+    get_available_roles,
+    get_db_connection,
+    get_dead_players,
+    get_game,
+    get_game_day,
+    get_game_image_count,
     get_game_messages,
     get_game_state,
-    update_game_state,
-    create_game,
-    get_game,
-    get_available_games,
-    get_db_connection,
-    get_player_actions,
-    get_players_in_game,
-    update_player_profile_last_poll,
-    get_available_roles,
-    take_role,
-    get_role_by_key,
-    update_game_title,
     get_game_title,
-    is_game_started,
-    start_game,
-    get_player_count_in_game,
-    save_game_image,
-    get_random_game_image,
-    get_game_image_count,
-    create_npc_profile,
-    get_npc_profile,
+    get_live_players,
+    get_mission,
     get_npc_by_role,
-    record_kick,
-    save_player_briefing,
+    get_npc_profile,
+    get_onboarding_session,
+    get_player_actions,
     get_player_briefing,
-    get_all_briefings_for_day,
-    update_briefing_choice,
+    get_player_count_in_game,
+    get_player_profile,
+    get_players_in_game,
     get_players_who_need_to_choose,
-    update_game_day_outcome,
-    update_game_day_global_circumstances,
-    get_all_roles,
+    get_random_game_image,
+    get_role_by_key,
+    init_db,
+    is_game_started,
+    mark_player_dead,
+    record_kick,
+    reset_game_state_to_day1,
     reset_roles,
+    run_migrations,
+    save_game_image,
+    save_player_action,
+    save_player_briefing,
+    start_game,
+    take_role,
+    update_briefing_choice,
+    update_game_day_global_circumstances,
+    update_game_day_outcome,
+    update_game_state,
+    update_game_title,
+    update_mission_stage_progress,
+    update_onboarding_session,
+    update_player_profile_last_poll,
 )
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from game_master import NPC_TEMPLATES, create_game_master_agent
+from image_generator import (
+    DEFAULT_LOADING_FALLBACK_URL,
+    DEFAULT_SPLASH_FALLBACK_URL,
+    create_image_generator,
+)
+from language import (
+    get_gender_type_name,
+    get_hybrid_species_name,
+    get_species_type_name,
+)
+from prompts import (
+    STATIC_ONBOARDING_QUESTIONS,
+    OnboardingQuestion,
+    build_interleaved_species_gender_questions,
+)
+from pydantic import BaseModel, TypeAdapter
 
 # Configure logging
 logging.basicConfig(
@@ -152,11 +172,11 @@ class PlayerActionRequest(BaseModel):
 class PollResponse(BaseModel):
     """Response from game polling endpoint"""
 
-    new_game_day: Optional[Dict[str, Any]] = None
-    pending_actions: List[Dict[str, Any]] = []
-    messages_from_gm: List[Dict[str, Any]] = []
-    npc_messages: List[Dict[str, Any]] = []
-    avatar_url: Optional[str] = None
+    new_game_day: dict[str, Any] | None = None
+    pending_actions: list[dict[str, Any]] = []
+    messages_from_gm: list[dict[str, Any]] = []
+    npc_messages: list[dict[str, Any]] = []
+    avatar_url: str | None = None
 
 
 class StartGameRequest(BaseModel):
@@ -183,7 +203,7 @@ class CreateGameRequest(BaseModel):
     language: str = "ru"
 
 
-def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
+def get_next_question(current_question: int) -> OnboardingQuestion | None:
     """Get the next onboarding question"""
     if current_question >= len(STATIC_ONBOARDING_QUESTIONS):
         return None
@@ -193,7 +213,7 @@ def get_next_question(current_question: int) -> Optional[OnboardingQuestion]:
 async def generate_dynamic_onboarding_questions(
     language: str = "en",
     game_id: str = "default_game",
-) -> List[OnboardingQuestion]:
+) -> list[OnboardingQuestion]:
     """Generate dynamic onboarding questions using LLM with json_schema and enrich with images via ComfyUI."""
     logger.info(
         f"=== Generating dynamic onboarding questions for language: {language} ==="
@@ -232,7 +252,7 @@ async def generate_dynamic_onboarding_questions(
         try:
             image_generator = create_image_generator()
 
-            async def _generate_question_image(q: OnboardingQuestion) -> Optional[str]:
+            async def _generate_question_image(q: OnboardingQuestion) -> str | None:
                 """Generate image for a single question using LLM-generated image_prompt."""
                 prompt = q.image_prompt
                 if not prompt:
@@ -251,7 +271,7 @@ async def generate_dynamic_onboarding_questions(
             tasks = [_generate_question_image(q) for q in questions]
             image_urls = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for q, url_or_err in zip(questions, image_urls):
+            for q, url_or_err in zip(questions, image_urls, strict=False):
                 if isinstance(url_or_err, str) and url_or_err:
                     q.image_url = url_or_err
                 elif isinstance(url_or_err, Exception):
@@ -277,7 +297,7 @@ async def generate_dynamic_onboarding_questions(
 
 async def _generate_option_images_for_question(
     question: OnboardingQuestion,
-    session: Dict[str, Any],
+    session: dict[str, Any],
     language: str,
     game_id: str,
 ) -> OnboardingQuestion:
@@ -391,11 +411,11 @@ async def _generate_option_images_for_question(
 
 def generate_player_profile_from_answers(
     player_id: int,
-    answers: Dict[int, str],
+    answers: dict[int, str],
     game_id: str = "default_game",
     language: str = "ru",
-    questions: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    questions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Assign a role from the available ship roles based on accumulated role scores from onboarding answers."""
     available = get_available_roles(game_id, language=language)
 
@@ -494,13 +514,14 @@ def generate_player_profile_from_answers(
 
     # Get secondary display names for hybrid display
     gender_secondary = gender_result.get("secondary", "")
-    gender_hybrid = gender_result.get("hybrid", False)
 
     species_type_display = get_species_type_name(species_primary, language)
     gender_type_display = get_gender_type_name(gender_primary, language)
 
     species_secondary_display = (
-        get_species_type_name(species_secondary, language) if species_secondary else None
+        get_species_type_name(species_secondary, language)
+        if species_secondary
+        else None
     )
     gender_secondary_display = (
         get_gender_type_name(gender_secondary, language) if gender_secondary else None
@@ -811,10 +832,14 @@ async def submit_onboarding_answer(
         # Generate option images for species/gender questions
         if next_question:
             has_species_tags = any(
-                opt.get("species_tags") for opt in next_question.options if opt.get("species_tags")
+                opt.get("species_tags")
+                for opt in next_question.options
+                if opt.get("species_tags")
             )
             has_gender_tags = any(
-                opt.get("gender_tags") for opt in next_question.options if opt.get("gender_tags")
+                opt.get("gender_tags")
+                for opt in next_question.options
+                if opt.get("gender_tags")
             )
             if has_species_tags or has_gender_tags:
                 # Update session answers in DB before generating images
@@ -1043,10 +1068,10 @@ async def complete_onboarding(session_id: str):
         logger.error(traceback.format_exc())
         # Continue without avatar URL
 
-    # Check player count and start game if >= 3
+    # Check player count and start game if >= GAME_START_MIN_PLAYERS
     player_count = get_player_count_in_game(game_id)
     game_was_started = False
-    if player_count >= 3:
+    if player_count >= GAME_START_MIN_PLAYERS:
         game_was_started = start_game(game_id)
 
     game_started = is_game_started(game_id)
@@ -1134,7 +1159,7 @@ async def get_player_profile_endpoint(player_id: int):
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Invalid player ID format: {str(e)}"
-        )
+        ) from e
 
 
 # ============== Game state endpoints ==============
@@ -1190,7 +1215,7 @@ async def get_current_game_day(game_id: str = Query("default_game")):
 
 
 @app.get("/game/poll/{player_id}")
-async def poll_game_updates(player_id: int, since: Optional[str] = None):
+async def poll_game_updates(player_id: int, since: str | None = None):
     """Poll for new game updates (days, actions, messages) since last poll"""
     profile = get_player_profile(player_id)
     if not profile:
@@ -1567,21 +1592,88 @@ async def _analyze_day_outcome(
                     "story", ""
                 )
 
+        # Get mission context for progress tracking
+        mission = get_mission(None, game_id)
+
         # Analyze with LLM
         gm = create_game_master_agent(language=language)
         outcome = gm.analyze_combined_outcome(
-            global_circ, all_decisions, previous_summary
+            global_circ,
+            all_decisions,
+            previous_summary,
+            mission_context=mission,
         )
 
         # Save the combined outcome
         update_game_day_outcome(day, json.dumps(outcome, ensure_ascii=False), game_id)
         logger.info(f"[OUTCOME] Combined outcome saved for Day {day}")
 
-        # Also update game state with outcome summary for next day generation
+        # Update mission progress if provided
+        mission_progress = outcome.get("mission_progress", {})
+        if mission_progress and mission:
+            stage_progress = mission.get("stage_progress", {})
+            current_stage = mission.get("current_stage", 0)
+            total_stages = mission.get("total_stages", 1)
+
+            for stage_str, points in mission_progress.items():
+                stage_key = str(stage_str)
+                stage_progress[stage_key] = stage_progress.get(stage_key, 0) + int(
+                    points
+                )
+                stage_num = int(stage_key)
+
+                # Check if current stage is now completed
+                if stage_num == current_stage:
+                    for obj in mission.get("objectives", []):
+                        if obj.get("stage") == stage_num:
+                            threshold = obj.get("success_threshold", 5)
+                            if stage_progress[stage_key] >= threshold:
+                                current_stage = min(current_stage + 1, total_stages)
+                                logger.info(f"[MISSION] Stage {stage_num} completed!")
+                                break
+
+            completed = current_stage >= total_stages
+            update_mission_stage_progress(
+                stage_progress,
+                current_stage,
+                game_id,
+                completed,
+            )
+
+            if completed:
+                logger.info("[MISSION] MISSION COMPLETE! Notifying players...")
+
+        # Handle crew deaths
+        dead_crew = outcome.get("dead_crew_members", [])
+        for death_entry in dead_crew:
+            # death_entry could be [name, role] or [player_id, role]
+            if isinstance(death_entry, list) and len(death_entry) >= 2:
+                entity_name = death_entry[0]
+                entity_role = death_entry[1]
+                # Try to find the player by looking up their entity name
+                for d in all_decisions:
+                    if d.get("name") == entity_name or d.get("role") == entity_role:
+                        pid = d.get("player_id")
+                        if pid:
+                            mark_player_dead(pid, game_id)
+                            logger.info(
+                                f"[DEATH] Player {pid} ({entity_role}) marked as dead"
+                            )
+                        break
+
+        # Handle ship destruction
+        ship_destroyed = outcome.get("ship_destroyed", False)
+        if ship_destroyed:
+            end_game("ship_destroyed", game_id)
+            logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
+
+        # Also update game state
         state = get_game_state(game_id)
+        ship_alive = not ship_destroyed and state.get("ship_alive", True)
         update_game_state(
             state["day"],
-            state.get("status", "active"),
+            "active" if ship_alive else "ship_destroyed",
+            ship_alive=ship_alive,
             game_id=game_id,
         )
 
@@ -1634,9 +1726,9 @@ async def admin_create_game(request: CreateGameRequest):
 async def generate_daily_episode(
     language: str = "en",
     game_id: str = "default_game",
-    previous_actions: Optional[List[Dict[str, Any]]] = None,
-    previous_summary: Optional[str] = None,
-    team_assembly_status: Optional[Dict[str, Any]] = None,
+    previous_actions: list[dict[str, Any]] | None = None,
+    previous_summary: str | None = None,
+    team_assembly_status: dict[str, Any] | None = None,
 ):
     """Generate a new daily episode (called by game master scheduler)"""
     state = get_game_state(game_id)
@@ -1701,7 +1793,7 @@ async def generate_daily_episode(
 @app.post("/admin/generate-comic/{player_id}")
 async def generate_personalized_comic(
     player_id: int,
-    day: Optional[int] = None,
+    day: int | None = None,
     game_id: str = "default_game",
 ):
     """Generate a personalized comic for a player"""
@@ -1765,7 +1857,7 @@ async def admin_generate_loading_images(count: int = 10, game_id: str = "default
         }
     except Exception as e:
         logger.error(f"[ADMIN] Loading image generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/admin/generate-splash-images")
@@ -1807,7 +1899,7 @@ async def admin_generate_splash_images(game_id: str = "default_game", lang: str 
         }
     except Exception as e:
         logger.error(f"[ADMIN] Splash image generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/admin/start-game")
@@ -1911,7 +2003,79 @@ async def admin_start_game(request: StartGameRequest):
         f"Total participants: {len(all_participants)} ({real_player_count} players + {len(npcs_created)} NPCs)"
     )
 
-    # 6. Generate the game day with the new restructured flow
+    # 6a. Generate NPC avatars (simplified, no interview)
+    npc_roles_for_avatar = [
+        {
+            "role_key": npc.get("role_key", ""),
+            "role_name": npc.get("role", npc.get("npc_name", "")),
+            "avatar_description": npc.get("avatar_description", ""),
+            "personality_traits": npc.get("personality_traits", []),
+        }
+        for npc in npcs_created
+    ]
+    if npc_roles_for_avatar:
+        try:
+            image_gen = create_image_generator()
+            avatar_prompts = gm.generate_npc_avatar_prompts(npc_roles_for_avatar)
+            for prompt_entry in avatar_prompts:
+                role_key = prompt_entry.get("role_key", "")
+                prompt = prompt_entry.get("prompt", "")
+                if role_key and prompt:
+                    url = await image_gen.generate_avatar_image(
+                        prompt=prompt,
+                        filename_prefix=f"npc_{role_key}_{game_id}",
+                    )
+                    if url:
+                        # Update NPC profile with avatar URL
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE npc_profiles SET avatar_description = ? WHERE role_key = ? AND game_id = ?",
+                            (f"avatar_url={url};{prompt}", role_key, game_id),
+                        )
+                        conn.commit()
+                        conn.close()
+                        logger.info(
+                            f"[NPC_AVATAR] Generated avatar for {role_key}: {url}"
+                        )
+        except Exception as e:
+            logger.warning(f"[NPC_AVATAR] Batch generation failed: {e}")
+
+    # 6b. Generate mission
+    mission_data = gm.generate_mission(all_participants)
+    mission_result = create_mission(mission_data, game_id)
+    if mission_result:
+        logger.info(
+            f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages)"
+        )
+    else:
+        logger.error("[MISSION] Failed to create mission")
+        mission_result = {}
+
+    # 6c. Generate bridge image
+    try:
+        bridge_result = gm.generate_bridge_image_prompt(
+            mission_data or {}, all_participants
+        )
+        bridge_prompt = bridge_result.get("bridge_prompt", "")
+        if bridge_prompt:
+            image_gen = create_image_generator()
+            bridge_url = await image_gen.generate_scene_image(
+                prompt=bridge_prompt,
+                filename_prefix=f"bridge_{game_id}",
+            )
+            if bridge_url:
+                save_game_image(
+                    type="bridge",
+                    image_url=bridge_url,
+                    game_id=game_id,
+                    prompt=bridge_prompt,
+                )
+                logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
+    except Exception as e:
+        logger.warning(f"[BRIDGE] Image generation failed: {e}")
+
+    # 7. Generate the game day with the new restructured flow
     state = get_game_state(game_id)
     day_num = state["day"]
     previous_summary = state.get("last_updated", "")
@@ -2034,8 +2198,6 @@ async def admin_start_game(request: StartGameRequest):
 
     # Step D: Build NPC dialogues from global circumstances
     player_role = all_participants[0]["role"] if all_participants else "Crew Member"
-    story_for_dialogues = global_narrative
-
     from game_master import GameStory
 
     dialog_story = GameStory(
@@ -2095,6 +2257,18 @@ async def admin_start_game(request: StartGameRequest):
         f"Day: {day_num}, Participants: {len(all_participants)}, NPCs: {len(npcs_created)}"
     )
 
+    # Get bridge image URL if generated
+    bridge_url = get_random_game_image(type="bridge", game_id=game_id)
+
+    # Build mission info
+    mission_info = {}
+    if mission_data:
+        mission_info = {
+            "name": mission_data.get("name", ""),
+            "description": mission_data.get("description", ""),
+            "stages": len(mission_data.get("objectives", [])),
+        }
+
     return {
         "status": "success",
         "day": day_num,
@@ -2104,7 +2278,55 @@ async def admin_start_game(request: StartGameRequest):
         "global_circumstances": global_circ,
         "briefings": briefings_for_response,
         "npc_dialogues": npc_dialogues_list,
+        "mission": mission_info,
+        "bridge_image_url": bridge_url,
     }
+
+
+@app.get("/game/mission")
+async def get_mission_endpoint(game_id: str = "default_game"):
+    """Get the current mission for a game."""
+    mission = get_mission(None, game_id)
+    if not mission:
+        raise HTTPException(status_code=404, detail="No mission found for this game")
+    return mission
+
+
+@app.get("/game/bridge-image")
+async def get_bridge_image_endpoint(game_id: str = "default_game"):
+    """Get the bridge image for a game."""
+    url = get_random_game_image(type="bridge", game_id=game_id)
+    if not url:
+        raise HTTPException(status_code=404, detail="No bridge image found")
+    return {"image_url": url, "game_id": game_id}
+
+
+@app.post("/player/{player_id}/die")
+async def mark_player_dead_endpoint(player_id: int, game_id: str = "default_game"):
+    """Mark a player as dead (crew member died in the story)."""
+    result = mark_player_dead(player_id, game_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return {
+        "status": "ok",
+        "player_id": player_id,
+        "is_dead": True,
+        "is_spectator": True,
+    }
+
+
+@app.get("/players/{game_id}/spectators")
+async def get_spectator_ids_endpoint(game_id: str = "default_game"):
+    """Get IDs of dead players (spectators) in a game."""
+    dead = get_dead_players(game_id)
+    return {"spectator_ids": dead, "count": len(dead)}
+
+
+@app.get("/players/{game_id}/live")
+async def get_live_player_ids_endpoint(game_id: str = "default_game"):
+    """Get IDs of live players in a game."""
+    live = get_live_players(game_id)
+    return {"live_player_ids": live, "count": len(live)}
 
 
 @app.post("/admin/kick-player")
@@ -2185,7 +2407,7 @@ async def admin_kick_player(request: KickPlayerRequest):
         raise HTTPException(status_code=500, detail="Failed to create NPC replacement")
 
     # Record the kick
-    kick_record = record_kick(kicked_player_id, npc["npc_key"], request.reason)
+    record_kick(kicked_player_id, npc["npc_key"], request.reason)
 
     # 4. Send notification to the kicked player (via game_messages)
     kick_notification = (
@@ -2244,7 +2466,7 @@ async def admin_list_games():
 
 @app.post("/admin/analyze-day")
 async def admin_analyze_day(
-    day: Optional[int] = None,
+    day: int | None = None,
     language: str = "ru",
     game_id: str = "default_game",
 ):
@@ -2272,6 +2494,325 @@ async def admin_analyze_day(
         "status": "success",
         "day": day,
         "combined_outcome": outcome,
+    }
+
+
+@app.post("/admin/continue-game")
+async def admin_continue_game(
+    game_id: str = "default_game",
+    language: str = "ru",
+):
+    """Generate the next turn (day) in the game.
+
+    Generates a new game day with global circumstances, per-player briefings,
+    and NPC dialogues. Advances game state by one day.
+
+    This is essentially /admin/start-game but without the NPC/mission
+    setup — it continues an already-started game.
+    """
+    logger.info("=== ADMIN CONTINUE GAME ===")
+    logger.info(f"game_id={game_id}, language={language}")
+
+    state = get_game_state(game_id)
+    day_num = state["day"]
+
+    # Check game is active
+    if state["status"] != "active" or not state["ship_alive"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Game is not active (ship destroyed or status is not 'active')",
+        )
+
+    # Get all participants (players + NPCs)
+    player_ids = get_players_in_game(game_id)
+    npcs = get_all_active_npcs(game_id)
+
+    all_participants = []
+
+    for pid in player_ids:
+        profile = get_player_profile(pid)
+        if profile and not profile.get("is_dead", False):
+            all_participants.append(
+                {
+                    "type": "player",
+                    "player_id": pid,
+                    "role": profile["role"],
+                    "personality_traits": profile.get("personality_traits", []),
+                    "role_description": profile.get("role_description", ""),
+                }
+            )
+
+    for npc in npcs:
+        all_participants.append(
+            {
+                "type": "npc",
+                "npc_key": npc["npc_key"],
+                "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
+                "role": npc["role"],
+                "personality_traits": npc.get("personality_traits", []),
+                "role_description": npc.get("role_description", ""),
+            }
+        )
+
+    if not all_participants:
+        raise HTTPException(
+            status_code=400,
+            detail="No active participants (players or NPCs) in the game",
+        )
+
+    logger.info(f"Participants: {len(all_participants)}")
+
+    # Get previous day for story consistency
+    previous_summary = ""
+    if day_num > 1:
+        prev_day = get_game_day(day_num - 1, game_id)
+        if prev_day:
+            if prev_day.get("combined_outcome"):
+                previous_summary = prev_day["combined_outcome"]
+            elif prev_day.get("story"):
+                previous_summary = prev_day["story"]
+
+    gm = create_game_master_agent(language=language)
+
+    # Step A: Generate global circumstances
+    global_circ = gm.generate_global_circumstances(
+        day=day_num,
+        previous_summary=previous_summary,
+        player_profiles=all_participants,
+    )
+
+    # Save global circumstances
+    update_game_day_global_circumstances(
+        day_num,
+        json.dumps(global_circ, ensure_ascii=False),
+        game_id,
+    )
+
+    # Step B: Generate per-player briefings
+    all_briefings = []
+    for participant in all_participants:
+        gm_profile = {
+            "player_id": participant.get("player_id"),
+            "npc_key": participant.get("npc_key"),
+            "role": participant["role"],
+            "personality_traits": participant.get("personality_traits", []),
+            "role_description": participant.get("role_description", ""),
+        }
+        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile)
+        briefing = briefing_data.get("briefing", "")
+        choices = briefing_data.get("choices", [])
+
+        if participant["type"] == "npc":
+            npc_profile = get_npc_profile(participant["npc_key"]) or participant
+            npc_decision = gm.generate_npc_choice(choices, npc_profile)
+            selected_id = npc_decision.get("action_id", "")
+            rationale = npc_decision.get("rationale", "")
+
+            chosen_consequence = ""
+            for c in choices:
+                if c.get("id") == selected_id:
+                    chosen_consequence = c.get("consequence", "")
+                    break
+
+            saved = save_player_briefing(
+                {
+                    "day": day_num,
+                    "player_id": None,
+                    "npc_key": participant["npc_key"],
+                    "is_npc": True,
+                    "briefing": briefing,
+                    "choices": choices,
+                    "selected_action_id": selected_id,
+                    "choice_rationale": rationale,
+                    "consequence_result": {"consequence": chosen_consequence},
+                },
+                game_id,
+            )
+            if saved:
+                all_briefings.append(
+                    {
+                        **saved,
+                        "name": participant.get("npc_name", participant["npc_key"]),
+                        "role": participant["role"],
+                        "action_text": next(
+                            (c["text"] for c in choices if c.get("id") == selected_id),
+                            "",
+                        ),
+                    }
+                )
+        else:
+            saved = save_player_briefing(
+                {
+                    "day": day_num,
+                    "player_id": participant["player_id"],
+                    "npc_key": None,
+                    "is_npc": False,
+                    "briefing": briefing,
+                    "choices": choices,
+                    "selected_action_id": None,
+                    "choice_rationale": "",
+                    "consequence_result": {},
+                },
+                game_id,
+            )
+            if saved:
+                all_briefings.append(
+                    {
+                        **saved,
+                        "name": str(participant["player_id"]),
+                        "role": participant["role"],
+                    }
+                )
+
+    # Step C: Analyze NPC choices
+    npc_decisions = [b for b in all_briefings if b.get("is_npc")]
+    if npc_decisions:
+        outcome = gm.analyze_combined_outcome(
+            global_circ, npc_decisions, previous_summary
+        )
+        update_game_day_outcome(
+            day_num, json.dumps(outcome, ensure_ascii=False), game_id
+        )
+
+    # Step D: NPC dialogues
+    player_role = all_participants[0]["role"] if all_participants else "Crew Member"
+    from game_master import GameStory
+
+    dialog_story = GameStory(
+        day=day_num,
+        setting=global_circ.get("setting", ""),
+        conflict=global_circ.get("conflict", ""),
+        narrative=global_circ.get("narrative", ""),
+        decision_points=[],
+    )
+    try:
+        dialogues = gm.generate_npc_dialogues(
+            story=dialog_story, player_role=player_role
+        )
+        npc_dialogues_list = [
+            {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
+        ]
+    except Exception as e:
+        logger.warning(f"NPC dialogue generation failed: {e}")
+        npc_dialogues_list = []
+
+    # Step E: Create game day record
+    new_day = {
+        "day": day_num,
+        "story": global_circ.get("narrative", ""),
+        "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
+        "npc_dialogues": npc_dialogues_list,
+        "player_actions": all_briefings[0].get("choices", []) if all_briefings else [],
+        "generated_content": {
+            "image": f"/content/day_{day_num}/scene.jpg",
+        },
+        "previous_day_summary": previous_summary,
+    }
+    create_game_day(new_day, game_id)
+
+    # Advance game state
+    update_game_state(day_num + 1, "active", game_id=game_id)
+
+    logger.info("=== ADMIN CONTINUE GAME COMPLETED ===")
+    logger.info(f"Day {day_num} generated with {len(all_participants)} participants")
+
+    return {
+        "status": "success",
+        "day": day_num,
+        "total_participants": len(all_participants),
+        "players": len(player_ids),
+        "npcs": len(npcs),
+        "npc_dialogues": npc_dialogues_list,
+    }
+
+
+@app.post("/admin/regenerate-turn")
+async def admin_regenerate_turn(
+    game_id: str = "default_game",
+    language: str = "ru",
+):
+    """Regenerate the current turn with state reset.
+
+    Deletes the current day's data (briefings, actions, day record),
+    rolls back game state by one day, then regenerates the day.
+    """
+    logger.info("=== ADMIN REGENERATE TURN ===")
+    logger.info(f"game_id={game_id}, language={language}")
+
+    state = get_game_state(game_id)
+    current_day = state["day"]
+    regenerate_day = max(1, current_day - 1)
+
+    logger.info(f"Regenerating Day {regenerate_day} (current state day={current_day})")
+
+    # Delete current day's data
+    deleted_briefings = delete_player_briefings_for_day(regenerate_day, game_id)
+    deleted_actions = delete_player_actions_for_day(regenerate_day, game_id)
+    deleted_day = delete_game_day(regenerate_day, game_id)
+
+    logger.info(
+        f"Deleted: {deleted_briefings} briefings, {deleted_actions} player actions, "
+        f"day_record={deleted_day}"
+    )
+
+    # Roll back game state to before the deleted day
+    reset_game_state_to_day1(game_id)
+    # Restore to the correct day (the day being regenerated)
+    update_game_state(regenerate_day, "active", game_id=game_id)
+
+    # Now regenerate the day using the continue-game logic
+    return await admin_continue_game(game_id=game_id, language=language)
+
+
+@app.post("/admin/restart-game")
+async def admin_restart_game(
+    game_id: str = "default_game",
+    language: str = "ru",
+):
+    """Reset game state and restart from the first turn.
+
+    Deletes all game days, briefings, actions, messages, mission,
+    and game images. Resets game state to day 1, marks game as
+    not-started, and keeps player profiles intact.
+    """
+    logger.info("=== ADMIN RESTART GAME ===")
+    logger.info(f"game_id={game_id}, language={language}")
+
+    # Delete all game content
+    deleted_days = delete_all_game_days(game_id)
+    deleted_briefings = delete_all_player_briefings(game_id)
+    deleted_actions = delete_all_player_actions(game_id)
+    deleted_messages = delete_all_game_messages(game_id)
+    deleted_mission = delete_mission(game_id)
+    deleted_images = delete_game_images(game_id)
+
+    logger.info(
+        f"Deleted: {deleted_days} days, {deleted_briefings} briefings, "
+        f"{deleted_actions} actions, {deleted_messages} messages, "
+        f"mission={deleted_mission}, {deleted_images} images"
+    )
+
+    # Reset game state to day 1
+    reset_game_state_to_day1(game_id)
+
+    # Mark game as not started
+    clear_game_started(game_id)
+
+    # Reset ship roles (make all available again)
+    reset_roles(game_id)
+
+    logger.info("=== ADMIN RESTART GAME COMPLETED ===")
+
+    return {
+        "status": "success",
+        "game_id": game_id,
+        "deleted_days": deleted_days,
+        "deleted_briefings": deleted_briefings,
+        "deleted_actions": deleted_actions,
+        "deleted_messages": deleted_messages,
+        "deleted_mission": deleted_mission,
+        "deleted_images": deleted_images,
+        "message": f"Game {game_id} has been reset to day 1. All content cleared.",
     }
 
 

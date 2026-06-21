@@ -5,14 +5,14 @@ All prompt strings organized by language (ru/en)
 
 import random
 from typing import Any
-from pydantic import BaseModel
 
 from language import (
-    LANGUAGE_RU,
     LANGUAGE_EN,
-    get_species_questions_data,
+    LANGUAGE_RU,
     get_gender_questions_data,
+    get_species_questions_data,
 )
+from pydantic import BaseModel
 
 
 class OnboardingQuestion(BaseModel):
