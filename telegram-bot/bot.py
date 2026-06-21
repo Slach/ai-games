@@ -1886,6 +1886,10 @@ async def cmd_gm_restart_game(message: types.Message):
             timeout_total=600,
         )
         if start_result and start_result.get("status") == "success":
+            # Clear briefing dedup cache — restart resets day to 1, but
+            # _last_sent_briefing_day may still have the old day 1 cached
+            _last_sent_briefing_day.clear()
+
             msg = gm_msgs["game_restarted"].format(
                 game_id=game_id,
                 deleted_days=result.get("deleted_days", 0),
@@ -1900,6 +1904,47 @@ async def cmd_gm_restart_game(message: types.Message):
             if start_result.get("briefings"):
                 msg += gm_msgs["briefings_sent"]
             await message.answer(msg, parse_mode="Markdown")
+
+            # Send bridge image with mission info (like _broadcast_game_started)
+            bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
+            mission = None
+            bridge = None
+            from contextlib import suppress
+
+            with suppress(Exception):
+                mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+            with suppress(Exception):
+                bridge = await api_request(
+                    "GET", "/game/bridge-image", ignore_codes=(404,)
+                )
+
+            if bridge and bridge.get("image_url"):
+                caption = bridge_msgs["title"]
+                if mission:
+                    caption += "\n\n" + bridge_msgs["mission_header"].format(
+                        name=mission.get("name", "")
+                    )
+                    caption += "\n\n" + bridge_msgs["mission_desc"].format(
+                        description=mission.get("description", "")
+                    )
+                try:
+                    async with (
+                        aiohttp.ClientSession() as session,
+                        session.get(
+                            bridge["image_url"],
+                            timeout=aiohttp.ClientTimeout(total=30),
+                        ) as img_resp,
+                    ):
+                        if img_resp.status == 200:
+                            photo_data = await img_resp.read()
+                            photo = BufferedInputFile(photo_data, filename="bridge.png")
+                            await message.answer_photo(
+                                photo=photo,
+                                caption=caption,
+                                parse_mode="Markdown",
+                            )
+                except Exception as e:
+                    logger.warning(f"Failed to send bridge image after restart: {e}")
         else:
             # Game was reset but start failed
             await message.answer(
@@ -2428,6 +2473,17 @@ async def _process_game_update_for_player(
     player_id: int, update: dict, bot: Bot
 ) -> None:
     """Send game updates (briefings, actions, messages) to the player via Telegram."""
+    # Defense-in-depth dedup: skip if we already sent briefing for this day
+    day_data = update.get("day", {})
+    if isinstance(day_data, dict):
+        update_day_num = day_data.get("day")
+        if update_day_num is not None:
+            last_sent = _last_sent_briefing_day.get(player_id)
+            if last_sent == update_day_num:
+                logger.debug(
+                    f"[DEDUP] Skipping send for player {player_id}, day {update_day_num}"
+                )
+                return
     day = update.get("day", {})
     actions = update.get("actions", [])
     personal_briefing = update.get("personal_briefing")

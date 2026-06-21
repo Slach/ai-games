@@ -104,7 +104,8 @@ from pydantic import BaseModel, TypeAdapter
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -621,10 +622,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS middleware — allows browser-based clients (Telegram Mini App) to call the API.
+# - GAME_MASTER_API_URL: internal Docker URL (for development / self-reference)
+# - CORS_ORIGIN: external/public URL for browser frontend (Telegram Mini App)
+# Only browsers enforce CORS; backend services (telegram-bot, game-master) don't need it.
+cors_origins = [os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")]
+extra_cors = os.getenv("CORS_ORIGIN", "")
+if extra_cors:
+    cors_origins.append(extra_cors)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1265,8 +1274,15 @@ async def poll_game_updates(player_id: int, since: str | None = None):
         briefing = get_player_briefing(current_day_num, player_id, game_id=game_id)
 
         if briefing and briefing.get("choices"):
-            # Player has a briefing with choices — check if they already chose
-            if not briefing.get("selected_action_id"):
+            # Safety check: only return briefing if game_day record exists
+            # (prevents race condition where briefings are saved before game_day)
+            day_record = get_game_day(current_day_num, game_id=game_id)
+            if day_record is None:
+                logger.debug(
+                    f"[POLL] Skipping briefing for player {player_id} day {current_day_num}: "
+                    "game_day not yet created"
+                )
+            elif not briefing.get("selected_action_id"):
                 # Player hasn't chosen yet — return their briefing
                 # Get scene image for this day
                 scene_url = get_random_game_image(
@@ -1321,15 +1337,12 @@ async def submit_player_action(request: PlayerActionRequest):
     profile = get_player_profile(request.player_id)
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
 
-    current_day = get_game_day(request.day, game_id=game_id)
-    if not current_day:
-        raise HTTPException(status_code=404, detail="No active game day")
-
-    # Check if player has a personal briefing for this day (new system)
+    # First check if player has a personal briefing (new system)
     briefing = get_player_briefing(request.day, request.player_id, game_id=game_id)
 
     if briefing and briefing.get("choices"):
-        # New system: validate against briefing choices
+        # New system: validate against briefing choices — does NOT require game_day
+        # (game_day may not exist yet if briefings were saved before game_day record)
         valid_ids = [c["id"] for c in briefing["choices"]]
         if request.action_id not in valid_ids:
             raise HTTPException(
@@ -1352,6 +1365,9 @@ async def submit_player_action(request: PlayerActionRequest):
         )
     else:
         # Legacy system: validate against game_days.player_actions
+        current_day = get_game_day(request.day, game_id=game_id)
+        if not current_day:
+            raise HTTPException(status_code=404, detail="No active game day")
         valid_actions = [a["id"] for a in current_day.get("player_actions", [])]
         if request.action_id not in valid_actions:
             raise HTTPException(status_code=400, detail="Invalid action ID")
@@ -1960,6 +1976,34 @@ async def admin_start_game(request: StartGameRequest):
         f"Available (unfilled) roles: {[r['role_key'] for r in available_roles]}"
     )
 
+    # 2.b Re-assign roles to existing players (important after restart reset_roles)
+    for pid in player_ids:
+        profile = get_player_profile(pid)
+        if not profile:
+            continue
+
+        player_role = profile.get("role", "")
+        player_role_en = profile.get("role_name_en", "")
+
+        for role_data in available_roles:
+            if (
+                role_data["role_name"] == player_role
+                or role_data["role_name_en"] == player_role
+                or role_data["role_name_en"] == player_role_en
+            ):
+                taken = take_role(role_data["role_key"], pid, game_id)
+                if taken:
+                    logger.info(
+                        f"[ROLE] Re-assigned role {role_data['role_key']} to player {pid}"
+                    )
+                break
+
+    # Refresh available_roles (some may have been re-taken)
+    available_roles = get_available_roles(game_id, language=language)
+    logger.info(
+        f"Available roles after re-assignment: {[r['role_key'] for r in available_roles]}"
+    )
+
     # 3. Create NPCs for all unfilled roles
     npcs_created = []
     gm = create_game_master_agent(language=language)
@@ -2014,6 +2058,7 @@ async def admin_start_game(request: StartGameRequest):
                     "type": "player",
                     "player_id": pid,
                     "role": profile["role"],
+                    "species": profile.get("species"),
                     "personality_traits": profile.get("personality_traits", []),
                     "role_description": profile.get("role_description", ""),
                 }
@@ -2026,6 +2071,7 @@ async def admin_start_game(request: StartGameRequest):
                 "npc_key": npc["npc_key"],
                 "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
                 "role": npc["role"],
+                "species": npc.get("species"),
                 "personality_traits": npc.get("personality_traits", []),
                 "role_description": npc.get("role_description", ""),
             }
@@ -2165,6 +2211,24 @@ async def admin_start_game(request: StartGameRequest):
         logger.warning(
             f"[SCENE] Failed to generate turn scene image for day {day_num}: {e}"
         )
+
+    # Create game day record EARLY to prevent race condition with polling loop.
+    # Poll needs the game_day record to exist before briefings are visible,
+    # otherwise the player sees a briefing but cannot submit an action (404).
+    # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
+    early_day = {
+        "day": day_num,
+        "story": global_narrative,
+        "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
+        "npc_dialogues": [],
+        "player_actions": [],
+        "generated_content": {
+            "image": f"/content/day_{day_num}/scene.jpg",
+        },
+        "previous_day_summary": previous_summary,
+    }
+    create_game_day(early_day, game_id)
+    logger.info(f"[DAY] Early game day record created for day {day_num}")
 
     # Step B: Generate per-player briefings and choices IN PARALLEL
     llm_parallel = int(os.getenv("LLM_PARALLEL", "2"))
@@ -2630,6 +2694,7 @@ async def admin_continue_game(
                     "type": "player",
                     "player_id": pid,
                     "role": profile["role"],
+                    "species": profile.get("species"),
                     "personality_traits": profile.get("personality_traits", []),
                     "role_description": profile.get("role_description", ""),
                 }
@@ -2642,6 +2707,7 @@ async def admin_continue_game(
                 "npc_key": npc["npc_key"],
                 "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
                 "role": npc["role"],
+                "species": npc.get("species"),
                 "personality_traits": npc.get("personality_traits", []),
                 "role_description": npc.get("role_description", ""),
             }
@@ -2680,6 +2746,22 @@ async def admin_continue_game(
         json.dumps(global_circ, ensure_ascii=False),
         game_id,
     )
+
+    # Create game day record EARLY to prevent race condition with polling loop.
+    # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
+    early_day = {
+        "day": day_num,
+        "story": global_circ.get("narrative", ""),
+        "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
+        "npc_dialogues": [],
+        "player_actions": [],
+        "generated_content": {
+            "image": f"/content/day_{day_num}/scene.jpg",
+        },
+        "previous_day_summary": previous_summary,
+    }
+    create_game_day(early_day, game_id)
+    logger.info(f"[DAY] Early game day record created for day {day_num}")
 
     # Step B: Generate per-player briefings
     all_briefings = []

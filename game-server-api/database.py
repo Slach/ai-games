@@ -1566,7 +1566,24 @@ def get_all_active_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
     )
     rows = cursor.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [
+        {
+            "npc_key": row["npc_key"],
+            "role_key": row["role_key"],
+            "npc_name": row["npc_name"],
+            "role": row["role"],
+            "role_description": row["role_description"],
+            "personality_traits": json.loads(row["personality_traits"] or "[]"),
+            "species": row["species"],
+            "gender": row["gender"],
+            "avatar_description": row["avatar_description"],
+            "game_id": row["game_id"],
+            "is_active": bool(row["is_active"]),
+            "replaces_player_id": row["replaces_player_id"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
 
 
 def get_npc_by_role(
@@ -1583,7 +1600,21 @@ def get_npc_by_role(
     conn.close()
     if not row:
         return None
-    return dict(row)
+    return {
+        "npc_key": row["npc_key"],
+        "role_key": row["role_key"],
+        "npc_name": row["npc_name"],
+        "role": row["role"],
+        "role_description": row["role_description"],
+        "personality_traits": json.loads(row["personality_traits"] or "[]"),
+        "species": row["species"],
+        "gender": row["gender"],
+        "avatar_description": row["avatar_description"],
+        "game_id": row["game_id"],
+        "is_active": bool(row["is_active"]),
+        "replaces_player_id": row["replaces_player_id"],
+        "created_at": row["created_at"],
+    }
 
 
 def deactivate_npc(npc_key: str) -> bool:

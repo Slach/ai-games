@@ -2545,7 +2545,7 @@ spatial presence\n"
         crew_desc = "\n".join(
             [
                 f"  - {p.get('role', '?')} ({p.get('type', '?')}): "
-                f"species={p.get('species', '?')}, "
+                f"species={p.get('species') or '?'}, "
                 f"traits={', '.join(p.get('personality_traits', []))}"
                 for p in all_participants
             ]

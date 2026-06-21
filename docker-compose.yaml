@@ -65,6 +65,10 @@ services:
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
       - ONBOARDING_QUESTIONS_COUNT=${ONBOARDING_QUESTIONS_COUNT:-5}
       - ONBOARDING_OPTIONS_COUNT=${ONBOARDING_OPTIONS_COUNT:-5}
+      # Public/external URL for CORS and self-reference
+      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
+      # CORS origin for browser frontend (Telegram Mini App), e.g. https://t.me
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
     depends_on:
       comfyui:
         condition: service_healthy
