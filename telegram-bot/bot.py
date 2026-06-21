@@ -163,11 +163,11 @@ async def _send_bridge_and_mission(
     if mission:
         name = mission.get("name", "")
         caption += "\n\n" + bridge_msgs["mission_header"].format(name=name)
-        # Use brief_description from API if available, otherwise first 200 chars of description
-        desc = mission.get("brief_description", "") or mission.get("description", "")
-        if len(desc) > 200:
-            desc = desc[:200] + "…"
+        # brief_description is a short Russian text from the LLM (max 200 chars)
+        desc = mission.get("brief_description", "") or ""
         if desc:
+            if len(desc) > 200:
+                desc = desc[:200] + "…"
             caption += "\n\n" + bridge_msgs["mission_desc"].format(description=desc)
 
     photo_data = None
