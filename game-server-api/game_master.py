@@ -188,6 +188,10 @@ def _build_onboarding_questions_schema() -> dict:
                         "items": {
                             "type": "object",
                             "properties": {
+                                "image_prompt": {
+                                    "type": "string",
+                                    "description": "A detailed English image generation prompt for this question scene — cinematic, sci-fi/space opera, 4K quality",
+                                },
                                 "text": {
                                     "type": "string",
                                     "description": "Question text about what would you do",
@@ -220,7 +224,7 @@ def _build_onboarding_questions_schema() -> dict:
                                     },
                                 },
                             },
-                            "required": ["text", "options"],
+                            "required": ["image_prompt", "text", "options"],
                             "additionalProperties": False,
                         },
                     }
@@ -372,6 +376,37 @@ SPECIES_GENDER_DESC_SCHEMA = {
         },
     },
 }
+
+SPECIES_OPTION_PROMPTS_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "species_option_prompts",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "prompts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "option_value": {"type": "string"},
+                            "prompt": {
+                                "type": "string",
+                                "description": "Short creative image prompt in English for Stable Diffusion, ~20-30 words, cinematic sci-fi style"
+                            },
+                        },
+                        "required": ["option_value", "prompt"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["prompts"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 GAME_TITLE_SCHEMA = {
     "type": "json_schema",
@@ -831,7 +866,16 @@ class GameMasterAgent:
                 "ПРИМЕР role_scores для действия 'Починить варп-двигатель': "
                 '{"chief_engineer": 3, "science_officer": 1, "tactical_officer": 0, "communications_officer": 0, '
                 '"security_chief": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 1}. '
-                "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков."
+                "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n"
+                "ВАЖНОЕ ДОПОЛНЕНИЕ про image_prompt:\n"
+                "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
+                "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
+                "НЕ ВСТАВЛЯЙ английский текст в question.text или option.label — только в image_prompt.\n"
+                "Для КАЖДОГО вопроса сгенерируй image_prompt — детальный промпт на АНГЛИЙСКОМ для генерации изображения сцены. "
+                "Промпт должен быть кинематографичным, sci-fi/space opera, 4K. "
+                "Пример ТОЛЬКО для поля image_prompt (не для текста вопроса): "
+                '"A starship bridge with holographic star maps glowing in blue light, crew members at their stations, cinematic lighting, epic sci-fi atmosphere, 4K quality."'
+                " Отделяй русский текст вопроса от английского image_prompt. "
             )
         else:
             system = "You are a game designer. Generate onboarding questions for a space exploration game."
@@ -857,7 +901,17 @@ class GameMasterAgent:
                 "EXAMPLE role_scores for action 'Repair the warp drive': "
                 '{"chief_engineer": 3, "science_officer": 1, "tactical_officer": 0, "communications_officer": 0, '
                 '"security_chief": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 1}. '
-                "IMPORTANT: Within each question, options should give points to DIFFERENT roles — so each question helps distinguish players."
+                "IMPORTANT: Within each question, options should give points to DIFFERENT roles — so each question helps distinguish players.\n\n"
+                "IMPORTANT NOTE about image_prompt:\n"
+                "The question text (text) and option labels (label) must be in the SAME language as the rest of the output.\n"
+                "The image_prompt field is a SEPARATE JSON field that MUST be in English (for image generation).\n"
+                "DO NOT put English text in question.text or option.label — only in image_prompt.\n"
+                "For EACH question generate an 'image_prompt' field — a detailed English prompt "
+                "for generating an image of this scene. The prompt must be cinematic, "
+                "sci-fi/space opera style, 4K quality. "
+                "Example FOR image_prompt ONLY (not for question text): "
+                '"A starship bridge with holographic star maps glowing in blue light, crew members at their stations, cinematic lighting, epic sci-fi atmosphere, 4K quality."'
+                " Keep the question text language separate from the image_prompt."
             )
 
         # NOTE: This is a token-heavy generation (5 questions × 5 options × 10 role_scores).
@@ -884,7 +938,7 @@ class GameMasterAgent:
                 # Skip overly short labels (single letters, "A", "B", etc.)
                 if len(label.strip()) < 5:
                     logger.warning(
-                        f"Skipping short option label: '{label}' in question: {q.get('text', '')[:50]}"
+                        f"Skipping short option label: '{label}' in question: {q.get('text', '')}"
                     )
                     continue
                 seen_labels.add(label)
@@ -893,7 +947,7 @@ class GameMasterAgent:
             # If we filtered out too many, keep original options
             if len(unique_options) < 2 and len(options) >= 2:
                 logger.warning(
-                    f"Question had invalid options, using original: {q.get('text', '')[:50]}"
+                    f"Question had invalid options, using original: {q.get('text', '')}"
                 )
                 unique_options = options
 
@@ -967,7 +1021,7 @@ class GameMasterAgent:
 
                 if not selected_option:
                     logger.warning(
-                        f"[ROLE] Answer '{selected_label[:50]}' not found in options for Q{question_id}"
+                        f"[ROLE] Answer '{selected_label}' not found in options for Q{question_id}"
                     )
                     continue
 
@@ -997,7 +1051,7 @@ class GameMasterAgent:
             best_key, best_score = scored_available[0]
 
         # Build reasoning string
-        top_roles = sorted(role_points.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_roles = sorted(role_points.items(), key=lambda x: x[1], reverse=True)
         reasoning = "Points: " + ", ".join(f"{k}={v}" for k, v in top_roles)
 
         logger.info(f"[ROLE] Point-based assignment: role_key={best_key}, {reasoning}")
@@ -1094,7 +1148,7 @@ class GameMasterAgent:
             decision_points=parsed.get("decision_points", []),
         )
         logger.info(
-            f"[STORY] Story generated: setting='{story.setting[:50]}...', {len(story.decision_points)} actions"
+            f"[STORY] Story generated: setting='{story.setting}...', {len(story.decision_points)} actions"
         )
         return story
 
@@ -1431,7 +1485,7 @@ spatial presence\n"
 
         avatar_prompt = parsed.get("avatar_prompt", "")
         logger.info(
-            f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt[:100]}..."
+            f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}..."
         )
         return avatar_prompt
 
@@ -1502,7 +1556,11 @@ spatial presence\n"
         answers: Dict[int, str],
         questions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Calculate gender type by counting gender_tags across answers."""
+        """Calculate gender type by counting gender_tags across answers.
+
+        Supports hybrids: if two gender tags have the same count,
+        returns hybrid=True with primary and secondary genders.
+        """
         tag_counts = GameMasterAgent._count_tags_from_answers(
             answers, "gender_tags", questions
         )
@@ -1511,7 +1569,14 @@ spatial presence\n"
 
         sorted_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
         primary = sorted_tags[0][0]
-        return {"primary": primary, "secondary": "", "hybrid": False}
+        primary_count = sorted_tags[0][1]
+        secondary = ""
+        hybrid = False
+        if len(sorted_tags) > 1 and sorted_tags[1][1] == primary_count:
+            secondary = sorted_tags[1][0]
+            hybrid = True
+
+        return {"primary": primary, "secondary": secondary, "hybrid": hybrid}
 
     def generate_species_gender_description(
         self,
@@ -1524,14 +1589,17 @@ spatial presence\n"
 
         species_display = species_result.get("primary", "unknown")
         gender_display = gender_result.get("primary", "undefined")
-        hybrid = species_result.get("hybrid", False)
-        secondary = species_result.get("secondary", "")
+        species_hybrid = species_result.get("hybrid", False)
+        species_secondary = species_result.get("secondary", "")
+        gender_hybrid = gender_result.get("hybrid", False)
+        gender_secondary = gender_result.get("secondary", "")
 
         if self.language == "ru":
             species_note = (
                 f"Тип расы: {species_display}"
-                + (f" (гибрид с {secondary})" if hybrid else "")
+                + (f" (гибрид с {species_secondary})" if species_hybrid else "")
                 + f"\nТип пола: {gender_display}"
+                + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
             )
             system = (
                 "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. "
@@ -1550,8 +1618,9 @@ spatial presence\n"
         else:
             species_note = (
                 f"Species type: {species_display}"
-                + (f" (hybrid with {secondary})" if hybrid else "")
+                + (f" (hybrid with {species_secondary})" if species_hybrid else "")
                 + f"\nGender type: {gender_display}"
+                + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
             )
             system = (
                 "You are a creative sci-fi writer crafting descriptions of alien characters. "
@@ -1577,12 +1646,12 @@ spatial presence\n"
                 max_tokens=1024,
             )
             combined = parsed.get("combined_description", "")
-            logger.info(f"[SPECIES] Description generated: {combined[:100]}...")
+            logger.info(f"[SPECIES] Description generated: {combined}...")
             return combined
         except Exception as e:
             logger.warning(f"[SPECIES] LLM description failed, using fallback: {e}")
             return self._fallback_species_gender_description(
-                species_display, gender_display, hybrid, secondary, role
+                species_display, gender_display, species_hybrid, species_secondary, role
             )
 
     def _fallback_species_gender_description(
@@ -1634,6 +1703,113 @@ spatial presence\n"
                 base = species_map.get(species_type, f"Your species is {species_type}.")
             gender_note = f" Your gender: {gender_type}."
             return f"{base}{gender_note} Your role aboard the ship is {role}."
+
+    # ============== Species/Gender Option Image Prompts ==============
+
+    def generate_species_option_prompts(
+        self,
+        question: Dict[str, Any],
+        accumulated_tags: Dict[str, int],
+        tag_type: str = "species_tags",
+    ) -> Dict[str, str]:
+        """Generate short creative image prompts for each option in a species/gender question.
+
+        Each prompt shows the cumulative visual effect of ALL accumulated tags
+        PLUS the tag of this specific option — what the character would look
+        like if the player chose this option.
+
+        Args:
+            question: Question dict with text and options
+            accumulated_tags: Dict of species/gender tag -> count accumulated so far
+            tag_type: 'species_tags' or 'gender_tags'
+
+        Returns:
+            Dict mapping option_value -> short image prompt (English, ~20-30 words)
+        """
+        question_text = question.get("text", "")
+        options = question.get("options", [])
+
+        # Build aggregated tag description from accumulated tags
+        sorted_tags = sorted(accumulated_tags.items(), key=lambda x: x[1], reverse=True)
+        accumulated_desc = " and ".join(
+            f"{tag} ({count}){' times' if count > 1 else ''}"
+            for tag, count in sorted_tags[:3]
+        )
+
+        options_text = ""
+        for opt in options:
+            opt_value = opt.get("value", "")
+            opt_label = opt.get("label", "")
+            tags = opt.get(tag_type, [])
+            tag_str = ", ".join(tags)
+            options_text += f"  - [{opt_value}] {opt_label}; tags: {tag_str}\n"
+
+        if self.language == "ru":
+            system = (
+                "You are a creative sci-fi portrait prompt writer. "
+                "Write SHORT image prompts in English for Stable Diffusion. "
+                "Each prompt shows a Star Trek character whose appearance reflects "
+                "the accumulated species/gender traits. "
+                "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K."
+            )
+            user = (
+                f"Question: {question_text}\n"
+                f"Accumulated traits so far: {accumulated_desc or 'none yet'}\n"
+                f"Options (each with its own trait tags):\n{options_text}\n\n"
+                "For EACH option, write a short English image prompt showing a "
+                "character with the accumulated traits AND the option's specific trait. "
+                "Each prompt MAX 30 words. "
+                "Output as JSON array: [{\"option_value\": ..., \"prompt\": ...}]."
+            )
+        else:
+            system = (
+                "You are a creative sci-fi portrait prompt writer. "
+                "Write SHORT image prompts in English for Stable Diffusion. "
+                "Each prompt shows a Star Trek character whose appearance reflects "
+                "the accumulated species/gender traits. "
+                "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K."
+            )
+            user = (
+                f"Question: {question_text}\n"
+                f"Accumulated traits so far: {accumulated_desc or 'none yet'}\n"
+                f"Options (each with its own trait tags):\n{options_text}\n\n"
+                "For EACH option, write a short English image prompt showing a "
+                "character with the accumulated traits AND the option's specific trait. "
+                "Each prompt MAX 30 words. "
+                "Output as JSON array: [{\"option_value\": ..., \"prompt\": ...}]."
+            )
+
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
+                temperature=0.8,
+                max_tokens=1024,
+            )
+            prompts_list = result.get("prompts", [])
+            prompts_dict = {}
+            for entry in prompts_list:
+                opt_value = entry.get("option_value", "")
+                prompt_text = entry.get("prompt", "")
+                if opt_value and prompt_text:
+                    prompts_dict[opt_value] = prompt_text
+            logger.info(f"[OPTION_PROMPTS] Generated {len(prompts_dict)} option prompts")
+            return prompts_dict
+        except Exception as e:
+            logger.warning(f"[OPTION_PROMPTS] LLM failed, using fallback: {e}")
+            # Fallback: simple generic prompts
+            fallback = {}
+            for opt in options:
+                opt_value = opt.get("value", "")
+                opt_label = opt.get("label", "")
+                tags = opt.get(tag_type, [])
+                tag_str = ", ".join(tags) if tags else "character"
+                fallback[opt_value] = (
+                    f"Star Trek character portrait, {tag_str} traits, "
+                    f"cinematic lighting, uniform, 4K quality, portrait, upper body."
+                )
+            return fallback
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
@@ -1714,7 +1890,7 @@ spatial presence\n"
                 action_id = valid_ids[0] if valid_ids else ""
                 rationale = "Fallback: first available action"
 
-            logger.info(f"[NPC] {npc_name} chose '{action_id}': {rationale[:60]}...")
+            logger.info(f"[NPC] {npc_name} chose '{action_id}': {rationale}...")
             return {"action_id": action_id, "rationale": rationale}
 
         except Exception as e:
@@ -1789,7 +1965,7 @@ spatial presence\n"
                 max_tokens=4096,
             )
             logger.info(
-                f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))[:60]}...'"
+                f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'"
             )
             return parsed
         except Exception as e:
@@ -1987,7 +2163,7 @@ spatial presence\n"
                 max_tokens=4096,
             )
             logger.info(
-                f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))[:80]}..."
+                f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}..."
             )
             return parsed
         except Exception as e:

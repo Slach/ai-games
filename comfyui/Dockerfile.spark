@@ -39,8 +39,18 @@ RUN grep -vE '^\s*#' requirements.txt | grep -viE '^\s*(torch|torchvision|torcha
 RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager && \
     /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
 
+# Fix outdated channel URLs (ltdrdata -> Comfy-Org) in Manager source
+RUN sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main|g' \
+    /opt/ComfyUI/custom_nodes/ComfyUI-Manager/channels.list.template && \
+    sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main|g' \
+    /opt/ComfyUI/custom_nodes/ComfyUI-Manager/glob/manager_server.py
+
 # Install comfy-cli
 RUN /opt/ComfyUI/.venv/bin/pip install comfy-cli
+
+# Fix permissions: runtime user (from compose's user: field) needs write access
+# to .git directories inside custom_nodes for ComfyUI-Manager's .cnr-id files
+RUN chmod -R a+rw /opt/ComfyUI/custom_nodes
 
 EXPOSE 8188
 

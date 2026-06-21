@@ -3,10 +3,16 @@ LLM prompt constants for Game Master API
 All prompt strings organized by language (ru/en)
 """
 
-from typing import List, Dict, Any, Optional
+import random
+from typing import Any
 from pydantic import BaseModel
 
-from language import LANGUAGE_RU, LANGUAGE_EN, get_species_questions_data, get_gender_questions_data
+from language import (
+    LANGUAGE_RU,
+    LANGUAGE_EN,
+    get_species_questions_data,
+    get_gender_questions_data,
+)
 
 
 class OnboardingQuestion(BaseModel):
@@ -14,12 +20,17 @@ class OnboardingQuestion(BaseModel):
 
     id: int
     text: str
-    options: List[Dict[str, Any]]
-    image_url: Optional[str] = None
+    options: list[dict[str, Any]]
+    image_url: str | None = None
+    image_prompt: str | None = None
 
 
 def build_species_gender_questions(language: str = LANGUAGE_RU) -> list:
-    """Build static species and gender questions with tags from language data."""
+    """Build static species and gender questions with tags from language data.
+
+    Legacy: all species first, then all gender. No shuffling.
+    Kept for backward compatibility (STATIC_ONBOARDING_QUESTIONS legacy path).
+    """
     questions = []
     next_id = 1
     species_data = get_species_questions_data(language)
@@ -33,9 +44,7 @@ def build_species_gender_questions(language: str = LANGUAGE_RU) -> list:
                 "species_tags": opt.get("species_tags", []),
             }
             options.append(option)
-        questions.append(
-            OnboardingQuestion(id=i, text=q_data["text"], options=options)
-        )
+        questions.append(OnboardingQuestion(id=i, text=q_data["text"], options=options))
     next_id = len(questions) + 1
     gender_data = get_gender_questions_data(language)
     for i, q_data in enumerate(gender_data, start=next_id):
@@ -48,10 +57,85 @@ def build_species_gender_questions(language: str = LANGUAGE_RU) -> list:
                 "gender_tags": opt.get("gender_tags", []),
             }
             options.append(option)
-        questions.append(
-            OnboardingQuestion(id=i, text=q_data["text"], options=options)
-        )
+        questions.append(OnboardingQuestion(id=i, text=q_data["text"], options=options))
     return questions
+
+
+def build_interleaved_species_gender_questions(
+    language: str = LANGUAGE_RU,
+    shuffle_seed: int = 0,
+) -> list:
+    """Build species and gender questions INTERLEAVED (alternating),
+    with OPTIONS shuffled deterministically by shuffle_seed.
+
+    Flow:
+    1. Randomly shuffle the species question pool
+    2. Randomly shuffle the gender question pool
+    3. Take one from each pool alternately: species → gender → species → ...
+    4. Within each question, shuffle its options with the same seed
+
+    This ensures:
+    - Species and gender questions never cluster together
+    - Option order is different every session (seed varies per player)
+    - No player can press [1] repeatedly to get "human + male"
+    """
+    rng = random.Random(shuffle_seed)
+
+    species_data = get_species_questions_data(language)
+    gender_data = get_gender_questions_data(language)
+
+    # Shuffle question indices for each pool
+    species_indices = list(range(len(species_data)))
+    gender_indices = list(range(len(gender_data)))
+    rng.shuffle(species_indices)
+    rng.shuffle(gender_indices)
+
+    questions = []
+    next_id = 1
+    i, j = 0, 0
+
+    while i < len(species_indices) or j < len(gender_indices):
+        # Take a species question
+        if i < len(species_indices):
+            q_data = species_data[species_indices[i]]
+            options = []
+            for opt in q_data["options"]:
+                option = {
+                    "value": opt["value"],
+                    "label": opt["label"],
+                    "role_scores": {},
+                    "species_tags": opt.get("species_tags", []),
+                }
+                options.append(option)
+            # Shuffle options within this question
+            rng.shuffle(options)
+            questions.append(OnboardingQuestion(id=next_id, text=q_data["text"], options=options))
+            next_id += 1
+            i += 1
+
+        # Take a gender question
+        if j < len(gender_indices):
+            q_data = gender_data[gender_indices[j]]
+            options = []
+            for opt in q_data["options"]:
+                option = {
+                    "value": opt["value"],
+                    "label": opt["label"],
+                    "role_scores": {},
+                    "gender_tags": opt.get("gender_tags", []),
+                }
+                options.append(option)
+            # Shuffle options within this question
+            rng.shuffle(options)
+            questions.append(OnboardingQuestion(id=next_id, text=q_data["text"], options=options))
+            next_id += 1
+            j += 1
+
+    return questions
+
+
+# New export name for cleaner imports
+build_questions_v2 = build_interleaved_species_gender_questions
 
 
 # Static onboarding questions (fallback when LLM generation fails)
@@ -63,27 +147,82 @@ STATIC_ONBOARDING_QUESTIONS = [
             {
                 "value": "repair_systems",
                 "label": "Проверить все системы корабля и подготовить оборудование к возможным перегрузкам",
-                "role_scores": {"chief_engineer": 3, "tactical_officer": 1, "quartermaster": 1, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "chief_engineer": 3,
+                    "tactical_officer": 1,
+                    "quartermaster": 1,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "analyze_signal",
                 "label": "Начать детальный анализ сигнала и собрать данные о его происхождении",
-                "role_scores": {"science_officer": 3, "xenobiologist": 2, "communications_officer": 1, "chief_engineer": 0, "tactical_officer": 0, "quartermaster": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "pilot": 0},
+                "role_scores": {
+                    "science_officer": 3,
+                    "xenobiologist": 2,
+                    "communications_officer": 1,
+                    "chief_engineer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "hail_signal",
                 "label": "Немедленно установить контакт и начать переговоры с источником сигнала",
-                "role_scores": {"communications_officer": 3, "xenobiologist": 1, "security_chief": 0, "chief_engineer": 0, "science_officer": 0, "tactical_officer": 0, "quartermaster": 0, "navigator": 0, "medical_officer": 0, "pilot": 0},
+                "role_scores": {
+                    "communications_officer": 3,
+                    "xenobiologist": 1,
+                    "security_chief": 0,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "secure_perimeter",
                 "label": "Активировать боевой режим, поднять щиты и подготовить оружие к бою",
-                "role_scores": {"security_chief": 3, "tactical_officer": 3, "navigator": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "quartermaster": 0, "medical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "security_chief": 3,
+                    "tactical_officer": 3,
+                    "navigator": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "quartermaster": 0,
+                    "medical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "emergency_medical",
                 "label": "Подготовить медицинский отсек к приёму пострадавших и проверить запасы медикаментов",
-                "role_scores": {"medical_officer": 3, "quartermaster": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "medical_officer": 3,
+                    "quartermaster": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
         ],
     ),
@@ -94,27 +233,82 @@ STATIC_ONBOARDING_QUESTIONS = [
             {
                 "value": "fly_out",
                 "label": "Запрыгнуть в шаттл и совершить рискованный манёвр чтобы вырваться из зоны обвала",
-                "role_scores": {"pilot": 3, "navigator": 2, "tactical_officer": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+                "role_scores": {
+                    "pilot": 3,
+                    "navigator": 2,
+                    "tactical_officer": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "medical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                },
             },
             {
                 "value": "build_shelter",
                 "label": "Использовать обломки пород чтобы построить временное укрытие и усилить конструкцию",
-                "role_scores": {"chief_engineer": 3, "quartermaster": 2, "security_chief": 1, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "chief_engineer": 3,
+                    "quartermaster": 2,
+                    "security_chief": 1,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "triage_injured",
                 "label": "Немедленно оказать первую помощь раненым и распределить ресурсы для выживания",
-                "role_scores": {"medical_officer": 3, "quartermaster": 2, "communications_officer": 1, "chief_engineer": 0, "science_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "medical_officer": 3,
+                    "quartermaster": 2,
+                    "communications_officer": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "study_cave",
                 "label": "Исследовать пещеру — возможно обвал открыл проход к неизвестным пещерным формациям",
-                "role_scores": {"xenobiologist": 3, "science_officer": 2, "navigator": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+                "role_scores": {
+                    "xenobiologist": 3,
+                    "science_officer": 2,
+                    "navigator": 1,
+                    "chief_engineer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "coordinate_rescue",
                 "label": "Связаться с кораблём и координировать спасательную операцию с других членов экипажа",
-                "role_scores": {"communications_officer": 3, "security_chief": 2, "tactical_officer": 1, "chief_engineer": 0, "science_officer": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "communications_officer": 3,
+                    "security_chief": 2,
+                    "tactical_officer": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
         ],
     ),
@@ -125,27 +319,82 @@ STATIC_ONBOARDING_QUESTIONS = [
             {
                 "value": "negotiate",
                 "label": "Поговорить с обоими, выслушать каждую сторону и найти компромисс",
-                "role_scores": {"communications_officer": 3, "medical_officer": 1, "xenobiologist": 1, "chief_engineer": 0, "science_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+                "role_scores": {
+                    "communications_officer": 3,
+                    "medical_officer": 1,
+                    "xenobiologist": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "data_driven",
                 "label": "Собрать все данные о ситуации и предложить решение на основе анализа фактов",
-                "role_scores": {"science_officer": 3, "quartermaster": 1, "chief_engineer": 1, "communications_officer": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "science_officer": 3,
+                    "quartermaster": 1,
+                    "chief_engineer": 1,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "enforce_order",
                 "label": "Немедленно разнять конфликтующих и установить порядок силой если необходимо",
-                "role_scores": {"security_chief": 3, "tactical_officer": 2, "pilot": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+                "role_scores": {
+                    "security_chief": 3,
+                    "tactical_officer": 2,
+                    "pilot": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                },
             },
             {
                 "value": "check_resources",
                 "label": "Проверить не вызван ли конфликт дефицитом ресурсов и перераспределить запасы",
-                "role_scores": {"quartermaster": 3, "chief_engineer": 1, "medical_officer": 1, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "quartermaster": 3,
+                    "chief_engineer": 1,
+                    "medical_officer": 1,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "diagnose_cause",
                 "label": "Проверить нет ли медицинской или психологической причины — возможно кто-то болен",
-                "role_scores": {"medical_officer": 3, "xenobiologist": 1, "science_officer": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+                "role_scores": {
+                    "medical_officer": 3,
+                    "xenobiologist": 1,
+                    "science_officer": 1,
+                    "chief_engineer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "pilot": 0,
+                },
             },
         ],
     ),
@@ -156,27 +405,82 @@ STATIC_ONBOARDING_QUESTIONS = [
             {
                 "value": "dissect_device",
                 "label": "Аккуратно разобрать артефакт чтобы понять его внутреннее устройство",
-                "role_scores": {"chief_engineer": 3, "science_officer": 2, "xenobiologist": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+                "role_scores": {
+                    "chief_engineer": 3,
+                    "science_officer": 2,
+                    "xenobiologist": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "contain_sample",
                 "label": "Поместить артефакт в карантинную камеру и изучить его биологические свойства",
-                "role_scores": {"xenobiologist": 3, "medical_officer": 2, "science_officer": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "quartermaster": 0, "pilot": 0},
+                "role_scores": {
+                    "xenobiologist": 3,
+                    "medical_officer": 2,
+                    "science_officer": 1,
+                    "chief_engineer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "secure_artifact",
                 "label": "Оцепить зону и обеспечить безопасность при работе с неизвестным объектом",
-                "role_scores": {"security_chief": 3, "tactical_officer": 2, "quartermaster": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "security_chief": 3,
+                    "tactical_officer": 2,
+                    "quartermaster": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "signal_analysis",
                 "label": "Попытаться расшифровать сигналы артефакта и установить коммуникацию",
-                "role_scores": {"communications_officer": 3, "navigator": 1, "science_officer": 1, "chief_engineer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "communications_officer": 3,
+                    "navigator": 1,
+                    "science_officer": 1,
+                    "chief_engineer": 0,
+                    "security_chief": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "plot_course",
                 "label": "Вычислить координаты происхождения артефакта и проложить курс к его источнику",
-                "role_scores": {"navigator": 3, "pilot": 2, "science_officer": 1, "chief_engineer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+                "role_scores": {
+                    "navigator": 3,
+                    "pilot": 2,
+                    "science_officer": 1,
+                    "chief_engineer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                },
             },
         ],
     ),
@@ -187,31 +491,86 @@ STATIC_ONBOARDING_QUESTIONS = [
             {
                 "value": "emergency_repair",
                 "label": "Возглавить ремонтную команду и лично чинить критические системы",
-                "role_scores": {"chief_engineer": 3, "quartermaster": 1, "security_chief": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "chief_engineer": 3,
+                    "quartermaster": 1,
+                    "security_chief": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "tactical_retreat",
                 "label": "Рассчитать манёвр уклонения и увести корабль из зоны обстрела",
-                "role_scores": {"pilot": 3, "navigator": 2, "tactical_officer": 2, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "security_chief": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+                "role_scores": {
+                    "pilot": 3,
+                    "navigator": 2,
+                    "tactical_officer": 2,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "security_chief": 0,
+                    "medical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                },
             },
             {
                 "value": "return_fire",
                 "label": "Сосредоточить огонь на слабом месте противника и подавить его орудия",
-                "role_scores": {"tactical_officer": 3, "security_chief": 2, "pilot": 1, "chief_engineer": 0, "science_officer": 0, "communications_officer": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0},
+                "role_scores": {
+                    "tactical_officer": 3,
+                    "security_chief": 2,
+                    "pilot": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "communications_officer": 0,
+                    "navigator": 0,
+                    "medical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                },
             },
             {
                 "value": "treat_wounded",
                 "label": "Организовать сортировку раненых и начать массовую медицинскую помощь",
-                "role_scores": {"medical_officer": 3, "communications_officer": 1, "quartermaster": 1, "chief_engineer": 0, "science_officer": 0, "security_chief": 0, "navigator": 0, "tactical_officer": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "medical_officer": 3,
+                    "communications_officer": 1,
+                    "quartermaster": 1,
+                    "chief_engineer": 0,
+                    "science_officer": 0,
+                    "security_chief": 0,
+                    "navigator": 0,
+                    "tactical_officer": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
             {
                 "value": "call_backup",
                 "label": "Отправить экстренный сигнал координатам и запросить подкрепление",
-                "role_scores": {"communications_officer": 3, "navigator": 1, "science_officer": 1, "chief_engineer": 0, "security_chief": 0, "medical_officer": 0, "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0},
+                "role_scores": {
+                    "communications_officer": 3,
+                    "navigator": 1,
+                    "science_officer": 1,
+                    "chief_engineer": 0,
+                    "security_chief": 0,
+                    "medical_officer": 0,
+                    "tactical_officer": 0,
+                    "quartermaster": 0,
+                    "xenobiologist": 0,
+                    "pilot": 0,
+                },
             },
         ],
     ),
-] + build_species_gender_questions(LANGUAGE_RU)
+] + build_interleaved_species_gender_questions(LANGUAGE_RU, shuffle_seed=42)
 
 
 # LLM prompts for dynamic content generation (legacy format — used by main.py)
@@ -252,7 +611,7 @@ LLM_PROMPTS = {
 Черты характера: {traits}
 Описание аватара: {avatar_description}
 
-ВАЖНО: Описание аватара — это ОКОНЧАТЕЛЬНЫЙ источник внешности персонажа.
+ВАЖНО: Описание аватара — это ОКОНЧАТЕЛЬНЫЙ источник внешности персонажа. Ни в коем случае не интерпретируй его как описание корабля, транспортного средства или фона. Промпт должен описывать исключительно персонажа.
 Определи вид персонажа по описанию и подбери соответствующее описание внешности:
 - Человек / Гуманоид → лицо, волосы, униформа, портрет верхней части тела
 - Негуманоид → реальная альен-анатомия (щупальца, панцирь, экзоскелет), БЕЗ человеческих черт, полный рост
@@ -263,9 +622,10 @@ LLM_PROMPTS = {
 Промпт должен содержать:
 - Внешность персонажа строго по описанию (человеческая ИЛИ нечеловеческая анатомия)
 - Одежду / оболочку / естественное покрытие (униформа, панцирь, свечение, кристаллы)
-- Окружение (мостик корабля, лаборатория, и т.д.)
+- Окружение (мостик корабля, лаборатория, и т.д.) — только как фон, не главный объект
 - Освещение и стиль (кинематографичное, детализированное)
 - Качество (4K, high quality, detailed)
+- Чёткое указание, что основной фокус — персонаж, а не корабль или техника
 
 Ответь ТОЛЬКО промптом на английском языке, без пояснений. Одним абзацем.
 """,
@@ -321,7 +681,7 @@ Role: {role}
 Personality traits: {traits}
 Avatar description: {avatar_description}
 
-IMPORTANT: The avatar description is the DEFINITIVE source for the character's appearance.
+IMPORTANT: The avatar description is the DEFINITIVE source for the character's appearance. Do NOT interpret it as a description of a spacecraft, vehicle, or background. The prompt must describe ONLY the character.
 Determine the species type from the description and adapt the visual focus accordingly:
 - Human / Humanoid → face, hair, uniform, portrait upper body
 - Non-Humanoid → actual alien anatomy (tentacles, carapace, exoskeleton), NO human features, full body
@@ -332,9 +692,10 @@ Determine the species type from the description and adapt the visual focus accor
 The prompt must include:
 - Character appearance exactly as described (human OR non-human anatomy)
 - Clothing / shell / natural covering (uniform, carapace, glow, crystals)
-- Environment (ship bridge, laboratory, etc.)
+- Environment (ship bridge, laboratory, etc.) — only as background, not the main subject
 - Lighting and style (cinematic, detailed)
 - Quality (4K, high quality, detailed)
+- Clear statement that the primary focus is the character, not a ship or technology
 
 Respond with ONLY the prompt text. No explanations. Single paragraph.
 """,

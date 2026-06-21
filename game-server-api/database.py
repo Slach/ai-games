@@ -331,6 +331,24 @@ MIGRATIONS = [
     ALTER TABLE ship_roles_v2 RENAME TO ship_roles;
     """,
     ),
+    (
+        26,
+        """
+    ALTER TABLE onboarding_sessions ADD COLUMN shuffle_seed INTEGER DEFAULT 0
+    """,
+    ),
+    (
+        27,
+        """
+    ALTER TABLE player_profiles ADD COLUMN species_secondary TEXT DEFAULT NULL
+    """,
+    ),
+    (
+        28,
+        """
+    ALTER TABLE player_profiles ADD COLUMN gender_secondary TEXT DEFAULT NULL
+    """,
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -373,6 +391,7 @@ _CRITICAL_TABLE_RECOVERY: Dict[str, str] = {
         completed INTEGER DEFAULT 0,
         language TEXT DEFAULT 'en',
         questions TEXT DEFAULT '[]',
+        shuffle_seed INTEGER DEFAULT 0,
         created_at TEXT NOT NULL
     )""",
     "player_profiles": """CREATE TABLE IF NOT EXISTS player_profiles (
@@ -387,7 +406,9 @@ _CRITICAL_TABLE_RECOVERY: Dict[str, str] = {
         created_at TEXT NOT NULL,
         species TEXT DEFAULT NULL,
         gender TEXT DEFAULT NULL,
-        species_description TEXT DEFAULT NULL
+        species_description TEXT DEFAULT NULL,
+        species_secondary TEXT DEFAULT NULL,
+        gender_secondary TEXT DEFAULT NULL
     )""",
     "game_days": """CREATE TABLE IF NOT EXISTS game_days (
         day INTEGER NOT NULL,
@@ -643,6 +664,7 @@ def create_onboarding_session(
     player_id: int,
     language: str = "en",
     questions: Optional[List[Dict[str, Any]]] = None,
+    shuffle_seed: int = 0,
 ) -> Dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
@@ -653,13 +675,14 @@ def create_onboarding_session(
 
     cursor.execute(
         """INSERT INTO onboarding_sessions
-           (session_id, player_id, current_question, answers, completed, language, questions, created_at)
-           VALUES (?, ?, 0, '{}', 0, ?, ?, ?)""",
+           (session_id, player_id, current_question, answers, completed, language, questions, shuffle_seed, created_at)
+           VALUES (?, ?, 0, '{}', 0, ?, ?, ?, ?)""",
         (
             session_id,
             player_id,
             language,
             json.dumps(questions) if questions else "[]",
+            shuffle_seed,
             created_at,
         ),
     )
@@ -675,6 +698,7 @@ def create_onboarding_session(
         "completed": False,
         "language": language,
         "questions": questions or [],
+        "shuffle_seed": shuffle_seed,
         "created_at": created_at,
     }
 
@@ -701,6 +725,7 @@ def get_onboarding_session(session_id: str) -> Optional[Dict[str, Any]]:
         "completed": bool(row["completed"]),
         "language": row["language"] or "en",
         "questions": json.loads(row["questions"] or "[]"),
+        "shuffle_seed": row.get("shuffle_seed", 0),
         "created_at": row["created_at"],
     }
 
@@ -782,8 +807,9 @@ def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any
     cursor.execute(
         """INSERT OR REPLACE INTO player_profiles
            (player_id, avatar_url, avatar_description, role, role_description, personality_traits,
-            game_id, last_poll, created_at, species, gender, species_description)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            game_id, last_poll, created_at, species, gender, species_description,
+            species_secondary, gender_secondary)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             player_data["player_id"],
             player_data.get("avatar_url"),
@@ -797,6 +823,8 @@ def create_player_profile(player_data: Dict[str, Any]) -> Optional[Dict[str, Any
             player_data.get("species"),
             player_data.get("gender"),
             player_data.get("species_description"),
+            player_data.get("species_secondary"),
+            player_data.get("gender_secondary"),
         ),
     )
 
@@ -831,6 +859,8 @@ def get_player_profile(player_id: int) -> Optional[Dict[str, Any]]:
         "species": row["species"],
         "gender": row["gender"],
         "species_description": row["species_description"],
+        "species_secondary": row.get("species_secondary"),
+        "gender_secondary": row.get("gender_secondary"),
     }
 
 
@@ -1348,7 +1378,7 @@ def save_game_image(
         row_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        logger.info(f"[IMAGE] Saved {type} image #{row_id}: {image_url[:60]}...")
+        logger.info(f"[IMAGE] Saved {type} image #{row_id}: {image_url}...")
         return row_id
     except Exception as e:
         logger.error(f"[IMAGE] Failed to save {type} image: {e}")

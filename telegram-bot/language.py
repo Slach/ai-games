@@ -45,12 +45,12 @@ ONBOARDING = {
 HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
-        "commands": "**Команды:**\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий день игры\n/help - Эта справка\n\n**Команды Game Master:**\n/gm-start-game <id> - Запустить игру\n/gm-kick <id> <роль> - Изгнать игрока\n/gm-list-games - Список игр",
+        "commands": "**Команды:**\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий день игры\n/help - Эта справка\n\n**Команды Game Master:**\n/gm_start_game <id> - Запустить игру\n/gm_kick <id> <роль> - Изгнать игрока\n/gm_list_games - Список игр",
         "how_to_play": "**Как играть:**\n1. Каждый день генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
-        "commands": "**Commands:**\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game day\n/help - This help\n\n**Game Master Commands:**\n/gm-start-game <id> - Start a game\n/gm-kick <id> <role> - Kick a player\n/gm-list-games - List all games",
+        "commands": "**Commands:**\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game day\n/help - This help\n\n**Game Master Commands:**\n/gm_start_game <id> - Start a game\n/gm_kick <id> <role> - Kick a player\n/gm_list_games - List all games",
         "how_to_play": "**How to play:**\n1. A new story is generated every day\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
 }
@@ -175,12 +175,12 @@ MENU = {
 GM_COMMANDS = {
     LANGUAGE_RU: {
         "unauthorized": "⛔ У вас нет прав на использование этой команды.",
-        "start_game_usage": "❌ Использование: /gm-start-game <game_id>\n\nПример: /gm-start-game abc123",
+        "start_game_usage": "❌ Использование: /gm_start_game <game_id>\n\nПример: /gm_start_game abc123",
         "starting_game": "🚀 Запуск игры `{game_id}`...",
         "game_started": "✅ **Игра `{game_id}` запущена!**\n\n📅 День: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC заменено: {npc_count}\n\nИстория дня сгенерирована.",
         "briefings_sent": "\n\n📋 Вводные отправлены игрокам.",
         "start_game_error": "❌ Ошибка запуска игры: {error}",
-        "kick_usage": "❌ Использование: /gm-kick <game_id> <role_key> [причина]\n\nПример: /gm-kick abc123 chief_engineer Неактивен более 3 дней",
+        "kick_usage": "❌ Использование: /gm_kick <game_id> <role_key> [причина]\n\nПример: /gm_kick abc123 chief_engineer Неактивен более 3 дней",
         "default_kick_reason": "Не указана",
         "kicking_player": "⏳ Изгнание игрока с ролью `{role_key}` из игры `{game_id}`...",
         "player_kicked": "✅ **Игрок изгнан!**\n\n🎮 Игра: `{game_id}`\n👤 Игрок: `{kicked_id}`\n🤖 Заменён NPC: {npc_name}\n📝 Причина: {reason}\n\nУведомление отправлено игроку.",
@@ -195,12 +195,12 @@ GM_COMMANDS = {
     },
     LANGUAGE_EN: {
         "unauthorized": "⛔ You don't have permission to use this command.",
-        "start_game_usage": "❌ Usage: /gm-start-game <game_id>\n\nExample: /gm-start-game abc123",
+        "start_game_usage": "❌ Usage: /gm_start_game <game_id>\n\nExample: /gm_start_game abc123",
         "starting_game": "🚀 Starting game `{game_id}`...",
         "game_started": "✅ **Game `{game_id}` started!**\n\n📅 Day: {day_num}\n👤 Players: {player_count}\n🤖 NPCs replaced: {npc_count}\n\nToday's story has been generated.",
         "briefings_sent": "\n\n📋 Briefings sent to players.",
         "start_game_error": "❌ Error starting game: {error}",
-        "kick_usage": "❌ Usage: /gm-kick <game_id> <role_key> [reason]\n\nExample: /gm-kick abc123 chief_engineer Inactive for more than 3 days",
+        "kick_usage": "❌ Usage: /gm_kick <game_id> <role_key> [reason]\n\nExample: /gm_kick abc123 chief_engineer Inactive for more than 3 days",
         "default_kick_reason": "Not specified",
         "kicking_player": "⏳ Kicking player with role `{role_key}` from game `{game_id}`...",
         "player_kicked": "✅ **Player kicked!**\n\n🎮 Game: `{game_id}`\n👤 Player: `{kicked_id}`\n🤖 Replaced by NPC: {npc_name}\n📝 Reason: {reason}\n\nNotification sent to player.",

@@ -151,7 +151,7 @@ New method `generate_species_option_prompts()`:
                             "option_value": {"type": "string"},
                             "prompt": {
                                 "type": "string",
-                                "description": "Short creative image prompt in English for Stable Diffusion"
+                                "description": "Short creative image prompt in English for Diffusion Model"
                             }
                         },
                         "required": ["option_value", "prompt"],

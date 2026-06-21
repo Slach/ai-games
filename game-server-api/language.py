@@ -452,8 +452,8 @@ GENDER_QUESTIONS_DATA = {
         {
             "text": "Как твой вид участвует в продолжении рода?",
             "options": [
-                {"value": "g1_a", "label": "Через мужскую репродуктивную роль.", "gender_tags": ["male"]},
-                {"value": "g1_b", "label": "Через женскую репродуктивную роль.", "gender_tags": ["female"]},
+                {"value": "g1_a", "label": "Через мужскую репродуктивную роль.", "gender_tags": ["female"]},
+                {"value": "g1_b", "label": "Через женскую репродуктивную роль.", "gender_tags": ["male"]},
                 {"value": "g1_c", "label": "Индивидуум не участвует в размножении напрямую.", "gender_tags": ["neutral"]},
                 {"value": "g1_d", "label": "Роль меняется в течение жизни.", "gender_tags": ["fluid"]},
                 {"value": "g1_e", "label": "Для рождения нужно больше двух половых ролей.", "gender_tags": ["multiple"]},

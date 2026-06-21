@@ -358,7 +358,7 @@ async def send_random_splash_image(
 async def send_question_with_image(
     bot_or_message: types.Message,
     question: dict,
-    keyboard: ReplyKeyboardMarkup,
+    keyboard: InlineKeyboardMarkup,
     language: str = BOT_LANGUAGE,
 ) -> str:
     """Send a question to the player, optionally with an image.
@@ -368,9 +368,16 @@ async def send_question_with_image(
     Returns the question text that was displayed.
     """
     image_url = question.get("image_url")
+    options = question.get("options", [])
+    # Separate each option with a blank line for readability
+    options_text = "\n\n".join(
+        [f"{i + 1}. {opt['label']}" for i, opt in enumerate(options)]
+    )
     question_text = lang.get_onboarding(language)["question_prefix"].format(
         id=question["id"], text=question["text"]
     )
+    if options_text:
+        question_text += f"\n\n---\n\n{options_text}"
 
     if image_url:
         try:
@@ -502,12 +509,28 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
 
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
 
+        # Format species/gender with hybrid display
+        species_primary = profile.get("species", "Unknown") or "Unknown"
+        species_secondary = profile.get("species_secondary")
+        gender_primary = profile.get("gender", "Unknown") or "Unknown"
+        gender_secondary = profile.get("gender_secondary")
+
+        if species_secondary:
+            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {species_primary} + {species_secondary}"
+        else:
+            species_display = species_primary
+
+        if gender_secondary:
+            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {gender_primary} + {gender_secondary}"
+        else:
+            gender_display = gender_primary
+
         # Build the onboarding message text
         onboarding_text = onboarding_msgs["onboarding_complete"].format(
             role=escape_markdown(profile.get("role", "Crew Member")),
             role_description=escape_markdown(profile.get("role_description", "")),
-            species=escape_markdown(profile.get("species", "Unknown")),
-            gender=escape_markdown(profile.get("gender", "Unknown")),
+            species=escape_markdown(species_display),
+            gender=escape_markdown(gender_display),
             traits=escape_markdown("\n- ".join(profile.get("personality_traits", []))),
         )
 
@@ -762,30 +785,28 @@ def wrap_text(text: str, width: int = 35) -> str:
     return "\n".join(lines)
 
 
-def create_onboarding_keyboard(options: list, question_id: int) -> ReplyKeyboardMarkup:
-    """Create reply keyboard for onboarding options.
+def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboardMarkup:
+    """Create inline keyboard for onboarding options.
 
-    Uses ReplyKeyboardMarkup instead of InlineKeyboardMarkup to avoid text truncation.
-    Telegram reply keyboards display full text without ellipsis.
+    Buttons show numbers [1] [2] [3] etc. attached to the message
+    itself — unlike ReplyKeyboardMarkup, these CANNOT be dismissed
+    by the user, ensuring they always have a way to answer.
     """
-    keyboard = []
-    labels = []
-    for option in options:
-        # Use full label text - reply keyboards don't truncate
-        label = option["label"]
-        labels.append(label)
-        button = KeyboardButton(text=label)
-        keyboard.append([button])
+    builder = InlineKeyboardBuilder()
+    for idx in range(len(options)):
+        builder.add(
+            InlineKeyboardButton(
+                text=f"[{idx + 1}]",
+                callback_data=f"onb_ans:{question_id}:{idx}",
+            )
+        )
+    builder.adjust(len(options))  # one row, Telegram wraps if too wide
 
     logger.info(
-        f"Created onboarding keyboard for question_id={question_id} with {len(labels)} buttons: {labels}"
+        f"Created onboarding inline keyboard for question_id={question_id} with {len(options)} buttons"
     )
 
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=True,  # Hide keyboard after selection
-    )
+    return builder.as_markup()
 
 
 def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -803,13 +824,17 @@ def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
-    """Create inline keyboard for game actions"""
+    """Create inline keyboard for game actions
+
+    Buttons show numbers [1] [2] [3] etc. instead of full action text.
+    Full action text is displayed in the message as a numbered list.
+    """
     builder = InlineKeyboardBuilder()
-    for action in actions:
-        # Wrap long action text to fit in Telegram button width
-        text = wrap_text(action["text"], width=35)
+    for idx, action in enumerate(actions, start=1):
         builder.add(
-            InlineKeyboardButton(text=text, callback_data=f"action:{action['id']}")
+            InlineKeyboardButton(
+                text=f"[{idx}]", callback_data=f"action:{action['id']}"
+            )
         )
     builder.adjust(1)
     return builder.as_markup()
@@ -945,14 +970,13 @@ async def start_onboarding_flow(
             )
 
         # Send splash image with game description as caption
-        menu_kb = create_main_menu_keyboard()
-        splash_sent = await send_random_splash_image(message, welcome_text, menu_kb)
+        # NOTE: No main menu keyboard during onboarding — buttons show only after completion
+        splash_sent = await send_random_splash_image(message, welcome_text)
         if not splash_sent:
             # Fallback: send text-only if no splash image available
             await message.answer(
                 welcome_text,
                 parse_mode="Markdown",
-                reply_markup=menu_kb,
             )
 
         session_id = result.get("session_id")
@@ -980,10 +1004,10 @@ async def start_onboarding_flow(
         )
 
         logger.info(
-            f"First onboarding question: id={question['id']}, text={question['text'][:50]}..."
+            f"First onboarding question: id={question['id']}, text={question['text']}..."
         )
         logger.info(
-            f"Question options: {[opt['label'][:80] for opt in question['options']]}"
+            f"Question options: {[opt['label'] for opt in question['options']]}"
         )
         if question.get("image_url"):
             logger.info(f"Question has image: {question['image_url']}")
@@ -1056,13 +1080,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
             f"Player {player_id} already has active onboarding session: {player_state['onboarding_session_id']}"
         )
         current_options = player_state.get("current_options", [])
-        keyboard = (
-            create_onboarding_keyboard(
+        if current_options:
+            keyboard = create_onboarding_keyboard(
                 current_options, player_state.get("current_question_id", 1)
             )
-            if current_options
-            else create_main_menu_keyboard()
-        )
+        else:
+            # No options stored — remove any reply keyboard
+            keyboard = types.ReplyKeyboardRemove()
         await message.answer(
             msgs["already_in_onboarding"],
             reply_markup=keyboard,
@@ -1140,15 +1164,26 @@ async def cmd_profile(message: types.Message):
             return
         msgs = lang.get_profile(BOT_LANGUAGE)
 
-        # Build profile message
+        # Build profile message with hybrid display support
+        species_primary = profile.get('species', 'Unknown') or 'Unknown'
+        species_secondary = profile.get('species_secondary')
+        gender_primary = profile.get('gender', 'Unknown') or 'Unknown'
+        gender_secondary = profile.get('gender_secondary')
+
+        if species_secondary:
+            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {species_primary} + {species_secondary}"
+        else:
+            species_display = species_primary
+
+        if gender_secondary:
+            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == 'ru' else f"Hybrid: {gender_primary} + {gender_secondary}"
+        else:
+            gender_display = gender_primary
+
         profile_text = f"{msgs['title']}\n\n"
         profile_text += f"{msgs['role'].format(role=profile['role'])}\n"
-        profile_text += (
-            f"{msgs['species'].format(species=profile.get('species', 'Unknown'))}\n"
-        )
-        profile_text += (
-            f"{msgs['gender'].format(gender=profile.get('gender', 'Unknown'))}\n\n"
-        )
+        profile_text += f"{msgs['species'].format(species=species_display)}\n"
+        profile_text += f"{msgs['gender'].format(gender=gender_display)}\n\n"
         profile_text += f"{msgs['description'].format(role_description=profile['role_description'])}\n\n"
         profile_text += f"{msgs['traits'].format(traits='\n- '.join(profile['personality_traits']))}"
 
@@ -1229,7 +1264,7 @@ async def cmd_today(message: types.Message):
             keyboard = create_action_keyboard(choices) if choices else None
 
             actions_text = "\n\n".join(
-                [f"{i + 1}. {a['text']}" for i, a in enumerate(choices)]
+                [f"{i + 1} - {a['text']}" for i, a in enumerate(choices)]
             )
 
             await message.answer(
@@ -1258,7 +1293,7 @@ async def cmd_today(message: types.Message):
             # Build actions text
             actions_text = "\n\n".join(
                 [
-                    f"{i + 1}. {a['text']}"
+                    f"{i + 1} - {a['text']}"
                     for i, a in enumerate(day.get("player_actions", []))
                 ]
             )
@@ -1313,7 +1348,7 @@ async def cmd_help(message: types.Message):
 
 async def cmd_gm_start_game(message: types.Message):
     """GM command: Force start a game by ID.
-    Usage: /gm-start-game <game_id>
+    Usage: /gm_start_game <game_id>
     Only executable by the configured Game Master user.
     """
     assert message.from_user is not None
@@ -1321,7 +1356,7 @@ async def cmd_gm_start_game(message: types.Message):
     gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(f"Unauthorized /gm-start-game attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_start_game attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -1369,7 +1404,7 @@ async def cmd_gm_start_game(message: types.Message):
 async def cmd_gm_kick(message: types.Message):
     """GM command: Kick a player by role and replace with NPC.
 
-    Usage: /gm-kick <game_id> <role_key> [reason]
+    Usage: /gm_kick <game_id> <role_key> [reason]
     The kicked player receives a notification about being removed.
     Only executable by the configured Game Master user.
     """
@@ -1378,11 +1413,11 @@ async def cmd_gm_kick(message: types.Message):
     gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(f"Unauthorized /gm-kick attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_kick attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
-    # Parse args: /gm-kick <game_id> <role_key> [reason]
+    # Parse args: /gm_kick <game_id> <role_key> [reason]
     parts = (message.text or "").split(maxsplit=3)
     if len(parts) < 3:
         await message.answer(gm_msgs["kick_usage"])
@@ -1433,7 +1468,7 @@ async def cmd_gm_kick(message: types.Message):
 async def cmd_gm_list_games(message: types.Message):
     """GM command: List available games.
 
-    Usage: /gm-list-games
+    Usage: /gm_list_games
     Only executable by the configured Game Master user.
     """
     assert message.from_user is not None
@@ -1441,7 +1476,7 @@ async def cmd_gm_list_games(message: types.Message):
     gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(f"Unauthorized /gm-list-games attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_list_games attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -1543,10 +1578,144 @@ async def handle_text_message(message: types.Message):
         await message.answer(msgs["error"].format(error=str(e)))
 
 
+async def handle_onboarding_inline_answer(
+    callback: types.CallbackQuery, state: FSMContext
+):
+    """Handle onboarding answer selection from inline keyboard buttons.
+
+    Callback data format: onb_ans:<question_id>:<option_index>
+    The option_index is used to look up the answer value from current_options in state.
+    """
+    await callback.answer()
+    assert callback.data is not None
+    assert callback.message is not None
+    msg: types.Message = callback.message  # type: ignore[assignment]
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await msg.answer(lang.get_errors(BOT_LANGUAGE)["invalid_format"])
+        return
+
+    _, question_id_str, option_idx_str = parts
+    option_idx = int(option_idx_str)
+    player_id = callback.from_user.id
+    error_msgs = lang.get_errors(BOT_LANGUAGE)
+
+    # Get current question data from state
+    state_data = await state.get_data()
+    session_id = state_data.get("session_id")
+    current_question_id = state_data.get("current_question_id")
+    current_options = state_data.get("current_options")
+
+    logger.info(
+        f"Inline onboarding answer: player={player_id}, question_id={question_id_str}, option_idx={option_idx}, "
+        f"session_id={session_id}"
+    )
+
+    if not session_id:
+        logger.error(f"No session_id in state for player {player_id}")
+        await msg.answer(error_msgs["session_not_found"])
+        return
+
+    if not current_options or option_idx < 0 or option_idx >= len(current_options):
+        logger.error(
+            f"Invalid option_idx {option_idx} for {len(current_options) if current_options else 0} options"
+        )
+        await msg.answer(error_msgs["invalid_format"])
+        return
+
+    answer_value = current_options[option_idx]["value"]
+    matched_label = current_options[option_idx]["label"]
+    logger.info(f"Matched option: idx={option_idx}, label='{matched_label}'")
+
+    try:
+        logger.info(
+            f"Submitting onboarding answer (inline): session_id={session_id}, "
+            f"question_id={current_question_id}, answer_value='{answer_value}'"
+        )
+        result = await api_request(
+            "POST",
+            f"/onboarding/{session_id}/answer",
+            data={"question_id": current_question_id, "answer": answer_value},
+            params={"language": BOT_LANGUAGE},
+        )
+        logger.info(f"Onboarding answer response: {result}")
+
+        if result is None:
+            raise Exception("No response from API when submitting onboarding answer")
+
+        if result.get("completed"):
+            profile = result.get("profile") or {}
+            logger.info(
+                f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}"
+            )
+
+            try:
+                verify_profile = await api_request(
+                    "GET", f"/players/{player_id}/profile"
+                )
+                logger.info(
+                    f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}"
+                )
+            except Exception as verify_error:
+                logger.error(
+                    f"Profile verification failed for player {player_id}: {verify_error}"
+                )
+
+            await state.clear()
+            update_player_state(
+                player_id,
+                onboarding_session_id=None,
+                current_question_id=None,
+                current_options=None,
+            )
+
+            # Show loading image while profile/avatar is being generated
+            await send_random_loading_image(msg, caption_key="processing_caption")
+
+            # Avatar generation + onboarding message
+            if msg.bot is None:
+                logger.error(
+                    f"message.bot is None for player {player_id}, cannot generate avatar"
+                )
+            else:
+                asyncio.create_task(
+                    _generate_and_send_avatar(player_id, session_id, msg.bot)
+                )
+        else:
+            next_question = result.get("next_question")
+            if next_question:
+                logger.info(
+                    f"Next onboarding question (inline): id={next_question['id']}, text={next_question['text']}..."
+                )
+                await state.update_data(
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                )
+                update_player_state(
+                    player_id,
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                )
+                keyboard = create_onboarding_keyboard(
+                    next_question["options"], next_question["id"]
+                )
+                await send_question_with_image(
+                    msg, next_question, keyboard, BOT_LANGUAGE
+                )
+
+    except Exception as e:
+        logger.error(f"Failed to submit onboarding answer (inline): {e}")
+        await callback.message.answer(
+            error_msgs["onboarding_error"].format(error=str(e))
+        )
+
+
 async def onboarding_answer(message: types.Message, state: FSMContext):
     """Handle onboarding answer selection from reply keyboard.
 
-    Matches button text to option value and submits to API.
+    Buttons show [1], [2], [3] etc. The number is extracted and used
+    as an index into current_options to find the matching option value.
     """
     assert message.from_user is not None
     assert message.text is not None
@@ -1580,36 +1749,21 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         await message.answer(error_msgs["invalid_format"])
         return
 
-    # Log all available option labels for debugging
-    logger.info(f"Available option labels: {[opt['label'] for opt in current_options]}")
-
-    # Find matching option by button text
+    # Match by numeric index from button text (e.g., "[1]" or "1")
     answer_value = None
     matched_label = None
-    for option in current_options:
-        label = option["label"]
-        if label == answer_text:
-            answer_value = option["value"]
-            matched_label = label
-            logger.info(f"Exact match found: label='{label}'")
-            break
-        elif label.strip() == answer_text.strip():
-            # Try with whitespace normalization
-            answer_value = option["value"]
-            matched_label = label
-            logger.info(f"Match with whitespace normalization: label='{label}'")
-            break
-        elif label.lower() == answer_text.lower():
-            # Try case-insensitive match
-            answer_value = option["value"]
-            matched_label = label
-            logger.info(f"Case-insensitive match: label='{label}'")
-            break
+    match = re.match(r"^\[?(\d+)\]?$", answer_text.strip())
+    if match:
+        idx = int(match.group(1)) - 1
+        if 0 <= idx < len(current_options):
+            answer_value = current_options[idx]["value"]
+            matched_label = current_options[idx]["label"]
+            logger.info(f"Numeric match: idx={idx}, label='{matched_label}'")
 
     if not answer_value:
         logger.warning(
             f"No matching option found! Player text: '{answer_text}', "
-            f"Available labels: {[opt['label'] for opt in current_options]}"
+            f"Available options: {[opt['label'] for opt in current_options]}"
         )
         await message.answer(error_msgs["invalid_format"])
         return
@@ -1673,10 +1827,10 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             next_question = result.get("next_question")
             if next_question:
                 logger.info(
-                    f"Next onboarding question: id={next_question['id']}, text={next_question['text'][:50]}..."
+                    f"Next onboarding question: id={next_question['id']}, text={next_question['text']}..."
                 )
                 logger.info(
-                    f"Next question options: {[opt['label'][:80] for opt in next_question['options']]}"
+                    f"Next question options: {[opt['label'] for opt in next_question['options']]}"
                 )
                 if next_question.get("image_url"):
                     logger.info(
@@ -1685,7 +1839,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 # Store next question data in state for matching
                 logger.info(
                     f"Storing next question in state: question_id={next_question['id']}, "
-                    f"options={[opt['label'][:60] for opt in next_question['options']]}"
+                    f"options={[opt['label'] for opt in next_question['options']]}"
                 )
                 await state.update_data(
                     current_question_id=next_question["id"],
@@ -1779,7 +1933,7 @@ async def refresh_game(callback: types.CallbackQuery):
         # Build actions text
         actions_text = "\n\n".join(
             [
-                f"{i + 1}. {a['text']}"
+                f"{i + 1} - {a['text']}"
                 for i, a in enumerate(day.get("player_actions", []))
             ]
         )
@@ -1885,12 +2039,17 @@ async def main():
     dp.message.register(cmd_profile, Command("profile"))
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_help, Command("help"))
-    dp.message.register(cmd_gm_start_game, Command("gm-start-game"))
-    dp.message.register(cmd_gm_kick, Command("gm-kick"))
-    dp.message.register(cmd_gm_list_games, Command("gm-list-games"))
+    dp.message.register(cmd_gm_start_game, Command("gm_start_game"))
+    dp.message.register(cmd_gm_kick, Command("gm_kick"))
+    dp.message.register(cmd_gm_list_games, Command("gm_list_games"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Onboarding answer handler - must be registered BEFORE general text handlers
+    # Onboarding answer handler - inline keyboard callback
+    dp.callback_query.register(
+        handle_onboarding_inline_answer, F.data.startswith("onb_ans:")
+    )
+    # Fallback for manually typed text answers (if user types instead of pressing button)
     dp.message.register(onboarding_answer, OnboardingState.waiting_for_answer)
 
     # General text message handler (catch-all for non-command messages)
