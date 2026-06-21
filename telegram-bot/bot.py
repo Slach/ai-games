@@ -134,6 +134,221 @@ def _mark_briefing_sent(player_id: int, day_num: int) -> None:
 _restart_suppressed_players: set[int] = set()
 
 
+async def _send_bridge_and_mission(
+    bot: Bot | None,
+    gm_message: types.Message,
+    game_id: str,
+    bridge_url: str | None,
+    mission: dict | None,
+    suppress_player_id: int | None = None,
+) -> None:
+    """Download and broadcast bridge image with mission info to all players."""
+    bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
+    from contextlib import suppress
+
+    if not bridge_url:
+        with suppress(Exception):
+            bridge_resp = await api_request(
+                "GET", "/game/bridge-image", ignore_codes=(404,)
+            )
+            if bridge_resp:
+                bridge_url = bridge_resp.get("image_url")
+    if not mission:
+        with suppress(Exception):
+            mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+    if not bridge_url and not mission:
+        return
+
+    caption = bridge_msgs["title"]
+    if mission:
+        name = mission.get("name", "")
+        caption += "\n\n" + bridge_msgs["mission_header"].format(name=name)
+        # Use brief_description from API if available, otherwise first 200 chars of description
+        desc = mission.get("brief_description", "") or mission.get("description", "")
+        if len(desc) > 200:
+            desc = desc[:200] + "…"
+        if desc:
+            caption += "\n\n" + bridge_msgs["mission_desc"].format(description=desc)
+
+    photo_data = None
+    if bridge_url:
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    bridge_url, timeout=aiohttp.ClientTimeout(total=30)
+                ) as img_resp,
+            ):
+                if img_resp.status == 200:
+                    photo_data = await img_resp.read()
+        except Exception as e:
+            logger.warning(f"Failed to download bridge image: {e}")
+
+    if photo_data:
+        try:
+            photo = BufferedInputFile(photo_data, filename="bridge.png")
+            await gm_message.answer_photo(
+                photo=photo, caption=caption, parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send bridge image to GM: {e}")
+    elif bridge_url or mission:
+        with suppress(Exception):
+            await gm_message.answer(caption, parse_mode="Markdown")
+
+    if bot is None:
+        return
+
+    try:
+        players_result = await api_request(
+            "GET", "/players", params={"game_id": game_id}
+        )
+        if not players_result:
+            return
+        for pid in (p["player_id"] for p in players_result if isinstance(p, dict)):
+            if suppress_player_id is not None and pid == suppress_player_id:
+                continue
+            try:
+                if photo_data:
+                    photo = BufferedInputFile(photo_data, filename="bridge.png")
+                    await bot.send_photo(
+                        chat_id=pid, photo=photo, caption=caption, parse_mode="Markdown"
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=pid, text=caption, parse_mode="Markdown"
+                    )
+                logger.info(f"Sent bridge+mission to player {pid}")
+            except Exception as e:
+                logger.warning(f"Failed to send bridge to player {pid}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to broadcast bridge to players: {e}")
+
+
+_SEND_SEP = "\n---\n"
+
+
+async def _download_and_send_photo(
+    bot: Bot, pid: int, url: str, filename: str = "image.png"
+) -> bool:
+    """Download an image from url and send it as a photo to a player.
+
+    Returns True if sent successfully, False otherwise.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            resp = await session.get(url, timeout=aiohttp.ClientTimeout(total=30))
+            if resp.status == 200:
+                data = await resp.read()
+                photo = BufferedInputFile(data, filename=filename)
+                await bot.send_photo(chat_id=pid, photo=photo)
+                return True
+            else:
+                logger.warning(f"Failed to download image (HTTP {resp.status}): {url}")
+    except Exception as e:
+        logger.warning(f"Failed to download/send image to player {pid}: {e}")
+    return False
+
+
+async def _send_game_briefings(
+    bot: Bot | None, game_id: str, day_num: int
+) -> list[int]:
+    """Send individual briefings with images, crew behavior and action choices."""
+    if bot is None:
+        return []
+    try:
+        players_result = await api_request(
+            "GET", "/players", params={"game_id": game_id}
+        )
+        if not players_result:
+            return []
+        current = lang.get_current_day(BOT_LANGUAGE)
+        sent_ids: list[int] = []
+        for pid in (p["player_id"] for p in players_result if isinstance(p, dict)):
+            try:
+                br = await api_request(
+                    "GET", f"/game/briefing/{pid}/{day_num}", ignore_codes=(404,)
+                )
+                if not br:
+                    continue
+                choices = br.get("choices", [])
+                btext = br.get("briefing", "")
+                if not choices or not btext:
+                    continue
+
+                # ── Send comic image, if available ───────────────────────
+                # Send briefing image: comic > scene fallback > nothing
+                img_url = br.get("comic_url")
+                if not img_url:
+                    try:
+                        scene = await api_request(
+                            "GET",
+                            "/game/bridge-image",
+                            params={"game_id": game_id, "day": day_num},
+                            ignore_codes=(404,),
+                        )
+                        if scene:
+                            img_url = scene.get("image_url")
+                    except Exception:
+                        pass
+                if img_url:
+                    await _download_and_send_photo(
+                        bot, pid, img_url, filename="briefing.png"
+                    )
+
+                # ── Fetch crew_dialogues ───────────────────────────────────
+                crew_d = []
+                try:
+                    dd = await api_request(
+                        "GET",
+                        f"/game/day/{day_num}",
+                        params={"game_id": game_id},
+                        ignore_codes=(404,),
+                    )
+                    if dd:
+                        crew_d = dd.get("crew_dialogues", [])
+                except Exception:
+                    pass
+
+                crew_txt = ""
+                if crew_d:
+                    lines = [
+                        f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
+                        for d in crew_d
+                    ]
+                    crew_txt = "\n\n*Поведение экипажа:*\n" + _SEND_SEP.join(lines)
+
+                acts = "\n\n".join(
+                    f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
+                    for i, a in enumerate(choices)
+                )
+                text = (
+                    current["title"].format(day=day_num)
+                    + "\n\n"
+                    + current["briefing_header"].format(briefing=btext)
+                    + crew_txt
+                    + "\n\n"
+                    + current["actions"].format(actions=acts)
+                    + "\n\n"
+                    + current["select_action"]
+                )
+                await bot.send_message(
+                    chat_id=pid,
+                    text=text,
+                    parse_mode="Markdown",
+                    reply_markup=create_action_keyboard(choices),
+                )
+                _mark_briefing_sent(pid, day_num)
+                sent_ids.append(pid)
+                logger.info(f"Sent Day {day_num} briefing to player {pid}")
+            except Exception as e:
+                logger.warning(f"Failed to send briefing to player {pid}: {e}")
+        return sent_ids
+    except Exception as e:
+        logger.warning(f"Failed to send briefings: {e}")
+        return []
+
+
 def _get_player_briefing_day(result: dict) -> int | None:
     """Extract the day number from a poll result, if any."""
     day = result.get("new_game_day", {})
@@ -1672,6 +1887,23 @@ async def cmd_gm_start_game(message: types.Message):
             if result.get("briefings"):
                 msg += gm_msgs["briefings_sent"]
             await message.answer(msg, parse_mode="Markdown")
+
+            # ── Broadcast bridge image + mission info ──────────────────────
+            await _send_bridge_and_mission(
+                bot=message.bot,
+                gm_message=message,
+                game_id=game_id,
+                bridge_url=result.get("bridge_image_url"),
+                mission=result.get("mission", {}),
+                suppress_player_id=player_id,
+            )
+
+            # ── Send individual briefings to all players ────────────────────
+            await _send_game_briefings(
+                bot=message.bot,
+                game_id=game_id,
+                day_num=day_num,
+            )
         else:
             await message.answer(gm_msgs["start_game_error"].format(error=result))
     except Exception as e:
@@ -1989,239 +2221,47 @@ async def cmd_gm_restart_game(message: types.Message):
                 msg += gm_msgs["briefings_sent"]
             await message.answer(msg, parse_mode="Markdown")
 
-            # Broadcast bridge image with mission info to ALL players (like _broadcast_game_started)
-            bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
-            mission = None
-            bridge = None
-            from contextlib import suppress
+            # ── Broadcast bridge image + mission info ──────────────────────
+            await _send_bridge_and_mission(
+                bot=message.bot,
+                gm_message=message,
+                game_id=game_id,
+                bridge_url=start_result.get("bridge_image_url"),
+                mission=start_result.get("mission", {}),
+                suppress_player_id=player_id,
+            )
 
-            with suppress(Exception):
-                mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
-            with suppress(Exception):
-                bridge = await api_request(
-                    "GET", "/game/bridge-image", ignore_codes=(404,)
-                )
-
-            if bridge and bridge.get("image_url"):
-                # Build caption once
-                caption = bridge_msgs["title"]
-                if mission:
-                    caption += "\n\n" + bridge_msgs["mission_header"].format(
-                        name=mission.get("name", "")
-                    )
-                    caption += "\n\n" + bridge_msgs["mission_desc"].format(
-                        description=mission.get("description", "")
-                    )
-
-                # Download bridge image once
-                photo_data = None
-                try:
-                    async with (
-                        aiohttp.ClientSession() as session,
-                        session.get(
-                            bridge["image_url"],
-                            timeout=aiohttp.ClientTimeout(total=30),
-                        ) as img_resp,
-                    ):
-                        if img_resp.status == 200:
-                            photo_data = await img_resp.read()
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to download bridge image after restart: {e}"
-                    )
-
-                # Send to the GM who triggered the restart
-                if photo_data:
-                    try:
-                        photo = BufferedInputFile(photo_data, filename="bridge.png")
-                        await message.answer_photo(
-                            photo=photo,
-                            caption=caption,
-                            parse_mode="Markdown",
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to send bridge image to GM: {e}")
-
-                # Send to all players in the game
-                try:
-                    players_result = await api_request(
-                        "GET", "/players", params={"game_id": game_id}
-                    )
-                    if players_result:
-                        all_player_ids = [
-                            p["player_id"]
-                            for p in players_result
-                            if isinstance(p, dict)
-                        ]
-                        if message.bot is not None:
-                            for pid in all_player_ids:
-                                if pid == player_id:
-                                    continue  # Already sent to GM
-                                try:
-                                    if photo_data:
-                                        photo = BufferedInputFile(
-                                            photo_data, filename="bridge.png"
-                                        )
-                                        await message.bot.send_photo(
-                                            chat_id=pid,
-                                            photo=photo,
-                                            caption=caption,
-                                            parse_mode="Markdown",
-                                        )
-                                    else:
-                                        # Fallback: send text-only mission info
-                                        await message.bot.send_message(
-                                            chat_id=pid,
-                                            text=caption,
-                                            parse_mode="Markdown",
-                                        )
-                                    logger.info(
-                                        f"Sent bridge+mission to player {pid} after restart"
-                                    )
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Failed to send bridge to player {pid}: {e}"
-                                    )
-                except Exception as e:
-                    logger.warning(f"Failed to broadcast bridge to players: {e}")
-            elif mission:
-                # No bridge image but mission exists — send text-only with "continue" hint
-                restart_bridge_text = lang.get_gm_commands(BOT_LANGUAGE).get(
-                    "restart_bridge_pending",
-                    "🚀 Игра перезапущена! Мостик готовится к активации. Используйте /bridge чтобы увидеть цели миссии."
-                    if BOT_LANGUAGE == "ru"
-                    else "🚀 Game restarted! Bridge is being prepared. Use /bridge to see mission objectives.",
-                )
-                from contextlib import suppress
-
-                with suppress(Exception):
-                    await message.answer(restart_bridge_text, parse_mode="Markdown")
-
-            # Now send the Day 1 briefing to all players AFTER bridge+mission,
-            # so the order is correct: bridge+mission first, then briefing.
-            # This prevents the polling loop from sending briefing before bridge.
+            # ── Send individual briefings to all players ────────────────────
             day_num = start_result.get("day", 1)
-            try:
-                players_result = await api_request(
-                    "GET", "/players", params={"game_id": game_id}
+            briefing_sent_ids = await _send_game_briefings(
+                bot=message.bot,
+                game_id=game_id,
+                day_num=day_num,
+            )
+
+            # Clear any pending updates that polling may have queued during
+            # the long /admin/start-game call — we just sent everything manually.
+            for pid in briefing_sent_ids:
+                try:
+                    ps = get_player_state(pid)
+                    old_pending = len(ps.get("pending_updates", []))
+                    if old_pending:
+                        ps["pending_updates"] = []
+                        update_player_state(pid, pending_updates=[])
+                        logger.info(
+                            f"Cleared {old_pending} pending updates for player {pid} after restart briefing send"
+                        )
+                except Exception:
+                    pass
+
+            # Re-enable polling for all suppressed players — explicit delivery is done
+            unsuppressed = list(_restart_suppressed_players)
+            _restart_suppressed_players.clear()
+            if unsuppressed:
+                logger.info(
+                    f"[RACE_FIX] Re-enabled polling for {len(unsuppressed)} player(s) after restart "
+                    f"({unsuppressed})"
                 )
-                briefing_sent_ids: list[int] = []
-                if players_result and message.bot is not None:
-                    all_player_ids = [
-                        p["player_id"] for p in players_result if isinstance(p, dict)
-                    ]
-                    current_day_msgs = lang.get_current_day(BOT_LANGUAGE)
-
-                    for pid in all_player_ids:
-                        try:
-                            # Fetch this player's briefing
-                            briefing_result = await api_request(
-                                "GET",
-                                f"/game/briefing/{pid}/{day_num}",
-                                ignore_codes=(404,),
-                            )
-                            if not briefing_result:
-                                continue
-
-                            choices = briefing_result.get("choices", [])
-                            briefing_text = briefing_result.get("briefing", "")
-
-                            if not choices or not briefing_text:
-                                continue
-
-                            # Fetch NPC dialogues for crew behavior context
-                            crew_dialogues = []
-                            try:
-                                day_data = await api_request(
-                                    "GET",
-                                    f"/game/day/{day_num}",
-                                    params={"game_id": game_id},
-                                    ignore_codes=(404,),
-                                )
-                                if day_data:
-                                    crew_dialogues = day_data.get("crew_dialogues", [])
-                            except Exception:
-                                pass
-
-                            # Build crew behavior text
-                            crew_behavior_text = ""
-                            if crew_dialogues:
-                                dialogue_lines = []
-                                for d in crew_dialogues:
-                                    line = f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
-                                    dialogue_lines.append(line)
-                                crew_separator = "\n---\n"
-                                crew_behavior_text = (
-                                    f"\n\n*Поведение экипажа:*\n"
-                                    f"{crew_separator.join(dialogue_lines)}"
-                                )
-
-                            actions_text = "\n\n".join(
-                                [
-                                    f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
-                                    for i, a in enumerate(choices)
-                                ]
-                            )
-
-                            text = (
-                                current_day_msgs["title"].format(day=day_num)
-                                + "\n\n"
-                                + current_day_msgs["briefing_header"].format(
-                                    briefing=briefing_text
-                                )
-                                + crew_behavior_text
-                                + "\n\n"
-                                + current_day_msgs["actions"].format(
-                                    actions=actions_text
-                                )
-                                + "\n\n"
-                                + current_day_msgs["select_action"]
-                            )
-
-                            await message.bot.send_message(
-                                chat_id=pid,
-                                text=text,
-                                parse_mode="Markdown",
-                                reply_markup=create_action_keyboard(choices),
-                            )
-                            logger.info(
-                                f"Sent Day {day_num} briefing to player {pid} after restart"
-                            )
-
-                            # Mark this day as sent so polling loop doesn't re-send
-                            _mark_briefing_sent(pid, day_num)
-                            briefing_sent_ids.append(pid)
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to send briefing to player {pid}: {e}"
-                            )
-
-                # Clear any pending updates that polling may have queued during
-                # the long /admin/start-game call — we just sent everything manually.
-                for pid in briefing_sent_ids:
-                    try:
-                        ps = get_player_state(pid)
-                        old_pending = len(ps.get("pending_updates", []))
-                        if old_pending:
-                            ps["pending_updates"] = []
-                            update_player_state(pid, pending_updates=[])
-                            logger.info(
-                                f"Cleared {old_pending} pending updates for player {pid} after restart briefing send"
-                            )
-                    except Exception:
-                        pass
-
-                # Re-enable polling for all suppressed players — explicit delivery is done
-                unsuppressed = list(_restart_suppressed_players)
-                _restart_suppressed_players.clear()
-                if unsuppressed:
-                    logger.info(
-                        f"[RACE_FIX] Re-enabled polling for {len(unsuppressed)} player(s) after restart "
-                        f"({unsuppressed})"
-                    )
-
-            except Exception as e:
-                logger.warning(f"Failed to send briefing after restart: {e}")
         else:
             # Game was reset but start failed
             _restart_suppressed_players.clear()

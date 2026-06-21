@@ -663,6 +663,10 @@ BRIDGE_IMAGE_SCHEMA = {
                     "type": "string",
                     "description": "A detailed English image prompt for the starship bridge scene with the full crew at their stations",
                 },
+                "brief_description": {
+                    "type": "string",
+                    "description": "A very short (max 200 chars) Russian text description of the current mission situation, for use as a Telegram photo caption",
+                },
                 "crew_descriptions": {
                     "type": "array",
                     "items": {
@@ -680,7 +684,7 @@ BRIDGE_IMAGE_SCHEMA = {
                     "description": "Descriptions of where each crew member is positioned on the bridge",
                 },
             },
-            "required": ["bridge_prompt", "crew_descriptions"],
+            "required": ["bridge_prompt", "crew_descriptions", "brief_description"],
             "additionalProperties": False,
         },
     },
@@ -2603,6 +2607,7 @@ spatial presence\n"
                     "holographic displays glowing, viewport showing starfield and nebula, "
                     "cinematic lighting, dramatic composition, 4K quality, space opera aesthetic."
                 ),
+                "brief_description": "Мостик корабля в готовности к выполнению миссии.",
                 "crew_descriptions": [
                     {
                         "role": p.get("role", "?"),

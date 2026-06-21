@@ -2138,11 +2138,13 @@ async def admin_start_game(request: StartGameRequest):
         mission_result = {}
 
     # 6c. Generate bridge image
+    bridge_result = None
     try:
         bridge_result = gm.generate_bridge_image_prompt(
             mission_data or {}, all_participants
         )
         bridge_prompt = bridge_result.get("bridge_prompt", "")
+        brief_desc = bridge_result.get("brief_description", "")
         if bridge_prompt:
             image_gen = create_image_generator()
             bridge_url = await image_gen.generate_scene_image(
@@ -2154,7 +2156,7 @@ async def admin_start_game(request: StartGameRequest):
                     type="bridge",
                     image_url=bridge_url,
                     game_id=game_id,
-                    prompt=bridge_prompt,
+                    prompt=f"{bridge_prompt}\n---brief_desc---\n{brief_desc}",
                 )
                 logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
     except Exception as e:
@@ -2427,9 +2429,12 @@ async def admin_start_game(request: StartGameRequest):
     # Build mission info
     mission_info = {}
     if mission_data:
+        # Extract brief_description from bridge generation result
+        brief_desc = bridge_result.get("brief_description", "") if bridge_result else ""
         mission_info = {
             "name": mission_data.get("name", ""),
             "description": mission_data.get("description", ""),
+            "brief_description": brief_desc,
             "stages": len(mission_data.get("objectives", [])),
         }
 
@@ -2457,12 +2462,21 @@ async def get_mission_endpoint(game_id: str = "default_game"):
 
 
 @app.get("/game/bridge-image")
-async def get_bridge_image_endpoint(game_id: str = "default_game"):
-    """Get the bridge image for a game."""
-    url = get_random_game_image(type="bridge", game_id=game_id)
+async def get_bridge_image_endpoint(
+    game_id: str = "default_game",
+    day: int | None = Query(None),
+):
+    """Get the bridge image for a game.
+
+    Args:
+        game_id: Game identifier
+        day: If set, returns the scene image for that day instead of bridge image.
+    """
+    img_type = "scene" if day is not None else "bridge"
+    url = get_random_game_image(type=img_type, game_id=game_id, day=day)
     if not url:
-        raise HTTPException(status_code=404, detail="No bridge image found")
-    return {"image_url": url, "game_id": game_id}
+        raise HTTPException(status_code=404, detail=f"No {img_type} image found")
+    return {"image_url": url, "game_id": game_id, "type": img_type}
 
 
 @app.post("/player/{player_id}/die")
