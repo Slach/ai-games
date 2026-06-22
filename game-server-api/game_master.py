@@ -1896,14 +1896,13 @@ spatial presence\n"
         accumulated_tags: dict[str, int],
         tag_type: str = "species_tags",
     ) -> dict[str, str]:
-        """Generate short creative image prompts for each option in a species/gender question.
+        """Generate one image per answer option for a species/gender question.
 
-        Each prompt shows the cumulative visual effect of ALL accumulated tags
-        PLUS the tag of this specific option — what the character would look
-        like if the player chose this option.
+        Each option image shows cumulative visual effect of all previous
+        species/gender choices + this option's specific trait.
 
         Args:
-            question: Question dict with text and options
+            question: The next question to generate option images for
             accumulated_tags: Dict of species/gender tag -> count accumulated so far
             tag_type: 'species_tags' or 'gender_tags'
 
@@ -1930,74 +1929,79 @@ spatial presence\n"
                 f"  - value='{opt_value}' label='{opt_label}' tags: {tag_str}\n"
             )
 
-        if self.language == "ru":
-            system = (
-                "You are a creative sci-fi portrait prompt writer. "
-                "Write SHORT image prompts in English for Stable Diffusion. "
-                "Each prompt shows a Star Trek character whose appearance reflects "
-                "the accumulated species/gender traits. "
-                "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K."
-            )
-            user = (
-                f"Question: {question_text}\n"
-                f"Accumulated traits so far: {accumulated_desc or 'none yet'}\n"
-                f"Options (each with its own trait tags):\n{options_text}\n\n"
-                "For EACH option, write a short English image prompt showing a "
-                "character with the accumulated traits AND the option's specific trait. "
-                "Each prompt MAX 30 words. "
-                'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
-            )
-        else:
-            system = (
-                "You are a creative sci-fi portrait prompt writer. "
-                "Write SHORT image prompts in English for Stable Diffusion. "
-                "Each prompt shows a Star Trek character whose appearance reflects "
-                "the accumulated species/gender traits. "
-                "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K."
-            )
-            user = (
-                f"Question: {question_text}\n"
-                f"Accumulated traits so far: {accumulated_desc or 'none yet'}\n"
-                f"Options (each with its own trait tags):\n{options_text}\n\n"
-                "For EACH option, write a short English image prompt showing a "
-                "character with the accumulated traits AND the option's specific trait. "
-                "Each prompt MAX 30 words. "
-                'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
-            )
+        system_prompt = (
+            "You are a creative sci-fi portrait prompt writer. "
+            "Write SHORT image prompts in English for Stable Diffusion. "
+            "Each prompt shows a Star Trek character whose appearance reflects "
+            "the accumulated species/gender traits. "
+            "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K quality."
+        )
 
-        try:
-            result = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
-                temperature=0.8,
-                max_tokens=1024,
-            )
-            prompts_list = result.get("prompts", [])
-            prompts_dict = {}
-            for entry in prompts_list:
-                opt_value = entry.get("option_value", "").strip("[]")
-                prompt_text = entry.get("prompt", "")
-                if opt_value and prompt_text:
-                    prompts_dict[opt_value] = prompt_text
-            logger.info(
-                f"[OPTION_PROMPTS] Generated {len(prompts_dict)} option prompts"
-            )
-            return prompts_dict
-        except Exception as e:
-            logger.warning(f"[OPTION_PROMPTS] LLM failed, using fallback: {e}")
-            # Fallback: simple generic prompts
-            fallback = {}
-            for opt in options:
-                opt_value = opt.get("value", "")
-                opt_label = opt.get("label", "")
-                tags = opt.get(tag_type, [])
-                tag_str = ", ".join(tags) if tags else "character"
-                fallback[opt_value] = (
-                    f"Star Trek character portrait, {tag_str} traits, "
-                    f"cinematic lighting, uniform, 4K quality, portrait, upper body."
+        def _get_prompts_from_llm(prompt: str) -> dict[str, str]:
+            try:
+                result = self._call_llm(
+                    system_prompt=system_prompt,
+                    user_prompt=prompt,
+                    response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=1024,
                 )
-            return fallback
+                prompts_dict = {}
+                if result and "prompts" in result:
+                    for entry in result["prompts"]:
+                        opt_val = entry.get("option_value", "").strip("[]")
+                        prompt_text = entry.get("prompt", "")
+                        if opt_val and prompt_text:
+                            prompts_dict[opt_val] = prompt_text
+                return prompts_dict
+            except Exception as e:
+                logger.warning(f"[OPTION_PROMPTS] LLM call failed: {e}")
+                return {}
+
+        # 1. Initial attempt
+        user_prompt = (
+            f"Question: {question_text}\n"
+            f"Accumulated traits so far: {accumulated_desc or 'none yet'}\n"
+            f"Options (each with its own trait tags):\n{options_text}\n\n"
+            f"IMPORTANT: You must generate exactly {len(options)} prompts, one for each option listed above.\n"
+            "For EACH option, write a short English image prompt showing a "
+            "character with the accumulated traits AND the option's specific trait. "
+            "Each prompt MAX 30 words. "
+            'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
+        )
+        prompts_dict = _get_prompts_from_llm(user_prompt)
+
+        # 2. Retry for missing options
+        missing_options = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
+
+        if missing_options:
+            logger.info(f"[OPTION_PROMPTS] Missing {len(missing_options)} prompts. Retrying for: {missing_options}")
+            retry_user_prompt = (
+                f"You previously missed some options. Please generate prompts ONLY for these "
+                f"specific option values: {missing_options}. "
+                f"You MUST return exactly {len(options)} objects in total in your JSON array "
+                f"(including the ones you already provided). "
+                f"Each prompt MUST be a short English image prompt (~20-30 words) "
+                f"reflecting the accumulated traits: {accumulated_desc or 'none yet'} "
+                f"and the option's specific trait. "
+                "Output as JSON array: [{\"option_value\": ..., \"prompt\": ...}]."
+            )
+            retry_prompts = _get_prompts_from_llm(retry_user_prompt)
+            prompts_dict.update(retry_prompts)
+
+        # 3. Final fallback for any remaining missing options
+        final_missing = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
+        if final_missing:
+            logger.warning(f"[OPTION_PROMPTS] Still missing {len(final_missing)} prompts after retry. Using fallback.")
+            for opt in options:
+                opt_val = opt.get("value")
+                if opt_val not in prompts_dict:
+                    tags = opt.get(tag_type, [])
+                    tag_str = ", ".join(tags) if tags else "character"
+                    prompts_dict[opt_val] = f"Star Trek character portrait, {tag_str} traits, cinematic lighting, uniform, 4K quality, portrait, upper_body."
+
+        logger.info(f"[OPTION_PROMPTS] Successfully resolved {len(prompts_dict)}/{len(options)} prompts")
+        return prompts_dict
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
