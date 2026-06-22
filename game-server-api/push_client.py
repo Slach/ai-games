@@ -35,6 +35,8 @@ async def push_briefings(
     mission: dict | None = None,
     crew_dialogues: list | None = None,
     is_first_turn: bool = False,
+    force_resend: bool = False,
+    global_narrative: str = "",
 ) -> bool:
     """Push briefings to telegram-bot with exponential backoff retry.
 
@@ -47,6 +49,10 @@ async def push_briefings(
         mission: Mission info dict with name, description
         crew_dialogues: List of NPC dialogue dicts with npc, dialogue
         is_first_turn: If True, bot also sends bridge image + mission info
+        force_resend: If True, skip dedup check on telegram-bot side
+            (used for regenerate-turn to re-deliver briefings)
+        global_narrative: Shared narrative for all players (setting, conflict).
+            Sent as a separate common-intro message before personal briefings.
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -57,6 +63,10 @@ async def push_briefings(
         "players": players_briefings,
         "is_first_turn": is_first_turn,
     }
+    if force_resend:
+        payload["force_resend"] = True
+    if global_narrative:
+        payload["global_narrative"] = global_narrative
     if bridge_url:
         payload["bridge_image_url"] = bridge_url
     if mission:
@@ -189,6 +199,8 @@ async def push_day_outcome(
     ship_status: str | None = None,
     mission_progress: dict | None = None,
     death_notices: list[dict] | None = None,
+    total_crew_count: int | None = None,
+    alive_crew_count: int | None = None,
 ) -> bool:
     """Push the combined day outcome to all alive players.
 
@@ -201,6 +213,8 @@ async def push_day_outcome(
         ship_status: Current ship status ("alive" / "destroyed")
         mission_progress: Dict with stage progress info
         death_notices: List of death notice dicts with player_id and role
+        total_crew_count: Total crew members (NPCs + players) at start of turn
+        alive_crew_count: Crew members still alive after this turn
     """
     payload: dict = {
         "game_id": game_id,
@@ -216,6 +230,10 @@ async def push_day_outcome(
         payload["mission_progress"] = mission_progress
     if death_notices:
         payload["death_notices"] = death_notices
+    if total_crew_count is not None:
+        payload["total_crew_count"] = total_crew_count
+    if alive_crew_count is not None:
+        payload["alive_crew_count"] = alive_crew_count
 
     label = f"outcome day={day} game={game_id}"
     return await _post_with_retry(TELEGRAM_BOT_OUTCOME_URL, payload, label)

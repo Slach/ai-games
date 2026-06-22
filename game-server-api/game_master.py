@@ -1771,9 +1771,7 @@ spatial presence\n"
         )
 
         prompt = parsed.get("chosen_action_prompt", "")
-        logger.info(
-            f"[ACTION_PROMPT] Generated for {role}: {prompt[:120]}..."
-        )
+        logger.info(f"[ACTION_PROMPT] Generated for {role}: {prompt[:120]}...")
         return prompt
 
     # ============== Species and Gender ==============
@@ -2082,10 +2080,14 @@ spatial presence\n"
         prompts_dict = _get_prompts_from_llm(user_prompt)
 
         # 2. Retry for missing options
-        missing_options = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
+        missing_options = [
+            opt.get("value") for opt in options if opt.get("value") not in prompts_dict
+        ]
 
         if missing_options:
-            logger.info(f"[OPTION_PROMPTS] Missing {len(missing_options)} prompts. Retrying for: {missing_options}")
+            logger.info(
+                f"[OPTION_PROMPTS] Missing {len(missing_options)} prompts. Retrying for: {missing_options}"
+            )
             retry_user_prompt = (
                 f"You previously missed some options. Please generate prompts ONLY for these "
                 f"specific option values: {missing_options}. "
@@ -2094,23 +2096,31 @@ spatial presence\n"
                 f"Each prompt MUST be a short English image prompt (~20-30 words) "
                 f"reflecting the accumulated traits: {accumulated_desc or 'none yet'} "
                 f"and the option's specific trait. "
-                "Output as JSON array: [{\"option_value\": ..., \"prompt\": ...}]."
+                'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
             )
             retry_prompts = _get_prompts_from_llm(retry_user_prompt)
             prompts_dict.update(retry_prompts)
 
         # 3. Final fallback for any remaining missing options
-        final_missing = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
+        final_missing = [
+            opt.get("value") for opt in options if opt.get("value") not in prompts_dict
+        ]
         if final_missing:
-            logger.warning(f"[OPTION_PROMPTS] Still missing {len(final_missing)} prompts after retry. Using fallback.")
+            logger.warning(
+                f"[OPTION_PROMPTS] Still missing {len(final_missing)} prompts after retry. Using fallback."
+            )
             for opt in options:
                 opt_val = opt.get("value")
                 if opt_val not in prompts_dict:
                     tags = opt.get(tag_type, [])
                     tag_str = ", ".join(tags) if tags else "character"
-                    prompts_dict[opt_val] = f"Star Trek character portrait, {tag_str} traits, cinematic lighting, uniform, 4K quality, portrait, upper_body."
+                    prompts_dict[opt_val] = (
+                        f"Star Trek character portrait, {tag_str} traits, cinematic lighting, uniform, 4K quality, portrait, upper_body."
+                    )
 
-        logger.info(f"[OPTION_PROMPTS] Successfully resolved {len(prompts_dict)}/{len(options)} prompts")
+        logger.info(
+            f"[OPTION_PROMPTS] Successfully resolved {len(prompts_dict)}/{len(options)} prompts"
+        )
         return prompts_dict
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============

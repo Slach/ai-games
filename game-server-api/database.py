@@ -28,12 +28,11 @@ def get_db_connection():
     return conn
 
 
-MIGRATIONS: list[tuple[int, str]] = [
-    (
-        1,
-        "ALTER TABLE player_briefings RENAME COLUMN comic_url TO chosen_action_url;",
-    ),
-]
+# Migrations applied to upgrade existing databases to the latest schema.
+# Each migration runs once, even on fresh databases — so never reference
+# columns that may not exist yet (e.g. renaming a column that was already
+# created with the new name in the up-to-date CREATE TABLE).
+MIGRATIONS: list[tuple[int, str]] = []
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
 
@@ -1456,7 +1455,9 @@ def update_briefing_choice(
     return updated
 
 
-def update_briefing_chosen_action_url(briefing_id: int, chosen_action_url: str | None) -> bool:
+def update_briefing_chosen_action_url(
+    briefing_id: int, chosen_action_url: str | None
+) -> bool:
     """Store a chosen action image URL in a player's briefing."""
     conn = get_db_connection()
     cursor = conn.cursor()

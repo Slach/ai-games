@@ -538,19 +538,28 @@ class ImageGenerator:
                     "ipadapter_file": "ip-adapter-flux.safetensors",
                 },
             },
-            # Apply IP-Adapter to the base model
+            # Apply IP-Adapter to the base model (IPAdapterAdvanced)
+            # NOTE: IPAdapterApply was renamed to IPAdapter/Advanced in newer
+            # ComfyUI_IPAdapter_plus versions. IPAdapterAdvanced supports explicit
+            # clip_vision input and has more options.
+            #
+            # Fields: model, ipadapter, image (required)
+            #         weight, weight_type, combine_embeds, start_at, end_at,
+            #         embeds_scaling (required)
+            #         clip_vision, image_negative, attn_mask (optional)
             "44": {
-                "class_type": "IPAdapterApply",
+                "class_type": "IPAdapterAdvanced",
                 "inputs": {
-                    "ipadapter": ["43", 0],
-                    "clip_vision": ["42", 0],
                     "model": ["28", 0],
+                    "ipadapter": ["43", 0],
                     "image": ["40", 0],
+                    "clip_vision": ["42", 0],
                     "weight": ipadapter_weight,
-                    "noise": 0.3,
                     "weight_type": "linear",
+                    "combine_embeds": "concat",
                     "start_at": 0.0,
                     "end_at": 1.0,
+                    "embeds_scaling": "V only",
                 },
             },
             # Load UNET model (Z-Image Turbo)
@@ -693,7 +702,9 @@ class ImageGenerator:
                         image_url = self._extract_image_url(outputs)
 
                     if image_url:
-                        logger.info(f"[ACTION_IMAGE] Generated with reference: {image_url}")
+                        logger.info(
+                            f"[ACTION_IMAGE] Generated with reference: {image_url}"
+                        )
                         return image_url
                     else:
                         logger.warning(
@@ -723,7 +734,9 @@ class ImageGenerator:
         )
 
         if image_url:
-            logger.info(f"[ACTION_IMAGE] Generated (fallback text-to-image): {image_url}")
+            logger.info(
+                f"[ACTION_IMAGE] Generated (fallback text-to-image): {image_url}"
+            )
             return image_url
 
         logger.warning("[ACTION_IMAGE] Generation failed completely, using placeholder")

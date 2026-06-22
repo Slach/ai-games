@@ -1786,7 +1786,9 @@ async def _generate_chosen_action_image(
         # Get the briefing to find the action text
         briefing = get_player_briefing(day, player_id, game_id=game_id)
         if not briefing:
-            logger.warning(f"[ACTION_IMAGE] Briefing not found for {player_id} day {day}")
+            logger.warning(
+                f"[ACTION_IMAGE] Briefing not found for {player_id} day {day}"
+            )
             return
 
         # Find chosen action text
@@ -1887,13 +1889,10 @@ async def _generate_chosen_action_image(
                     game_id=game_id,
                     action_text=action_text,
                 )
-                logger.info(
-                    f"[ACTION_IMAGE] Pushed to player {player_id} day {day}"
-                )
+                logger.info(f"[ACTION_IMAGE] Pushed to player {player_id} day {day}")
             except Exception as push_err:
                 logger.warning(
-                    f"[ACTION_IMAGE] Failed to push to player {player_id}: "
-                    f"{push_err}"
+                    f"[ACTION_IMAGE] Failed to push to player {player_id}: {push_err}"
                 )
         else:
             logger.warning(
@@ -1901,6 +1900,73 @@ async def _generate_chosen_action_image(
             )
     except Exception as e:
         logger.error(f"[ACTION_IMAGE] Failed to generate: {e}")
+
+
+def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
+    """Build a compact text summary from combined_outcome JSON for cross-day context.
+
+    The LLM receives this summary as 'previous events' when generating the next day.
+    Extracts key fields rather than passing raw JSON to save tokens and improve focus.
+    """
+    if not combined_outcome_str:
+        return ""
+    try:
+        oc = json.loads(combined_outcome_str)
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON — might be a plain text summary already
+        return str(combined_outcome_str)[:2000]
+
+    parts = []
+
+    # Narrative summary (first ~400 chars for compactness)
+    narrative = oc.get("outcome_narrative", "")
+    if narrative:
+        parts.append(narrative[:400])
+
+    # Ship status
+    ship_status = oc.get("ship_status_change", "")
+    if ship_status:
+        if language == "ru":
+            parts.append(f"Состояние корабля: {ship_status}")
+        else:
+            parts.append(f"Ship status: {ship_status}")
+
+    # Crew morale
+    morale = oc.get("crew_morale_change", "")
+    if morale:
+        if language == "ru":
+            parts.append(f"Мораль экипажа: {morale}")
+        else:
+            parts.append(f"Crew morale: {morale}")
+
+    # Deaths
+    dead = oc.get("dead_crew_members", [])
+    if dead:
+        dead_names = [
+            f"{d[0]} ({d[1]})" if isinstance(d, list) and len(d) >= 2 else str(d)
+            for d in dead
+        ]
+        if language == "ru":
+            parts.append(f"Погибшие: {', '.join(dead_names)}")
+        else:
+            parts.append(f"Deceased: {', '.join(dead_names)}")
+
+    # Ship destroyed
+    if oc.get("ship_destroyed"):
+        if language == "ru":
+            parts.append("КОРАБЛЬ УНИЧТОЖЕН")
+        else:
+            parts.append("SHIP DESTROYED")
+
+    # Next day hook
+    hook = oc.get("next_day_hook", "")
+    if hook:
+        if language == "ru":
+            parts.append(f"Зацепка для следующего хода: {hook}")
+        else:
+            parts.append(f"Next day hook: {hook}")
+
+    return " | ".join(parts) if parts else narrative[:500]
 
 
 async def _analyze_day_outcome(
@@ -1997,9 +2063,10 @@ async def _analyze_day_outcome(
         if day > 1:
             prev_day = get_game_day(day - 1, game_id)
             if prev_day:
-                previous_summary = prev_day.get("combined_outcome") or prev_day.get(
+                raw_outcome = prev_day.get("combined_outcome") or prev_day.get(
                     "story", ""
                 )
+                previous_summary = _build_day_summary(raw_outcome, language=language)
 
         # Get mission context for progress tracking
         mission = get_mission(None, game_id)
@@ -2026,10 +2093,45 @@ async def _analyze_day_outcome(
 
             for stage_str, points in mission_progress.items():
                 stage_key = str(stage_str)
-                stage_progress[stage_key] = stage_progress.get(stage_key, 0) + int(
-                    points
+                try:
+                    points_int = int(points)
+                except (ValueError, TypeError):
+                    logger.warning(f"[MISSION] Skipping non-integer points: {points}")
+                    continue
+                stage_progress[stage_key] = (
+                    stage_progress.get(stage_key, 0) + points_int
                 )
-                stage_num = int(stage_key)
+
+                # Try to extract a stage number from the key.
+                # LLM may return keys like "Stage 1", "Stage_2", "investigation_stage", etc.
+                stage_num = None
+                try:
+                    stage_num = int(stage_key)
+                except (ValueError, TypeError):
+                    # Extract digits from the key (e.g., "Stage 1" -> 1)
+                    digits = "".join(c for c in stage_key if c.isdigit())
+                    if digits:
+                        stage_num = int(digits)
+                    else:
+                        # Map well-known stage name prefixes to numbers
+                        stage_name_map = {
+                            "investigation": 1,
+                            "survival": 2,
+                            "combat": 3,
+                            "negotiation": 4,
+                            "escape": 5,
+                            "repair": 6,
+                        }
+                        for prefix, num in stage_name_map.items():
+                            if stage_key.startswith(prefix):
+                                stage_num = num
+                                break
+
+                if stage_num is None:
+                    logger.info(
+                        f"[MISSION] Skipping unparseable stage key: {stage_key}"
+                    )
+                    continue
 
                 # Check if current stage is now completed
                 if stage_num == current_stage:
@@ -2089,7 +2191,8 @@ async def _analyze_day_outcome(
         # ── Push outcome to all alive players ──────────────────────
         # Build outcome text from the LLM result
         outcome_text = (
-            outcome.get("narrative", "")
+            outcome.get("outcome_narrative", "")
+            or outcome.get("narrative", "")
             or outcome.get("summary", "")
             or outcome.get("outcome", "")
         )
@@ -2106,26 +2209,78 @@ async def _analyze_day_outcome(
                     {"name": str(death_entry[0]), "role": str(death_entry[1])}
                 )
 
+        # ── Generate outcome scene image ──────────────────────────
+        outcome_image_url = None
+        try:
+            outcome_narrative = outcome.get("outcome_narrative", "")
+            ship_status_str = outcome.get("ship_status_change", "")
+            crew_morale_str = outcome.get("crew_morale_change", "")
+            # Build a prompt from the outcome narrative
+            outcome_prompt = (
+                f"Sci-fi cinematic scene illustrating the aftermath of events. "
+                f"{outcome_narrative[:600]} "
+                f"Ship status: {ship_status_str[:200]}. "
+                f"Crew morale: {crew_morale_str[:200]}. "
+                f"Dramatic lighting, starship interior or exterior, "
+                f"Star Trek aesthetic, 4K quality, cinematic composition."
+            )
+            image_gen = create_image_generator()
+            outcome_image_url = await image_gen.generate_scene_image(
+                prompt=outcome_prompt,
+                filename_prefix=f"outcome_day{day}_{game_id}",
+            )
+            if outcome_image_url:
+                save_game_image(
+                    type="outcome",
+                    image_url=outcome_image_url,
+                    game_id=game_id,
+                    day=day,
+                    prompt=outcome_prompt,
+                )
+                logger.info(
+                    f"[OUTCOME] Outcome image generated for day {day}: {outcome_image_url}"
+                )
+            else:
+                logger.warning(
+                    f"[OUTCOME] Outcome image generation returned None for day {day}"
+                )
+        except Exception as img_err:
+            logger.warning(
+                f"[OUTCOME] Failed to generate outcome image for day {day}: {img_err}"
+            )
+
         # Get alive players
         try:
             alive_players = get_live_players(game_id)
         except Exception:
             alive_players = get_players_in_game(game_id)
 
-        # Fire-and-forget push to avoid blocking
-        asyncio.create_task(
-            push_day_outcome(
+        # Compute crew counts for outcome display
+        total_crew = len(all_briefings)  # all participants (players + NPCs)
+        dead_this_turn = len(dead_crew)
+        alive_crew = total_crew - dead_this_turn
+
+        # Push outcome synchronously so message order is deterministic
+        # (outcome arrives BEFORE new day briefings)
+        try:
+            await push_day_outcome(
                 game_id=game_id,
                 day=day,
                 outcome_text=outcome_text,
                 alive_players=alive_players,
+                outcome_image_url=outcome_image_url,
                 ship_status="destroyed" if ship_destroyed else "alive",
                 death_notices=death_notices,
+                total_crew_count=total_crew,
+                alive_crew_count=alive_crew,
             )
-        )
-        logger.info(
-            f"[OUTCOME] Pushed outcome for day {day} to {len(alive_players)} alive players"
-        )
+            logger.info(
+                f"[OUTCOME] Outcome delivered for day {day} to {len(alive_players)} players"
+            )
+        except Exception as push_err:
+            logger.error(
+                f"[OUTCOME] Failed to deliver outcome for day {day}: {push_err}"
+            )
 
     except Exception as e:
         logger.error(f"[OUTCOME] Analysis failed for Day {day}: {e}")
@@ -2622,7 +2777,9 @@ async def admin_start_game(request: StartGameRequest):
         prev_day = get_game_day(day_num - 1, game_id)
         if prev_day:
             if prev_day.get("combined_outcome"):
-                previous_summary = prev_day["combined_outcome"]
+                previous_summary = _build_day_summary(
+                    prev_day["combined_outcome"], language=language
+                )
             elif prev_day.get("story"):
                 previous_summary = prev_day["story"]
 
@@ -2900,6 +3057,7 @@ async def admin_start_game(request: StartGameRequest):
                     mission=mission_info,
                     crew_dialogues=crew_dialogues_list,
                     is_first_turn=True,
+                    global_narrative=global_narrative,
                 )
             )
     except Exception as push_err:
@@ -3146,6 +3304,7 @@ async def admin_analyze_day(
 async def admin_continue_game(
     game_id: str = "default_game",
     language: str = "ru",
+    force_resend: bool = False,
 ):
     """Generate the next turn (day) in the game.
 
@@ -3215,7 +3374,9 @@ async def admin_continue_game(
         prev_day = get_game_day(day_num - 1, game_id)
         if prev_day:
             if prev_day.get("combined_outcome"):
-                previous_summary = prev_day["combined_outcome"]
+                previous_summary = _build_day_summary(
+                    prev_day["combined_outcome"], language=language
+                )
             elif prev_day.get("story"):
                 previous_summary = prev_day["story"]
 
@@ -3405,8 +3566,21 @@ async def admin_continue_game(
     # Advance game state
     update_game_state(day_num + 1, "active", game_id=game_id)
 
+    # ── Push previous day outcome (if applicable) ──────────────
+    # Must run BEFORE pushing new day briefings so player sees:
+    #   Итоги хода N-1 → Вводная хода N → Ход N + действия
+    if day_num > 1:
+        await _analyze_day_outcome(
+            day=day_num - 1,
+            language=language,
+            game_id=game_id,
+        )
+
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
+        # Build the global intro narrative from global circumstances
+        global_narrative = global_circ.get("narrative", "")
+
         player_briefings = _build_player_briefings_for_push(
             all_briefings, crew_dialogues_list, day_num, game_id=game_id
         )
@@ -3418,6 +3592,8 @@ async def admin_continue_game(
                     players_briefings=player_briefings,
                     crew_dialogues=crew_dialogues_list,
                     is_first_turn=False,
+                    force_resend=force_resend,
+                    global_narrative=global_narrative,
                 )
             )
     except Exception as push_err:
@@ -3471,7 +3647,9 @@ async def admin_regenerate_turn(
     update_game_state(regenerate_day, "active", game_id=game_id)
 
     # Now regenerate the day using the continue-game logic
-    return await admin_continue_game(game_id=game_id, language=language)
+    return await admin_continue_game(
+        game_id=game_id, language=language, force_resend=True
+    )
 
 
 @app.post("/admin/restart-game")

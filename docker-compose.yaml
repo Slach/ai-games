@@ -111,6 +111,20 @@ services:
     networks:
       - spark-network
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - |-
+          exec 3<>/dev/tcp/127.0.0.1/9090
+          printf 'GET /health HTTP/1.0\r\n\r\n' >&3
+          IFS= read -r line <&3
+          [[ $line = *200* ]]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     volumes:
       - ./telegram-bot/:/app/
 

@@ -94,6 +94,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     mission = payload.get("mission")
     crew_dialogues = payload.get("crew_dialogues", [])
     is_first_turn = payload.get("is_first_turn", False)
+    force_resend = payload.get("force_resend", False)
+    global_narrative = payload.get("global_narrative", "")
 
     if not day or not players:
         return web.json_response(
@@ -108,8 +110,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
         if not player_id:
             continue
 
-        # Dedup: skip if already sent for this day
-        if last_sent.get(player_id) == day:
+        # Dedup: skip if already sent for this day (unless force_resend)
+        if not force_resend and last_sent.get(player_id) == day:
             already_sent = True
             continue
 
@@ -152,7 +154,39 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                             parse_mode="Markdown",
                         )
 
-            # 2. Send action image
+            # 2. Send scene image (common for all players) before global narrative
+            scene_url = player_data.get("scene_url")
+            if scene_url:
+                img_data = await _download_image(scene_url)
+                if img_data:
+                    photo = BufferedInputFile(img_data, filename="scene.png")
+                    current_msgs = get_current_day(language)
+                    intro_title = current_msgs.get(
+                        "global_intro_title", "Turn {day}"
+                    ).format(day=day)
+                    caption = f"*{intro_title}*"
+                    if global_narrative:
+                        caption += f"\n\n{global_narrative[:900]}"
+                    await bot.send_photo(
+                        chat_id=player_id,
+                        photo=photo,
+                        caption=caption,
+                        parse_mode="Markdown",
+                    )
+
+            # 3. Send global narrative as separate text (if too long for caption)
+            if global_narrative and len(global_narrative) > 900:
+                current_msgs = get_current_day(language)
+                intro_title = current_msgs.get(
+                    "global_intro_title", "Turn {day}"
+                ).format(day=day)
+                await bot.send_message(
+                    chat_id=player_id,
+                    text=f"*{intro_title}*\n\n{global_narrative}",
+                    parse_mode="Markdown",
+                )
+
+            # 4. Send action image
             chosen_action_url = player_data.get("chosen_action_url")
             if chosen_action_url:
                 img_data = await _download_image(chosen_action_url)
@@ -160,14 +194,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     photo = BufferedInputFile(img_data, filename="action.png")
                     await bot.send_photo(chat_id=player_id, photo=photo)
 
-            scene_url = player_data.get("scene_url")
-            if scene_url and scene_url != chosen_action_url:
-                img_data = await _download_image(scene_url)
-                if img_data:
-                    photo = BufferedInputFile(img_data, filename="scene.png")
-                    await bot.send_photo(chat_id=player_id, photo=photo)
-
-            # 3. Send briefing text + action choices
+            # 5. Send briefing text + action choices
             briefing = player_data.get("briefing", "")
             choices = player_data.get("choices", [])
             if briefing and choices:
@@ -223,12 +250,17 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
 
     if not player_id or not day or not chosen_action_url:
         return web.json_response(
-            {"status": "error", "message": "Missing player_id, day or chosen_action_url"},
+            {
+                "status": "error",
+                "message": "Missing player_id, day or chosen_action_url",
+            },
             status=400,
         )
 
     try:
-        logger.info(f"[PUSH_ACTION] Sending action image to player {player_id} for day {day}")
+        logger.info(
+            f"[PUSH_ACTION] Sending action image to player {player_id} for day {day}"
+        )
 
         # Download and send the action image
         img_data = await _download_image(chosen_action_url)
@@ -280,6 +312,8 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     outcome_image_url = payload.get("outcome_image_url")
     ship_status = payload.get("ship_status")
     death_notices = payload.get("death_notices")
+    total_crew_count = payload.get("total_crew_count")
+    alive_crew_count = payload.get("alive_crew_count")
 
     if not day or not alive_players:
         return web.json_response(
@@ -309,6 +343,19 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             )
         parts.append("")
         parts.append(status_text)
+
+    # Crew count: "9 из 10 членов экипажа живы" or "10 / 10 crew alive"
+    if total_crew_count is not None and alive_crew_count is not None:
+        parts.append("")
+        if language == "ru":
+            parts.append(
+                f"\U0001f465 {alive_crew_count} из {total_crew_count} "
+                f"{'членов экипажа живы' if alive_crew_count > 1 else 'член экипажа жив'}"
+            )
+        else:
+            parts.append(
+                f"\U0001f465 {alive_crew_count} / {total_crew_count} crew alive"
+            )
 
     if death_notices:
         if language == "ru":
@@ -364,6 +411,11 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     )
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    """Handle GET /health for health checks."""
+    return web.json_response({"status": "ok"})
+
+
 async def start_push_server(
     bot: Bot,
     language: str = "ru",
@@ -410,6 +462,7 @@ async def start_push_server(
     app.router.add_post("/push/briefings", handle_push_briefings)
     app.router.add_post("/push/player-action", handle_push_player_chosen_action)
     app.router.add_post("/push/outcome", handle_push_outcome)
+    app.router.add_get("/health", handle_health)
 
     runner = web.AppRunner(app)
     await runner.setup()

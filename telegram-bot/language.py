@@ -94,6 +94,7 @@ CURRENT_DAY = {
         "briefing_header": "{briefing}",
         "error": "Не удалось получить информацию о текущем ходе: {error}",
         "outcome_title": "🎬 **Итоги хода {day}**",
+        "global_intro_title": "🌌 **Ход {day} — Общая вводная**",
     },
     LANGUAGE_EN: {
         "title": "🎯 **Turn {day}**",
@@ -104,6 +105,7 @@ CURRENT_DAY = {
         "briefing_header": "{briefing}",
         "error": "Could not get information about the current turn: {error}",
         "outcome_title": "🎬 **Turn {day} Outcome**",
+        "global_intro_title": "🌌 **Turn {day} — Common Briefing**",
     },
 }
 
