@@ -112,12 +112,12 @@ ACTIONS = {
     LANGUAGE_RU: {
         "recorded": "Ваш выбор записан!\n\nGame Master обработает ваше решение и обновит сюжет.\n\nВы можете продолжить общение с Game Master или подождать следующего дня.",
         "error": "Произошла ошибка при записи выбора: {error}",
-        "comic_caption": "🎬 Ваше действие в эпизоде сегодняшнего дня",
+        "action_caption": "🎬 Ваше действие в эпизоде сегодняшнего дня",
     },
     LANGUAGE_EN: {
         "recorded": "Your choice has been recorded!\n\nThe Game Master will process your decision and update the plot.\n\nYou can continue communicating with the Game Master or wait for the next day.",
         "error": "An error occurred while recording the choice: {error}",
-        "comic_caption": "🎬 Your action in today's episode",
+        "action_caption": "🎬 Your action in today's episode",
     },
 }
 

@@ -152,16 +152,16 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                             parse_mode="Markdown",
                         )
 
-            # 2. Send comic / scene image
-            comic_url = player_data.get("comic_url")
-            if comic_url:
-                img_data = await _download_image(comic_url)
+            # 2. Send action image
+            chosen_action_url = player_data.get("chosen_action_url")
+            if chosen_action_url:
+                img_data = await _download_image(chosen_action_url)
                 if img_data:
-                    photo = BufferedInputFile(img_data, filename="comic.png")
+                    photo = BufferedInputFile(img_data, filename="action.png")
                     await bot.send_photo(chat_id=player_id, photo=photo)
 
             scene_url = player_data.get("scene_url")
-            if scene_url and scene_url != comic_url:
+            if scene_url and scene_url != chosen_action_url:
                 img_data = await _download_image(scene_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="scene.png")
@@ -200,12 +200,12 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     )
 
 
-async def handle_push_player_comic(request: web.Request) -> web.Response:
-    """Handle POST /push/player-comic from game-server-api.
+async def handle_push_player_chosen_action(request: web.Request) -> web.Response:
+    """Handle POST /push/player-action from game-server-api.
 
-    Delivers a single comic image to the player who performed the action.
-    This is called after fire-and-forget comic generation completes.
-    Payload: {"player_id": int, "day": int, "comic_url": str, "game_id": str}
+    Delivers a chosen action image to the player who performed the action.
+    This is called after fire-and-forget action image generation completes.
+    Payload: {"player_id": int, "day": int, "chosen_action_url": str, "game_id": str}
     """
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
@@ -219,49 +219,49 @@ async def handle_push_player_comic(request: web.Request) -> web.Response:
 
     player_id = payload.get("player_id")
     day = payload.get("day")
-    comic_url = payload.get("comic_url")
+    chosen_action_url = payload.get("chosen_action_url")
 
-    if not player_id or not day or not comic_url:
+    if not player_id or not day or not chosen_action_url:
         return web.json_response(
-            {"status": "error", "message": "Missing player_id, day or comic_url"},
+            {"status": "error", "message": "Missing player_id, day or chosen_action_url"},
             status=400,
         )
 
     try:
-        logger.info(f"[PUSH_COMIC] Sending comic to player {player_id} for day {day}")
+        logger.info(f"[PUSH_ACTION] Sending action image to player {player_id} for day {day}")
 
-        # Download and send the comic image
-        img_data = await _download_image(comic_url)
+        # Download and send the action image
+        img_data = await _download_image(chosen_action_url)
         if img_data:
-            photo = BufferedInputFile(img_data, filename="action_comic.png")
+            photo = BufferedInputFile(img_data, filename="action_image.png")
             msgs = get_actions(language)
             action_text = payload.get("action_text", "")
             if action_text:
                 caption = action_text
             else:
-                caption = msgs.get("comic_caption", "")
+                caption = msgs.get("action_caption", "")
             await bot.send_photo(
                 chat_id=player_id,
                 photo=photo,
                 caption=caption,
             )
-            logger.info(f"[PUSH_COMIC] Comic delivered to player {player_id}")
+            logger.info(f"[PUSH_ACTION] Action image delivered to player {player_id}")
         else:
             logger.warning(
-                f"[PUSH_COMIC] Failed to download comic for player {player_id}"
+                f"[PUSH_ACTION] Failed to download image for player {player_id}"
             )
 
         return web.json_response({"status": "ok"})
 
     except Exception as e:
-        logger.error(f"[PUSH_COMIC] Failed to send comic to player {player_id}: {e}")
+        logger.error(f"[PUSH_ACTION] Failed to send to player {player_id}: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
 async def handle_push_outcome(request: web.Request) -> web.Response:
     """Handle POST /push/outcome from game-server-api.
 
-    Delivers the combined day outcome (narrative + status + comic) to all alive players.
+    Delivers the combined day outcome (narrative + status + image) to all alive players.
     This is called after _analyze_day_outcome completes.
     """
     bot: Bot = request.app["bot"]
@@ -277,7 +277,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     day = payload.get("day")
     outcome_text = payload.get("outcome_text", "")
     alive_players = payload.get("alive_players", [])
-    comic_url = payload.get("comic_url")
+    outcome_image_url = payload.get("outcome_image_url")
     ship_status = payload.get("ship_status")
     death_notices = payload.get("death_notices")
 
@@ -330,11 +330,11 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
     for player_id in alive_players:
         try:
-            # Send comic first if available
-            if comic_url:
-                img_data = await _download_image(comic_url)
+            # Send outcome image first if available
+            if outcome_image_url:
+                img_data = await _download_image(outcome_image_url)
                 if img_data:
-                    photo = BufferedInputFile(img_data, filename="outcome_comic.png")
+                    photo = BufferedInputFile(img_data, filename="outcome_image.png")
                     await bot.send_photo(
                         chat_id=player_id,
                         photo=photo,
@@ -408,7 +408,7 @@ async def start_push_server(
     app["create_keyboard_fn"] = create_keyboard_fn
 
     app.router.add_post("/push/briefings", handle_push_briefings)
-    app.router.add_post("/push/player-comic", handle_push_player_comic)
+    app.router.add_post("/push/player-action", handle_push_player_chosen_action)
     app.router.add_post("/push/outcome", handle_push_outcome)
 
     runner = web.AppRunner(app)

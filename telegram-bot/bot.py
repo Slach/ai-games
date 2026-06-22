@@ -1479,30 +1479,30 @@ async def cmd_today(message: types.Message):
                     f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
                 )
 
-            # Send comic image first, if available
-            comic_url = briefing.get("comic_url")
-            if comic_url:
+            # Send action image first, if available
+            chosen_action_url = briefing.get("chosen_action_url")
+            if chosen_action_url:
                 try:
                     async with aiohttp.ClientSession() as session:
                         resp = await session.get(
-                            comic_url,
+                            chosen_action_url,
                             timeout=aiohttp.ClientTimeout(total=30),
                         )
                         if resp.status == 200:
                             photo_data = await resp.read()
-                            photo = BufferedInputFile(photo_data, filename="comic.png")
+                            photo = BufferedInputFile(photo_data, filename="action.png")
                             await message.answer_photo(
                                 photo=photo,
                             )
                             logger.info(
-                                f"[TODAY] Sent comic for player {player_id}, day {briefing['day']}"
+                                f"[TODAY] Sent action image for player {player_id}, day {briefing['day']}"
                             )
                         else:
                             logger.warning(
-                                f"[TODAY] Failed to download comic: {resp.status}"
+                                f"[TODAY] Failed to download action image: {resp.status}"
                             )
                 except Exception as e:
-                    logger.warning(f"[TODAY] Failed to send comic: {e}")
+                    logger.warning(f"[TODAY] Failed to send action image: {e}")
 
             await message.answer(
                 msgs["briefing_header"].format(briefing=briefing["briefing"])

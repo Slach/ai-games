@@ -28,7 +28,12 @@ def get_db_connection():
     return conn
 
 
-MIGRATIONS: list[tuple[int, str]] = []
+MIGRATIONS: list[tuple[int, str]] = [
+    (
+        1,
+        "ALTER TABLE player_briefings RENAME COLUMN comic_url TO chosen_action_url;",
+    ),
+]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
 
@@ -174,7 +179,7 @@ def init_db():
         selected_action_id TEXT DEFAULT NULL,
         choice_rationale TEXT DEFAULT '',
         consequence_result TEXT DEFAULT '{}',
-        comic_url TEXT DEFAULT NULL,
+        chosen_action_url TEXT DEFAULT NULL,
         game_id TEXT NOT NULL DEFAULT 'default_game',
         created_at TEXT NOT NULL
     );
@@ -1346,7 +1351,7 @@ def save_player_briefing(
     cursor.execute(
         """INSERT INTO player_briefings
            (day, player_id, npc_key, is_npc, briefing, choices,
-            selected_action_id, choice_rationale, consequence_result, comic_url, created_at, game_id)
+            selected_action_id, choice_rationale, consequence_result, chosen_action_url, created_at, game_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             briefing_data["day"],
@@ -1358,7 +1363,7 @@ def save_player_briefing(
             briefing_data.get("selected_action_id"),
             briefing_data.get("choice_rationale", ""),
             json.dumps(briefing_data.get("consequence_result", {}), ensure_ascii=False),
-            briefing_data.get("comic_url"),
+            briefing_data.get("chosen_action_url"),
             datetime.now().isoformat(),
             game_id,
         ),
@@ -1401,7 +1406,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
         "selected_action_id": row["selected_action_id"],
         "choice_rationale": row["choice_rationale"],
         "consequence_result": json.loads(row["consequence_result"] or "{}"),
-        "comic_url": row["comic_url"],
+        "chosen_action_url": row["chosen_action_url"],
         "created_at": row["created_at"],
         "game_id": row["game_id"],
     }
@@ -1451,13 +1456,13 @@ def update_briefing_choice(
     return updated
 
 
-def update_briefing_comic_url(briefing_id: int, comic_url: str | None) -> bool:
-    """Store a comic URL in a player's briefing."""
+def update_briefing_chosen_action_url(briefing_id: int, chosen_action_url: str | None) -> bool:
+    """Store a chosen action image URL in a player's briefing."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE player_briefings SET comic_url = ? WHERE id = ?",
-        (comic_url, briefing_id),
+        "UPDATE player_briefings SET chosen_action_url = ? WHERE id = ?",
+        (chosen_action_url, briefing_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()

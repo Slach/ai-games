@@ -14,9 +14,9 @@ TELEGRAM_BOT_PUSH_URL = os.getenv(
     "TELEGRAM_BOT_PUSH_URL",
     "http://telegram-bot:9090/push/briefings",
 )
-TELEGRAM_BOT_COMIC_URL = os.getenv(
-    "TELEGRAM_BOT_COMIC_URL",
-    "http://telegram-bot:9090/push/player-comic",
+TELEGRAM_BOT_ACTION_URL = os.getenv(
+    "TELEGRAM_BOT_ACTION_URL",
+    "http://telegram-bot:9090/push/player-action",
 )
 TELEGRAM_BOT_OUTCOME_URL = os.getenv(
     "TELEGRAM_BOT_OUTCOME_URL",
@@ -158,26 +158,26 @@ async def _post_with_retry(url: str, payload: dict, label: str) -> bool:
     return False
 
 
-async def push_player_comic(
+async def push_player_chosen_action(
     player_id: int,
     day: int,
-    comic_url: str,
+    chosen_action_url: str,
     game_id: str = "default_game",
     action_text: str = "",
 ) -> bool:
-    """Push a player's action comic to the telegram-bot after generation.
+    """Push a player's chosen action image to the telegram-bot.
 
-    Delivers the comic image directly to the player who performed the action.
+    Delivers the action image directly to the player who performed the action.
     """
     payload: dict = {
         "player_id": player_id,
         "day": day,
-        "comic_url": comic_url,
+        "chosen_action_url": chosen_action_url,
         "game_id": game_id,
         "action_text": action_text,
     }
-    label = f"comic player={player_id} day={day}"
-    return await _post_with_retry(TELEGRAM_BOT_COMIC_URL, payload, label)
+    label = f"action player={player_id} day={day}"
+    return await _post_with_retry(TELEGRAM_BOT_ACTION_URL, payload, label)
 
 
 async def push_day_outcome(
@@ -185,7 +185,7 @@ async def push_day_outcome(
     day: int,
     outcome_text: str,
     alive_players: list[int],
-    comic_url: str | None = None,
+    outcome_image_url: str | None = None,
     ship_status: str | None = None,
     mission_progress: dict | None = None,
     death_notices: list[dict] | None = None,
@@ -197,7 +197,7 @@ async def push_day_outcome(
         day: Day number
         outcome_text: Narrative description of the outcome
         alive_players: List of player IDs still alive
-        comic_url: Optional URL to an outcome scene comic
+        outcome_image_url: Optional URL to an outcome scene image
         ship_status: Current ship status ("alive" / "destroyed")
         mission_progress: Dict with stage progress info
         death_notices: List of death notice dicts with player_id and role
@@ -208,8 +208,8 @@ async def push_day_outcome(
         "outcome_text": outcome_text,
         "alive_players": alive_players,
     }
-    if comic_url:
-        payload["comic_url"] = comic_url
+    if outcome_image_url:
+        payload["outcome_image_url"] = outcome_image_url
     if ship_status:
         payload["ship_status"] = ship_status
     if mission_progress:

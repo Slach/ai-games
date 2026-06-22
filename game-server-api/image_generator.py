@@ -642,22 +642,22 @@ class ImageGenerator:
             },
         }
 
-    async def generate_comic_with_reference(
+    async def generate_action_image_with_reference(
         self,
         prompt: str,
         reference_image_url: str | None,
         character_description: str = "",
-        filename_prefix: str = "comic",
+        filename_prefix: str = "action",
         width: int = 1024,
         height: int = 1024,
     ) -> str:
-        """Generate a comic-style image using an avatar as visual reference.
+        """Generate an action scene image using avatar as visual reference.
 
         Tries IP-Adapter workflow first (if reference image is provided).
         Falls back to text-to-image with character description in prompt.
 
         Args:
-            prompt: Main action prompt for the comic scene
+            prompt: Main action prompt for the scene
             reference_image_url: URL of the avatar image to use as reference
             character_description: Text description of the character (fallback)
             filename_prefix: Output filename prefix
@@ -693,21 +693,21 @@ class ImageGenerator:
                         image_url = self._extract_image_url(outputs)
 
                     if image_url:
-                        logger.info(f"[COMIC] Generated with reference: {image_url}")
+                        logger.info(f"[ACTION_IMAGE] Generated with reference: {image_url}")
                         return image_url
                     else:
                         logger.warning(
-                            "[COMIC] IP-Adapter workflow produced no output, "
+                            "[ACTION_IMAGE] IP-Adapter workflow produced no output, "
                             "falling back to text-to-image"
                         )
                 else:
                     logger.warning(
-                        "[COMIC] Failed to upload reference image, "
+                        "[ACTION_IMAGE] Failed to upload reference image, "
                         "falling back to text-to-image"
                     )
             except Exception as e:
                 logger.warning(
-                    f"[COMIC] IP-Adapter workflow failed: {e}, "
+                    f"[ACTION_IMAGE] IP-Adapter workflow failed: {e}, "
                     f"falling back to text-to-image"
                 )
 
@@ -723,10 +723,10 @@ class ImageGenerator:
         )
 
         if image_url:
-            logger.info(f"[COMIC] Generated (fallback text-to-image): {image_url}")
+            logger.info(f"[ACTION_IMAGE] Generated (fallback text-to-image): {image_url}")
             return image_url
 
-        logger.warning("[COMIC] Generation failed completely, using placeholder")
+        logger.warning("[ACTION_IMAGE] Generation failed completely, using placeholder")
         return f"/content/comics/{filename_prefix}_placeholder.webp"
 
     # ============== Batch Image Generation ==============

@@ -72,7 +72,7 @@ from database import (
     start_game,
     take_role,
     update_briefing_choice,
-    update_briefing_comic_url,
+    update_briefing_chosen_action_url,
     update_game_day_global_circumstances,
     update_game_day_outcome,
     update_game_state,
@@ -99,7 +99,7 @@ from prompts import (
     OnboardingQuestion,
     build_interleaved_species_gender_questions,
 )
-from push_client import push_briefings, push_day_outcome, push_player_comic
+from push_client import push_briefings, push_day_outcome, push_player_chosen_action
 from pydantic import BaseModel, TypeAdapter
 
 # Configure logging
@@ -1504,7 +1504,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
                 updates["personal_briefing"] = {
                     "briefing": briefing["briefing"],
                     "choices": briefing["choices"],
-                    "comic_url": briefing.get("comic_url"),
+                    "chosen_action_url": briefing.get("chosen_action_url"),
                     "briefing_image_url": scene_url,
                     "crew_dialogues": crew_dialogues,
                 }
@@ -1595,7 +1595,7 @@ async def submit_player_action(request: PlayerActionRequest):
     # Fire-and-forget: generates a comic-style image showing the player's
     # character performing the chosen action, using their avatar as reference.
     asyncio.create_task(
-        _generate_action_comic(
+        _generate_chosen_action_image(
             player_id=request.player_id,
             game_id=game_id,
             day=request.day,
@@ -1685,7 +1685,7 @@ async def get_player_briefing_endpoint(player_id: int, day: int):
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
         "day": briefing["day"],
-        "comic_url": briefing.get("comic_url"),
+        "chosen_action_url": briefing.get("chosen_action_url"),
     }
 
 
@@ -1704,7 +1704,7 @@ async def get_current_briefing_endpoint(player_id: int):
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
         "day": briefing["day"],
-        "comic_url": briefing.get("comic_url"),
+        "chosen_action_url": briefing.get("chosen_action_url"),
     }
 
 
@@ -1765,27 +1765,28 @@ async def get_splash_image(game_id: str = "default_game"):
     return {"image_url": url, "available": get_game_image_count("splash", game_id)}
 
 
-async def _generate_action_comic(
+async def _generate_chosen_action_image(
     player_id: int,
     game_id: str,
     day: int,
     action_id: str,
 ):
-    """Generate a comic-style image showing the player's action.
+    """Generate an image showing the player's chosen action.
 
-    Uses the player's avatar as visual reference for character consistency.
+    Uses LLM to craft a prompt in the same style as avatar prompts,
+    with the player's avatar as visual reference for character consistency.
     Runs as fire-and-forget background task.
     """
     try:
         profile = get_player_profile(player_id)
         if not profile:
-            logger.warning(f"[COMIC] Player {player_id} not found, skipping")
+            logger.warning(f"[ACTION_IMAGE] Player {player_id} not found, skipping")
             return
 
         # Get the briefing to find the action text
         briefing = get_player_briefing(day, player_id, game_id=game_id)
         if not briefing:
-            logger.warning(f"[COMIC] Briefing not found for {player_id} day {day}")
+            logger.warning(f"[ACTION_IMAGE] Briefing not found for {player_id} day {day}")
             return
 
         # Find chosen action text
@@ -1817,60 +1818,89 @@ async def _generate_action_comic(
         species = profile.get("species", "")
         species_desc = profile.get("species_description", "")
         avatar_desc = profile.get("avatar_description", "")
+        traits = profile.get("personality_traits", [])
 
         # SHORT character visual reference (1 sentence max for image gen fallback)
         character_description = role
         if species and species not in ("Unknown", "Неизвестно"):
             character_description += f", {species}"
 
-        # Build action-focused comic prompt — ACTION FIRST, then visual context
-        prompt = (
-            f"{role} performing action: {action_text}. "
-            f"{character_description}. "
-            f"Setting: {setting[:200]}. "
-            f"Sci-fi comic book panel, dynamic action pose, dramatic lighting, "
-            f"detailed environment, heroic composition, space opera style, "
-            f"vibrant colors, 4K quality."
-        )
+        # Generate prompt via LLM (same style as avatar prompt),
+        # with fallback to string concatenation
+        prompt = ""
+        try:
+            gm = create_game_master_agent(language="en")
+            prompt = gm.generate_chosen_action_prompt(
+                role=role,
+                traits=traits,
+                avatar_description=avatar_desc,
+                action_text=action_text,
+                setting=setting,
+                species_desc=species_desc,
+                species_type=species,
+            )
+            logger.info(f"[ACTION_IMAGE] LLM prompt for {role}: {prompt[:120]}...")
+        except Exception as llm_err:
+            logger.warning(
+                f"[ACTION_IMAGE] LLM prompt failed for {role}: {llm_err}, "
+                f"using fallback prompt"
+            )
+
+        if not prompt:
+            # Fallback: build prompt via concatenation
+            prompt = (
+                f"{role} performing action: {action_text}. "
+                f"{character_description}. "
+                f"Setting: {setting[:200]}. "
+                f"Cinematic sci-fi scene, dynamic action in progress, "
+                f"dramatic lighting, detailed environment, "
+                f"space opera aesthetic, photorealistic quality, 4K."
+            )
 
         # Get player's avatar URL for reference
         avatar_url = profile.get("avatar_url") or None
 
         image_gen = create_image_generator()
-        comic_url = await image_gen.generate_comic_with_reference(
+        chosen_action_url = await image_gen.generate_action_image_with_reference(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
             filename_prefix=f"action_day{day}_{game_id}_p{player_id}",
         )
 
-        if comic_url:
-            # Save comic URL to the briefing
+        if chosen_action_url:
+            # Save chosen action URL to the briefing
             if briefing.get("id"):
-                update_briefing_comic_url(briefing["id"], comic_url)
+                update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
                 logger.info(
-                    f"[COMIC] Saved comic for player {player_id} day {day}: {comic_url}"
+                    f"[ACTION_IMAGE] Saved for player {player_id} "
+                    f"day {day}: {chosen_action_url}"
                 )
 
-            # Push the comic to the player via telegram-bot
-            # (fire-and-forget to avoid blocking the comic generation loop)
+            # Push the action image to the player via telegram-bot
+            # (fire-and-forget to avoid blocking the generation loop)
             try:
-                await push_player_comic(
+                await push_player_chosen_action(
                     player_id=player_id,
                     day=day,
-                    comic_url=comic_url,
+                    chosen_action_url=chosen_action_url,
                     game_id=game_id,
                     action_text=action_text,
                 )
-                logger.info(f"[COMIC] Pushed comic to player {player_id} day {day}")
+                logger.info(
+                    f"[ACTION_IMAGE] Pushed to player {player_id} day {day}"
+                )
             except Exception as push_err:
                 logger.warning(
-                    f"[COMIC] Failed to push comic to player {player_id}: {push_err}"
+                    f"[ACTION_IMAGE] Failed to push to player {player_id}: "
+                    f"{push_err}"
                 )
         else:
-            logger.warning(f"[COMIC] Generation returned None for player {player_id}")
+            logger.warning(
+                f"[ACTION_IMAGE] Generation returned None for player {player_id}"
+            )
     except Exception as e:
-        logger.error(f"[COMIC] Failed to generate action comic: {e}")
+        logger.error(f"[ACTION_IMAGE] Failed to generate: {e}")
 
 
 async def _analyze_day_outcome(
@@ -2166,7 +2196,7 @@ def _build_player_briefings_for_push(
                 "player_id": player_id,
                 "briefing": b.get("briefing", ""),
                 "choices": b.get("choices", []),
-                "comic_url": b.get("comic_url"),
+                "chosen_action_url": b.get("chosen_action_url"),
                 "scene_url": scene_url,
             }
         )
@@ -2244,12 +2274,12 @@ async def generate_daily_episode(
 
 
 @app.post("/admin/generate-comic/{player_id}")
-async def generate_personalized_comic(
+async def generate_chosen_action_image(
     player_id: int,
     day: int | None = None,
     game_id: str = "default_game",
 ):
-    """Generate a personalized comic for a player"""
+    """Generate a chosen action image for a player (admin endpoint)."""
     profile = get_player_profile(player_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found")
@@ -2263,27 +2293,45 @@ async def generate_personalized_comic(
     image_generator = create_image_generator()
     role = profile["role"]
     traits = profile["personality_traits"]
-    prompt = (
-        f"Sci-fi comic book panel: {role} in action during a space mission. "
-        f"Story: {day_data['story']}. "
-        f"Character traits: {', '.join(traits)}. "
-        f"Dynamic action pose, dramatic lighting, detailed environment. "
-        f"Space opera comic book style, vibrant colors, 4K quality."
-    )
-    comic_url = await image_generator.generate_scene_image(
+    # Generate prompt via LLM if game_master is available
+    prompt = ""
+    try:
+        gm = create_game_master_agent(language="en")
+        prompt = gm.generate_chosen_action_prompt(
+            role=role,
+            traits=traits,
+            avatar_description=profile.get("avatar_description", ""),
+            action_text=day_data["story"][:200],
+            setting=day_data["story"][:300],
+            species_desc=profile.get("species_description", ""),
+            species_type=profile.get("species", ""),
+        )
+    except Exception as e:
+        logger.warning(f"[ADMIN] LLM prompt failed: {e}")
+
+    if not prompt:
+        prompt = (
+            f"{role} performing a critical action during a space mission. "
+            f"Story: {day_data['story'][:200]}. "
+            f"Character traits: {', '.join(traits)}. "
+            f"Dynamic composition, dramatic lighting, detailed environment. "
+            f"Cinematic space opera aesthetic, photorealistic quality, 4K."
+        )
+
+    chosen_action_url = await image_generator.generate_scene_image(
         prompt=prompt,
-        filename_prefix=f"comic_day{game_day}_{game_id}_{role.replace(' ', '_')}",
+        filename_prefix=f"action_day{game_day}_{game_id}_{role.replace(' ', '_')}",
     )
 
-    # Store comic_url in player's briefing for this day (if briefing exists)
+    # Store chosen_action_url in player's briefing for this day (if briefing exists)
     briefing = get_player_briefing(game_day, player_id, game_id=game_id)
     if briefing:
-        update_briefing_comic_url(briefing["id"], comic_url)
+        update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
 
     return {
         "player_id": player_id,
         "day": game_day,
-        "comic_url": comic_url,
+        "chosen_action_url": chosen_action_url,
         "role": profile["role"],
     }
 

@@ -333,6 +333,30 @@ AVATAR_PROMPT_SCHEMA = {
     },
 }
 
+CHOSEN_ACTION_PROMPT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "chosen_action_prompt",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "chosen_action_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Detailed image generation prompt showing the character performing "
+                        "their chosen action. Must describe: character appearance (from avatar "
+                        "description), the specific action being performed, setting/environment, "
+                        "cinematic composition and lighting, sci-fi space opera aesthetic, 4K quality."
+                    ),
+                }
+            },
+            "required": ["chosen_action_prompt"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 ROLE_ASSIGNMENT_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -1665,6 +1689,92 @@ spatial presence\n"
             f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}..."
         )
         return avatar_prompt
+
+    def generate_chosen_action_prompt(
+        self,
+        role: str,
+        traits: list[str],
+        avatar_description: str,
+        action_text: str,
+        setting: str,
+        species_desc: str = "",
+        species_type: str = "",
+    ) -> str:
+        """Generate an image prompt for the chosen action scene using LLM.
+
+        Produces a prompt in the same cinematic style as avatar prompts,
+        showing the character performing the selected action.
+
+        Args:
+            role: Player's role on the ship
+            traits: Personality traits
+            avatar_description: Full avatar visual description
+            action_text: The action the player chose to perform
+            setting: Story setting / environment
+            species_desc: Extra species appearance details
+            species_type: Species type label
+
+        Returns:
+            LLM-generated image prompt string
+        """
+        logger.info(f"[ACTION_PROMPT] Generating chosen action prompt for {role}")
+
+        species_cat = self._detect_species_category(avatar_description)
+        instr = self._species_prompt_instructions(species_cat)
+
+        # Combine avatar context for character appearance
+        avatar_context = avatar_description or ""
+        if species_type and species_type not in ("Unknown", "Неизвестно"):
+            avatar_context += f"\nSpecies type: {species_type}"
+        if species_desc:
+            avatar_context += f"\nAppearance details: {species_desc}"
+
+        system = (
+            "You are an expert AI art prompt engineer specializing in sci-fi character portraits "
+            "and action scenes. Generate detailed, cinematic-quality image prompts that show "
+            "a character ACTIVELY PERFORMING an action (not just posing).\n\n"
+            "CRITICAL RULE: The character description below is the DEFINITIVE source for the "
+            "character's appearance. If it describes an alien, non-humanoid, energy, cybernetic, "
+            "or symbiotic being — describe their ACTUAL form, NOT human anatomy.\n"
+            'Never default to "face, hair, eyes, upper body" for non-human characters.\n\n'
+            "The prompt must match the visual style of the character's existing avatar — "
+            "use the SAME aesthetic, NOT a comic book or cartoon style."
+        )
+
+        user = (
+            f"Generate an image prompt showing a Star Trek-style {instr['intro']} "
+            f"PERFORMING a specific action.\n\n"
+            f"Role: {role}\n"
+            f"Personality traits: {', '.join(traits)}\n"
+            f"Character appearance (definitive source): {avatar_context}\n\n"
+            f"ACTION TO PERFORM: {action_text}\n\n"
+            f"Setting: {setting[:300]}\n\n"
+            "The prompt should describe:\n"
+            f"{instr['appearance']}\n"
+            f"- The character ACTIVELY PERFORMING the action described above\n"
+            "- Environment matching the setting (ship interior, planet surface, etc.)\n"
+            "- Dynamic composition showing the action in progress\n"
+            "- Cinematic lighting and camera angle appropriate to the scene\n"
+            "- Sci-fi/space opera aesthetic (NOT comic book style)\n"
+            "- High quality, 4K, detailed\n"
+            f"{instr['framing']}\n\n"
+            "IMPORTANT: This is an action SCENE image, NOT a comic panel. "
+            "Use the same cinematic photorealistic style as the character's avatar. "
+            "Do NOT add comic book effects, panel borders, speech bubbles, or halftone dots."
+        )
+
+        parsed = self._call_llm(
+            system_prompt=system,
+            user_prompt=user,
+            response_schema=CHOSEN_ACTION_PROMPT_SCHEMA,
+            max_tokens=self.llm_max_avatar_tokens,
+        )
+
+        prompt = parsed.get("chosen_action_prompt", "")
+        logger.info(
+            f"[ACTION_PROMPT] Generated for {role}: {prompt[:120]}..."
+        )
+        return prompt
 
     # ============== Species and Gender ==============
 
