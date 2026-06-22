@@ -164,12 +164,14 @@ BRIDGE = {
         "error": "Картинка рубки пока не сгенерирована. Дождитесь начала миссии.",
         "mission_header": "**Миссия:** {name}",
         "mission_desc": "{description}",
+        "objectives_header": "**Цели миссии:**",
     },
     LANGUAGE_EN: {
         "title": "🚀 **Bridge**",
         "error": "Bridge image not yet generated. Wait for the mission to start.",
         "mission_header": "**Mission:** {name}",
         "mission_desc": "{description}",
+        "objectives_header": "**Mission Objectives:**",
     },
 }
 

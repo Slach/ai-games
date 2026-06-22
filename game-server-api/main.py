@@ -2138,13 +2138,11 @@ async def admin_start_game(request: StartGameRequest):
         mission_result = {}
 
     # 6c. Generate bridge image
-    bridge_result = None
     try:
         bridge_result = gm.generate_bridge_image_prompt(
             mission_data or {}, all_participants
         )
         bridge_prompt = bridge_result.get("bridge_prompt", "")
-        brief_desc = bridge_result.get("brief_description", "")
         if bridge_prompt:
             image_gen = create_image_generator()
             bridge_url = await image_gen.generate_scene_image(
@@ -2156,7 +2154,7 @@ async def admin_start_game(request: StartGameRequest):
                     type="bridge",
                     image_url=bridge_url,
                     game_id=game_id,
-                    prompt=f"{bridge_prompt}\n---brief_desc---\n{brief_desc}",
+                    prompt=bridge_prompt,
                 )
                 logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
     except Exception as e:
@@ -2429,12 +2427,9 @@ async def admin_start_game(request: StartGameRequest):
     # Build mission info
     mission_info = {}
     if mission_data:
-        # Extract brief_description from bridge generation result
-        brief_desc = bridge_result.get("brief_description", "") if bridge_result else ""
         mission_info = {
             "name": mission_data.get("name", ""),
             "description": mission_data.get("description", ""),
-            "brief_description": brief_desc,
             "stages": len(mission_data.get("objectives", [])),
         }
 

@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 import re
+from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
@@ -144,32 +145,52 @@ async def _send_bridge_and_mission(
 ) -> None:
     """Download and broadcast bridge image with mission info to all players."""
     bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
-    from contextlib import suppress
 
     if not bridge_url:
-        with suppress(Exception):
+        try:
             bridge_resp = await api_request(
                 "GET", "/game/bridge-image", ignore_codes=(404,)
             )
             if bridge_resp:
                 bridge_url = bridge_resp.get("image_url")
+        except Exception as e:
+            logger.warning(f"Failed to fetch bridge image: {e}")
     if not mission:
-        with suppress(Exception):
+        try:
             mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+        except Exception as e:
+            logger.warning(f"Failed to fetch mission: {e}")
     if not bridge_url and not mission:
         return
 
+    # Build short caption with just the bridge title (mission name only)
     caption = bridge_msgs["title"]
-    if mission:
-        name = mission.get("name", "")
-        caption += "\n\n" + bridge_msgs["mission_header"].format(name=name)
-        # brief_description is a short Russian text from the LLM (max 200 chars)
-        desc = mission.get("brief_description", "") or ""
-        if desc:
-            if len(desc) > 200:
-                desc = desc[:200] + "…"
-            caption += "\n\n" + bridge_msgs["mission_desc"].format(description=desc)
+    mission_name = mission.get("name", "") if mission else ""
+    if mission_name:
+        caption += "\n\n" + bridge_msgs["mission_header"].format(name=mission_name)
 
+    # Build full mission info text (sent as separate message after the photo)
+    mission_text = ""
+    if mission:
+        mission_text = bridge_msgs["title"]
+        mission_text += "\n\n" + bridge_msgs["mission_header"].format(
+            name=mission.get("name", "")
+        )
+        desc = mission.get("description", "")
+        if desc:
+            mission_text += "\n\n" + bridge_msgs["mission_desc"].format(description=desc)
+        objectives = mission.get("objectives", [])
+        if objectives:
+            mission_text += "\n\n" + bridge_msgs["objectives_header"] + "\n"
+            for obj in objectives:
+                obj_name = obj.get("name", "")
+                obj_desc = obj.get("description", "")
+                if obj_name:
+                    mission_text += f"\n*{obj_name}*"
+                if obj_desc:
+                    mission_text += f": {obj_desc}"
+
+    # Download and send bridge photo (with short caption)
     photo_data = None
     if bridge_url:
         try:
@@ -184,6 +205,7 @@ async def _send_bridge_and_mission(
         except Exception as e:
             logger.warning(f"Failed to download bridge image: {e}")
 
+    # Send to GM: photo + mission text
     if photo_data:
         try:
             photo = BufferedInputFile(photo_data, filename="bridge.png")
@@ -192,10 +214,19 @@ async def _send_bridge_and_mission(
             )
         except Exception as e:
             logger.warning(f"Failed to send bridge image to GM: {e}")
-    elif bridge_url or mission:
-        with suppress(Exception):
+    elif mission_name:
+        try:
             await gm_message.answer(caption, parse_mode="Markdown")
+        except Exception:
+            pass
 
+    if mission_text:
+        try:
+            await gm_message.answer(mission_text, parse_mode="Markdown")
+        except Exception:
+            pass
+
+    # Send to all other players
     if bot is None:
         return
 
@@ -217,6 +248,10 @@ async def _send_bridge_and_mission(
                 else:
                     await bot.send_message(
                         chat_id=pid, text=caption, parse_mode="Markdown"
+                    )
+                if mission_text:
+                    await bot.send_message(
+                        chat_id=pid, text=mission_text, parse_mode="Markdown"
                     )
                 logger.info(f"Sent bridge+mission to player {pid}")
             except Exception as e:
@@ -3107,7 +3142,6 @@ async def main():
 
     # Clean up
     polling_task.cancel()
-    from contextlib import suppress
 
     with suppress(asyncio.CancelledError):
         await polling_task
