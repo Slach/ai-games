@@ -81,6 +81,21 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE player_states ADD COLUMN last_briefing_day_sent INTEGER DEFAULT NULL"
         )
+
+    # Referral tracking: who invited whom into which game.
+    # One row per (referred_id, referrer_id, game_id) — deduplicated via UNIQUE.
+    # "references" is double-quoted because it is a SQL keyword (REFERENCES).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS "references" (
+            referred_id  INTEGER  NOT NULL,
+            referrer_id  INTEGER  NOT NULL,
+            game_id      TEXT     NOT NULL,
+            created_at   TEXT     DEFAULT (datetime('now')),
+            PRIMARY KEY (referred_id, referrer_id, game_id)
+        )
+        """
+    )
     conn.commit()
 
 
@@ -235,5 +250,55 @@ def delete_player_state(player_id: int) -> None:
     try:
         conn.execute("DELETE FROM player_states WHERE player_id = ?", (player_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Referral tracking (references table)
+# ---------------------------------------------------------------------------
+
+
+def record_reference(referred_id: int, referrer_id: int, game_id: str) -> bool:
+    """Record that ``referrer_id`` invited ``referred_id`` into ``game_id``.
+
+    Silently no-ops when the referrer and the referred player are the same
+    person (self-referral) or when ``game_id`` is empty. The row is
+    deduplicated via the table PRIMARY KEY, so repeated /start deep-link
+    clicks from the same link only produce a single reference.
+
+    Returns True when a new row was inserted, False otherwise.
+    """
+    if not game_id or referred_id == referrer_id:
+        return False
+
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO "references" (referred_id, referrer_id, game_id)
+            VALUES (?, ?, ?)
+            """,
+            (referred_id, referrer_id, game_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_referrer_id(referred_id: int, game_id: str) -> int | None:
+    """Return the referrer_id who invited ``referred_id`` into ``game_id``."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT referrer_id FROM "references"
+            WHERE referred_id = ? AND game_id = ?
+            ORDER BY created_at ASC LIMIT 1
+            """,
+            (referred_id, game_id),
+        ).fetchone()
+        return row["referrer_id"] if row else None
     finally:
         conn.close()

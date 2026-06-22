@@ -46,6 +46,7 @@ from aiohttp_socks import ProxyConnector
 from player_store import (
     get_all_player_ids,
     get_player_state,
+    record_reference,
     update_player_state,
 )
 
@@ -178,7 +179,9 @@ async def _send_bridge_and_mission(
         )
         desc = mission.get("description", "")
         if desc:
-            mission_text += "\n\n" + bridge_msgs["mission_desc"].format(description=desc)
+            mission_text += "\n\n" + bridge_msgs["mission_desc"].format(
+                description=desc
+            )
         objectives = mission.get("objectives", [])
         if objectives:
             mission_text += "\n\n" + bridge_msgs["objectives_header"] + "\n"
@@ -923,7 +926,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         if BOT_USERNAME:
             game_id = profile.get("game_id", "")
             if game_id:
-                invite_url = f"https://t.me/{BOT_USERNAME}?start=game={game_id}"
+                invite_url = (
+                    f"https://t.me/{BOT_USERNAME}?start=game={game_id}:{player_id}"
+                )
                 # Escape the URL for Markdown to handle underscores in bot username
                 invite_text = (
                     onboarding_msgs["invite_title"]
@@ -1249,21 +1254,40 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 # ============== Handlers ==============
 
 
-def parse_game_id_from_start_command(text: str) -> str | None:
-    """Extract game_id from `/start game=...` command payload."""
+def parse_game_id_from_start_command(text: str) -> tuple[str | None, int | None]:
+    """Extract game_id and optional referrer_id from `/start game=...` payload.
+
+    Accepted payload format (Telegram deep link):
+        game=<game_id>:<referrer_id>
+
+    The ``:`` delimiter keeps the referrer Telegram id visually and
+    syntactically separate from the game id, so game ids that themselves
+    contain digits/underscores are never mis-parsed.
+
+    Returns:
+        ``(game_id, referrer_id)`` — referrer_id is ``None`` when the deep
+        link carries no referral suffix.
+    """
     if not text:
-        return None
+        return None, None
 
     text_parts = text.split()
     if len(text_parts) <= 1:
-        return None
+        return None, None
 
     for part in text_parts[1:]:
         if part.startswith("game="):
-            game_id = part[5:].strip()
-            return game_id or None
+            payload = part[len("game=") :].strip()
+            if not payload:
+                return None, None
+            # Split off the trailing referrer id after the ':' delimiter.
+            if ":" in payload:
+                game_id, _, ref_part = payload.rpartition(":")
+                referrer_id: int | None = int(ref_part) if ref_part.isdigit() else None
+                return (game_id or None), referrer_id
+            return payload, None
 
-    return None
+    return None, None
 
 
 async def create_new_game(player_id: int) -> str:
@@ -1490,9 +1514,23 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         return
 
-    game_id = parse_game_id_from_start_command(message.text or "")
+    game_id, referrer_id = parse_game_id_from_start_command(message.text or "")
     if game_id:
         logger.info(f"Player {player_id} started with game_id={game_id} from deep link")
+        if referrer_id:
+            logger.info(
+                f"Referrer detected: {referrer_id} invited {player_id} "
+                f"into game {game_id}"
+            )
+            # Persist the referral (deduplicated; self-referrals ignored).
+            try:
+                if record_reference(player_id, referrer_id, game_id):
+                    logger.info(
+                        f"Recorded new reference: referrer={referrer_id} "
+                        f"-> referred={player_id} game={game_id}"
+                    )
+            except Exception as ref_err:
+                logger.warning(f"Failed to record reference for {player_id}: {ref_err}")
 
     # Check if player already has a profile
     try:
@@ -1534,7 +1572,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
             if BOT_USERNAME:
                 game_id = profile.get("game_id", "")
                 if game_id:
-                    invite_url = f"https://t.me/{BOT_USERNAME}?start=game={game_id}"
+                    invite_url = (
+                        f"https://t.me/{BOT_USERNAME}?start=game={game_id}:{player_id}"
+                    )
                     invite_text = (
                         msgs.get("invite_title", "")
                         + "\n\n"
