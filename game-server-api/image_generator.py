@@ -425,40 +425,309 @@ class ImageGenerator:
             filename_prefix=f"char_{character_name.replace(' ', '_')}",
         )
 
-    async def generate_personalized_comic(
-        self,
-        day: int,
-        story: str,
-        player_profile: dict[str, Any],
-        crew_dialogues: list[dict[str, str]],
-    ) -> str:
-        """Generate a personalized comic/scene for a player.
+    async def _upload_image(self, image_url: str, filename: str) -> str | None:
+        """Download an image from a URL and upload it to ComfyUI.
 
-        For now generates a single key scene image.
-        Full multi-panel comic strip can be added later.
+        Returns the uploaded filename (which may differ from the requested one
+        due to ComfyUI dedup), or None on failure.
         """
-        role = player_profile.get("role", "Crew Member")
-        traits = player_profile.get("personality_traits", [])
+        try:
+            # Download the image
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp,
+            ):
+                if resp.status != 200:
+                    logger.warning(
+                        f"[UPLOAD] Failed to download reference image: HTTP {resp.status}"
+                    )
+                    return None
+                img_data = await resp.read()
 
-        prompt = (
-            f"Sci-fi comic book panel: {role} in action during a space mission. "
-            f"Story: {story}. "
-            f"Character traits: {', '.join(traits)}. "
-            f"Dynamic action pose, dramatic lighting, detailed environment. "
-            f"Space opera comic book style, vibrant colors, 4K quality."
-        )
+            # Upload to ComfyUI via /upload/image using multipart form
+            data = aiohttp.FormData()
+            data.add_field(
+                "image",
+                img_data,
+                filename=filename,
+                content_type="image/png",
+            )
+            data.add_field("type", "input")
+            data.add_field("overwrite", "true")
+
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.comfyui_url}/upload/image",
+                    data=data,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    result = await resp.json()
+                    uploaded_name = result.get("name", filename)
+                    logger.info(f"[UPLOAD] Reference image uploaded: {uploaded_name}")
+                    return uploaded_name
+                else:
+                    error_text = await resp.text()
+                    logger.warning(
+                        f"[UPLOAD] ComfyUI upload failed: HTTP {resp.status}: {error_text}"
+                    )
+                    return None
+        except Exception as e:
+            logger.warning(f"[UPLOAD] Failed to upload reference image: {e}")
+            return None
+
+    def _build_reference_image_workflow(
+        self,
+        prompt: str,
+        reference_filename: str,
+        width: int = 1024,
+        height: int = 1024,
+        seed: int = 0,
+        filename_prefix: str = "comic",
+        ipadapter_weight: float = 0.6,
+    ) -> dict[str, Any]:
+        """Build a Z-Image Turbo workflow with IP-Adapter image reference.
+
+        Uses the uploaded reference image as visual conditioning via IP-Adapter,
+        producing an output that preserves the character's appearance from the
+        reference while following the text prompt.
+
+        Args:
+            prompt: Text prompt for the scene
+            reference_filename: Uploaded filename in ComfyUI input folder
+            width, height: Output dimensions
+            seed: Random seed (0 = randomize)
+            filename_prefix: Output filename prefix
+            ipadapter_weight: IP-Adapter influence weight (0.0-1.0)
+
+        Returns:
+            ComfyUI workflow dict ready for /prompt API
+        """
+        if seed == 0:
+            seed = random.randint(0, 2**63)
+
+        return {
+            # Load reference image (uploaded to ComfyUI input folder)
+            "40": {
+                "class_type": "LoadImage",
+                "inputs": {
+                    "image": reference_filename,
+                },
+            },
+            # Load CLIP Vision model (for IP-Adapter image encoding)
+            "41": {
+                "class_type": "CLIPVisionLoader",
+                "inputs": {
+                    "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+                },
+            },
+            # Encode reference image with CLIP Vision
+            "42": {
+                "class_type": "CLIPVisionEncode",
+                "inputs": {
+                    "clip_vision": ["41", 0],
+                    "image": ["40", 0],
+                },
+            },
+            # Load IP-Adapter model
+            "43": {
+                "class_type": "IPAdapterModelLoader",
+                "inputs": {
+                    "ipadapter_file": "ip-adapter-flux.safetensors",
+                },
+            },
+            # Apply IP-Adapter to the base model
+            "44": {
+                "class_type": "IPAdapterApply",
+                "inputs": {
+                    "ipadapter": ["43", 0],
+                    "clip_vision": ["42", 0],
+                    "model": ["28", 0],
+                    "image": ["40", 0],
+                    "weight": ipadapter_weight,
+                    "noise": 0.3,
+                    "weight_type": "linear",
+                    "start_at": 0.0,
+                    "end_at": 1.0,
+                },
+            },
+            # Load UNET model (Z-Image Turbo)
+            "28": {
+                "class_type": "UNETLoader",
+                "inputs": {
+                    "unet_name": "z_image_turbo_bf16.safetensors",
+                    "weight_dtype": "default",
+                },
+            },
+            # Load CLIP text encoder - Qwen for Z-Image Turbo
+            "30": {
+                "class_type": "CLIPLoader",
+                "inputs": {
+                    "clip_name": "qwen_3_4b.safetensors",
+                    "type": "lumina2",
+                },
+            },
+            # Load VAE
+            "29": {
+                "class_type": "VAELoader",
+                "inputs": {
+                    "vae_name": "ae.safetensors",
+                },
+            },
+            # Encode positive prompt
+            "27": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {
+                    "text": prompt,
+                    "clip": ["30", 0],
+                },
+            },
+            # Create empty latent
+            "13": {
+                "class_type": "EmptySD3LatentImage",
+                "inputs": {
+                    "width": width,
+                    "height": height,
+                    "batch_size": 1,
+                },
+            },
+            # Apply AuraFlow sampling (required for Z-Image Turbo)
+            "11": {
+                "class_type": "ModelSamplingAuraFlow",
+                "inputs": {
+                    "model": ["44", 0],  # Model FROM IP-Adapter Apply
+                    "shift": 3.0,
+                },
+            },
+            # KSampler - Z-Image Turbo is distilled, 8 steps optimal
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": seed,
+                    "steps": 8,
+                    "cfg": 1.0,
+                    "sampler_name": "res_multistep",
+                    "scheduler": "simple",
+                    "denoise": 1.0,
+                    "model": ["11", 0],
+                    "positive": ["27", 0],
+                    "negative": ["33", 0],
+                    "latent_image": ["13", 0],
+                },
+            },
+            # ConditioningZeroOut for negative (required by Z-Image Turbo)
+            "33": {
+                "class_type": "ConditioningZeroOut",
+                "inputs": {
+                    "conditioning": ["27", 0],
+                },
+            },
+            # Decode latent to image
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": {
+                    "samples": ["3", 0],
+                    "vae": ["29", 0],
+                },
+            },
+            # Save image
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "filename_prefix": filename_prefix,
+                    "images": ["8", 0],
+                },
+            },
+        }
+
+    async def generate_comic_with_reference(
+        self,
+        prompt: str,
+        reference_image_url: str | None,
+        character_description: str = "",
+        filename_prefix: str = "comic",
+        width: int = 1024,
+        height: int = 1024,
+    ) -> str:
+        """Generate a comic-style image using an avatar as visual reference.
+
+        Tries IP-Adapter workflow first (if reference image is provided).
+        Falls back to text-to-image with character description in prompt.
+
+        Args:
+            prompt: Main action prompt for the comic scene
+            reference_image_url: URL of the avatar image to use as reference
+            character_description: Text description of the character (fallback)
+            filename_prefix: Output filename prefix
+            width, height: Output dimensions
+
+        Returns:
+            URL of the generated image, or placeholder on failure
+        """
+        # Try IP-Adapter workflow first (if reference image available)
+        if reference_image_url:
+            try:
+                # Upload reference image to ComfyUI
+                ref_filename = f"ref_{filename_prefix}.png"
+                uploaded_name = await self._upload_image(
+                    reference_image_url, ref_filename
+                )
+                if uploaded_name:
+                    # Build IP-Adapter workflow
+                    workflow = self._build_reference_image_workflow(
+                        prompt=prompt,
+                        reference_filename=uploaded_name,
+                        width=width,
+                        height=height,
+                        filename_prefix=filename_prefix,
+                    )
+
+                    # Queue and wait
+                    async with _image_semaphore:
+                        prompt_id = await self._queue_prompt(workflow)
+                        outputs = await self._wait_for_completion(
+                            prompt_id, timeout=300
+                        )
+                        image_url = self._extract_image_url(outputs)
+
+                    if image_url:
+                        logger.info(f"[COMIC] Generated with reference: {image_url}")
+                        return image_url
+                    else:
+                        logger.warning(
+                            "[COMIC] IP-Adapter workflow produced no output, "
+                            "falling back to text-to-image"
+                        )
+                else:
+                    logger.warning(
+                        "[COMIC] Failed to upload reference image, "
+                        "falling back to text-to-image"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[COMIC] IP-Adapter workflow failed: {e}, "
+                    f"falling back to text-to-image"
+                )
+
+        # Fallback: text-to-image with character description in prompt
+        # Put the action prompt FIRST, character description SECOND for emphasis
+        fallback_prompt = prompt if prompt else ""
+        if character_description:
+            fallback_prompt += f" Character reference: {character_description}."
 
         image_url = await self.generate_scene_image(
-            prompt=prompt,
-            filename_prefix=f"comic_day{day}_{role.replace(' ', '_')}",
+            prompt=fallback_prompt,
+            filename_prefix=filename_prefix,
         )
 
         if image_url:
-            logger.info(f"Generated comic for day {day}: {image_url}")
+            logger.info(f"[COMIC] Generated (fallback text-to-image): {image_url}")
             return image_url
-        else:
-            logger.warning(f"Comic generation failed for day {day}, using placeholder")
-            return f"/content/comics/day_{day}_placeholder.webp"
+
+        logger.warning("[COMIC] Generation failed completely, using placeholder")
+        return f"/content/comics/{filename_prefix}_placeholder.webp"
 
     # ============== Batch Image Generation ==============
 

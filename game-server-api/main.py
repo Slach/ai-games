@@ -14,10 +14,6 @@ from datetime import datetime
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, TypeAdapter
-
 from database import (
     GAME_START_MIN_PLAYERS,
     add_game_message,
@@ -85,6 +81,8 @@ from database import (
     update_onboarding_session,
     update_player_profile_last_poll,
 )
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from game_master import NPC_TEMPLATES, create_game_master_agent
 from image_generator import (
     DEFAULT_LOADING_FALLBACK_URL,
@@ -101,7 +99,8 @@ from prompts import (
     OnboardingQuestion,
     build_interleaved_species_gender_questions,
 )
-from push_client import push_briefings
+from push_client import push_briefings, push_day_outcome, push_player_comic
+from pydantic import BaseModel, TypeAdapter
 
 # Configure logging
 logging.basicConfig(
@@ -1136,6 +1135,217 @@ def update_player_profile_avatar(player_id: int, avatar_url: str) -> bool:
     return True
 
 
+async def _generate_player_avatar(
+    player_id: int, game_id: str, language: str = "en"
+) -> str | None:
+    """Generate avatar for an existing player. Returns avatar_url or None."""
+    profile = get_player_profile(player_id)
+    if not profile:
+        logger.warning(f"[AVATAR] Player {player_id} not found, cannot generate avatar")
+        return None
+
+    # Step 1: Generate avatar prompt (LLM) with fallback to template
+    avatar_prompt = ""
+    try:
+        game_master = create_game_master_agent(language=language)
+
+        species_desc = profile.get("species_description") or ""
+        species_type = profile.get("species", "") or ""
+        gender_type = profile.get("gender", "") or ""
+        if species_desc or species_type or gender_type:
+            parts = [profile.get("avatar_description", "")]
+            if species_type:
+                parts.append(f"Species type: {species_type}")
+            if gender_type:
+                parts.append(f"Gender type: {gender_type}")
+            if species_desc:
+                parts.append(f"Appearance: {species_desc}")
+            avatar_description_combined = "\n".join(parts)
+        else:
+            avatar_description_combined = profile.get("avatar_description", "")
+
+        avatar_prompt = game_master.generate_avatar_prompt(
+            role=profile["role"],
+            traits=profile["personality_traits"],
+            avatar_description=avatar_description_combined,
+        )
+        logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
+    except Exception as e:
+        logger.warning(
+            f"[AVATAR] LLM prompt generation failed for player {player_id}: {e}"
+        )
+
+    # Step 2: Use LLM prompt or build fallback
+    if not avatar_prompt:
+        traits_str = ", ".join(profile.get("personality_traits", []))
+        species_desc = profile.get("species_description", "")
+        species_type = profile.get("species", "") or ""
+        gender_type = profile.get("gender", "") or ""
+        avatar_desc = profile.get("avatar_description", "")
+        combined_desc = (
+            f"{avatar_desc} {species_type} {gender_type} {species_desc}".lower()
+        )
+
+        species_cat = "human"
+        cat_keywords = {
+            "energy": [
+                "energy being",
+                "энергетическ",
+                "plasma",
+                "energy field",
+                "gaseous",
+                "frequency",
+                "resonance",
+                "light being",
+            ],
+            "cybernetic": [
+                "cybernetic",
+                "кибернетическ",
+                "robotic",
+                "mechanical",
+                "synthetic",
+                "machine",
+                "android",
+                "cyborg",
+                "digital",
+            ],
+            "symbiotic": [
+                "symbiotic",
+                "симбиотическ",
+                "symbiont",
+                "composite",
+                "multiple beings",
+                "host",
+                "union",
+                "collective",
+            ],
+            "non_humanoid": [
+                "non_humanoid",
+                "негуманоид",
+                "tentacle",
+                "carapace",
+                "exoskeleton",
+                "crystalline",
+                "кристаллическ",
+                "щупальц",
+                "панцирь",
+                "экзоскелет",
+                "бесформенн",
+                "amorphous",
+                "alien anatomy",
+                "multiple limb",
+            ],
+            "humanoid": ["humanoid", "гуманоид"],
+        }
+        for cat, keywords in cat_keywords.items():
+            if any(kw in combined_desc for kw in keywords):
+                species_cat = cat
+                break
+
+        fallback_templates = {
+            "human": (
+                f"Sci-fi character portrait of a {profile['role']} in Star Trek style. "
+                f"Personality traits: {traits_str}. "
+                f"{avatar_desc} "
+                f"Futuristic uniform, cinematic lighting, detailed face, 4K quality. "
+                f"Portrait, upper body, space opera aesthetic."
+            ),
+            "humanoid": (
+                f"Sci-fi character portrait of a humanoid {profile['role']} in Star Trek style. "
+                f"Personality traits: {traits_str}. "
+                f"{avatar_desc} "
+                f"{species_desc} "
+                f"Humanoid with subtle alien features, futuristic uniform, "
+                f"cinematic lighting, detailed face, 4K quality. "
+                f"Portrait, upper body, space opera aesthetic."
+            ),
+            "non_humanoid": (
+                f"Sci-fi artwork of a non-humanoid {profile['role']} in Star Trek style. "
+                f"Personality traits: {traits_str}. "
+                f"Character form: {avatar_desc} "
+                f"{species_desc} "
+                f"Cinematic lighting, 4K quality, space opera aesthetic. "
+                f"Full body or 3/4 view showing the alien physiology."
+            ),
+            "energy": (
+                f"Sci-fi artwork of an energy being {profile['role']} in Star Trek style. "
+                f"Personality traits: {traits_str}. "
+                f"Form: {avatar_desc} "
+                f"{species_desc} "
+                f"Glowing plasma energy form, luminous, ethereal, "
+                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"Full body showing the energy form."
+            ),
+            "cybernetic": (
+                f"Sci-fi artwork of a cybernetic {profile['role']} in Star Trek style. "
+                f"Personality traits: {traits_str}. "
+                f"Form: {avatar_desc} "
+                f"{species_desc} "
+                f"Mechanical body, circuits, synthetic components, "
+                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"Full body or 3/4 view showing cybernetic anatomy."
+            ),
+            "symbiotic": (
+                f"Sci-fi artwork of a symbiotic being {profile['role']} in Star Trek style. "
+                f"Personality traits: {traits_str}. "
+                f"Form: {avatar_desc} "
+                f"{species_desc} "
+                f"Composite organism, multiple life forms in one body, "
+                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"Full body view showing the composite nature."
+            ),
+        }
+        avatar_prompt = fallback_templates.get(species_cat, fallback_templates["human"])
+        logger.info(
+            f"[AVATAR] Using fallback prompt ({species_cat}) for player {player_id}: {avatar_prompt}..."
+        )
+
+    # Step 3: Call ComfyUI to generate the avatar
+    avatar_url = None
+    try:
+        image_generator = create_image_generator()
+        logger.info(
+            f"[AVATAR] Calling ComfyUI at {image_generator.comfyui_url} for avatar generation"
+        )
+        avatar_url = await image_generator.generate_avatar_image(
+            prompt=avatar_prompt,
+            filename_prefix=f"avatar_{game_id}_{player_id}",
+        )
+
+        if avatar_url:
+            logger.info(f"[AVATAR] URL received for player {player_id}: {avatar_url}")
+            update_player_profile_avatar(player_id, avatar_url)
+        else:
+            logger.warning(f"[AVATAR] ComfyUI returned None for player {player_id}")
+
+    except Exception as e:
+        logger.error(
+            f"[AVATAR] ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}"
+        )
+        logger.error(traceback.format_exc())
+
+    return avatar_url
+
+
+@app.post("/players/{player_id}/generate-avatar")
+async def generate_player_avatar_endpoint(player_id: int):
+    """Generate avatar for an existing player who doesn't have one yet"""
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player profile not found")
+
+    if profile.get("avatar_url"):
+        return {"status": "already_exists", "avatar_url": profile["avatar_url"]}
+
+    game_id = profile.get("game_id") or "default_game"
+    avatar_url = await _generate_player_avatar(player_id, game_id)
+
+    if avatar_url:
+        return {"status": "generated", "avatar_url": avatar_url}
+    else:
+        return {"status": "failed", "avatar_url": None}
+
+
 @app.get("/onboarding/{session_id}")
 async def get_onboarding_status(session_id: str, language: str = "en"):
     """Get onboarding session status"""
@@ -1381,6 +1591,18 @@ async def submit_player_action(request: PlayerActionRequest):
         request.player_id, request.day, request.action_id, request.choice
     )
 
+    # ── Generate comic panel for this player's action ────────────────
+    # Fire-and-forget: generates a comic-style image showing the player's
+    # character performing the chosen action, using their avatar as reference.
+    asyncio.create_task(
+        _generate_action_comic(
+            player_id=request.player_id,
+            game_id=game_id,
+            day=request.day,
+            action_id=request.action_id,
+        )
+    )
+
     # Check if all real players have now chosen — if so, trigger combined outcome analysis
     try:
         remaining = get_players_who_need_to_choose(request.day, game_id=game_id)
@@ -1541,6 +1763,114 @@ async def get_splash_image(game_id: str = "default_game"):
             "fallback": True,
         }
     return {"image_url": url, "available": get_game_image_count("splash", game_id)}
+
+
+async def _generate_action_comic(
+    player_id: int,
+    game_id: str,
+    day: int,
+    action_id: str,
+):
+    """Generate a comic-style image showing the player's action.
+
+    Uses the player's avatar as visual reference for character consistency.
+    Runs as fire-and-forget background task.
+    """
+    try:
+        profile = get_player_profile(player_id)
+        if not profile:
+            logger.warning(f"[COMIC] Player {player_id} not found, skipping")
+            return
+
+        # Get the briefing to find the action text
+        briefing = get_player_briefing(day, player_id, game_id=game_id)
+        if not briefing:
+            logger.warning(f"[COMIC] Briefing not found for {player_id} day {day}")
+            return
+
+        # Find chosen action text
+        action_text = ""
+        for c in briefing.get("choices", []):
+            if c.get("id") == action_id:
+                action_text = c.get("text", c.get("description", ""))
+                break
+        if not action_text:
+            action_text = action_id
+
+        # Get scene context from game_day
+        day_data = get_game_day(day, game_id=game_id)
+        global_circ_str = (
+            day_data.get("global_circumstances", "{}") if day_data else "{}"
+        )
+        try:
+            global_circ = json.loads(global_circ_str)
+        except (json.JSONDecodeError, TypeError):
+            global_circ = {}
+        setting = (
+            global_circ.get("setting", "") or day_data.get("story", "")
+            if day_data
+            else ""
+        )
+
+        # Build character appearance description
+        role = profile.get("role", "Crew Member")
+        species = profile.get("species", "")
+        species_desc = profile.get("species_description", "")
+        avatar_desc = profile.get("avatar_description", "")
+
+        # SHORT character visual reference (1 sentence max for image gen fallback)
+        character_description = role
+        if species and species not in ("Unknown", "Неизвестно"):
+            character_description += f", {species}"
+
+        # Build action-focused comic prompt — ACTION FIRST, then visual context
+        prompt = (
+            f"{role} performing action: {action_text}. "
+            f"{character_description}. "
+            f"Setting: {setting[:200]}. "
+            f"Sci-fi comic book panel, dynamic action pose, dramatic lighting, "
+            f"detailed environment, heroic composition, space opera style, "
+            f"vibrant colors, 4K quality."
+        )
+
+        # Get player's avatar URL for reference
+        avatar_url = profile.get("avatar_url") or None
+
+        image_gen = create_image_generator()
+        comic_url = await image_gen.generate_comic_with_reference(
+            prompt=prompt,
+            reference_image_url=avatar_url,
+            character_description=character_description,
+            filename_prefix=f"action_day{day}_{game_id}_p{player_id}",
+        )
+
+        if comic_url:
+            # Save comic URL to the briefing
+            if briefing.get("id"):
+                update_briefing_comic_url(briefing["id"], comic_url)
+                logger.info(
+                    f"[COMIC] Saved comic for player {player_id} day {day}: {comic_url}"
+                )
+
+            # Push the comic to the player via telegram-bot
+            # (fire-and-forget to avoid blocking the comic generation loop)
+            try:
+                await push_player_comic(
+                    player_id=player_id,
+                    day=day,
+                    comic_url=comic_url,
+                    game_id=game_id,
+                    action_text=action_text,
+                )
+                logger.info(f"[COMIC] Pushed comic to player {player_id} day {day}")
+            except Exception as push_err:
+                logger.warning(
+                    f"[COMIC] Failed to push comic to player {player_id}: {push_err}"
+                )
+        else:
+            logger.warning(f"[COMIC] Generation returned None for player {player_id}")
+    except Exception as e:
+        logger.error(f"[COMIC] Failed to generate action comic: {e}")
 
 
 async def _analyze_day_outcome(
@@ -1726,6 +2056,47 @@ async def _analyze_day_outcome(
             game_id=game_id,
         )
 
+        # ── Push outcome to all alive players ──────────────────────
+        # Build outcome text from the LLM result
+        outcome_text = (
+            outcome.get("narrative", "")
+            or outcome.get("summary", "")
+            or outcome.get("outcome", "")
+        )
+        if not outcome_text:
+            # Fallback: clean up JSON string for display
+            raw = json.dumps(outcome, ensure_ascii=False)
+            outcome_text = raw[:500] + ("..." if len(raw) > 500 else "")
+
+        # Build death notices for the push payload
+        death_notices = []
+        for death_entry in dead_crew:
+            if isinstance(death_entry, list) and len(death_entry) >= 2:
+                death_notices.append(
+                    {"name": str(death_entry[0]), "role": str(death_entry[1])}
+                )
+
+        # Get alive players
+        try:
+            alive_players = get_live_players(game_id)
+        except Exception:
+            alive_players = get_players_in_game(game_id)
+
+        # Fire-and-forget push to avoid blocking
+        asyncio.create_task(
+            push_day_outcome(
+                game_id=game_id,
+                day=day,
+                outcome_text=outcome_text,
+                alive_players=alive_players,
+                ship_status="destroyed" if ship_destroyed else "alive",
+                death_notices=death_notices,
+            )
+        )
+        logger.info(
+            f"[OUTCOME] Pushed outcome for day {day} to {len(alive_players)} alive players"
+        )
+
     except Exception as e:
         logger.error(f"[OUTCOME] Analysis failed for Day {day}: {e}")
         import traceback
@@ -1775,8 +2146,14 @@ def _build_player_briefings_for_push(
     all_briefings: list[dict],
     crew_dialogues: list[dict],
     day_num: int,
+    game_id: str = "default_game",
 ) -> list[dict]:
-    """Build per-player briefing dicts for push payload from stored briefings."""
+    """Build per-player briefing dicts for push payload from stored briefings.
+
+    Fetches scene image (if available) from game_images table for this day.
+    """
+    # Fetch scene image for this day (if generated and saved)
+    scene_url = get_random_game_image(type="scene", day=day_num, game_id=game_id)
     players_data = []
     for b in all_briefings:
         if b.get("is_npc"):
@@ -1790,7 +2167,7 @@ def _build_player_briefings_for_push(
                 "briefing": b.get("briefing", ""),
                 "choices": b.get("choices", []),
                 "comic_url": b.get("comic_url"),
-                "scene_url": None,
+                "scene_url": scene_url,
             }
         )
     return players_data
@@ -2463,7 +2840,7 @@ async def admin_start_game(request: StartGameRequest):
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
         player_briefings = _build_player_briefings_for_push(
-            all_briefings, crew_dialogues_list, day_num
+            all_briefings, crew_dialogues_list, day_num, game_id=game_id
         )
         if player_briefings:
             asyncio.create_task(
@@ -2810,6 +3187,35 @@ async def admin_continue_game(
         game_id,
     )
 
+    # Step A2: Generate scene image for this turn's briefing
+    try:
+        scene_prompt = (
+            f"Sci-fi scene: {global_circ.get('setting', '')}. "
+            f"{global_circ.get('narrative', '')[:500]} "
+            f"Cinematic starship interior, crew interacting with holographic displays, "
+            f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+        )
+        image_gen = create_image_generator()
+        scene_url = await image_gen.generate_scene_image(
+            prompt=scene_prompt,
+            filename_prefix=f"scene_day{day_num}_{game_id}",
+        )
+        if scene_url:
+            save_game_image(
+                type="scene",
+                image_url=scene_url,
+                game_id=game_id,
+                day=day_num,
+                prompt=scene_prompt,
+            )
+            logger.info(
+                f"[SCENE] Turn scene image saved for day {day_num}: {scene_url}"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[SCENE] Failed to generate turn scene image for day {day_num}: {e}"
+        )
+
     # Create game day record EARLY to prevent race condition with polling loop.
     # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
     early_day = {
@@ -2954,7 +3360,7 @@ async def admin_continue_game(
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
         player_briefings = _build_player_briefings_for_push(
-            all_briefings, crew_dialogues_list, day_num
+            all_briefings, crew_dialogues_list, day_num, game_id=game_id
         )
         if player_briefings:
             asyncio.create_task(

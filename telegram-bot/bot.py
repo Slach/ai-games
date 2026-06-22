@@ -20,15 +20,14 @@ import asyncio
 import logging
 import os
 import re
-from contextlib import suppress
-from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 import language as lang
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -40,6 +39,7 @@ from aiogram.types import (
     ReactionTypeEmoji,
     ReplyKeyboardMarkup,
 )
+from aiogram.utils.deep_linking import create_start_link, decode_payload
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiohttp_socks import ProxyConnector
@@ -75,7 +75,7 @@ def escape_markdown(text: str) -> str:
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
 BOT_LANGUAGE = os.getenv("BOT_LANGUAGE", "ru")
-POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # seconds between polls
+
 BOT_USERNAME: str | None = None
 
 # Game Master Telegram user ID — only this user can send GM commands
@@ -127,272 +127,6 @@ def _mark_briefing_sent(player_id: int, day_num: int) -> None:
     """Record that a briefing was sent — updates both in-memory cache and DB."""
     _last_sent_briefing_day[player_id] = day_num
     update_player_state(player_id, last_briefing_day_sent=day_num)
-
-
-# Suppress polling delivery for players whose game is being restarted.
-# The polling loop checks this set and skips _process_game_update_for_player,
-# preventing the race where polling sends "Day 1" before the restart handler's
-# explicit delivery completes. Players are removed after explicit delivery.
-_restart_suppressed_players: set[int] = set()
-
-
-async def _send_bridge_and_mission(
-    bot: Bot | None,
-    gm_message: types.Message,
-    game_id: str,
-    bridge_url: str | None,
-    mission: dict | None,
-    suppress_player_id: int | None = None,
-) -> None:
-    """Download and broadcast bridge image with mission info to all players."""
-    bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
-
-    if not bridge_url:
-        try:
-            bridge_resp = await api_request(
-                "GET", "/game/bridge-image", ignore_codes=(404,)
-            )
-            if bridge_resp:
-                bridge_url = bridge_resp.get("image_url")
-        except Exception as e:
-            logger.warning(f"Failed to fetch bridge image: {e}")
-    if not mission:
-        try:
-            mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
-        except Exception as e:
-            logger.warning(f"Failed to fetch mission: {e}")
-    if not bridge_url and not mission:
-        return
-
-    # Build short caption with just the bridge title (mission name only)
-    caption = bridge_msgs["title"]
-    mission_name = mission.get("name", "") if mission else ""
-    if mission_name:
-        caption += "\n\n" + bridge_msgs["mission_header"].format(name=mission_name)
-
-    # Build full mission info text (sent as separate message after the photo)
-    mission_text = ""
-    if mission:
-        mission_text = bridge_msgs["title"]
-        mission_text += "\n\n" + bridge_msgs["mission_header"].format(
-            name=mission.get("name", "")
-        )
-        desc = mission.get("description", "")
-        if desc:
-            mission_text += "\n\n" + bridge_msgs["mission_desc"].format(
-                description=desc
-            )
-        objectives = mission.get("objectives", [])
-        if objectives:
-            mission_text += "\n\n" + bridge_msgs["objectives_header"] + "\n"
-            for obj in objectives:
-                obj_name = obj.get("name", "")
-                obj_desc = obj.get("description", "")
-                if obj_name:
-                    mission_text += f"\n*{obj_name}*"
-                if obj_desc:
-                    mission_text += f": {obj_desc}"
-
-    # Download and send bridge photo (with short caption)
-    photo_data = None
-    if bridge_url:
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    bridge_url, timeout=aiohttp.ClientTimeout(total=30)
-                ) as img_resp,
-            ):
-                if img_resp.status == 200:
-                    photo_data = await img_resp.read()
-        except Exception as e:
-            logger.warning(f"Failed to download bridge image: {e}")
-
-    # Send to GM: photo + mission text
-    if photo_data:
-        try:
-            photo = BufferedInputFile(photo_data, filename="bridge.png")
-            await gm_message.answer_photo(
-                photo=photo, caption=caption, parse_mode="Markdown"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send bridge image to GM: {e}")
-    elif mission_name:
-        try:
-            await gm_message.answer(caption, parse_mode="Markdown")
-        except Exception:
-            pass
-
-    if mission_text:
-        try:
-            await gm_message.answer(mission_text, parse_mode="Markdown")
-        except Exception:
-            pass
-
-    # Send to all other players
-    if bot is None:
-        return
-
-    try:
-        players_result = await api_request(
-            "GET", "/players", params={"game_id": game_id}
-        )
-        if not players_result:
-            return
-        for pid in (p["player_id"] for p in players_result if isinstance(p, dict)):
-            if suppress_player_id is not None and pid == suppress_player_id:
-                continue
-            try:
-                if photo_data:
-                    photo = BufferedInputFile(photo_data, filename="bridge.png")
-                    await bot.send_photo(
-                        chat_id=pid, photo=photo, caption=caption, parse_mode="Markdown"
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=pid, text=caption, parse_mode="Markdown"
-                    )
-                if mission_text:
-                    await bot.send_message(
-                        chat_id=pid, text=mission_text, parse_mode="Markdown"
-                    )
-                logger.info(f"Sent bridge+mission to player {pid}")
-            except Exception as e:
-                logger.warning(f"Failed to send bridge to player {pid}: {e}")
-    except Exception as e:
-        logger.warning(f"Failed to broadcast bridge to players: {e}")
-
-
-_SEND_SEP = "\n---\n"
-
-
-async def _download_and_send_photo(
-    bot: Bot, pid: int, url: str, filename: str = "image.png"
-) -> bool:
-    """Download an image from url and send it as a photo to a player.
-
-    Returns True if sent successfully, False otherwise.
-    """
-    try:
-        async with aiohttp.ClientSession() as session:
-            resp = await session.get(url, timeout=aiohttp.ClientTimeout(total=30))
-            if resp.status == 200:
-                data = await resp.read()
-                photo = BufferedInputFile(data, filename=filename)
-                await bot.send_photo(chat_id=pid, photo=photo)
-                return True
-            else:
-                logger.warning(f"Failed to download image (HTTP {resp.status}): {url}")
-    except Exception as e:
-        logger.warning(f"Failed to download/send image to player {pid}: {e}")
-    return False
-
-
-async def _send_game_briefings(
-    bot: Bot | None, game_id: str, day_num: int
-) -> list[int]:
-    """Send individual briefings with images, crew behavior and action choices."""
-    if bot is None:
-        return []
-    try:
-        players_result = await api_request(
-            "GET", "/players", params={"game_id": game_id}
-        )
-        if not players_result:
-            return []
-        current = lang.get_current_day(BOT_LANGUAGE)
-        sent_ids: list[int] = []
-        for pid in (p["player_id"] for p in players_result if isinstance(p, dict)):
-            try:
-                br = await api_request(
-                    "GET", f"/game/briefing/{pid}/{day_num}", ignore_codes=(404,)
-                )
-                if not br:
-                    continue
-                choices = br.get("choices", [])
-                btext = br.get("briefing", "")
-                if not choices or not btext:
-                    continue
-
-                # ── Send comic image, if available ───────────────────────
-                # Send briefing image: comic > scene fallback > nothing
-                img_url = br.get("comic_url")
-                if not img_url:
-                    try:
-                        scene = await api_request(
-                            "GET",
-                            "/game/bridge-image",
-                            params={"game_id": game_id, "day": day_num},
-                            ignore_codes=(404,),
-                        )
-                        if scene:
-                            img_url = scene.get("image_url")
-                    except Exception:
-                        pass
-                if img_url:
-                    await _download_and_send_photo(
-                        bot, pid, img_url, filename="briefing.png"
-                    )
-
-                # ── Fetch crew_dialogues ───────────────────────────────────
-                crew_d = []
-                try:
-                    dd = await api_request(
-                        "GET",
-                        f"/game/day/{day_num}",
-                        params={"game_id": game_id},
-                        ignore_codes=(404,),
-                    )
-                    if dd:
-                        crew_d = dd.get("crew_dialogues", [])
-                except Exception:
-                    pass
-
-                crew_txt = ""
-                if crew_d:
-                    lines = [
-                        f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
-                        for d in crew_d
-                    ]
-                    crew_txt = "\n\n*Поведение экипажа:*\n" + _SEND_SEP.join(lines)
-
-                acts = "\n\n".join(
-                    f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
-                    for i, a in enumerate(choices)
-                )
-                text = (
-                    current["title"].format(day=day_num)
-                    + "\n\n"
-                    + current["briefing_header"].format(briefing=btext)
-                    + crew_txt
-                    + "\n\n"
-                    + current["actions"].format(actions=acts)
-                    + "\n\n"
-                    + current["select_action"]
-                )
-                await bot.send_message(
-                    chat_id=pid,
-                    text=text,
-                    parse_mode="Markdown",
-                    reply_markup=create_action_keyboard(choices),
-                )
-                _mark_briefing_sent(pid, day_num)
-                sent_ids.append(pid)
-                logger.info(f"Sent Day {day_num} briefing to player {pid}")
-            except Exception as e:
-                logger.warning(f"Failed to send briefing to player {pid}: {e}")
-        return sent_ids
-    except Exception as e:
-        logger.warning(f"Failed to send briefings: {e}")
-        return []
-
-
-def _get_player_briefing_day(result: dict) -> int | None:
-    """Extract the day number from a poll result, if any."""
-    day = result.get("new_game_day", {})
-    if isinstance(day, dict):
-        return day.get("day")
-    return None
 
 
 # ============== Helper Functions ==============
@@ -753,77 +487,15 @@ async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
         return None
 
 
-async def poll_game_updates(player_id: int):
-    """Poll for new game updates (days, actions, messages)"""
-    state = get_player_state(player_id)
-
-    # Skip polling if player hasn't completed onboarding yet
-    if state.get("onboarding_session_id") is not None:
-        logger.debug(f"Skipping poll for player {player_id}: onboarding in progress")
-        return
-
-    try:
-        # Get last poll timestamp from profile
-        # If profile doesn't exist (404), skip polling silently
-        profile = await api_request(
-            "GET", f"/players/{player_id}/profile", ignore_codes=(404,)
-        )
-        if not profile:
-            # Player hasn't completed onboarding yet - skip polling
-            return
-        last_poll = profile.get("last_poll") if profile else None
-
-        # Poll for updates using the new endpoint
-        params = {"since": last_poll} if last_poll is not None else {}
-        result = await api_request("GET", f"/game/poll/{player_id}", params=params)
-        if result is None:
-            return
-
-        # Consolidate all updates from this poll into a single pending entry
-        new_game_day = result.get("new_game_day")
-        pending_actions = result.get("pending_actions", [])
-        personal_briefing = result.get("personal_briefing")
-        messages_from_gm = result.get("messages_from_gm", [])
-
-        has_updates = new_game_day or pending_actions or messages_from_gm
-
-        if has_updates:
-            # Deduplicate: skip if we already sent briefing for this day
-            day_num = _get_player_briefing_day(result)
-            if day_num is not None:
-                last_sent = _last_sent_briefing_day.get(player_id)
-                if last_sent == day_num:
-                    logger.debug(
-                        f"Skipping duplicate briefing for player {player_id}, day {day_num}"
-                    )
-                    has_updates = False
-
-        if has_updates:
-            entry = {
-                "type": "game_update",
-                "timestamp": datetime.now().isoformat(),
-            }
-            if new_game_day:
-                entry["day"] = new_game_day
-            if pending_actions:
-                entry["actions"] = pending_actions
-            if personal_briefing:
-                entry["personal_briefing"] = personal_briefing
-            if messages_from_gm:
-                entry["messages_from_gm"] = messages_from_gm
-
-            state["pending_updates"].append(entry)
-
-        # Update last poll time and persist to DB
-        state["last_poll"] = datetime.now()
-        update_player_state(
-            player_id,
-            pending_updates=state["pending_updates"],
-            last_poll=state["last_poll"],
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to poll game updates for player {player_id}: {e}")
+def _build_share_text(msgs: dict, game_title: str = "") -> str:
+    """Build pre-filled text for t.me/share/url?text= parameter."""
+    base = msgs.get("share_text", "Join the game")
+    if game_title:
+        # Strip any existing guillemets from the title to avoid double-wrapping
+        # e.g. incoming «Title» wrapped again produces ««Title»»
+        clean_title = game_title.strip("\u00ab\u00bb")
+        return f"{base} \u00ab{clean_title}\u00bb!"
+    return f"{base}!"
 
 
 async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
@@ -844,6 +516,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         game_started = result.get("game_started", False)
         game_just_started = result.get("game_just_started", False)
         other_player_ids = result.get("other_player_ids", [])
+        game_title = result.get("game_title", "")
 
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
 
@@ -926,9 +599,11 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         if BOT_USERNAME:
             game_id = profile.get("game_id", "")
             if game_id:
-                invite_url = (
-                    f"https://t.me/{BOT_USERNAME}?start=game={game_id}:{player_id}"
+                invite_url = await create_start_link(
+                    bot, f"{game_id}:{player_id}", encode=True
                 )
+                share_text = _build_share_text(onboarding_msgs, game_title)
+                share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(share_text, safe='')}"
                 # Escape the URL for Markdown to handle underscores in bot username
                 invite_text = (
                     onboarding_msgs["invite_title"]
@@ -943,7 +618,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         [
                             InlineKeyboardButton(
                                 text=onboarding_msgs["invite_button"],
-                                url=invite_url,  # Real URL (no escaping needed for button)
+                                url=share_url,
                             )
                         ]
                     ]
@@ -1014,7 +689,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     reply_markup=create_main_menu_keyboard(),
                 )
         except Exception:
-            pass
+            logger.error(
+                f"Failed to send fallback message to player {player_id}", exc_info=True
+            )
 
 
 async def _broadcast_new_player(
@@ -1210,13 +887,12 @@ def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboar
 
 
 def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Create main menu keyboard"""
+    """Create compact main menu keyboard with horizontal button layout"""
     menu = lang.get_menu(BOT_LANGUAGE)
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=menu["start"])],
-            [KeyboardButton(text=menu["profile"])],
-            [KeyboardButton(text=menu["today"])],
+            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"])],
+            [KeyboardButton(text=menu["today"]), KeyboardButton(text=menu["invite"])],
             [KeyboardButton(text=menu["help"])],
         ],
         resize_keyboard=True,
@@ -1252,42 +928,6 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 
 
 # ============== Handlers ==============
-
-
-def parse_game_id_from_start_command(text: str) -> tuple[str | None, int | None]:
-    """Extract game_id and optional referrer_id from `/start game=...` payload.
-
-    Accepted payload format (Telegram deep link):
-        game=<game_id>:<referrer_id>
-
-    The ``:`` delimiter keeps the referrer Telegram id visually and
-    syntactically separate from the game id, so game ids that themselves
-    contain digits/underscores are never mis-parsed.
-
-    Returns:
-        ``(game_id, referrer_id)`` — referrer_id is ``None`` when the deep
-        link carries no referral suffix.
-    """
-    if not text:
-        return None, None
-
-    text_parts = text.split()
-    if len(text_parts) <= 1:
-        return None, None
-
-    for part in text_parts[1:]:
-        if part.startswith("game="):
-            payload = part[len("game=") :].strip()
-            if not payload:
-                return None, None
-            # Split off the trailing referrer id after the ':' delimiter.
-            if ":" in payload:
-                game_id, _, ref_part = payload.rpartition(":")
-                referrer_id: int | None = int(ref_part) if ref_part.isdigit() else None
-                return (game_id or None), referrer_id
-            return payload, None
-
-    return None, None
 
 
 async def create_new_game(player_id: int) -> str:
@@ -1487,7 +1127,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
-async def cmd_start(message: types.Message, state: FSMContext):
+async def cmd_start(message: types.Message, command: CommandObject, state: FSMContext):
     """Handle /start command - Begin onboarding or join existing game"""
     assert message.from_user is not None
     player_id = message.from_user.id
@@ -1514,7 +1154,20 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         return
 
-    game_id, referrer_id = parse_game_id_from_start_command(message.text or "")
+    game_id, referrer_id = None, None
+    if command.args:
+        try:
+            payload = decode_payload(command.args)
+            if payload and ":" in payload:
+                game_id, referrer_id_str = payload.split(":", 1)
+                referrer_id = (
+                    int(referrer_id_str) if referrer_id_str.isdigit() else None
+                )
+            elif payload:
+                game_id = payload
+        except Exception as e:
+            logger.warning(f"Failed to decode start payload: {e}")
+
     if game_id:
         logger.info(f"Player {player_id} started with game_id={game_id} from deep link")
         if referrer_id:
@@ -1559,21 +1212,69 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
             # Player already has a profile - welcome back
             await send_random_loading_image(message)
-            await message.answer(
-                msgs["welcome_back"].format(
-                    role=profile["role"],
-                    role_description=profile["role_description"],
-                    traits=", ".join(profile["personality_traits"]),
-                ),
-                reply_markup=create_main_menu_keyboard(),
+
+            welcome_text = msgs["welcome_back"].format(
+                role=profile["role"],
+                role_description=profile["role_description"],
+                traits=", ".join(profile["personality_traits"]),
             )
+
+            # Try to send avatar as photo, fall back to text-only
+            avatar_url = profile.get("avatar_url")
+            avatar_sent = False
+
+            if avatar_url:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        resp = await session.get(
+                            avatar_url,
+                            timeout=aiohttp.ClientTimeout(total=60),
+                        )
+                        if resp.status == 200:
+                            photo_data = await resp.read()
+                            photo = BufferedInputFile(photo_data, filename="avatar.png")
+                            if message.bot:
+                                await message.bot.send_photo(
+                                    chat_id=player_id,
+                                    photo=photo,
+                                    caption=welcome_text,
+                                    parse_mode="Markdown",
+                                    reply_markup=create_main_menu_keyboard(),
+                                )
+                                avatar_sent = True
+                except Exception as avatar_err:
+                    logger.warning(
+                        f"Failed to send welcome_back avatar for {player_id}: {avatar_err}"
+                    )
+
+            if not avatar_sent:
+                await message.answer(
+                    welcome_text,
+                    parse_mode="Markdown",
+                    reply_markup=create_main_menu_keyboard(),
+                )
 
             # Send invite link for existing player
             if BOT_USERNAME:
                 game_id = profile.get("game_id", "")
-                if game_id:
-                    invite_url = (
-                        f"https://t.me/{BOT_USERNAME}?start=game={game_id}:{player_id}"
+                if game_id and message.bot is not None:
+                    # Fetch game title for share text
+                    game_title = ""
+                    try:
+                        title_data = await api_request(
+                            "GET", "/game/title", params={"game_id": game_id}
+                        )
+                        if title_data and title_data.get("title"):
+                            game_title = title_data["title"]
+                    except Exception:
+                        pass
+
+                    invite_url = await create_start_link(
+                        message.bot, f"{game_id}:{player_id}", encode=True
+                    )
+                    share_url = (
+                        f"https://t.me/share/url?url={quote(invite_url, safe='')}"
+                        f"&text={quote(_build_share_text(msgs, game_title), safe='')}"
                     )
                     invite_text = (
                         msgs.get("invite_title", "")
@@ -1582,8 +1283,22 @@ async def cmd_start(message: types.Message, state: FSMContext):
                             invite_url=escape_markdown(invite_url)
                         )
                     )
+                    invite_keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=msgs.get("invite_button", "Invite"),
+                                    url=share_url,
+                                )
+                            ]
+                        ]
+                    )
                     try:
-                        await message.answer(invite_text, parse_mode="Markdown")
+                        await message.answer(
+                            invite_text,
+                            parse_mode="Markdown",
+                            reply_markup=invite_keyboard,
+                        )
                     except Exception as e:
                         logger.warning(
                             f"Failed to send invite to player {player_id}: {e}"
@@ -1722,7 +1437,10 @@ async def cmd_today(message: types.Message):
                 ignore_codes=(404,),
             )
         except Exception:
-            pass
+            logger.error(
+                f"Failed to fetch briefing for player {player_id} day {current_day_num}",
+                exc_info=True,
+            )
 
         if briefing and briefing.get("choices"):
             # New system: show personal briefing
@@ -1745,7 +1463,10 @@ async def cmd_today(message: types.Message):
                 if day_data:
                     crew_dialogues_today = day_data.get("crew_dialogues", [])
             except Exception:
-                pass
+                logger.error(
+                    "Failed to fetch day data, continuing without crew dialogues",
+                    exc_info=True,
+                )
 
             crew_behavior_text = ""
             if crew_dialogues_today:
@@ -1878,6 +1599,95 @@ async def cmd_bridge(message: types.Message):
         await message.answer(str(e))
 
 
+async def cmd_invite(message: types.Message):
+    """Send invite link to current game"""
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    msgs = lang.get_onboarding(BOT_LANGUAGE)
+
+    try:
+        profile = await api_request(
+            "GET", f"/players/{player_id}/profile", ignore_codes=(404,)
+        )
+        if not profile:
+            await message.answer(
+                lang.get_profile(BOT_LANGUAGE)["no_profile"],
+                reply_markup=create_main_menu_keyboard(),
+            )
+            return
+
+        game_id = profile.get("game_id", "")
+        if not game_id:
+            await message.answer(
+                "No active game found. Use /start to join a game.",
+                reply_markup=create_main_menu_keyboard(),
+            )
+            return
+
+        if BOT_USERNAME and message.bot is not None:
+            # Fetch game title for share text
+            game_title = ""
+            try:
+                title_data = await api_request(
+                    "GET", "/game/title", params={"game_id": game_id}
+                )
+                if title_data and title_data.get("title"):
+                    game_title = title_data["title"]
+            except Exception:
+                pass
+
+            invite_url = await create_start_link(
+                message.bot, f"{game_id}:{player_id}", encode=True
+            )
+            share_text = _build_share_text(msgs, game_title)
+            share_url = (
+                f"https://t.me/share/url?url={quote(invite_url, safe='')}"
+                f"&text={quote(share_text, safe='')}"
+            )
+            invite_text = (
+                msgs["invite_title"]
+                + "\n\n"
+                + msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
+            )
+
+            invite_keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=msgs["invite_button"],
+                            url=share_url,
+                        )
+                    ]
+                ]
+            )
+
+            try:
+                await message.answer(
+                    invite_text,
+                    parse_mode="Markdown",
+                    reply_markup=invite_keyboard,
+                )
+                logger.info(f"Sent invite link to player {player_id}: {invite_url}")
+            except Exception as e:
+                logger.warning(f"Failed to send invite to player {player_id}: {e}")
+                await message.answer(
+                    msgs["invite_title"] + "\n\n" + invite_url,
+                    reply_markup=invite_keyboard,
+                )
+        else:
+            await message.answer(
+                "Bot username is not available. Invite links cannot be generated at this moment.",
+                reply_markup=create_main_menu_keyboard(),
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to send invite for player {player_id}: {e}")
+        await message.answer(
+            "Failed to generate invite link. Please try again later.",
+            reply_markup=create_main_menu_keyboard(),
+        )
+
+
 async def cmd_help(message: types.Message):
     """Show help information"""
     assert message.from_user is not None
@@ -1959,26 +1769,8 @@ async def cmd_gm_start_game(message: types.Message):
                 player_count=player_count,
                 npc_count=npc_count,
             )
-            if result.get("briefings"):
-                msg += gm_msgs["briefings_sent"]
             await message.answer(msg, parse_mode="Markdown")
-
-            # ── Broadcast bridge image + mission info ──────────────────────
-            await _send_bridge_and_mission(
-                bot=message.bot,
-                gm_message=message,
-                game_id=game_id,
-                bridge_url=result.get("bridge_image_url"),
-                mission=result.get("mission", {}),
-                suppress_player_id=player_id,
-            )
-
-            # ── Send individual briefings to all players ────────────────────
-            await _send_game_briefings(
-                bot=message.bot,
-                game_id=game_id,
-                day_num=day_num,
-            )
+            # Bridge, mission & briefings are delivered via push_briefings
         else:
             await message.answer(gm_msgs["start_game_error"].format(error=result))
     except Exception as e:
@@ -2242,24 +2034,6 @@ async def cmd_gm_restart_game(message: types.Message):
         parse_mode="Markdown",
     )
 
-    # Suppress polling delivery for all game players so the polling loop does NOT
-    # send briefings generated by /admin/start-game before explicit delivery below.
-    try:
-        players_result = await api_request(
-            "GET", "/players", params={"game_id": game_id}
-        )
-        if players_result:
-            for p in players_result:
-                if isinstance(p, dict):
-                    pid = p.get("player_id")
-                    if pid is not None:
-                        _restart_suppressed_players.add(pid)
-        logger.info(
-            f"[RACE_FIX] Suppressed polling for {len(_restart_suppressed_players)} player(s) during restart"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to pre-fetch players for suppression: {e}")
-
     try:
         # Step 1: Reset game state
         result = await api_request(
@@ -2270,8 +2044,28 @@ async def cmd_gm_restart_game(message: types.Message):
         )
         if not result or result.get("status") != "success":
             await message.answer(gm_msgs["restart_game_error"].format(error=result))
-            _restart_suppressed_players.clear()
             return
+
+        # Reset dedup cache for all players in this game — otherwise push_server
+        # will skip delivery because _last_sent_briefing_day still has the old day 1
+        # from the previous game session (loaded from persistent DB at startup).
+        try:
+            players_result = await api_request(
+                "GET", "/players", params={"game_id": game_id}
+            )
+            if players_result:
+                for p in players_result:
+                    if isinstance(p, dict):
+                        pid = p.get("player_id")
+                        if pid is not None and pid in _last_sent_briefing_day:
+                            del _last_sent_briefing_day[pid]
+                            update_player_state(pid, last_briefing_day_sent=None)
+                            logger.info(
+                                f"[DEDUP] Reset briefing cache for player {pid} "
+                                f"(game restart)"
+                            )
+        except Exception as e:
+            logger.warning(f"Failed to reset dedup cache for restart: {e}")
 
         # Step 2: Immediately start the game (generate Day 1)
         start_result = await api_request(
@@ -2292,61 +2086,15 @@ async def cmd_gm_restart_game(message: types.Message):
                 player_count=start_result.get("player_count", 0),
                 npc_count=start_result.get("npc_count", 0),
             )
-            if start_result.get("briefings"):
-                msg += gm_msgs["briefings_sent"]
             await message.answer(msg, parse_mode="Markdown")
-
-            # ── Broadcast bridge image + mission info ──────────────────────
-            await _send_bridge_and_mission(
-                bot=message.bot,
-                gm_message=message,
-                game_id=game_id,
-                bridge_url=start_result.get("bridge_image_url"),
-                mission=start_result.get("mission", {}),
-                suppress_player_id=player_id,
-            )
-
-            # ── Send individual briefings to all players ────────────────────
-            day_num = start_result.get("day", 1)
-            briefing_sent_ids = await _send_game_briefings(
-                bot=message.bot,
-                game_id=game_id,
-                day_num=day_num,
-            )
-
-            # Clear any pending updates that polling may have queued during
-            # the long /admin/start-game call — we just sent everything manually.
-            for pid in briefing_sent_ids:
-                try:
-                    ps = get_player_state(pid)
-                    old_pending = len(ps.get("pending_updates", []))
-                    if old_pending:
-                        ps["pending_updates"] = []
-                        update_player_state(pid, pending_updates=[])
-                        logger.info(
-                            f"Cleared {old_pending} pending updates for player {pid} after restart briefing send"
-                        )
-                except Exception:
-                    pass
-
-            # Re-enable polling for all suppressed players — explicit delivery is done
-            unsuppressed = list(_restart_suppressed_players)
-            _restart_suppressed_players.clear()
-            if unsuppressed:
-                logger.info(
-                    f"[RACE_FIX] Re-enabled polling for {len(unsuppressed)} player(s) after restart "
-                    f"({unsuppressed})"
-                )
+            # Bridge, mission & briefings are delivered via push_briefings
         else:
-            # Game was reset but start failed
-            _restart_suppressed_players.clear()
             await message.answer(
                 gm_msgs["restart_game_error"].format(
                     error="Сброс выполнен, но запуск не удался: " + str(start_result)
                 )
             )
     except Exception as e:
-        _restart_suppressed_players.clear()
         logger.error(f"Failed to restart game {game_id}: {e}")
         await message.answer(gm_msgs["restart_game_error"].format(error=e))
 
@@ -2398,11 +2146,11 @@ async def handle_text_message(message: types.Message):
 
         msgs = lang.get_messages(BOT_LANGUAGE)
 
-        # If there's a response from Game Master, show it
+        # If there's a response from Game Master, show it (plain text —
+        # LLM output is not valid Telegram Markdown and would break parsing)
         if response and response.get("response"):
             await message.answer(
                 f"{msgs['game_master_response']}\n\n{response['response']}",
-                parse_mode="Markdown",
             )
         else:
             await message.answer(msgs["text_received"])
@@ -2863,243 +2611,6 @@ async def refresh_game(callback: types.CallbackQuery):
 # ============== Polling Loop ==============
 
 
-async def _process_game_update_for_player(
-    player_id: int, update: dict, bot: Bot
-) -> None:
-    """Send game updates (briefings, actions, messages) to the player via Telegram."""
-    # Defense-in-depth dedup: skip if we already sent briefing for this day
-    day_data = update.get("day", {})
-    if isinstance(day_data, dict):
-        update_day_num = day_data.get("day")
-        if update_day_num is not None:
-            last_sent = _last_sent_briefing_day.get(player_id)
-            if last_sent == update_day_num:
-                logger.debug(
-                    f"[DEDUP] Skipping send for player {player_id}, day {update_day_num}"
-                )
-                return
-    day = update.get("day", {})
-    actions = update.get("actions", [])
-    personal_briefing = update.get("personal_briefing")
-    messages_from_gm = update.get("messages_from_gm", [])
-
-    msgs = lang.get_current_day(BOT_LANGUAGE)
-
-    if personal_briefing and actions:
-        # New personal-briefing system: send briefing + action choices
-        briefing_text = personal_briefing.get("briefing", "")
-        choices = personal_briefing.get("choices", actions)
-        day_num = day.get("day", "")
-        comic_url = personal_briefing.get("comic_url")
-        briefing_image_url = personal_briefing.get("briefing_image_url")
-
-        # Send briefing image first, if available
-        if briefing_image_url:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    resp = await session.get(
-                        briefing_image_url,
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    )
-                    if resp.status == 200:
-                        photo_data = await resp.read()
-                        photo = BufferedInputFile(photo_data, filename="briefing.png")
-                        await bot.send_photo(
-                            chat_id=player_id,
-                            photo=photo,
-                        )
-                        logger.info(
-                            f"Sent briefing image to player {player_id} for day {day_num}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Failed to download briefing image: {resp.status}"
-                        )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to send briefing image to player {player_id}: {e}"
-                )
-
-        # Send comic image, if available (after briefing image)
-        if comic_url:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    resp = await session.get(
-                        comic_url,
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    )
-                    if resp.status == 200:
-                        photo_data = await resp.read()
-                        photo = BufferedInputFile(photo_data, filename="comic.png")
-                        await bot.send_photo(
-                            chat_id=player_id,
-                            photo=photo,
-                        )
-                        logger.info(
-                            f"Sent comic to player {player_id} for day {day_num}"
-                        )
-                    else:
-                        logger.warning(f"Failed to download comic: {resp.status}")
-            except Exception as e:
-                logger.warning(f"Failed to send comic to player {player_id}: {e}")
-
-        # Build crew behavior text from NPC dialogues in the personal briefing
-        crew_dialogues = personal_briefing.get("crew_dialogues", [])
-        crew_behavior_text = ""
-        if crew_dialogues:
-            dialogue_lines = []
-            for d in crew_dialogues:
-                line = f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
-                dialogue_lines.append(line)
-            crew_separator = "\n---\n"
-            crew_behavior_text = (
-                f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
-            )
-
-        actions_text = "\n\n".join(
-            [
-                f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
-                for i, a in enumerate(choices)
-            ]
-        )
-
-        text = (
-            msgs["title"].format(day=day_num)
-            + "\n\n"
-            + msgs["briefing_header"].format(briefing=briefing_text)
-            + crew_behavior_text
-            + "\n\n"
-            + msgs["actions"].format(actions=actions_text)
-            + "\n\n"
-            + msgs["select_action"]
-        )
-
-        try:
-            await bot.send_message(
-                chat_id=player_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=create_action_keyboard(choices),
-            )
-            logger.info(f"Sent briefing to player {player_id} for day {day_num}")
-        except Exception as e:
-            logger.error(f"Failed to send briefing to player {player_id}: {e}")
-
-    elif day and actions and not personal_briefing:
-        # Legacy system: send story + actions
-        story_text = day.get("story", day.get("briefing", ""))
-        crew_dialogues = day.get("crew_dialogues", [])
-        day_num = day.get("day", "")
-
-        actions_text = "\n\n".join(
-            [
-                f"{i + 1} - {escape_markdown(a.get('text', a.get('description', '')))}"
-                for i, a in enumerate(actions)
-            ]
-        )
-
-        npc_text = ""
-        if crew_dialogues:
-            npc_text = "\n".join(
-                [
-                    f"- {d.get('npc', 'NPC')}: {d.get('dialogue', '')}"
-                    for d in crew_dialogues
-                ]
-            )
-            npc_text = "\n\n" + msgs["crew_dialogues"] + "\n" + npc_text
-
-        text = (
-            msgs["title"].format(day=day_num)
-            + "\n\n"
-            + msgs["story"].format(story=story_text)
-            + npc_text
-            + "\n\n"
-            + msgs["actions"].format(actions=actions_text)
-            + "\n\n"
-            + msgs["select_action"]
-        )
-
-        try:
-            await bot.send_message(
-                chat_id=player_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=create_action_keyboard(actions),
-            )
-            logger.info(f"Sent legacy briefing to player {player_id} for day {day_num}")
-        except Exception as e:
-            logger.error(f"Failed to send legacy briefing to player {player_id}: {e}")
-
-    # Forward GM messages
-    for gm_msg in messages_from_gm:
-        msg_text = gm_msg.get("message", gm_msg.get("text", ""))
-        if msg_text:
-            try:
-                await bot.send_message(
-                    chat_id=player_id,
-                    text=f"📨 *Сообщение от Game Master:*\n\n{escape_markdown(msg_text)}"
-                    if BOT_LANGUAGE == "ru"
-                    else f"📨 *Message from Game Master:*\n\n{escape_markdown(msg_text)}",
-                    parse_mode="Markdown",
-                )
-            except Exception as e:
-                logger.error(f"Failed to send GM message to player {player_id}: {e}")
-
-
-async def polling_loop(bot: Bot):
-    """Background polling loop for checking updates"""
-    logger.info("Starting polling loop")
-
-    while True:
-        try:
-            # Get all player IDs from state storage
-            player_ids = get_all_player_ids()
-
-            for player_id in player_ids:
-                state = get_player_state(player_id)
-
-                # Skip players whose game is being restarted — explicit delivery
-                # in cmd_gm_restart_game handles them after all content is generated.
-                if player_id in _restart_suppressed_players:
-                    continue
-
-                # Check if enough time has passed since last poll
-                if (
-                    datetime.now() - state["last_poll"]
-                ).total_seconds() >= POLLING_INTERVAL:
-                    await poll_game_updates(player_id)
-
-                    # RE-READ state after poll_game_updates saved new entries to DB
-                    # (poll_game_updates gets its own state reference internally)
-                    state = get_player_state(player_id)
-
-                    # Process pending updates
-                    for update in state.get("pending_updates", []):
-                        if update["type"] == "game_update":
-                            await _process_game_update_for_player(
-                                player_id, update, bot
-                            )
-                            # Track last sent briefing day for dedup
-                            day_data = update.get("day", {})
-                            if isinstance(day_data, dict):
-                                day_num = day_data.get("day")
-                                if day_num is not None:
-                                    _mark_briefing_sent(player_id, day_num)
-
-                    # Clear processed updates
-                    state["pending_updates"] = []
-                    update_player_state(player_id, pending_updates=[])
-
-            await asyncio.sleep(POLLING_INTERVAL)
-
-        except Exception as e:
-            logger.error(f"Error in polling loop: {e}")
-            await asyncio.sleep(60)  # Wait before retrying
-
-
-# ============== Main Entry Point ==============
-
-
 async def main():
     """Main entry point"""
     if not BOT_TOKEN:
@@ -3127,11 +2638,13 @@ async def main():
         logger.warning(f"Failed to fetch bot username: {e}")
 
     # Register handlers
-    dp.message.register(cmd_start, Command("start"))
+    dp.message.register(cmd_start, CommandStart())
+    dp.message.register(cmd_start, CommandStart(deep_link=True))
     dp.message.register(cmd_profile, Command("profile"))
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(cmd_bridge, Command("bridge"))
+    dp.message.register(cmd_invite, Command("invite"))
     dp.message.register(cmd_gm_start_game, Command("gm_start_game"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list_games, Command("gm_list_games"))
@@ -3174,17 +2687,22 @@ async def main():
 
     logger.info("Starting Telegram Bot")
 
-    # Start polling loop in background
-    polling_task = asyncio.create_task(polling_loop(bot))
+    # Start push HTTP server (replaces old polling loop)
+    from push_server import start_push_server
 
-    # Start bot polling
+    push_runner = await start_push_server(
+        bot=bot,
+        language=BOT_LANGUAGE,
+        last_sent_briefing_day=_last_sent_briefing_day,
+        mark_sent_fn=_mark_briefing_sent,
+        create_keyboard_fn=create_action_keyboard,
+    )
+
+    # Start bot polling (aiogram)
     await dp.start_polling(bot)
 
-    # Clean up
-    polling_task.cancel()
-
-    with suppress(asyncio.CancelledError):
-        await polling_task
+    # Clean up push server
+    await push_runner.cleanup()
 
 
 if __name__ == "__main__":

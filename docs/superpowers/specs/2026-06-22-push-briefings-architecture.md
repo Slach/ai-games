@@ -22,19 +22,25 @@ Replace polling with **push delivery**: the service that generates content
 
 ## Architecture
 
-### Current (broken)
+### Current (partially implemented)
+
+`push_client.py` и `push_server.py` созданы, но push-сервер НЕ ЗАПУЩЕН.
+Polling loop всё ещё работает, что приводит к дублированию брифингов.
 
 ```
 Scheduler ──POST /admin/generate-day──→ game-server-api
 GM cmd    ──POST /admin/start-game───→ game-server-api
 
-                                        polling loop (30s)
+                                        polling loop (30s) ← ЕЩЁ НЕ УДАЛЁН
 telegram-bot ──GET /game/poll/{id}──→ game-server-api
               ← briefing data
               → bot.send_message() (Telegram)
+
+            game-server-api ──POST /push/briefings──→ telegram-bot:9090
+                                                     ✘ сервер НЕ ЗАПУЩЕН
 ```
 
-### Target
+### Target (что нужно сделать)
 
 ```
 Scheduler ──POST /admin/generate-day──→ game-server-api
@@ -42,7 +48,7 @@ GM cmd    ──POST /admin/start-game───→ game-server-api
 
             game-server-api генерирует LLM → ComfyUI → сохраняет в БД
                                ↓
-                    POST /push/briefings ── exponential retry ──→ telegram-bot
+                    POST /push/briefings ── exponential retry ──→ telegram-bot:9090
                                                                   ↓
                                                          bot.send_message() (Telegram)
 ```

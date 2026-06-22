@@ -11,7 +11,7 @@ from aiohttp import web
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
-from language import get_bridge, get_current_day
+from language import get_actions, get_bridge, get_current_day
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,7 @@ def _build_briefing_text(
     if crew_dialogues:
         sep = "\n---\n"
         lines = [
-            f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
-            for d in crew_dialogues
+            f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}" for d in crew_dialogues
         ]
         crew_txt = f"\n\n*{'Поведение экипажа' if language == 'ru' else 'Crew behavior'}*:\n{sep.join(lines)}"
 
@@ -60,12 +59,13 @@ def _build_briefing_text(
 async def _download_image(url: str, timeout: int = 30) -> bytes | None:
     """Download an image from URL and return raw bytes."""
     try:
-        async with aiohttp.ClientSession() as session, session.get(
-            url, timeout=aiohttp.ClientTimeout(total=timeout)
-        ) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                logger.warning(f"[PUSH] Failed to download image: HTTP {resp.status}")
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
+        ):
+            if resp.status == 200:
+                return await resp.read()
+            logger.warning(f"[PUSH] Failed to download image: HTTP {resp.status}")
     except Exception as e:
         logger.warning(f"[PUSH] Failed to download image: {e}")
     return None
@@ -77,9 +77,9 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     language: str = request.app.get("language", "ru")
     last_sent: dict[int, int | None] = request.app["last_sent_briefing_day"]
     mark_sent_fn: Callable[[int, int], None] = request.app["mark_sent_fn"]
-    create_keyboard_fn: Callable[
-        [list[dict[str, Any]]], InlineKeyboardMarkup
-    ] = request.app["create_keyboard_fn"]
+    create_keyboard_fn: Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] = (
+        request.app["create_keyboard_fn"]
+    )
 
     try:
         payload = await request.json()
@@ -200,6 +200,170 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     )
 
 
+async def handle_push_player_comic(request: web.Request) -> web.Response:
+    """Handle POST /push/player-comic from game-server-api.
+
+    Delivers a single comic image to the player who performed the action.
+    This is called after fire-and-forget comic generation completes.
+    Payload: {"player_id": int, "day": int, "comic_url": str, "game_id": str}
+    """
+    bot: Bot = request.app["bot"]
+    language: str = request.app.get("language", "ru")
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response(
+            {"status": "error", "message": f"Invalid JSON: {e}"}, status=400
+        )
+
+    player_id = payload.get("player_id")
+    day = payload.get("day")
+    comic_url = payload.get("comic_url")
+
+    if not player_id or not day or not comic_url:
+        return web.json_response(
+            {"status": "error", "message": "Missing player_id, day or comic_url"},
+            status=400,
+        )
+
+    try:
+        logger.info(f"[PUSH_COMIC] Sending comic to player {player_id} for day {day}")
+
+        # Download and send the comic image
+        img_data = await _download_image(comic_url)
+        if img_data:
+            photo = BufferedInputFile(img_data, filename="action_comic.png")
+            msgs = get_actions(language)
+            action_text = payload.get("action_text", "")
+            if action_text:
+                caption = action_text
+            else:
+                caption = msgs.get("comic_caption", "")
+            await bot.send_photo(
+                chat_id=player_id,
+                photo=photo,
+                caption=caption,
+            )
+            logger.info(f"[PUSH_COMIC] Comic delivered to player {player_id}")
+        else:
+            logger.warning(
+                f"[PUSH_COMIC] Failed to download comic for player {player_id}"
+            )
+
+        return web.json_response({"status": "ok"})
+
+    except Exception as e:
+        logger.error(f"[PUSH_COMIC] Failed to send comic to player {player_id}: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+async def handle_push_outcome(request: web.Request) -> web.Response:
+    """Handle POST /push/outcome from game-server-api.
+
+    Delivers the combined day outcome (narrative + status + comic) to all alive players.
+    This is called after _analyze_day_outcome completes.
+    """
+    bot: Bot = request.app["bot"]
+    language: str = request.app.get("language", "ru")
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response(
+            {"status": "error", "message": f"Invalid JSON: {e}"}, status=400
+        )
+
+    day = payload.get("day")
+    outcome_text = payload.get("outcome_text", "")
+    alive_players = payload.get("alive_players", [])
+    comic_url = payload.get("comic_url")
+    ship_status = payload.get("ship_status")
+    death_notices = payload.get("death_notices")
+
+    if not day or not alive_players:
+        return web.json_response(
+            {"status": "error", "message": "Missing day or alive_players"},
+            status=400,
+        )
+
+    # Build outcome message text
+    current_msgs = get_current_day(language)
+    outcome_title = current_msgs.get("outcome_title", "Day {day} - Outcome").format(
+        day=day
+    )
+    parts = [outcome_title, "", outcome_text]
+
+    if ship_status:
+        if language == "ru":
+            status_text = (
+                "\U0001f6a2 Корабль цел"
+                if ship_status == "alive"
+                else "\U0001f4a5 Корабль уничтожен!"
+            )
+        else:
+            status_text = (
+                "\U0001f6a2 Ship is intact"
+                if ship_status == "alive"
+                else "\U0001f4a5 Ship destroyed!"
+            )
+        parts.append("")
+        parts.append(status_text)
+
+    if death_notices:
+        if language == "ru":
+            parts.append("")
+            parts.append(
+                "\u2620 \u041f\u043e\u0442\u0435\u0440\u0438 \u044d\u043a\u0438\u043f\u0430\u0436\u0430:"
+            )
+        else:
+            parts.append("")
+            parts.append("\u2620 Crew losses:")
+        for notice in death_notices:
+            role = notice.get("role", "")
+            name = notice.get("name", "")
+            parts.append(f"\u2022 {name} ({role})")
+
+    outcome_message = "\n".join(parts)
+
+    sent_player_ids: list[int] = []
+
+    for player_id in alive_players:
+        try:
+            # Send comic first if available
+            if comic_url:
+                img_data = await _download_image(comic_url)
+                if img_data:
+                    photo = BufferedInputFile(img_data, filename="outcome_comic.png")
+                    await bot.send_photo(
+                        chat_id=player_id,
+                        photo=photo,
+                    )
+
+            # Send outcome narrative
+            await bot.send_message(
+                chat_id=player_id,
+                text=outcome_message,
+            )
+
+            sent_player_ids.append(player_id)
+            logger.info(
+                f"[PUSH_OUTCOME] Outcome for day {day} sent to player {player_id}"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"[PUSH_OUTCOME] Failed to send outcome to player {player_id}: {e}"
+            )
+
+    return web.json_response(
+        {
+            "status": "ok",
+            "sent": sent_player_ids,
+        }
+    )
+
+
 async def start_push_server(
     bot: Bot,
     language: str = "ru",
@@ -224,12 +388,16 @@ async def start_push_server(
     if last_sent_briefing_day is None:
         last_sent_briefing_day = {}
     if mark_sent_fn is None:
+
         def _noop_mark_sent(pid: int, day: int) -> None:
             pass
+
         mark_sent_fn = _noop_mark_sent
     if create_keyboard_fn is None:
+
         def _noop_keyboard(choices: list) -> InlineKeyboardMarkup:
             return InlineKeyboardMarkup(inline_keyboard=[[]])
+
         create_keyboard_fn = _noop_keyboard
 
     app = web.Application()
@@ -240,6 +408,8 @@ async def start_push_server(
     app["create_keyboard_fn"] = create_keyboard_fn
 
     app.router.add_post("/push/briefings", handle_push_briefings)
+    app.router.add_post("/push/player-comic", handle_push_player_comic)
+    app.router.add_post("/push/outcome", handle_push_outcome)
 
     runner = web.AppRunner(app)
     await runner.setup()

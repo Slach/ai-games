@@ -14,6 +14,14 @@ TELEGRAM_BOT_PUSH_URL = os.getenv(
     "TELEGRAM_BOT_PUSH_URL",
     "http://telegram-bot:9090/push/briefings",
 )
+TELEGRAM_BOT_COMIC_URL = os.getenv(
+    "TELEGRAM_BOT_COMIC_URL",
+    "http://telegram-bot:9090/push/player-comic",
+)
+TELEGRAM_BOT_OUTCOME_URL = os.getenv(
+    "TELEGRAM_BOT_OUTCOME_URL",
+    "http://telegram-bot:9090/push/outcome",
+)
 PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
 PUSH_BASE_DELAY = float(os.getenv("PUSH_BASE_DELAY", "1.0"))
 PUSH_REQUEST_TIMEOUT = int(os.getenv("PUSH_REQUEST_TIMEOUT", "30"))
@@ -63,11 +71,14 @@ async def push_briefings(
         jitter = random.uniform(0, delay)
 
         try:
-            async with aiohttp.ClientSession() as session, session.post(
-                TELEGRAM_BOT_PUSH_URL,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=PUSH_REQUEST_TIMEOUT),
-            ) as resp:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    TELEGRAM_BOT_PUSH_URL,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=PUSH_REQUEST_TIMEOUT),
+                ) as resp,
+            ):
                 if resp.status == 200:
                     body = await resp.json()
                     sent_count = len(body.get("sent", []))
@@ -83,9 +94,7 @@ async def push_briefings(
                         f"[PUSH] Attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
                         f"HTTP {resp.status} - {error_text}"
                     )
-                    last_exception = Exception(
-                        f"HTTP {resp.status}: {error_text}"
-                    )
+                    last_exception = Exception(f"HTTP {resp.status}: {error_text}")
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.warning(
@@ -103,3 +112,110 @@ async def push_briefings(
         f"after {PUSH_MAX_RETRIES} attempts: {last_exception}"
     )
     return False
+
+
+async def _post_with_retry(url: str, payload: dict, label: str) -> bool:
+    """Post JSON payload to a push endpoint with exponential backoff."""
+    last_exception: Exception | None = None
+
+    for attempt in range(PUSH_MAX_RETRIES):
+        delay = PUSH_BASE_DELAY * (2**attempt)
+        jitter = random.uniform(0, delay)
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=PUSH_REQUEST_TIMEOUT),
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    logger.info(f"[PUSH] {label}: delivered successfully")
+                    return True
+                else:
+                    error_text = await resp.text()
+                    logger.warning(
+                        f"[PUSH] {label} attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
+                        f"HTTP {resp.status} - {error_text}"
+                    )
+                    last_exception = Exception(f"HTTP {resp.status}: {error_text}")
+
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning(
+                f"[PUSH] {label} attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
+                f"{type(e).__name__}: {e}. Retrying in {jitter:.1f}s..."
+            )
+            last_exception = e
+
+        if attempt < PUSH_MAX_RETRIES - 1:
+            await asyncio.sleep(jitter)
+
+    logger.error(
+        f"[PUSH] {label} failed after {PUSH_MAX_RETRIES} attempts: {last_exception}"
+    )
+    return False
+
+
+async def push_player_comic(
+    player_id: int,
+    day: int,
+    comic_url: str,
+    game_id: str = "default_game",
+    action_text: str = "",
+) -> bool:
+    """Push a player's action comic to the telegram-bot after generation.
+
+    Delivers the comic image directly to the player who performed the action.
+    """
+    payload: dict = {
+        "player_id": player_id,
+        "day": day,
+        "comic_url": comic_url,
+        "game_id": game_id,
+        "action_text": action_text,
+    }
+    label = f"comic player={player_id} day={day}"
+    return await _post_with_retry(TELEGRAM_BOT_COMIC_URL, payload, label)
+
+
+async def push_day_outcome(
+    game_id: str,
+    day: int,
+    outcome_text: str,
+    alive_players: list[int],
+    comic_url: str | None = None,
+    ship_status: str | None = None,
+    mission_progress: dict | None = None,
+    death_notices: list[dict] | None = None,
+) -> bool:
+    """Push the combined day outcome to all alive players.
+
+    Args:
+        game_id: Game identifier
+        day: Day number
+        outcome_text: Narrative description of the outcome
+        alive_players: List of player IDs still alive
+        comic_url: Optional URL to an outcome scene comic
+        ship_status: Current ship status ("alive" / "destroyed")
+        mission_progress: Dict with stage progress info
+        death_notices: List of death notice dicts with player_id and role
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "day": day,
+        "outcome_text": outcome_text,
+        "alive_players": alive_players,
+    }
+    if comic_url:
+        payload["comic_url"] = comic_url
+    if ship_status:
+        payload["ship_status"] = ship_status
+    if mission_progress:
+        payload["mission_progress"] = mission_progress
+    if death_notices:
+        payload["death_notices"] = death_notices
+
+    label = f"outcome day={day} game={game_id}"
+    return await _post_with_retry(TELEGRAM_BOT_OUTCOME_URL, payload, label)

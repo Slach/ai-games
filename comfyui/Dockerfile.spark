@@ -39,6 +39,13 @@ RUN grep -vE '^\s*#' requirements.txt | grep -viE '^\s*(torch|torchvision|torcha
 RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager && \
     /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
 
+# Install KJNodes (advanced custom nodes for various workflows)
+RUN git clone --depth 1 https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/ComfyUI-KJNodes && \
+    /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-KJNodes/requirements.txt 2>/dev/null || true
+
+# Install IP-Adapter custom nodes (for image reference / style transfer)
+RUN git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus.git /opt/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus
+
 # Fix outdated channel URLs (ltdrdata -> Comfy-Org) in Manager source
 RUN sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main|g' \
     /opt/ComfyUI/custom_nodes/ComfyUI-Manager/channels.list.template && \

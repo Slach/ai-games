@@ -1,0 +1,50 @@
+# ============== Z-Image Turbo (Base Model) ==============
+# 8-step distilled Flux model
+https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/z_image_turbo_bf16.safetensors -> diffusion_models/z_image_turbo_bf16.safetensors
+
+# ============== Text Encoders ==============
+# Qwen2.5 3B text encoder for Z-Image Turbo
+https://huggingface.co/Qwen/Qwen2.5-3B/resolve/main/model.safetensors -> text_encoders/qwen_3_4b.safetensors
+
+# Standard CLIP-L (required for some IP-Adapter models)
+https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors -> text_encoders/clip_l.safetensors
+
+# T5XXL FP8 (optional, for advanced prompting)
+# https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp16.safetensors -> text_encoders/t5xxl_fp16.safetensors
+
+# ============== VAE ==============
+https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/ae.safetensors -> vae/ae.safetensors
+https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/vae/flux2-vae.safetensors -> vae/flux2-vae.safetensors
+
+# ============== CLIP Vision (for IP-Adapter) ==============
+# OpenCLIP ViT-H-14 for IP-Adapter image encoding
+https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/clip-vit-h-14-laion2B-s32B-b79K.safetensors -> clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors
+
+# CLIP Vision ViT-L for IP-Adapter SDXL
+# https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors -> clip_vision/clip-vit-large.safetensors
+
+# ============== IP-Adapter Models ==============
+# IP-Adapter SDXL (works with many models)
+https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors -> ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors
+https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors -> ipadapter/ip-adapter-plus-face_sdxl_vit-h.safetensors
+
+# IP-Adapter SD1.5 (already have plus variant)
+https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors -> ipadapter/ip-adapter-plus_sd15.safetensors
+https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-faceid-plusv2_sd15.bin -> ipadapter/ip-adapter-faceid-plusv2_sd15.bin
+
+# IP-Adapter Flux (for Flux-based models like Z-Image Turbo)
+https://huggingface.co/InstantX/FLUX.1-dev-IP-Adapter/resolve/main/ip-adapter.bin -> ipadapter/ip-adapter-flux.safetensors
+https://huggingface.co/InstantX/FLUX.1-dev-IP-Adapter/resolve/main/ip-adapter-faceid.bin -> ipadapter/ip-adapter-flux-faceid.safetensors
+
+# IP-Adapter FaceID SDXL
+# https://huggingface.co/h94/IP-Adapter-FaceID/resolve/main/ip-adapter-faceid-plusv2_sdxl.bin -> ipadapter/ip-adapter-faceid-plusv2_sdxl.bin
+
+# ============== Optional: ControlNet for pose guidance ==============
+# https://huggingface.co/lllyasviel/sd_controlnet_collection/resolve/main/control_v11p_sd15_openpose.safetensors -> controlnet/control_v11p_sd15_openpose.safetensors
+
+# ============== LoRAs ==============
+https://huggingface.co/ByteDance/Z-Image-Turbo-LoRAs/resolve/main/pixel_art_style_z_image_turbo.safetensors -> loras/pixel_art_style_z_image_turbo.safetensors
+
+# ============== Qwen Image Models (for editing) ==============
+https://huggingface.co/Qwen/Qwen-Image-Edit-2511/resolve/main/qwen_image_edit_2511_bf16.safetensors -> diffusion_models/qwen_image_edit_2511_bf16.safetensors
+https://huggingface.co/Qwen/Qwen-Image-Edit-2511/resolve/main/vae/qwen_image_vae.safetensors -> vae/qwen_image_vae.safetensors

@@ -1,6 +1,6 @@
 # Push-Based Briefing Delivery — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace the polling loop in `telegram-bot` with push delivery from `game-server-api`.
 After `/admin/start-game`, `/admin/continue-game`, or `/admin/regenerate-turn` finish generating
@@ -25,16 +25,16 @@ downloads images, and sends them via Telegram API. The polling loop is deleted.
 
 ## File Structure
 
-| File | Responsibility |
-|------|---------------|
-| `game-server-api/push_client.py` | 🆕 Exponential retry HTTP client that calls `telegram-bot` |
-| `telegram-bot/push_server.py` | 🆕 aiohttp server with `/push/briefings` endpoint |
-| `game-server-api/main.py` | 🔧 Add push calls after `/admin/*` endpoints |
-| `telegram-bot/bot.py` | 🔧 Remove polling loop, start push server in `main()` |
-| `docker-compose.yaml` | 🔧 Add port 9090, env vars for push |
-| `docs/RULES_RU.md` | 🔧 Update architecture diagram |
-| `docs/RULES_EN.md` | 🔧 Update architecture diagram |
-| `AGENTS.md` | 🔧 Update architecture description |
+| File | Responsibility | Status |
+|------|---------------|--------|
+| `game-server-api/push_client.py` | 🆕 Exponential retry HTTP client that calls `telegram-bot` | ✅ IMPLEMENTED |
+| `telegram-bot/push_server.py` | 🆕 aiohttp server with `/push/briefings` endpoint | ✅ IMPLEMENTED |
+| `game-server-api/main.py` | 🔧 Add push calls after `/admin/*` endpoints | ✅ IMPLEMENTED (lines 2680, 3171) |
+| `telegram-bot/bot.py` | 🔧 Удалить polling loop, запустить push server в `main()` | ✅ IMPLEMENTED |
+| `docker-compose.yaml` | 🔧 Add port 9090, env vars for push | ✅ IMPLEMENTED |
+| `docs/RULES_RU.md` | 🔧 Update architecture diagram | ❌ Не обновлено |
+| `docs/RULES_EN.md` | 🔧 Update architecture diagram | ❌ Не обновлено |
+| `AGENTS.md` | 🔧 Update architecture description | ✅ Уже описано (см. AGENTS.md в проекте) |
 
 ### Task 1: push_client.py — retry HTTP client
 
@@ -46,7 +46,7 @@ downloads images, and sends them via Telegram API. The polling loop is deleted.
 
 - Produces: `async def push_briefings(game_id: str, day: int, players_briefings: list[dict], bridge_url: str | None = None, mission: dict | None = None, crew_dialogues: list | None = None, is_first_turn: bool = False) -> bool`
 
-- [ ] **Step 1: Create push_client.py with config and retry logic**
+- [x] **Step 1: Create push_client.py with config and retry logic**
 
 ```python
 """Push client that delivers briefings to telegram-bot with exponential retry."""
@@ -157,7 +157,7 @@ async def push_briefings(
     return False
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add game-server-api/push_client.py
@@ -183,7 +183,7 @@ git commit -m "feat(game-server-api): add push_client with exponential retry"
 - Uses: `lang.get_current_day()` and `lang.get_bridge()` from `language.py`
 - Uses: `BufferedInputFile` from `aiogram.types`
 
-- [ ] **Step 1: Create push_server.py with aiohttp endpoint**
+- [x] **Step 1: Create push_server.py with aiohttp endpoint**
 
 ```python
 """HTTP server for receiving push briefings from game-server-api."""
@@ -429,7 +429,7 @@ async def start_push_server(
     return runner
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add telegram-bot/push_server.py
@@ -449,7 +449,7 @@ git commit -m "feat(telegram-bot): add push server with /push/briefings endpoint
 - Consumes: `push_briefings()` from `push_client.py` (Task 1)
 - Modifies: `/admin/start-game`, `/admin/continue-game`, `/admin/regenerate-turn` endpoints
 
-- [ ] **Step 1: Add import and helper in main.py**
+- [x] **Step 1: Add import and helper in main.py**
 
 ```python
 # At top of main.py, after existing imports:
@@ -480,7 +480,7 @@ def _build_player_briefings_for_push(
     return players_data
 ```
 
-- [ ] **Step 2: Add push after `/admin/start-game` success**
+- [x] **Step 2: Add push after `/admin/start-game` success**
 
 At the end of the `admin_start_game` function, **after** the existing code that creates the game day record and builds `briefings_for_response`, add:
 
@@ -506,7 +506,7 @@ except Exception as push_err:
     logger.warning(f"[PUSH] Failed to initiate push: {push_err}")
 ```
 
-- [ ] **Step 3: Add push after `/admin/continue-game` success**
+- [x] **Step 3: Add push after `/admin/continue-game` success**
 
 At the end of `admin_continue_game`, after the game day record is created and `all_briefings` is populated, add:
 
@@ -530,11 +530,11 @@ except Exception as push_err:
     logger.warning(f"[PUSH] Failed to initiate push: {push_err}")
 ```
 
-- [ ] **Step 4: Add push after `/admin/regenerate-turn`**
+- [x] **Step 4: Add push after `/admin/regenerate-turn`**
 
 `admin_regenerate_turn` calls `admin_continue_game` internally, so the push from Step 3 will fire automatically. No additional changes needed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add game-server-api/main.py
@@ -573,7 +573,7 @@ git commit -m "feat(game-server-api): add push_briefings calls after game endpoi
 
 5. In `main()`: replace polling loop start with push server start.
 
-- [ ] **Step 1: Remove polling infrastructure from bot.py**
+- [x] **Step 1: Remove polling infrastructure from bot.py**
 
 Delete these entire function bodies (keep `_mark_briefing_sent` and `_last_sent_briefing_day`):
 
@@ -598,7 +598,7 @@ _restart_suppressed_players: set[int] = set()
 
 Keep `_mark_briefing_sent` — it's used by `push_server.py`.
 
-- [ ] **Step 2: Clean up GM commands in bot.py**
+- [x] **Step 2: Clean up GM commands in bot.py**
 
 In `cmd_gm_start_game`:
 
@@ -665,7 +665,7 @@ async def cmd_gm_start_game(message: types.Message):
 
 Same pattern for `cmd_gm_continue_game` and `cmd_gm_restart_game`.
 
-- [ ] **Step 3: Replace polling loop with push server in main()**
+- [x] **Step 3: Replace polling loop with push server in main()**
 
 In `main()`, replace:
 
@@ -706,7 +706,7 @@ with:
 await push_runner.cleanup()
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add telegram-bot/bot.py
@@ -721,7 +721,7 @@ git commit -m "refactor(telegram-bot): remove polling loop, add push server"
 
 - Modify: `docker-compose.yaml`
 
-- [ ] **Step 1: Add port and env vars for telegram-bot**
+- [x] **Step 1: Add port and env vars for telegram-bot**
 
 ```yaml
 telegram-bot:
@@ -733,7 +733,7 @@ telegram-bot:
     - PUSH_SERVER_PORT=9090
 ```
 
-- [ ] **Step 2: Add env vars for game-server-api**
+- [x] **Step 2: Add env vars for game-server-api**
 
 ```yaml
 game-server-api:
@@ -745,7 +745,7 @@ game-server-api:
     - PUSH_BASE_DELAY=1.0
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docker-compose.yaml
@@ -762,7 +762,7 @@ git commit -m "chore: add push server port and env vars to docker-compose"
 - Modify: `docs/RULES_EN.md`
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Update RULES_RU.md architecture diagram**
+- [x] **Step 1: Update RULES_RU.md architecture diagram**
 
 Replace the current ASCII diagram with:
 
@@ -793,17 +793,17 @@ Replace the current ASCII diagram with:
     └─────────┘
 ```
 
-- [ ] **Step 2: Update RULES_EN.md architecture diagram**
+- [x] **Step 2: Update RULES_EN.md architecture diagram**
 
 Same diagram but in English.
 
-- [ ] **Step 3: Update AGENTS.md**
+- [x] **Step 3: Update AGENTS.md**
 
 In the "Architecture Overview" section, update the system diagram to match the new push architecture.
 Add a note: "Briefings are pushed from game-server-api → telegram-bot via HTTP with exponential retry.
 No polling loop needed."
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/RULES_RU.md docs/RULES_EN.md AGENTS.md

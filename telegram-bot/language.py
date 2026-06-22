@@ -20,6 +20,7 @@ ONBOARDING = {
         "invite_title": "🎯 **Пригласите друзей!**",
         "invite_message": "Поделитесь этой ссылкой с друзьями, чтобы они присоединились к вашей игре:\n{invite_url}",
         "invite_button": "🔗 Пригласить друга",
+        "share_text": "Присоединяйся к игре",
         "already_in_onboarding": "Вы уже проходите онбординг. Пожалуйста, ответьте на текущий вопрос.",
         "game_starting_broadcast": "🚀 Игра начинается! {player_name} присоединился, и команда в полном составе!\n\n**{player_name}** — **{role}**\n\n{role_description}",
     },
@@ -36,6 +37,7 @@ ONBOARDING = {
         "invite_title": "🎯 **Invite friends!**",
         "invite_message": "Share this link with friends so they can join your game:\n{invite_url}",
         "invite_button": "🔗 Share Invite Link",
+        "share_text": "Join the game",
         "already_in_onboarding": "You are already in onboarding. Please answer the current question.",
         "game_starting_broadcast": "🚀 The game is starting! {player_name} has joined, and the crew is assembled!\n\n**{player_name}** — **{role}**\n\n{role_description}",
     },
@@ -45,13 +47,13 @@ ONBOARDING = {
 HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
-        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/help - Эта справка",
+        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/help - Эта справка",
         "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр",
         "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
-        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/help - This help",
+        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/help - This help",
         "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games",
         "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
@@ -91,6 +93,7 @@ CURRENT_DAY = {
         "select_action": "Выберите действие ниже:",
         "briefing_header": "{briefing}",
         "error": "Не удалось получить информацию о текущем ходе: {error}",
+        "outcome_title": "🎬 **Итоги хода {day}**",
     },
     LANGUAGE_EN: {
         "title": "🎯 **Turn {day}**",
@@ -100,6 +103,7 @@ CURRENT_DAY = {
         "select_action": "Select an action below:",
         "briefing_header": "{briefing}",
         "error": "Could not get information about the current turn: {error}",
+        "outcome_title": "🎬 **Turn {day} Outcome**",
     },
 }
 
@@ -108,10 +112,12 @@ ACTIONS = {
     LANGUAGE_RU: {
         "recorded": "Ваш выбор записан!\n\nGame Master обработает ваше решение и обновит сюжет.\n\nВы можете продолжить общение с Game Master или подождать следующего дня.",
         "error": "Произошла ошибка при записи выбора: {error}",
+        "comic_caption": "🎬 Ваше действие в эпизоде сегодняшнего дня",
     },
     LANGUAGE_EN: {
         "recorded": "Your choice has been recorded!\n\nThe Game Master will process your decision and update the plot.\n\nYou can continue communicating with the Game Master or wait for the next day.",
         "error": "An error occurred while recording the choice: {error}",
+        "comic_caption": "🎬 Your action in today's episode",
     },
 }
 
@@ -194,12 +200,14 @@ MENU = {
         "profile": "/profile",
         "today": "/today",
         "help": "/help",
+        "invite": "/invite",
     },
     LANGUAGE_EN: {
         "start": "/start",
         "profile": "/profile",
         "today": "/today",
         "help": "/help",
+        "invite": "/invite",
     },
 }
 
@@ -219,7 +227,7 @@ GM_COMMANDS = {
         "regenerate_turn_error": "❌ Ошибка перегенерации хода: {error}",
         "restart_game_usage": "❌ Использование: /gm_restart_game <game_id>\n\nПример: /gm_restart_game abc123",
         "restarting_game": "🔄 Перезапуск игры `{game_id}`...",
-        "game_restarted": "✅ **Игра перезапущена и запущена!**\n\n🎮 Игра: `{game_id}`\n🗑 Удалено ходов: {deleted_days}\n🗑 Удалено брифингов: {deleted_briefings}\n🗑 Удалено действий: {deleted_actions}\n🗑 Удалено сообщений: {deleted_messages}\n🗑 Удалена миссия: {deleted_mission}\n\n🎯 Ход: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC создано: {npc_count}\n🚀 Миссия сгенерирована",
+        "game_restarted": "✅ **Игра перезапущена!**\n\n🎮 Игра: `{game_id}`\n🗑 Удалено ходов: {deleted_days}\n🗑 Удалено брифингов: {deleted_briefings}\n🗑 Удалено действий: {deleted_actions}\n🗑 Удалено сообщений: {deleted_messages}\n🗑 Удалена миссия: {deleted_mission}\n\n🎯 Ход: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC создано: {npc_count}\n🚀 Миссия сгенерирована",
         "restart_game_error": "❌ Ошибка перезапуска игры: {error}",
         "game_started": "✅ **Игра `{game_id}` запущена!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC создано: {npc_count}\n🚀 Миссия сгенерирована\n🖼 Картинка рубки готова\n\nКоманда собрана, вводные разосланы!",
         "briefings_sent": "",
@@ -251,7 +259,7 @@ GM_COMMANDS = {
         "regenerate_turn_error": "❌ Error regenerating turn: {error}",
         "restart_game_usage": "❌ Usage: /gm_restart_game <game_id>\n\nExample: /gm_restart_game abc123",
         "restarting_game": "🔄 Restarting game `{game_id}`...",
-        "game_restarted": "✅ **Game restarted and started!**\n\n🎮 Game: `{game_id}`\n🗑 Days deleted: {deleted_days}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n🗑 Messages deleted: {deleted_messages}\n🗑 Mission deleted: {deleted_mission}\n\n🎯 Turn: {day_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated",
+        "game_restarted": "✅ **Game restarted!**\n\n🎮 Game: `{game_id}`\n🗑 Days deleted: {deleted_days}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n🗑 Messages deleted: {deleted_messages}\n🗑 Mission deleted: {deleted_mission}\n\n🎯 Turn: {day_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated",
         "restart_game_error": "❌ Error restarting game: {error}",
         "game_started": "✅ **Game `{game_id}` started!**\n\n🎯 Turn: {day_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated\n🖼 Bridge image ready\n\nCrew assembled, briefings sent!",
         "briefings_sent": "",
