@@ -14,6 +14,10 @@ from datetime import datetime
 from typing import Any
 
 import uvicorn
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, TypeAdapter
+
 from database import (
     GAME_START_MIN_PLAYERS,
     add_game_message,
@@ -81,8 +85,6 @@ from database import (
     update_onboarding_session,
     update_player_profile_last_poll,
 )
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from game_master import NPC_TEMPLATES, create_game_master_agent
 from image_generator import (
     DEFAULT_LOADING_FALLBACK_URL,
@@ -99,7 +101,7 @@ from prompts import (
     OnboardingQuestion,
     build_interleaved_species_gender_questions,
 )
-from pydantic import BaseModel, TypeAdapter
+from push_client import push_briefings
 
 # Configure logging
 logging.basicConfig(
@@ -1769,6 +1771,31 @@ async def admin_create_game(request: CreateGameRequest):
     }
 
 
+def _build_player_briefings_for_push(
+    all_briefings: list[dict],
+    crew_dialogues: list[dict],
+    day_num: int,
+) -> list[dict]:
+    """Build per-player briefing dicts for push payload from stored briefings."""
+    players_data = []
+    for b in all_briefings:
+        if b.get("is_npc"):
+            continue  # Only send to real players
+        player_id = b.get("player_id")
+        if not player_id:
+            continue
+        players_data.append(
+            {
+                "player_id": player_id,
+                "briefing": b.get("briefing", ""),
+                "choices": b.get("choices", []),
+                "comic_url": b.get("comic_url"),
+                "scene_url": None,
+            }
+        )
+    return players_data
+
+
 @app.post("/admin/generate-day")
 async def generate_daily_episode(
     language: str = "en",
@@ -2433,6 +2460,26 @@ async def admin_start_game(request: StartGameRequest):
             "stages": len(mission_data.get("objectives", [])),
         }
 
+    # ── Push briefings to telegram-bot ─────────────────────────
+    try:
+        player_briefings = _build_player_briefings_for_push(
+            all_briefings, crew_dialogues_list, day_num
+        )
+        if player_briefings:
+            asyncio.create_task(
+                push_briefings(
+                    game_id=game_id,
+                    day=day_num,
+                    players_briefings=player_briefings,
+                    bridge_url=bridge_url,
+                    mission=mission_info,
+                    crew_dialogues=crew_dialogues_list,
+                    is_first_turn=True,
+                )
+            )
+    except Exception as push_err:
+        logger.warning(f"[PUSH] Failed to initiate push: {push_err}")
+
     return {
         "status": "success",
         "day": day_num,
@@ -2903,6 +2950,24 @@ async def admin_continue_game(
 
     # Advance game state
     update_game_state(day_num + 1, "active", game_id=game_id)
+
+    # ── Push briefings to telegram-bot ─────────────────────────
+    try:
+        player_briefings = _build_player_briefings_for_push(
+            all_briefings, crew_dialogues_list, day_num
+        )
+        if player_briefings:
+            asyncio.create_task(
+                push_briefings(
+                    game_id=game_id,
+                    day=day_num,
+                    players_briefings=player_briefings,
+                    crew_dialogues=crew_dialogues_list,
+                    is_first_turn=False,
+                )
+            )
+    except Exception as push_err:
+        logger.warning(f"[PUSH] Failed to initiate push: {push_err}")
 
     logger.info("=== ADMIN CONTINUE GAME COMPLETED ===")
     logger.info(f"Day {day_num} generated with {len(all_participants)} participants")
