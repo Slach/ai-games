@@ -21,6 +21,7 @@ cp .env.example .env
 ```
 
 Make sure to set `TELEGRAM_BOT_TOKEN` in `.env`:
+
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ```
@@ -46,6 +47,7 @@ docker-compose logs -f telegram-bot
 ### Game Master API (game-server-api)
 
 Runs as a REST API server:
+
 ```bash
 # In Docker
 docker-compose logs game-server-api
@@ -64,6 +66,7 @@ Swagger UI: `http://localhost:8000/docs`
 Starts automatically with `docker-compose up`.
 
 For local testing:
+
 ```bash
 cd telegram-bot
 pip install -r requirements.txt
@@ -76,6 +79,7 @@ python bot.py
 This service triggers generation daily at 08:00 (container time). It calls the game-server-api endpoints to generate content.
 
 **Modes:**
+
 - `scheduled` (default) - runs daily generation on schedule based on GAME_SCHEDULE_TIME
 - `single` - single generation for testing/debugging
 
@@ -88,33 +92,39 @@ docker compose run --rm game-master GAME_MASTER_MODE=single GAME_LANGUAGE=ru pyt
 ```
 
 **Admin Endpoints (called by scheduler):**
+
 - `POST /admin/generate-day` - Generate new daily episode (with optional language parameter)
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic for a player
 
 ## 6. API Testing
 
 ### Health Check
+
 ```bash
 curl http://localhost:8000/health
 ```
 
 ### Get Game State
+
 ```bash
 curl http://localhost:8000/game/state
 ```
 
 ### Start Onboarding
+
 ```bash
 curl -X POST "http://localhost:8000/onboarding/start?player_id=123"
 ```
 
 ### Generate Daily Episode
+
 ```bash
 # With language parameter (en or ru)
 curl -X POST "http://localhost:8000/admin/generate-day?language=en"
 ```
 
 ### Generate Comic for Player
+
 ```bash
 # For specific day (optional)
 curl -X POST "http://localhost:8000/admin/generate-comic/123?day=5"
@@ -124,6 +134,7 @@ curl -X POST "http://localhost:8000/admin/generate-comic/123"
 ```
 
 ### Submit Player Message
+
 ```bash
 curl -X POST "http://localhost:8000/game/messages" \
   -H "Content-Type: application/json" \
@@ -131,6 +142,7 @@ curl -X POST "http://localhost:8000/game/messages" \
 ```
 
 ### Get Player Messages
+
 ```bash
 curl http://localhost:8000/game/messages/123?limit=10
 ```
@@ -142,6 +154,7 @@ docker-compose down
 ```
 
 For complete cleanup (including volumes):
+
 ```bash
 docker-compose down -v
 ```
@@ -149,6 +162,7 @@ docker-compose down -v
 ## 8. Troubleshooting
 
 ### NVIDIA GPU Not Available
+
 ```bash
 # Check NVIDIA runtime
 docker info | grep -i nvidia
@@ -159,12 +173,14 @@ docker network create spark-network
 ```
 
 ### ComfyUI Not Running
+
 ```bash
 docker-compose logs comfyui
 docker-compose ps
 ```
 
 ### Telegram Bot Not Responding
+
 ```bash
 # Check token
 docker-compose exec telegram-bot env | grep TELEGRAM
@@ -183,7 +199,7 @@ docker-compose restart telegram-bot
          ▼
 ┌───────────────────────────┐
 │    game-server-api        │  ← REST API, AI generation, database
-│  (FastAPI + STRANDS Agent)│
+│  (FastAPI + OpenAI Agent) │
 └────────┬──────────────────┘
          ▲
     ┌────┴────┐
@@ -196,8 +212,9 @@ docker-compose restart telegram-bot
 ```
 
 **Service Descriptions:**
+
 - **telegram-bot**: Player interface via Telegram commands and inline keyboards
-- **game-server-api**: FastAPI REST API with STRANDS-based Game Master agent, handles story generation, player profiles, actions, and messages
+- **game-server-api**: FastAPI REST API with OpenAI-based Game Master agent, handles story generation, player profiles, actions, and messages
 - **game-master**: Scheduler service that triggers daily episode generation (runs at configured time or manually)
 - **comfyui**: GPU-accelerated content generation backend with HuggingFace models
 

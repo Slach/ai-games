@@ -1,4 +1,5 @@
 # AI-Generated Cooperative Game Project Plan
+
 ## Improved Version (Combined from AI-Games + Obsidian AI-MMO)
 
 ## Project Overview
@@ -27,7 +28,7 @@ A cooperative game delivered through a Telegram bot and Telegram Mini App, where
                        ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    GAME MASTER API                              │
-│              (FastAPI + STRANDS Agent)                          │
+                │  (FastAPI + OpenAI Agent)                          │
 │                                                                 │
 │  ┌─────────────────────┐  ┌──────────────────┐                 │
 │  │ Game Master Agent   │  │ Comic Generator  │                 │
@@ -65,7 +66,7 @@ Database: SQLite (game_master.db)
 
 ## Core Components (Current Implementation)
 
-### 1. Game Master Agent (strands-agents) - ✅ IMPLEMENTED
+### 1. Game Master Agent (OpenAI) - ✅ IMPLEMENTED
 - Generation of daily plot using LLM
 - NPC dialogue generation with personality templates
 - Content prompt generation for visual assets
@@ -124,7 +125,7 @@ Database: SQLite (game_master.db)
 |-------|------------|
 | Bot | Python + aiogram |
 | Mini App | TypeScript + React + Three.js |
-| Game Engine | strands-agents/sdk-python |
+| Game Engine | OpenAI SDK |
 | Content Gen | ComfyUI (Docker) |
 | Database | PostgreSQL + pgvector |
 | Queue | Redis |
@@ -133,6 +134,7 @@ Database: SQLite (game_master.db)
 ## Daily Gameplay Loop (Current Flow)
 
 ```
+
 ┌─────────────────────────────────────────────────────────────┐
 │  08:00  │  Game Master Scheduler triggers daily episode    │
 ├─────────┼───────────────────────────────────────────────────┤
@@ -155,6 +157,7 @@ Database: SQLite (game_master.db)
 │  Day    │  - Story continues from previous day             │
 │         │  - Player choices influence narrative            │
 └─────────┴───────────────────────────────────────────────────┘
+
 ```
 
 ## Implementation Phases
@@ -162,8 +165,7 @@ Database: SQLite (game_master.db)
 ### Phase 1: Foundation (Months 1-2) - MOSTLY COMPLETE ✅
 
 **Implemented:**
-- [x] Docker Compose setup with all services
-- [x] Game Master Agent with STRANDS SDK integration
+- [x] Game Master Agent with OpenAI SDK integration
 - [x] Basic Telegram bot with aiogram
 - [x] Story generation system (text only)
 - [x] Onboarding flow with player profiles
@@ -181,7 +183,8 @@ Database: SQLite (game_master.db)
 - [ ] Default action selection logic improvement
 - [ ] Error handling and logging improvements
 
-**Status:** Core gameplay loop is functional. Content generation pipeline needs implementation.
+**Status:** Core gameplay loop is functional.
+Content generation pipeline needs implementation.
 
 ### Phase 2: Content Generation (Months 3-4) - PLANNED ⏳
 
@@ -294,7 +297,11 @@ Database: SQLite (game_master.db)
 
 ## Conclusion
 
-This project represents an innovative approach to gaming that leverages generative AI to create unique, daily experiences for players. The cooperative nature and daily story generation create a sense of community and anticipation that should drive engagement and retention. The modular architecture allows for future expansion to different settings and gameplay mechanics.
+This project represents an innovative approach to gaming that leverages generative AI
+to create unique, daily experiences for players. The cooperative nature and daily
+story generation create a sense of community and anticipation that should drive
+engagement and retention. The modular architecture allows for future expansion to
+different settings and gameplay mechanics.
 
 **Target:** Q1-Q2 2026
 **Time Budget:** Parallel with Flight Reminder Bot, 1-2 hours/week

@@ -1,6 +1,7 @@
 # AI Game Master
 
-AI-powered cooperative game delivered through Telegram bot. Each day, an AI generates a unique story, personalized comics, and NPC interactions based on player choices.
+AI-powered cooperative game delivered through Telegram bot. Each day, an AI generates a
+unique story, personalized comics, and NPC interactions based on player choices.
 
 ## Architecture
 
@@ -32,8 +33,7 @@ graph TD
 
 FastAPI service that orchestrates the game:
 
-- Player onboarding with behavioral testing
-- Daily story generation using STRANDS Agents SDK
+- Daily story generation using OpenAI API
 - NPC dialogue generation
 - Personalized comic generation via ComfyUI
 - Player action processing
@@ -149,7 +149,7 @@ GAME_MASTER_MODE=single docker compose run --rm game-master
 
 ## Daily Game Loop
 
-```
+```text
 08:00  - Game Master generates daily episode
 08:30  - Players receive notification with setup
 08:00-20:00 - Players vote on actions
@@ -240,7 +240,7 @@ docker compose exec telegram-bot env | grep TELEGRAM
 docker compose exec telegram-bot ping game-server-api
 ```
 
-## Configuration
+## Configuration Details
 
 | Variable | Default | Description |
 |----------|---------|-------------|
