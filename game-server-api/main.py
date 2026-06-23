@@ -3658,6 +3658,8 @@ async def admin_start_game(request: StartGameRequest):
                 p = get_player_profile(player_id)
                 if p:
                     player_name = p.get("player_name", "") or ""
+            elif participant.get("type") == "npc":
+                player_name = participant.get("npc_name", "") or ""
 
             gm_profile = {
                 "player_id": player_id,
@@ -3890,20 +3892,7 @@ async def admin_start_game(request: StartGameRequest):
                     f"[CHAR_IMAGE] Failed for player {b.get('player_id')}: {url_or_err}"
                 )
 
-    # Step C: Analyze NPC choices (real players haven't chosen yet)
-    npc_decisions = [b for b in all_briefings if b.get("is_npc")]
-    if npc_decisions:
-        outcome = gm.analyze_combined_outcome(
-            global_circ, npc_decisions, previous_summary
-        )
-        # Save the partial outcome (will be updated when real players choose)
-        update_game_day_outcome(
-            day_num,
-            json.dumps(outcome, ensure_ascii=False),
-            game_id,
-        )
-
-    # Step D: Build NPC dialogues from global circumstances
+    # NPC dialogues
     player_role = all_participants[0]["role"] if all_participants else "Crew Member"
     from game_master import GameStory
 
@@ -4503,6 +4492,8 @@ async def admin_continue_game(
             p = get_player_profile(participant["player_id"])
             if p:
                 player_name = p.get("player_name", "") or ""
+        elif participant["type"] == "npc":
+            player_name = participant.get("npc_name", "") or ""
         briefing_data = gm.generate_player_briefing_and_choices(
             global_circ, gm_profile, player_name, day_num
         )
@@ -4694,17 +4685,7 @@ async def admin_continue_game(
                     f"[CHAR_IMAGE] Failed for player {b.get('player_id')}: {url_or_err}"
                 )
 
-    # Step C: Analyze NPC choices
-    npc_decisions = [b for b in all_briefings if b.get("is_npc")]
-    if npc_decisions:
-        outcome = gm.analyze_combined_outcome(
-            global_circ, npc_decisions, previous_summary
-        )
-        update_game_day_outcome(
-            day_num, json.dumps(outcome, ensure_ascii=False), game_id
-        )
-
-    # Step D: NPC dialogues
+    # NPC dialogues
     player_role = all_participants[0]["role"] if all_participants else "Crew Member"
     from game_master import GameStory
 
