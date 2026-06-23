@@ -509,15 +509,46 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
                 },
                 "narrative": {
                     "type": "string",
-                    "description": "The shared story description for the day from the GM's perspective",
+                    "description": "The shared story description for the day from the GM's perspective. Include [avatar: role_key] markers when describing crew members (e.g. '[avatar: captain] stands at the helm, [avatar: chief_engineer] works in engineering')",
                 },
                 "key_events": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "3-5 key events happening in the background that all characters can perceive",
                 },
+                "scene_prompt": {
+                    "type": "string",
+                    "description": "A detailed English image generation prompt for this day's scene. Must be cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, lighting, and atmosphere.",
+                },
+                "crew_positions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role_key": {"type": "string"},
+                            "position": {
+                                "type": "string",
+                                "description": "Where this crew member is and what they are doing",
+                            },
+                            "avatar_ref": {
+                                "type": "string",
+                                "description": "Marker like [avatar: role_key] that will be replaced with actual avatar URL",
+                            },
+                        },
+                        "required": ["role_key", "position"],
+                        "additionalProperties": False,
+                    },
+                    "description": "Positions of each crew member in the scene for avatar reference",
+                },
             },
-            "required": ["setting", "conflict", "narrative", "key_events"],
+            "required": [
+                "setting",
+                "conflict",
+                "narrative",
+                "key_events",
+                "scene_prompt",
+                "crew_positions",
+            ],
             "additionalProperties": False,
         },
     },
@@ -533,7 +564,7 @@ PLAYER_BRIEFING_CHOICES_SCHEMA = {
             "properties": {
                 "personal_title": {
                     "type": "string",
-                    "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {day} — {role} — {personal_greeting}' (on Russian) or 'Turn {day} — {role} — {personal_greeting}' (on English). The greeting MUST include the player's name and role. Example (Russian): 'Ход 1 — Инженер — Маркус, твои руки помнят гул реактора лучше любого сканера'. Example (English): 'Turn 1 — Engineer — Marcus, your hands remember the reactor hum better than any scanner'.",
+                    "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {day} — {role} — {personal_greeting}' (Russian) or 'Turn {day} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
                 },
                 "briefing": {
                     "type": "string",
@@ -581,11 +612,11 @@ COMBINED_OUTCOME_SCHEMA = {
             "properties": {
                 "outcome_narrative": {
                     "type": "string",
-                    "description": "A coherent narrative describing what actually happened as a result of all choices made",
+                    "description": "A coherent narrative describing what actually happened as a result of all choices made (2-3 paragraphs)",
                 },
                 "ship_status_change": {
                     "type": "string",
-                    "description": "How the ship's condition changed (e.g. 'hull damage repaired', 'shields depleted')",
+                    "description": "Narrative description of how the ship's condition changed",
                 },
                 "crew_morale_change": {
                     "type": "string",
@@ -596,22 +627,84 @@ COMBINED_OUTCOME_SCHEMA = {
                     "description": "A teaser or hook for the next day's story",
                 },
                 "mission_progress": {
-                    "type": "object",
-                    "description": "Mission stage progress changes: {stage_number: points_added}",
-                    "additionalProperties": {"type": "integer"},
+                    "type": "array",
+                    "description": "Mission stage progress changes (positive = advance, negative = regression/setback)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "stage": {"type": "integer"},
+                            "points": {
+                                "type": "integer",
+                                "description": "Progress points for this stage. Positive = advance toward goal, Negative = regression/setback",
+                            },
+                        },
+                        "required": ["stage", "points"],
+                        "additionalProperties": False,
+                    },
                 },
                 "dead_crew_members": {
                     "type": "array",
+                    "description": "List of [name, role] who died this turn",
                     "items": {
                         "type": "array",
                         "items": [{"type": "string"}, {"type": "string"}],
-                        "description": "[name, role] of a dead crew member",
                     },
-                    "description": "List of [name, role] who died this turn",
                 },
                 "ship_destroyed": {
                     "type": "boolean",
                     "description": "Whether the ship was destroyed",
+                },
+                "ship_hull_integrity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Ship hull structural integrity percentage (0 = destroyed, 100 = pristine)",
+                },
+                "ship_shields": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Shield strength percentage (0 = depleted, 100 = full)",
+                },
+                "ship_systems_offline": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of ship systems that are damaged/offline (e.g. 'warp drive', 'life support', 'weapons', 'communications', 'navigation')",
+                },
+                "crew_injured": {
+                    "type": "array",
+                    "description": "List of [name, role, severity] who were injured this turn. Severity: 'critical', 'moderate', 'minor'",
+                    "items": {
+                        "type": "array",
+                        "items": [
+                            {"type": "string"},
+                            {"type": "string"},
+                            {"type": "string"},
+                        ],
+                    },
+                },
+                "personal_outcomes": {
+                    "type": "array",
+                    "description": "Personal consequences for each crew member who made a decision this turn",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "character_name": {
+                                "type": "string",
+                                "description": "Character name (player name or NPC name)",
+                            },
+                            "role": {
+                                "type": "string",
+                                "description": "Role on the ship",
+                            },
+                            "outcome_text": {
+                                "type": "string",
+                                "description": "Personal consequence for this character (1-2 sentences)",
+                            },
+                        },
+                        "required": ["character_name", "role", "outcome_text"],
+                        "additionalProperties": False,
+                    },
                 },
             },
             "required": [
@@ -622,6 +715,11 @@ COMBINED_OUTCOME_SCHEMA = {
                 "mission_progress",
                 "dead_crew_members",
                 "ship_destroyed",
+                "ship_hull_integrity",
+                "ship_shields",
+                "ship_systems_offline",
+                "crew_injured",
+                "personal_outcomes",
             ],
             "additionalProperties": False,
         },
@@ -740,6 +838,30 @@ NPC_AVATAR_PROMPT_SCHEMA = {
                 }
             },
             "required": ["prompts"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+NPC_NAME_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "npc_name",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Full name for this NPC character. Must match their species, gender, and role. Creative and unique — not generic.",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Brief explanation of the name choice (1 sentence)",
+                },
+            },
+            "required": ["name", "explanation"],
             "additionalProperties": False,
         },
     },
@@ -1337,14 +1459,23 @@ class GameMasterAgent:
     # ============== NPC Dialogues ==============
 
     def generate_crew_dialogues(
-        self, story: GameStory, player_role: str
+        self,
+        story: GameStory,
+        player_role: str,
+        crew_members: list[dict[str, Any]] | None = None,
     ) -> list[NPCDialogue]:
-        """Generate NPC dialogues for the day."""
+        """Generate NPC dialogues for the day.
+
+        Args:
+            story: The current day's story context
+            player_role: Role of the player receiving the dialogues
+            crew_members: Optional list of actual crew profiles from the database.
+                Each dict should have 'name' (display name) and 'role'.
+                When provided, replaces the default NPC_TEMPLATES system.
+        """
         logger.info(
             f"[NPC] Starting NPC dialogue generation, language: {self.language}"
         )
-        team_npcs = self.generate_team_npcs(player_role)
-        dialogues = []
 
         if self.language == "ru":
             lang_note = "Отвечай на русском."
@@ -1353,16 +1484,68 @@ class GameMasterAgent:
             lang_note = "Respond in English."
             player_role_display = player_role or "Crew member"
 
-        for npc_key, npc in team_npcs.items():
-            try:
+        if crew_members:
+            # Use real crew profiles from the database
+            dialogue_targets = []
+            for m in crew_members:
+                name = (
+                    m.get("name")
+                    or m.get("npc_name")
+                    or m.get("player_name")
+                    or m.get("role", "Crew")
+                )
+                role = m.get("role", "Crew Member")
+                species = m.get("species", "") or ""
+                traits = m.get("personality_traits", []) or []
+                if isinstance(traits, str):
+                    traits = []
+                traits_str = ", ".join(traits) if traits else "professional"
+                species_str = f" ({species})" if species else ""
+                dialogue_targets.append(
+                    {
+                        "key": name,
+                        "name": name,
+                        "role": role,
+                        "personality": traits_str,
+                        "species": species_str,
+                    }
+                )
+        else:
+            # Fallback: use default NPC templates
+            team_npcs = self.generate_team_npcs(player_role)
+            dialogue_targets = []
+            for npc_key, npc in team_npcs.items():
                 npc_name = npc.get("name", npc.get("default_name", "Unknown"))
-                logger.info(f"[NPC] Generating dialogue for {npc_name} ({npc_key})")
+                dialogue_targets.append(
+                    {
+                        "key": npc_key,
+                        "name": npc_name,
+                        "role": npc["role"],
+                        "personality": npc["personality"],
+                        "speech_style": npc.get("speech_style", "direct"),
+                    }
+                )
+
+        dialogues = []
+        for target in dialogue_targets:
+            try:
+                npc_name = target["name"]
+                npc_role = target["role"]
+                logger.info(f"[NPC] Generating dialogue for {npc_name} ({npc_role})")
+
+                if "speech_style" in target:
+                    personality_block = (
+                        f"Personality: {target['personality']}\n"
+                        f"Speech style: {target['speech_style']}\n"
+                    )
+                else:
+                    personality_block = (
+                        f"Personality: {target['personality']}\n"
+                        f"Species: {target.get('species', '')}\n"
+                    )
 
                 system = (
-                    f"You are {npc_name}, {npc['role']}.\n"
-                    f"Personality: {npc['personality']}\n"
-                    f"Speech style: {npc['speech_style']}\n"
-                    f"{lang_note}"
+                    f"You are {npc_name}, {npc_role}.\n{personality_block}{lang_note}"
                 )
                 user = (
                     f"Game context: {story.narrative}\n"
@@ -1381,13 +1564,14 @@ class GameMasterAgent:
                 dialogues.append(
                     NPCDialogue(
                         npc_name=npc_name,
-                        npc_role=npc["role"],
+                        npc_role=npc_role,
                         dialogue=parsed.get("dialogue", ""),
                         emotion=parsed.get("emotion", "neutral"),
                     )
                 )
             except Exception as e:
-                logger.error(f"[NPC] Dialogue generation failed for {npc_key}: {e}")
+                err_name = target.get("name", target.get("key", "?"))
+                logger.error(f"[NPC] Dialogue generation failed for {err_name}: {e}")
                 raise
 
         logger.info(f"[NPC] Generated {len(dialogues)} NPC dialogues")
@@ -2362,9 +2546,23 @@ spatial presence\n"
         if player_profiles:
             player_lines = []
             for p in player_profiles:
-                pid = p.get("player_id") or p.get("npc_key", "?")
                 role = p.get("role", "Crew Member")
-                player_lines.append(f"  - {pid}: {role}")
+                name = p.get("player_name") or p.get("npc_name", "") or role
+                species = p.get("species", "")
+                avatar_desc = p.get("avatar_description", "")
+                species_desc = p.get("species_description", "")
+                # Build appearance description
+                appearance_parts = []
+                if species and species not in ("Unknown", "Неизвестно", ""):
+                    appearance_parts.append(f"Вид: {species}")
+                if species_desc:
+                    appearance_parts.append(species_desc)
+                if avatar_desc:
+                    appearance_parts.append(avatar_desc)
+                appearance_str = (
+                    f" ({'; '.join(appearance_parts)})" if appearance_parts else ""
+                )
+                player_lines.append(f"  - {name} ({role}){appearance_str}")
             player_descriptions = "\n".join(player_lines)
 
         # Build mission context string if available
@@ -2417,7 +2615,9 @@ spatial presence\n"
             system = (
                 "Ты — Game Master космической игры в стиле Star Trek. "
                 "Создаёшь ОБЩИЕ обстоятельства дня — ситуацию, которая происходит на корабле или вокруг него. "
-                "Эти обстоятельства едины для всех членов экипажа."
+                "Эти обстоятельства едины для всех членов экипажа.\n\n"
+                "Используй ПОЛНЫЕ ИМЕНА персонажей из списка экипажа в нарративе. "
+                "У каждого члена экипажа есть уникальное имя — обращайся к ним по имени.\n"
             )
             user = (
                 f"День: {day}\n"
@@ -2427,8 +2627,13 @@ spatial presence\n"
                 "Создай общие обстоятельства дня:\n"
                 "1. Место действия — где находится корабль (звездная система, станция, явление космоса)\n"
                 "2. Конфликт — центральная проблема или тайна\n"
-                "3. Нарратив — описание ситуации от лица GM (2-3 абзаца)\n"
-                "4. Ключевые события — 3-5 фоновых событий, которые могут заметить все\n\n"
+                "3. Нарратив — описание ситуации от лица GM (2-3 абзаца). "
+                "Упоминай членов экипажа по ИМЕНИ, показывая их местоположение и действия.\n"
+                "4. Ключевые события — 3-5 фоновых событий, которые могут заметить все\n"
+                "5. scene_prompt — детальный промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации изображения сцены. "
+                "Кинематографичный, sci-fi/space opera, 4K. Опиши обстановку, экипаж на своих местах, "
+                "освещение и атмосферу.\n"
+                "6. crew_positions — массив позиций каждого члена экипажа: где они находятся и что делают.\n\n"
                 "ВАЖНО: Все обстоятельства дня должны соответствовать контексту миссии.\n"
                 "Не выдумывай новый независимый сюжет — развивай события в рамках миссии.\n"
                 "Всё на русском языке."
@@ -2437,7 +2642,9 @@ spatial presence\n"
             system = (
                 "You are a Game Master for a Star Trek-style space exploration game. "
                 "Create SHARED circumstances for the day — the situation unfolding on or around the ship. "
-                "These circumstances are common to all crew members."
+                "These circumstances are common to all crew members.\n\n"
+                "Use the actual CHARACTER NAMES from the crew list in the narrative. "
+                "Each crew member has a unique name — refer to them by name.\n"
             )
             user = (
                 f"Day: {day}\n"
@@ -2447,8 +2654,13 @@ spatial presence\n"
                 "Create shared circumstances for the day:\n"
                 "1. Setting — where the ship is located\n"
                 "2. Conflict — central problem or mystery\n"
-                "3. Narrative — GM voice description (2-3 paragraphs)\n"
-                "4. Key events — 3-5 background events everyone can perceive\n\n"
+                "3. Narrative — GM voice description (2-3 paragraphs). "
+                "Refer to crew members by NAME, showing their location and actions.\n"
+                "4. Key events — 3-5 background events everyone can perceive\n"
+                "5. scene_prompt — a detailed English image generation prompt for this day's scene. "
+                "Cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, "
+                "lighting, and atmosphere.\n"
+                "6. crew_positions — array of positions for each crew member: where they are and what they're doing.\n\n"
                 "IMPORTANT: All circumstances must be consistent with the mission context. "
                 "Do not invent an independent plot — develop events within the mission framework.\n"
             )
@@ -2509,7 +2721,12 @@ spatial presence\n"
             system = (
                 "Ты — Game Master космической игры. Создаёшь ПЕРСОНАЛЬНУЮ вводную для игрока, "
                 "основываясь на общих обстоятельствах дня. "
-                "Каждый игрок видит ситуацию со своей уникальной точки зрения."
+                "Каждый игрок видит ситуацию со своей уникальной точки зрения.\n\n"
+                "ВАЖНО: Игра страдает от однообразия — игроки жалуются, что ходы скучные, "
+                "корабль не получает повреждений, экипаж не гибнет, миссия не продвигается. "
+                "Твоя задача — создавать ДРАМАТИЧЕСКИЕ, ОСЯЗАЕМЫЕ последствия. "
+                "Каждый ход ДОЛЖЕН что-то МЕНЯТЬ: приближать или отдалять цель миссии, "
+                "повреждать корабль, ранить или убивать членов экипажа."
             )
             user = (
                 f"Общие обстоятельства дня:\n"
@@ -2526,19 +2743,44 @@ spatial presence\n"
                 f"Формат: 'Ход {day} — {{{player_role}}} — {{персональное приветствие}}'. "
                 f"Приветствие должно включать имя персонажа ({display_name}) и его роль ({player_role}), "
                 "отражать его характер и текущую ситуацию. "
-                "Пример: 'Ход 1 — Инженер — Маркус, твои руки помнят гул реактора лучше любого сканера'.\n"
+                "Пример: 'Ход "
+                + str(day or 1)
+                + " — Инженер — Маркус, твои руки помнят гул реактора лучше любого сканера'.\n"
                 "2. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
-                "3. 3-4 варианта действий с последствиями — каждое действие должно быть логичным "
-                "для этой роли, а последствия — скрытыми от игрока. "
-                "Последствия не должны быть очевидны из текста действия!\n\n"
+                "3. 3-4 варианта действий с последствиями.\n\n"
+                "КРИТИЧЕСКИЕ ТРЕБОВАНИЯ К ВАРИАНТАМ ДЕЙСТВИЙ:\n"
+                "- Каждое действие ДОЛЖНО иметь РЕАЛЬНЫЙ РИСК. Успех приближает к цели миссии, "
+                "провал — отдаляет. Последствия должны быть РАДИКАЛЬНЫМИ.\n"
+                "- Последствия НЕ ДОЛЖНЫ быть очевидны из текста действия! Игрок ВЫБИРАЕТ вслепую.\n"
+                "- Последствия могут включать: гибель членов экипажа, повреждение систем корабля "
+                "(варп-двигатель, щиты, жизнеобеспечение), потерю ресурсов, ранения.\n"
+                "- Одно из действий должно быть БЕЗОПАСНЫМ (ничего не делать / ждать), "
+                "но оно НЕ продвигает миссию и может УХУДШИТЬ ситуацию.\n"
+                "- Разные варианты должны давать РАЗНЫЕ уровни риска и награды.\n"
+                "- Варианты должны соответствовать РОЛИ персонажа.\n\n"
+                "ПРИМЕР ХОРОШИХ ВАРИАНТОВ (последствия не видны игроку):\n"
+                "  Вариант 1 (смелый, высокий риск): 'Прорваться через вражеский заслон на максимальной скорости'\n"
+                "    → Последствие (скрыто): 'Корабль получил критические повреждения корпуса, но прорвался. "
+                "Двое членов экипажа ранены, один погиб. Этап миссии «Прорыв блокады» продвинут на +3.'\n"
+                "  Вариант 2 (осторожный, средний риск): 'Попытаться обмануть вражеские сенсоры, маскируясь под обломки'\n"
+                "    → Последствие (скрыто): 'Удалось проскользнуть незамеченными. Никто не пострадал, "
+                "но потеряно время. Этап миссии продвинут на +1.'\n"
+                "  Вариант 3 (безопасный): 'Остаться на месте и ждать развития ситуации'\n"
+                "    → Последствие (скрыто): 'Враг усилил блокаду. Этап миссии откатился на -2. "
+                "Ситуация ухудшилась.'\n\n"
                 "Всё на русском языке."
             )
         else:
             system = (
                 "You are a Game Master. You create PERSONAL briefings for each player "
                 "based on the shared global circumstances. "
-                "Each player sees the situation from their unique perspective."
+                "Each player sees the situation from their unique perspective.\n\n"
+                "CRITICAL: The game suffers from stale repetition — players report that turns are dull, "
+                "the ship never gets damaged, crew members never die, and mission goals never advance. "
+                "Your job is to create DRAMATIC, TANGIBLE consequences. "
+                "Every turn MUST CHANGE something: advance or regress the mission, "
+                "damage the ship, injure or kill crew members."
             )
             user = (
                 f"Global circumstances:\n"
@@ -2555,12 +2797,32 @@ spatial presence\n"
                 f"Format: 'Turn {day} — {{{player_role}}} — {{personal_greeting}}'. "
                 f"The greeting MUST include the character's name ({display_name}) and role ({player_role}), "
                 "reflecting their personality and the current situation. "
-                "Example: 'Turn 1 — Engineer — Marcus, your hands remember the reactor hum better than any scanner'.\n"
+                "Example: 'Turn "
+                + str(day or 1)
+                + " — Engineer — Marcus, your hands remember the reactor hum better than any scanner'.\n"
                 "2. briefing — personal narrative — what this specific character sees, hears, feels. "
                 "How their role and traits color their perception. (2-3 sentences)\n"
-                "3. 3-4 action choices with consequences — each action should be logical "
-                "for this role, with consequences hidden from the player. "
-                "Consequences should not be obvious from the action text!\n"
+                "3. 3-4 action choices with consequences.\n\n"
+                "CRITICAL REQUIREMENTS FOR ACTION CHOICES:\n"
+                "- Every action MUST have REAL RISK. Success advances the mission, failure regresses it. "
+                "Consequences must be RADICAL.\n"
+                "- Consequences must NOT be obvious from the action text! The player chooses BLIND.\n"
+                "- Consequences can include: crew death, ship system damage (warp drive, shields, "
+                "life support), resource loss, crew injuries.\n"
+                "- One option MUST be a SAFE choice (do nothing / wait), "
+                "but it does NOT advance the mission and may WORSEN the situation.\n"
+                "- Different options must have DIFFERENT risk-reward profiles.\n"
+                "- Options must match the character's ROLE.\n\n"
+                "EXAMPLE OF GOOD OPTIONS (consequences hidden from player):\n"
+                "  Option 1 (bold, high risk): 'Break through the enemy blockade at maximum speed'\n"
+                "    → Hidden consequence: 'Ship hull critically damaged, broke through. "
+                "Two crew members injured, one died. Mission stage 'Break blockade' advanced by +3.'\n"
+                "  Option 2 (cautious, medium risk): 'Try to fool enemy sensors by hiding among debris'\n"
+                "    → Hidden consequence: 'Slipped through unnoticed. No casualties, "
+                "but time was lost. Mission stage advanced by +1.'\n"
+                "  Option 3 (safe): 'Stay in place and wait for developments'\n"
+                "    → Hidden consequence: 'Enemy reinforced the blockade. Mission stage regressed by -2. "
+                "Situation worsened.'\n"
             )
 
         try:
@@ -2691,12 +2953,18 @@ spatial presence\n"
                 "Ты — Game Master космической игры. Ты анализируешь ВСЕ решения, принятые "
                 "игроками и NPC, вместе с их СКРЫТЫМИ последствиями, и создаёшь единый "
                 "связный результат хода.\n\n"
-                "ВАЖНЫЕ ПРАВИЛА:\n"
+                "ВАЖНЕЙШИЕ ПРАВИЛА:\n"
                 "1. Решения ИГРОКОВ (Weight: HIGH) имеют БОЛЬШИЙ вес, чем решения NPC\n"
-                "2. Прогресс миссии нелинейный — правильные действия НАКАПЛИВАЮТСЯ\n"
-                "3. Возможна гибель членов экипажа\n"
-                "4. Возможна гибель корабля\n"
-                "5. Цели миссии должны проверяться"
+                "2. Прогресс миссии нелинейный — правильные действия НАКАПЛИВАЮТСЯ, "
+                "неправильные — ОТКАТЫВАЮТ прогресс назад\n"
+                "3. Члены экипажа ДОЛЖНЫ получать ранения и погибать — без этого игра скучна\n"
+                "4. Корабль ДОЛЖЕН получать реальные повреждения (корпус, щиты, системы)\n"
+                "5. Сюжет ДОЛЖЕН ДВИГАТЬСЯ — каждый ход приближает к цели миссии ИЛИ отдаляет от неё\n"
+                "6. Игнорирование угрозы → эскалация угрозы\n"
+                "7. Неправильные действия → повреждения, регресс миссии, гибель экипажа\n"
+                "8. НИЧЕГО НЕ ДЕЛАТЬ — это тоже выбор, и он имеет последствия (обычно плохие)\n"
+                "9. У каждого персонажа должен быть ПЕРСОНАЛЬНЫЙ ИСХОД в personal_outcomes\n"
+                "10. Прошлые повреждения корабля СОХРАНЯЮТСЯ — их нельзя просто 'забыть'"
             )
             user = (
                 f"Общие обстоятельства:\n"
@@ -2708,14 +2976,27 @@ spatial presence\n"
                 f"Принятые решения (игроки имеют HIGH вес, NPC — NORMAL):\n{decisions_text}\n\n"
                 "Проанализируй все решения и создай единый связанный результат. "
                 "Учти, что решения ИГРОКОВ важнее решений NPC.\n\n"
+                "КРИТИЧЕСКИ ВАЖНО: Каждый ход что-то ДОЛЖНО МЕНЯТЬСЯ. "
+                "Неодалживай. Если решения были неудачными — корабль получает повреждения, "
+                "экипаж гибнет, миссия откатывается назад. "
+                "Если решения были удачными — миссия продвигается, но всё равно "
+                "могут быть потери (война требует жертв).\n\n"
                 "Верни JSON с полями:\n"
-                "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца)\n"
-                "2. ship_status_change — как изменилось состояние корабля\n"
-                "3. crew_morale_change — как изменился моральный дух экипажа\n"
-                "4. next_day_hook — зацепка для следующего хода\n"
-                "5. mission_progress — объект {{stage: points_added}} для каждого этапа миссии\n"
-                "6. dead_crew_members — список [[name, role]] погибших членов экипажа\n"
-                "7. ship_destroyed — true/false\n\n"
+                "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца). Должен быть ДРАМАТИЧЕСКИМ.\n"
+                "2. ship_status_change — как изменилось состояние корабля (текст)\n"
+                "3. crew_morale_change — как изменился моральный дух экипажа (текст)\n"
+                "4. next_day_hook — зацепка для следующего хода, которая создаёт ожидание\n"
+                "5. mission_progress — МАССИВ объектов [{{'stage': N, 'points': +/-M}}]. "
+                "Положительные = прогресс, отрицательные = регресс/откат.\n"
+                "6. dead_crew_members — список [[name, role]] погибших. Должен быть непустым, если были рискованные действия.\n"
+                "7. ship_destroyed — true/false\n"
+                "8. ship_hull_integrity — целостность корпуса в % (0-100). УМЕНЬШАЕТСЯ от повреждений.\n"
+                "9. ship_shields — состояние щитов в % (0-100)\n"
+                "10. ship_systems_offline — массив строк: какие системы корабля вышли из строя "
+                "(например ['warp drive', 'life support', 'weapons', 'communications'])\n"
+                "11. crew_injured — список [[name, role, severity]] раненых. severity: 'critical', 'moderate', 'minor'.\n"
+                "12. personal_outcomes — МАССИВ объектов {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
+                "для КАЖДОГО персонажа, принимавшего решение.\n\n"
                 "Всё на русском языке."
             )
         else:
@@ -2723,12 +3004,18 @@ spatial presence\n"
                 "You are a Game Master. You analyze ALL decisions made by "
                 "players and NPCs together with their HIDDEN consequences, "
                 "and produce a single coherent turn outcome.\n\n"
-                "IMPORTANT RULES:\n"
+                "CRITICAL RULES:\n"
                 "1. PLAYER decisions (Weight: HIGH) matter MORE than NPC decisions\n"
-                "2. Mission progress is NON-LINEAR — correct actions ACCUMULATE\n"
-                "3. Crew members CAN die\n"
-                "4. The ship CAN be destroyed\n"
-                "5. Mission objectives should be checked"
+                "2. Mission progress is NON-LINEAR — correct actions ACCUMULATE, "
+                "wrong actions REGRESS progress backward\n"
+                "3. Crew members MUST get injured and die — without this the game is boring\n"
+                "4. The ship MUST take REAL damage (hull, shields, systems)\n"
+                "5. The story MUST MOVE — every turn brings the mission closer OR pushes it further away\n"
+                "6. Ignoring a threat → threat escalation\n"
+                "7. Wrong actions → damage, mission regression, crew death\n"
+                "8. DOING NOTHING is also a choice and has consequences (usually bad)\n"
+                "9. Every character must have a PERSONAL OUTCOME in personal_outcomes\n"
+                "10. Past ship damage PERSISTS — it cannot be simply 'forgotten'"
             )
             user = (
                 f"Global circumstances:\n"
@@ -2740,14 +3027,26 @@ spatial presence\n"
                 f"All decisions (players = HIGH weight, NPCs = NORMAL):\n{decisions_text}\n\n"
                 "Analyze all decisions together and create a coherent combined result. "
                 "Remember that PLAYER decisions matter more than NPC decisions.\n\n"
+                "CRITICALLY IMPORTANT: Every turn MUST CHANGE something. "
+                "Do not stall. If decisions were bad — the ship takes damage, "
+                "crew members die, the mission regresses. "
+                "If decisions were good — the mission advances, but there can still be casualties.\n\n"
                 "Return JSON with fields:\n"
-                "1. outcome_narrative — what happened (2-3 paragraphs)\n"
-                "2. ship_status_change — ship condition change\n"
-                "3. crew_morale_change — morale shift\n"
-                "4. next_day_hook — teaser for the next turn\n"
-                "5. mission_progress — object {{stage: points_added}} for each mission stage\n"
-                "6. dead_crew_members — list of [name, role] who died\n"
+                "1. outcome_narrative — what happened (2-3 paragraphs). Must be DRAMATIC.\n"
+                "2. ship_status_change — narrative of ship condition change\n"
+                "3. crew_morale_change — how morale shifted\n"
+                "4. next_day_hook — teaser for the next turn that creates anticipation\n"
+                "5. mission_progress — ARRAY of [{{'stage': N, 'points': +/-M}}]. "
+                "Positive = progress, Negative = regression/setback.\n"
+                "6. dead_crew_members — list of [name, role] who died. Should NOT be empty if risky actions were taken.\n"
                 "7. ship_destroyed — true/false\n"
+                "8. ship_hull_integrity — hull integrity % (0-100). DECREASES with damage.\n"
+                "9. ship_shields — shield strength % (0-100)\n"
+                "10. ship_systems_offline — array of offline/damaged systems "
+                "(e.g. ['warp drive', 'life support', 'weapons', 'communications'])\n"
+                "11. crew_injured — list of [name, role, severity] injured. severity: 'critical', 'moderate', 'minor'.\n"
+                "12. personal_outcomes — ARRAY of {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
+                "for EVERY character who made a decision.\n"
             )
 
         try:
@@ -2769,9 +3068,14 @@ spatial presence\n"
                 "ship_status_change": "No significant change.",
                 "crew_morale_change": "Stable.",
                 "next_day_hook": "Tomorrow brings new challenges.",
-                "mission_progress": {},
+                "mission_progress": [],
                 "dead_crew_members": [],
                 "ship_destroyed": False,
+                "ship_hull_integrity": 100,
+                "ship_shields": 100,
+                "ship_systems_offline": [],
+                "crew_injured": [],
+                "personal_outcomes": [],
             }
 
     # ============== Default Action ==============
@@ -2948,6 +3252,147 @@ spatial presence\n"
                     for p in all_participants
                 ],
             }
+
+    # ============== NPC Name Generation (creative, species/gender-aware) ==============
+
+    def generate_npc_name(
+        self,
+        role_key: str,
+        role_name: str,
+        species: str,
+        gender: str,
+        avatar_description: str,
+        personality_traits: list[str],
+    ) -> str:
+        """Generate a creative name for an NPC using LLM.
+
+        The name is generated with high temperature for creativity and
+        matches the species, gender, role, and visual description.
+
+        Args:
+            role_key: Ship role key (e.g. 'navigator', 'medical_officer')
+            role_name: Localized role name (e.g. 'Штурман', 'Медицинский офицер')
+            species: Species type (e.g. 'human', 'humanoid', 'non_humanoid', etc.)
+            gender: Gender type (e.g. 'male', 'female', 'neutral', etc.)
+            avatar_description: Visual description of the character
+            personality_traits: Personality traits for this role
+
+        Returns:
+            Generated name string, or fallback format "Роль Имя" on failure.
+        """
+        logger.info(f"[NPC_NAME] Generating name for {role_key} ({role_name})")
+
+        if self.language == "ru":
+            system = (
+                "Ты — креативный писатель-фантаст. Придумываешь имена для персонажей "
+                "звёздного корабля в стиле Star Trek.\n\n"
+                "ВАЖНЫЕ ПРАВИЛА:\n"
+                "- Имя должно соответствовать ВИДУ и ПОЛУ персонажа\n"
+                "- Для людей/гуманоидов: человеческие имена (Алексей, Елена, Дмитрий, etc.)\n"
+                "- Для негуманоидов: уникальные инопланетные имена (К'рртх, Зиль-Ван, Гжорг, etc.)\n"
+                "- Для энергетических форм: имена как частоты или явления\n"
+                "- Для кибернетических: имена с техническим оттенком\n"
+                "- Для симбиотических: составные имена\n"
+                "- Имя ДОЛЖНО быть на русском языке!\n"
+                "- НЕ используй транслит английских имён — создай оригинальное имя.\n"
+                "- Учитывай роль персонажа при выборе имени\n"
+                "- Будь КРЕАТИВНЫМ, избегай шаблонов"
+            )
+            user = (
+                f"Роль: {role_name} ({role_key})\n"
+                f"Вид: {species}\n"
+                f"Пол: {gender}\n"
+                f"Описание внешности: {avatar_description}\n"
+                f"Черты характера: {', '.join(personality_traits)}\n\n"
+                "Придумай уникальное, креативное имя для этого персонажа. "
+                "Имя должно быть на русском языке и соответствовать описанию.\n"
+                "ПРИМЕРЫ (для русской локализации):\n"
+                "  - Инженер-человек: 'Инженер Дмитрий Волков'\n"
+                "  - Штурман-гуманоид: 'Штурман Зиара Вентрис'\n"
+                "  - Ксенобиолог-кристаллическая форма: 'Ксенобиолог Резонанс Три-Семь'\n"
+                "  - Медик-киборг: 'Медик ЛЕ-02'\n"
+                "ВЕРНИ ТОЛЬКО JSON."
+            )
+        else:
+            system = (
+                "You are a creative sci-fi writer. You invent names for starship crew "
+                "characters in Star Trek style.\n\n"
+                "IMPORTANT RULES:\n"
+                "- Name must match the SPECIES and GENDER of the character\n"
+                "- For humans/humanoids: human names (Alex, Elena, Marcus, etc.)\n"
+                "- For non-humanoids: unique alien names (K'rrtkh, Zil-Van, Gjorg, etc.)\n"
+                "- For energy beings: names as frequencies or phenomena\n"
+                "- For cybernetic: names with technical flavor\n"
+                "- For symbiotic: compound names\n"
+                "- Consider the character's ROLE when choosing the name\n"
+                "- Be CREATIVE, avoid templates"
+            )
+            user = (
+                f"Role: {role_name} ({role_key})\n"
+                f"Species: {species}\n"
+                f"Gender: {gender}\n"
+                f"Appearance: {avatar_description}\n"
+                f"Personality traits: {', '.join(personality_traits)}\n\n"
+                "Invent a unique, creative name for this character. "
+                "The name MUST match their species and gender.\n"
+                "EXAMPLES:\n"
+                "  - Human Engineer: 'Chief Engineer Marcus Chen'\n"
+                "  - Humanoid Navigator: 'Navigator Ziara Ventris'\n"
+                "  - Crystalline Xenobiologist: 'Xenobiologist Resonance Three-Seven'\n"
+                "  - Cybernetic Medic: 'Medic LE-02'\n"
+                "RETURN ONLY JSON."
+            )
+
+        try:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=NPC_NAME_SCHEMA,
+                temperature=0.95,
+                max_tokens=256,
+            )
+            name = parsed.get("name", "").strip()
+            explanation = parsed.get("explanation", "")
+
+            if name:
+                logger.info(f"[NPC_NAME] {role_name} → '{name}' ({explanation})")
+                return name
+
+            logger.warning(f"[NPC_NAME] LLM returned empty name for {role_key}")
+        except Exception as e:
+            logger.warning(f"[NPC_NAME] LLM failed for {role_key}: {e}")
+
+        # Fallback: build a simple name from role
+        if self.language == "ru":
+            fallback_names = {
+                "captain": "Капитан Алексей Старк",
+                "pilot": "Пилот Виктор Соколов",
+                "chief_engineer": "Инженер Дмитрий Волков",
+                "science_officer": "Научный офицер Елена Романова",
+                "communications_officer": "Офицер связи Анна Белова",
+                "security_chief": "Начальник безопасности Иван Громов",
+                "navigator": "Штурман Мария Крылова",
+                "medical_officer": "Медик София Павлова",
+                "tactical_officer": "Тактик Кирилл Огнев",
+                "quartermaster": "Квартирмейстер Пётр Кузнецов",
+                "xenobiologist": "Ксенобиолог Алиса Рубинова",
+            }
+            return fallback_names.get(role_key, f"{role_name} экипажа")
+        else:
+            fallback_names = {
+                "captain": "Captain Eva Rodriguez",
+                "pilot": "Pilot Alex 'Ace' Turner",
+                "chief_engineer": "Chief Engineer Marcus Chen",
+                "science_officer": "Dr. Aisha Patel",
+                "communications_officer": "Comm Officer Sarah Williams",
+                "security_chief": "Security Chief Jake Morrison",
+                "navigator": "Navigator Leo Kim",
+                "medical_officer": "Dr. Nina Hart",
+                "tactical_officer": "Tactical Officer Rex Vane",
+                "quartermaster": "Quartermaster Tessa Cole",
+                "xenobiologist": "Dr. Kiran Voss",
+            }
+            return fallback_names.get(role_key, f"{role_name} of the ship")
 
     # ============== NPC Avatar Prompts (simplified, random) ==============
 

@@ -12,7 +12,7 @@ from aiohttp import web
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
-from language import get_actions, get_bridge, get_current_day
+from language import get_actions, get_bridge, get_current_day, get_notifications
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     is_first_turn = payload.get("is_first_turn", False)
     force_resend = payload.get("force_resend", False)
     global_narrative = payload.get("global_narrative", "")
+    was_restarted = payload.get("was_restarted", False)
 
     if not day or not players:
         return web.json_response(
@@ -135,6 +136,17 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
             continue
 
         try:
+            # 0. Send "game restarted" notification (first turn after restart)
+            if was_restarted:
+                notif_msgs = get_notifications(language)
+                restart_msg = notif_msgs.get("game_restarted", "")
+                if restart_msg:
+                    await bot.send_message(
+                        chat_id=player_id,
+                        text=restart_msg,
+                        parse_mode="Markdown",
+                    )
+
             # 1. Send bridge image + mission (first turn only)
             if is_first_turn and bridge_url:
                 bridge_msgs = get_bridge(language)

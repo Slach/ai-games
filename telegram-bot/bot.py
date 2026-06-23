@@ -1646,6 +1646,120 @@ async def cmd_bridge(message: types.Message):
         await message.answer(str(e))
 
 
+async def cmd_team(message: types.Message):
+    """Show the full crew roster with avatars"""
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    msgs = lang.get_team(BOT_LANGUAGE)
+
+    try:
+        # Get player profile to find game_id
+        profile = await api_request(
+            "GET", f"/players/{player_id}/profile", ignore_codes=(404,)
+        )
+        if not profile:
+            await message.answer(msgs["no_team"])
+            return
+
+        game_id = profile.get("game_id", "")
+        if not game_id:
+            await message.answer(msgs["no_team"])
+            return
+
+        # Fetch team data
+        team_data = await api_request("GET", "/game/team", params={"game_id": game_id})
+        if not team_data or not team_data.get("members"):
+            await message.answer(msgs["no_team"])
+            return
+
+        members = team_data["members"]
+
+        # Build roster text — list all members without distinguishing NPC/player
+        roster_lines = []
+        for m in members:
+            name = m.get("name", "?")
+            role = m.get("role", "?")
+            species = m.get("species", "?") or "?"
+            gender = m.get("gender", "?") or "?"
+            if m.get("is_dead"):
+                roster_lines.append(
+                    msgs["entry_dead"].format(
+                        name=name, role=role, species=species, gender=gender
+                    )
+                )
+            else:
+                roster_lines.append(
+                    msgs["entry"].format(
+                        name=name, role=role, species=species, gender=gender
+                    )
+                )
+
+        roster_text = msgs["roster"].format(details="\n".join(roster_lines))
+
+        # Send header
+        await message.answer(
+            msgs["header"].format(count=len(members)),
+            parse_mode="Markdown",
+        )
+
+        # Download and send avatar images as media group
+        media_group = []
+        for m in members:
+            avatar_url = m.get("avatar_url")
+            if not avatar_url:
+                continue
+
+            name = m.get("name", "?")
+            role = m.get("role", "?")
+            species = m.get("species", "?") or "?"
+            gender = m.get("gender", "?") or "?"
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    resp = await session.get(
+                        avatar_url,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    )
+                    if resp.status == 200:
+                        photo_data = await resp.read()
+                        photo = BufferedInputFile(
+                            photo_data, filename=f"team_{name}.png"
+                        )
+                        caption = f"{name} — {role} | {species} | {gender}"
+                        media_group.append(
+                            InputMediaPhoto(
+                                media=photo,
+                                caption=caption,
+                            )
+                        )
+                    else:
+                        logger.warning(
+                            f"[TEAM] Failed to download avatar for {name}: {resp.status}"
+                        )
+            except Exception as e:
+                logger.warning(f"[TEAM] Error downloading avatar for {name}: {e}")
+
+        # Send media group (up to 10 photos per album)
+        if media_group:
+            # Telegram limits media groups to 10 items
+            for i in range(0, len(media_group), 10):
+                batch = media_group[i : i + 10]
+                try:
+                    await message.answer_media_group(media=batch)
+                except Exception as e:
+                    logger.error(f"[TEAM] Failed to send media group batch: {e}")
+
+        # Send roster text after images
+        await message.answer(
+            roster_text,
+            parse_mode="Markdown",
+        )
+
+    except Exception as e:
+        logger.error(f"[TEAM] Failed for player {player_id}: {e}")
+        await message.answer(msgs["api_error"])
+
+
 async def cmd_invite(message: types.Message):
     """Send invite link to current game"""
     assert message.from_user is not None
@@ -2118,7 +2232,11 @@ async def cmd_gm_restart_game(message: types.Message):
         start_result = await api_request(
             "POST",
             "/admin/start-game",
-            data={"game_id": game_id, "language": BOT_LANGUAGE},
+            data={
+                "game_id": game_id,
+                "language": BOT_LANGUAGE,
+                "was_restarted": True,
+            },
             timeout_total=600,
         )
         if start_result and start_result.get("status") == "success":
@@ -2831,6 +2949,7 @@ async def main():
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(cmd_bridge, Command("bridge"))
+    dp.message.register(cmd_team, Command("team"))
     dp.message.register(cmd_invite, Command("invite"))
     dp.message.register(cmd_gm_start_game, Command("gm_start_game"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))

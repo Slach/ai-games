@@ -37,6 +37,7 @@ async def push_briefings(
     is_first_turn: bool = False,
     force_resend: bool = False,
     global_narrative: str = "",
+    was_restarted: bool = False,
 ) -> bool:
     """Push briefings to telegram-bot with exponential backoff retry.
 
@@ -53,6 +54,8 @@ async def push_briefings(
             (used for regenerate-turn to re-deliver briefings)
         global_narrative: Shared narrative for all players (setting, conflict).
             Sent as a separate common-intro message before personal briefings.
+        was_restarted: If True, telegram-bot will send a "game restarted"
+            notification to all alive players before their briefings.
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -62,6 +65,7 @@ async def push_briefings(
         "day": day,
         "players": players_briefings,
         "is_first_turn": is_first_turn,
+        "was_restarted": was_restarted,
     }
     if force_resend:
         payload["force_resend"] = True
@@ -199,6 +203,12 @@ async def push_day_outcome(
     ship_status: str | None = None,
     mission_progress: dict | None = None,
     death_notices: list[dict] | None = None,
+    injury_notices: list[dict] | None = None,
+    personal_outcomes: list[dict] | None = None,
+    action_images: list[dict] | None = None,
+    ship_hull_integrity: int | None = None,
+    ship_shields: int | None = None,
+    ship_systems_offline: list[str] | None = None,
     total_crew_count: int | None = None,
     alive_crew_count: int | None = None,
 ) -> bool:
@@ -213,6 +223,14 @@ async def push_day_outcome(
         ship_status: Current ship status ("alive" / "destroyed")
         mission_progress: Dict with stage progress info
         death_notices: List of death notice dicts with player_id and role
+        injury_notices: List of injury notice dicts with name, role, severity
+        personal_outcomes: List of personal outcome dicts with character_name, role, outcome_text
+        action_images: List of action image dicts with image_url, caption, player_id/npc_key
+            Format: [{"image_url": str, "caption": "Ход X — Имя — Роль — Действие",
+                     "player_id": int | None, "npc_key": str | None}]
+        ship_hull_integrity: Hull integrity percentage (0-100)
+        ship_shields: Shield strength percentage (0-100)
+        ship_systems_offline: List of offline/damaged systems
         total_crew_count: Total crew members (NPCs + players) at start of turn
         alive_crew_count: Crew members still alive after this turn
     """
@@ -230,6 +248,18 @@ async def push_day_outcome(
         payload["mission_progress"] = mission_progress
     if death_notices:
         payload["death_notices"] = death_notices
+    if injury_notices:
+        payload["injury_notices"] = injury_notices
+    if personal_outcomes:
+        payload["personal_outcomes"] = personal_outcomes
+    if action_images:
+        payload["action_images"] = action_images
+    if ship_hull_integrity is not None:
+        payload["ship_hull_integrity"] = ship_hull_integrity
+    if ship_shields is not None:
+        payload["ship_shields"] = ship_shields
+    if ship_systems_offline is not None:
+        payload["ship_systems_offline"] = ship_systems_offline
     if total_crew_count is not None:
         payload["total_crew_count"] = total_crew_count
     if alive_crew_count is not None:

@@ -195,6 +195,56 @@ SPECTATOR = {
     },
 }
 
+# Team roster messages
+TEAM = {
+    LANGUAGE_RU: {
+        "header": "👥 **Команда корабля**\n\n{count} членов экипажа",
+        "roster": "**Состав команды:**\n{details}",
+        "entry": "{name} — {role} | {species} | {gender}",
+        "entry_dead": "💀 {name} — {role} | {species} | {gender}",
+        "no_team": "🚫 Команда не найдена. Сначала присоединитесь к игре.",
+        "api_error": "❌ Ошибка получения данных команды.",
+    },
+    LANGUAGE_EN: {
+        "header": "👥 **Ship's Crew**\n\n{count} crew members",
+        "roster": "**Crew Roster:**\n{details}",
+        "entry": "{name} — {role} | {species} | {gender}",
+        "entry_dead": "💀 {name} — {role} | {species} | {gender}",
+        "no_team": "🚫 No crew found. Join a game first.",
+        "api_error": "❌ Error fetching crew data.",
+    },
+}
+
+
+def get_team(language: str = LANGUAGE_RU):
+    """Get team roster messages for a specific language"""
+    return TEAM.get(language, TEAM[LANGUAGE_RU])
+
+
+# Notification messages sent to players (via push)
+NOTIFICATIONS = {
+    LANGUAGE_RU: {
+        "game_restarted": (
+            "⚠️ **Игра была перезапущена Game Master-ом!**\n\n"
+            "Все предыдущие ходы удалены. История начинается заново.\n"
+            "Ваш персонаж и роль сохранены.\n"
+        ),
+    },
+    LANGUAGE_EN: {
+        "game_restarted": (
+            "⚠️ **The game has been restarted by the Game Master!**\n\n"
+            "All previous turns have been deleted. The story begins anew.\n"
+            "Your character and role are preserved.\n"
+        ),
+    },
+}
+
+
+def get_notifications(language: str = LANGUAGE_RU):
+    """Get notification messages for a specific language"""
+    return NOTIFICATIONS.get(language, NOTIFICATIONS[LANGUAGE_RU])
+
+
 # Menu labels
 MENU = {
     LANGUAGE_RU: {

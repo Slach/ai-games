@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Minimum live players to start a game
 GAME_START_MIN_PLAYERS = int(os.getenv("GAME_START_MIN_PLAYERS", "3"))
+GAME_START_MAX_PLAYERS = int(os.getenv("GAME_START_MAX_PLAYERS", "10"))
 
 # Database path
 DB_PATH = Path(__file__).parent / "game_master.db"

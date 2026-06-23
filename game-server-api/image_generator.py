@@ -478,29 +478,30 @@ class ImageGenerator:
             logger.warning(f"[UPLOAD] Failed to upload reference image: {e}")
             return None
 
-    def _build_reference_image_workflow(
+    def _build_img2img_workflow(
         self,
         prompt: str,
         reference_filename: str,
         width: int = 1024,
         height: int = 1024,
         seed: int = 0,
-        filename_prefix: str = "comic",
-        ipadapter_weight: float = 0.6,
+        denoise: float = 0.75,
+        filename_prefix: str = "action",
     ) -> dict[str, Any]:
-        """Build a Z-Image Turbo workflow with IP-Adapter image reference.
+        """Build a Z-Image Turbo img2img workflow using reference image as latent.
 
-        Uses the uploaded reference image as visual conditioning via IP-Adapter,
-        producing an output that preserves the character's appearance from the
-        reference while following the text prompt.
+        Encodes the reference image into VAE latent space, then uses that
+        as the starting latent for partial denoising (denoise=0.75 by default).
+        This allows the CLIP conditioning to substantially change the scene/action
+        while still retaining some character appearance from the reference.
 
         Args:
             prompt: Text prompt for the scene
             reference_filename: Uploaded filename in ComfyUI input folder
             width, height: Output dimensions
             seed: Random seed (0 = randomize)
+            denoise: How much to denoise (0.0=no change, 1.0=completely new)
             filename_prefix: Output filename prefix
-            ipadapter_weight: IP-Adapter influence weight (0.0-1.0)
 
         Returns:
             ComfyUI workflow dict ready for /prompt API
@@ -516,39 +517,12 @@ class ImageGenerator:
                     "image": reference_filename,
                 },
             },
-            # Load CLIP Vision model (for IP-Adapter image encoding)
-            # NOTE: IPAdapterAdvanced expects the raw CLIP_VISION model,
-            # NOT the encoded output. The node handles encoding internally.
+            # VAE Encode reference image to latent space
             "41": {
-                "class_type": "CLIPVisionLoader",
+                "class_type": "VAEEncode",
                 "inputs": {
-                    "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
-                },
-            },
-            # Load IP-Adapter model
-            "43": {
-                "class_type": "IPAdapterModelLoader",
-                "inputs": {
-                    "ipadapter_file": "ip-adapter-flux.safetensors",
-                },
-            },
-            # Apply IP-Adapter to the base model (IPAdapterAdvanced)
-            # clip_vision receives the raw CLIP vision model (41),
-            # image receives the loaded reference image (40)
-            # IPAdapterAdvanced handles CLIP vision encoding internally.
-            "44": {
-                "class_type": "IPAdapterAdvanced",
-                "inputs": {
-                    "model": ["28", 0],
-                    "ipadapter": ["43", 0],
-                    "image": ["40", 0],
-                    "clip_vision": ["41", 0],
-                    "weight": ipadapter_weight,
-                    "weight_type": "linear",
-                    "combine_embeds": "concat",
-                    "start_at": 0.0,
-                    "end_at": 1.0,
-                    "embeds_scaling": "V only",
+                    "pixels": ["40", 0],
+                    "vae": ["29", 0],
                 },
             },
             # Load UNET model (Z-Image Turbo)
@@ -582,24 +556,19 @@ class ImageGenerator:
                     "clip": ["30", 0],
                 },
             },
-            # Create empty latent
-            "13": {
-                "class_type": "EmptySD3LatentImage",
-                "inputs": {
-                    "width": width,
-                    "height": height,
-                    "batch_size": 1,
-                },
-            },
             # Apply AuraFlow sampling (required for Z-Image Turbo)
             "11": {
                 "class_type": "ModelSamplingAuraFlow",
                 "inputs": {
-                    "model": ["44", 0],  # Model FROM IP-Adapter Apply
+                    "model": ["28", 0],
                     "shift": 3.0,
                 },
             },
-            # KSampler - Z-Image Turbo is distilled, 8 steps optimal
+            # KSampler — img2img with partial denoising
+            # Latent comes from VAEEncode of reference image (node 41).
+            # denoise=0.75 adds ~75% noise: CLIP prompt has ~6 effective steps
+            # to reshape the image into the new scene/action while still
+            # retaining some character structure from the reference.
             "3": {
                 "class_type": "KSampler",
                 "inputs": {
@@ -608,11 +577,11 @@ class ImageGenerator:
                     "cfg": 1.0,
                     "sampler_name": "res_multistep",
                     "scheduler": "simple",
-                    "denoise": 1.0,
+                    "denoise": denoise,
                     "model": ["11", 0],
                     "positive": ["27", 0],
                     "negative": ["33", 0],
-                    "latent_image": ["13", 0],
+                    "latent_image": ["41", 0],
                 },
             },
             # ConditioningZeroOut for negative (required by Z-Image Turbo)
@@ -651,8 +620,12 @@ class ImageGenerator:
     ) -> str:
         """Generate an action scene image using avatar as visual reference.
 
-        Tries IP-Adapter workflow first (if reference image is provided).
-        Falls back to text-to-image with character description in prompt.
+        Tries img2img workflow first — encodes the avatar into VAE latent
+        space, then partially denoises with the action prompt (denoise=0.75)
+        to substantially change the scene while retaining some character features.
+
+        Falls back to text-to-image with character description in prompt
+        if no reference image is available or if img2img fails.
 
         Args:
             prompt: Main action prompt for the scene
@@ -664,25 +637,23 @@ class ImageGenerator:
         Returns:
             URL of the generated image, or placeholder on failure
         """
-        # Try IP-Adapter workflow first (if reference image available)
+        # Try img2img workflow first (if reference image available)
         if reference_image_url:
             try:
-                # Upload reference image to ComfyUI
                 ref_filename = f"ref_{filename_prefix}.png"
                 uploaded_name = await self._upload_image(
                     reference_image_url, ref_filename
                 )
                 if uploaded_name:
-                    # Build IP-Adapter workflow
-                    workflow = self._build_reference_image_workflow(
+                    workflow = self._build_img2img_workflow(
                         prompt=prompt,
                         reference_filename=uploaded_name,
                         width=width,
                         height=height,
+                        denoise=0.75,
                         filename_prefix=filename_prefix,
                     )
 
-                    # Queue and wait
                     async with _image_semaphore:
                         prompt_id = await self._queue_prompt(workflow)
                         outputs = await self._wait_for_completion(
@@ -692,12 +663,12 @@ class ImageGenerator:
 
                     if image_url:
                         logger.info(
-                            f"[ACTION_IMAGE] Generated with reference: {image_url}"
+                            f"[ACTION_IMAGE] Generated via img2img: {image_url}"
                         )
                         return image_url
                     else:
                         logger.warning(
-                            "[ACTION_IMAGE] IP-Adapter workflow produced no output, "
+                            "[ACTION_IMAGE] img2img produced no output, "
                             "falling back to text-to-image"
                         )
                 else:
@@ -707,12 +678,10 @@ class ImageGenerator:
                     )
             except Exception as e:
                 logger.warning(
-                    f"[ACTION_IMAGE] IP-Adapter workflow failed: {e}, "
-                    f"falling back to text-to-image"
+                    f"[ACTION_IMAGE] img2img failed: {e}, falling back to text-to-image"
                 )
 
         # Fallback: text-to-image with character description in prompt
-        # Put the action prompt FIRST, character description SECOND for emphasis
         fallback_prompt = prompt if prompt else ""
         if character_description:
             fallback_prompt += f" Character reference: {character_description}."

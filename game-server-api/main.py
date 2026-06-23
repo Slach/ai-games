@@ -8,8 +8,8 @@ import logging
 import os
 import random
 import string
-import traceback
 import contextlib
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -17,6 +17,7 @@ from typing import Any
 import uvicorn
 from database import (
     GAME_START_MIN_PLAYERS,
+    GAME_START_MAX_PLAYERS,
     add_game_message,
     clear_game_started,
     create_game,
@@ -84,7 +85,7 @@ from database import (
 )
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from game_master import NPC_TEMPLATES, create_game_master_agent
+from game_master import create_game_master_agent
 from image_generator import (
     DEFAULT_LOADING_FALLBACK_URL,
     DEFAULT_SPLASH_FALLBACK_URL,
@@ -195,6 +196,7 @@ class StartGameRequest(BaseModel):
     game_id: str
     language: str = "ru"
     force: bool = True
+    was_restarted: bool = False
 
 
 class KickPlayerRequest(BaseModel):
@@ -203,6 +205,7 @@ class KickPlayerRequest(BaseModel):
     role_key: str
     reason: str = "Kicked by Game Master"
     game_id: str
+    language: str = "ru"
 
 
 class CreateGameRequest(BaseModel):
@@ -685,6 +688,17 @@ async def start_onboarding(request: StartOnboardingRequest):
     if existing_profile:
         logger.warning(f"Player {request.player_id} already has a profile")
         raise HTTPException(status_code=400, detail="Player already has a profile")
+
+    # Check if the game is already full
+    current_count = get_player_count_in_game(request.game_id)
+    if current_count >= GAME_START_MAX_PLAYERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Game is full ({current_count}/{GAME_START_MAX_PLAYERS} players). "
+                "No more players can join at this time."
+            ),
+        )
 
     # Generate role questions (dynamic or static fallback) with images
     logger.info("Generating dynamic onboarding questions...")
@@ -2152,6 +2166,130 @@ async def _generate_chosen_action_image(
         logger.error(f"[ACTION_IMAGE] Failed to generate: {e}")
 
 
+async def _generate_npc_chosen_action_image(
+    npc_key: str,
+    game_id: str,
+    day: int,
+    action_id: str,
+):
+    """Generate an image showing the NPC's chosen action.
+
+    Similar to _generate_chosen_action_image but uses NPC profiles.
+    Runs as fire-and-forget background task.
+    """
+    try:
+        npc_profile = get_npc_profile(npc_key)
+        if not npc_profile:
+            logger.warning(f"[NPC_ACTION_IMAGE] NPC {npc_key} not found, skipping")
+            return
+
+        # Get the briefing to find the action text
+        # NPC briefings have player_id = None and npc_key set
+        all_briefings = get_all_briefings_for_day(day, game_id)
+        briefing = None
+        for b in all_briefings:
+            if b.get("npc_key") == npc_key:
+                briefing = b
+                break
+        if not briefing:
+            logger.warning(
+                f"[NPC_ACTION_IMAGE] Briefing not found for {npc_key} day {day}"
+            )
+            return
+
+        # Find chosen action text
+        action_text = ""
+        for c in briefing.get("choices", []):
+            if c.get("id") == action_id:
+                action_text = c.get("text", c.get("description", ""))
+                break
+        if not action_text:
+            action_text = action_id
+
+        # Get scene context from game_day
+        day_data = get_game_day(day, game_id=game_id)
+        global_circ_str = (
+            day_data.get("global_circumstances", "{}") if day_data else "{}"
+        )
+        try:
+            global_circ = json.loads(global_circ_str)
+        except (json.JSONDecodeError, TypeError):
+            global_circ = {}
+        setting = (
+            global_circ.get("setting", "") or day_data.get("story", "")
+            if day_data
+            else ""
+        )
+
+        # Build character appearance description from NPC profile
+        role = npc_profile.get("role", "Crew Member")
+        npc_name = npc_profile.get("npc_name", npc_key)
+        traits = npc_profile.get("personality_traits", [])
+        avatar_desc = npc_profile.get("avatar_description", "")
+
+        # Extract avatar URL from avatar_description field (format: "avatar_url=<url>;...")
+        avatar_url = None
+        if avatar_desc.startswith("avatar_url="):
+            url_part = avatar_desc.split(";")[0]
+            avatar_url = url_part.replace("avatar_url=", "", 1)
+            # Remove prompt part for description
+            avatar_desc_clean = (
+                avatar_desc.split(";", 1)[1] if ";" in avatar_desc else ""
+            )
+        else:
+            avatar_desc_clean = avatar_desc
+
+        character_description = f"{npc_name}, the {role}"
+
+        # Generate prompt via LLM
+        prompt = ""
+        try:
+            gm = create_game_master_agent(language="en")
+            prompt = gm.generate_chosen_action_prompt(
+                role=role,
+                traits=traits,
+                avatar_description=avatar_desc_clean,
+                action_text=action_text,
+                setting=setting,
+            )
+        except Exception as llm_err:
+            logger.warning(
+                f"[NPC_ACTION_IMAGE] LLM prompt failed for {npc_name}: {llm_err}"
+            )
+
+        if not prompt:
+            prompt = (
+                f"{npc_name} ({role}) performing action: {action_text}. "
+                f"Setting: {setting[:200]}. "
+                f"Cinematic sci-fi scene, dynamic action in progress, "
+                f"dramatic lighting, detailed environment, "
+                f"space opera aesthetic, photorealistic quality, 4K."
+            )
+
+        image_gen = create_image_generator()
+        chosen_action_url = await image_gen.generate_action_image_with_reference(
+            prompt=prompt,
+            reference_image_url=avatar_url,
+            character_description=character_description,
+            filename_prefix=f"action_day{day}_{game_id}_npc_{npc_key}",
+        )
+
+        if chosen_action_url:
+            # Save chosen action URL to the briefing
+            if briefing.get("id"):
+                update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
+                logger.info(
+                    f"[NPC_ACTION_IMAGE] Saved for NPC {npc_name} "
+                    f"day {day}: {chosen_action_url}"
+                )
+        else:
+            logger.warning(
+                f"[NPC_ACTION_IMAGE] Generation returned None for {npc_name}"
+            )
+    except Exception as e:
+        logger.error(f"[NPC_ACTION_IMAGE] Failed to generate: {e}")
+
+
 def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
     """Build a compact text summary from combined_outcome JSON for cross-day context.
 
@@ -2181,6 +2319,26 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
         else:
             parts.append(f"Ship status: {ship_status}")
 
+    # Ship hull integrity
+    hull = oc.get("ship_hull_integrity")
+    shields = oc.get("ship_shields")
+    if hull is not None or shields is not None:
+        hull_str = f"{hull}%" if hull is not None else "?"
+        shields_str = f"{shields}%" if shields is not None else "?"
+        if language == "ru":
+            parts.append(f"Корпус: {hull_str}, Щиты: {shields_str}")
+        else:
+            parts.append(f"Hull: {hull_str}, Shields: {shields_str}")
+
+    # Ship systems offline
+    offline = oc.get("ship_systems_offline", [])
+    if offline:
+        systems_str = ", ".join(offline)
+        if language == "ru":
+            parts.append(f"Системы отключены: {systems_str}")
+        else:
+            parts.append(f"Systems offline: {systems_str}")
+
     # Crew morale
     morale = oc.get("crew_morale_change", "")
     if morale:
@@ -2200,6 +2358,22 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
             parts.append(f"Погибшие: {', '.join(dead_names)}")
         else:
             parts.append(f"Deceased: {', '.join(dead_names)}")
+
+    # Injured
+    injured = oc.get("crew_injured", [])
+    if injured:
+        injured_names = []
+        for i_entry in injured:
+            if isinstance(i_entry, list) and len(i_entry) >= 2:
+                i_name = i_entry[0]
+                i_severity = i_entry[2] if len(i_entry) >= 3 else "unknown"
+                injured_names.append(f"{i_name} ({i_severity})")
+            else:
+                injured_names.append(str(i_entry))
+        if language == "ru":
+            parts.append(f"Раненые: {', '.join(injured_names)}")
+        else:
+            parts.append(f"Injured: {', '.join(injured_names)}")
 
     # Ship destroyed
     if oc.get("ship_destroyed"):
@@ -2387,61 +2561,49 @@ async def _analyze_day_outcome(
         update_game_day_outcome(day, json.dumps(outcome, ensure_ascii=False), game_id)
         logger.info(f"[OUTCOME] Combined outcome saved for Day {day}")
 
-        # Update mission progress if provided
-        mission_progress = outcome.get("mission_progress", {})
+        # Update mission progress if provided (new array format: [{stage, points}])
+        mission_progress = outcome.get("mission_progress", [])
         if mission_progress and mission:
             stage_progress = mission.get("stage_progress", {})
             current_stage = mission.get("current_stage", 0)
             total_stages = mission.get("total_stages", 1)
 
-            for stage_str, points in mission_progress.items():
-                stage_key = str(stage_str)
+            for entry in mission_progress:
+                stage_num = entry.get("stage")
+                points = entry.get("points", 0)
+
+                if stage_num is None:
+                    logger.info(f"[MISSION] Skipping entry without stage: {entry}")
+                    continue
+
                 try:
                     points_int = int(points)
                 except (ValueError, TypeError):
                     logger.warning(f"[MISSION] Skipping non-integer points: {points}")
                     continue
-                stage_progress[stage_key] = (
-                    stage_progress.get(stage_key, 0) + points_int
+
+                stage_key = str(stage_num)
+                old_progress = stage_progress.get(stage_key, 0)
+                new_progress = max(0, old_progress + points_int)
+                stage_progress[stage_key] = new_progress
+
+                log_direction = (
+                    "advance"
+                    if points_int > 0
+                    else "setback"
+                    if points_int < 0
+                    else "neutral"
+                )
+                logger.info(
+                    f"[MISSION] Stage {stage_num}: {old_progress} -> {new_progress} ({log_direction}, delta={points_int})"
                 )
 
-                # Try to extract a stage number from the key.
-                # LLM may return keys like "Stage 1", "Stage_2", "investigation_stage", etc.
-                stage_num = None
-                try:
-                    stage_num = int(stage_key)
-                except (ValueError, TypeError):
-                    # Extract digits from the key (e.g., "Stage 1" -> 1)
-                    digits = "".join(c for c in stage_key if c.isdigit())
-                    if digits:
-                        stage_num = int(digits)
-                    else:
-                        # Map well-known stage name prefixes to numbers
-                        stage_name_map = {
-                            "investigation": 1,
-                            "survival": 2,
-                            "combat": 3,
-                            "negotiation": 4,
-                            "escape": 5,
-                            "repair": 6,
-                        }
-                        for prefix, num in stage_name_map.items():
-                            if stage_key.startswith(prefix):
-                                stage_num = num
-                                break
-
-                if stage_num is None:
-                    logger.info(
-                        f"[MISSION] Skipping unparseable stage key: {stage_key}"
-                    )
-                    continue
-
-                # Check if current stage is now completed
-                if stage_num == current_stage:
+                # Check if current stage is now completed (only on positive progress)
+                if points_int > 0 and stage_num == current_stage:
                     for obj in mission.get("objectives", []):
                         if obj.get("stage") == stage_num:
                             threshold = obj.get("success_threshold", 5)
-                            if stage_progress[stage_key] >= threshold:
+                            if new_progress >= threshold:
                                 current_stage = min(current_stage + 1, total_stages)
                                 logger.info(f"[MISSION] Stage {stage_num} completed!")
                                 break
@@ -2457,10 +2619,48 @@ async def _analyze_day_outcome(
             if completed:
                 logger.info("[MISSION] MISSION COMPLETE! Notifying players...")
 
+        # ========== Process ship damage from new structured fields ==========
+        ship_hull = outcome.get("ship_hull_integrity", 100)
+        ship_shields = outcome.get("ship_shields", 100)
+        ship_systems_offline = outcome.get("ship_systems_offline", [])
+        ship_destroyed = outcome.get("ship_destroyed", False)
+
+        # Compute crew_health from hull (hull=0 → crew_health=0, hull=100 → crew_health=100)
+        # Shields also contribute to survival chances
+        crew_health = max(0, min(100, int(ship_hull * 0.7 + ship_shields * 0.3)))
+
+        logger.info(
+            f"[SHIP] Day {day}: hull={ship_hull}%, shields={ship_shields}%, "
+            f"systems_offline={ship_systems_offline}, "
+            f"destroyed={ship_destroyed}"
+        )
+
+        # Handle crew injuries (new structured field)
+        crew_injured = outcome.get("crew_injured", [])
+        for injury_entry in crew_injured:
+            if isinstance(injury_entry, list) and len(injury_entry) >= 2:
+                injured_name = injury_entry[0]
+                injured_role = injury_entry[1]
+                severity = injury_entry[2] if len(injury_entry) >= 3 else "unknown"
+                # Try to find the player and log their injury
+                for d in all_decisions:
+                    if d.get("name") == injured_name or d.get("role") == injured_role:
+                        pid = d.get("player_id")
+                        if pid:
+                            logger.info(
+                                f"[INJURY] Player {pid} ({injured_role}) injured: {severity}"
+                            )
+                            # Critical injuries → player becomes spectator for this turn
+                            if severity == "critical":
+                                logger.info(
+                                    f"[INJURY] Player {pid} critically injured, out of action"
+                                )
+                        break
+
         # Handle crew deaths
         dead_crew = outcome.get("dead_crew_members", [])
         for death_entry in dead_crew:
-            # death_entry could be [name, role] or [player_id, role]
+            # death_entry could be [name, role]
             if isinstance(death_entry, list) and len(death_entry) >= 2:
                 entity_name = death_entry[0]
                 entity_role = death_entry[1]
@@ -2476,20 +2676,24 @@ async def _analyze_day_outcome(
                         break
 
         # Handle ship destruction
-        ship_destroyed = outcome.get("ship_destroyed", False)
         if ship_destroyed:
             end_game("ship_destroyed", game_id)
             logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
 
-        # Also update game state
+        # Also update game state with computed crew_health
         state = get_game_state(game_id)
         ship_alive = not ship_destroyed and state.get("ship_alive", True)
         update_game_state(
             state["day"],
             "active" if ship_alive else "ship_destroyed",
             ship_alive=ship_alive,
+            crew_health=crew_health,
             game_id=game_id,
         )
+
+        # Log ship systems offline
+        if ship_systems_offline:
+            logger.info(f"[SHIP] Systems offline: {', '.join(ship_systems_offline)}")
 
         # ── Push outcome to all alive players ──────────────────────
         # Build outcome text from the LLM result
@@ -2578,6 +2782,87 @@ async def _analyze_day_outcome(
                 if isinstance(r, Exception):
                     logger.warning(f"[OUTCOME] Action image task {i} failed: {r}")
 
+        # ── Build action images array with captions ────────────────
+        # After awaiting all pending tasks, briefings now have chosen_action_url populated.
+        # Format: 'Ход X — Имя — Роль — Действие'
+        action_images = []
+        all_briefings_fresh = get_all_briefings_for_day(day, game_id) or all_briefings
+        if language == "ru":
+            caption_prefix = f"Ход {day}"
+        else:
+            caption_prefix = f"Turn {day}"
+
+        for b in all_briefings_fresh:
+            action_url = b.get("chosen_action_url")
+            if not action_url:
+                continue
+
+            # Determine entity name and role
+            player_id = b.get("player_id")
+            npc_key = b.get("npc_key")
+
+            if player_id:
+                p = get_player_profile(player_id)
+                if p:
+                    entity_name = p.get("player_name", "") or str(player_id)
+                    role_name = p.get("role", "")
+                else:
+                    entity_name = str(player_id)
+                    role_name = b.get("role", "")
+            elif npc_key:
+                n = get_npc_profile(npc_key)
+                if n:
+                    entity_name = n.get("npc_name", npc_key)
+                    role_name = n.get("role", "")
+                else:
+                    entity_name = npc_key
+                    role_name = b.get("role", "")
+            else:
+                continue
+
+            # Find action text
+            selected_id = b.get("selected_action_id")
+            action_text = ""
+            for c in b.get("choices", []):
+                if c.get("id") == selected_id:
+                    action_text = c.get("text", c.get("description", ""))
+                    break
+            if not action_text:
+                action_text = selected_id or ""
+
+            # Truncate action text for caption (max 60 chars)
+            short_action = (
+                action_text[:57] + "..." if len(action_text) > 60 else action_text
+            )
+
+            caption = f"{caption_prefix} — {entity_name} — {role_name} — {short_action}"
+            action_images.append(
+                {
+                    "image_url": action_url,
+                    "caption": caption,
+                    "player_id": player_id,
+                    "npc_key": npc_key,
+                }
+            )
+
+        # ── Build injury notices for push ───────────────────────────
+        injury_notices = []
+        crew_injured_list = outcome.get("crew_injured", [])
+        for injury_entry in crew_injured_list:
+            if isinstance(injury_entry, list) and len(injury_entry) >= 2:
+                injury_notices.append(
+                    {
+                        "name": str(injury_entry[0]),
+                        "role": str(injury_entry[1]),
+                        "severity": str(injury_entry[2])
+                        if len(injury_entry) >= 3
+                        else "unknown",
+                    }
+                )
+
+        # ── Build personal outcomes for push ────────────────────────
+        personal_outcomes = outcome.get("personal_outcomes", [])
+
         # Push outcome synchronously so message order is deterministic
         # (outcome arrives BEFORE new day briefings)
         try:
@@ -2589,6 +2874,12 @@ async def _analyze_day_outcome(
                 outcome_image_url=outcome_image_url,
                 ship_status="destroyed" if ship_destroyed else "alive",
                 death_notices=death_notices,
+                injury_notices=injury_notices,
+                personal_outcomes=personal_outcomes,
+                action_images=action_images,
+                ship_hull_integrity=ship_hull,
+                ship_shields=ship_shields,
+                ship_systems_offline=ship_systems_offline,
                 total_crew_count=total_crew,
                 alive_crew_count=alive_crew,
             )
@@ -2728,7 +3019,9 @@ async def generate_daily_episode(
 
     logger.info("Generating NPC dialogues...")
     dialogues = game_master.generate_crew_dialogues(
-        story=story, player_role=player_role
+        story=story,
+        player_role=player_role,
+        crew_members=_get_crew_members(game_id),
     )
 
     new_day = {
@@ -2891,6 +3184,107 @@ async def admin_generate_splash_images(game_id: str = "default_game", lang: str 
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+# Species and gender options for NPC randomization
+_NPC_SPECIES_OPTIONS = ["human", "humanoid", "non_humanoid", "cybernetic"]
+_NPC_GENDER_OPTIONS = {
+    "ru": {
+        "male": "Мужской",
+        "female": "Женский",
+        "neutral": "Нейтральный",
+        "fluid": "Сменяемый",
+        "synthetic": "Синтетический",
+    },
+    "en": {
+        "male": "Male",
+        "female": "Female",
+        "neutral": "Neutral",
+        "fluid": "Fluid",
+        "synthetic": "Synthetic",
+    },
+}
+
+
+def _extract_avatar_prompt(avatar_description: str) -> str:
+    """Extract the text prompt from an avatar_description field.
+
+    The field may contain 'avatar_url=<url>;<prompt>' after avatar generation.
+    Strip the URL prefix and return just the prompt.
+    """
+    if not avatar_description:
+        return ""
+    if avatar_description.startswith("avatar_url="):
+        parts = avatar_description.split(";", 1)
+        return parts[1] if len(parts) > 1 else ""
+    return avatar_description
+
+
+def _extract_avatar_url(avatar_description: str) -> str | None:
+    """Extract the image URL from an avatar_description field.
+
+    NPCs store avatar URLs as 'avatar_url=<url>;<prompt>'. Players store
+    avatar_url directly in a separate column. This function extracts the URL
+    from the combined format.
+    """
+    if not avatar_description:
+        return None
+    if avatar_description.startswith("avatar_url="):
+        # Format: avatar_url=https://example.com/img.png;description text
+        parts = avatar_description.split(";", 1)
+        return parts[0].replace("avatar_url=", "", 1)
+    return None
+
+
+def _get_crew_members(game_id: str) -> list[dict[str, Any]]:
+    """Get all crew members (players + NPCs) for dialogue generation.
+
+    Returns a list of dicts with 'name' and 'role' keys, plus optional
+    'personality_traits' and 'species'. Used by generate_crew_dialogues.
+    """
+    crew: list[dict[str, Any]] = []
+
+    # Add real players
+    for pid in get_players_in_game(game_id):
+        p = get_player_profile(pid)
+        if not p:
+            continue
+        crew.append(
+            {
+                "name": p.get("player_name", "") or p.get("role", "Crew"),
+                "role": p.get("role", "Crew Member"),
+                "species": p.get("species", ""),
+                "personality_traits": p.get("personality_traits", []),
+            }
+        )
+
+    # Add NPCs
+    for npc in get_all_active_npcs(game_id):
+        crew.append(
+            {
+                "name": npc.get("npc_name", "") or npc.get("role", "NPC"),
+                "role": npc.get("role", "NPC"),
+                "species": npc.get("species", ""),
+                "personality_traits": npc.get("personality_traits", []),
+            }
+        )
+
+    return crew
+
+
+def _random_npc_species() -> str:
+    """Pick a random species key for NPC generation."""
+    return random.choice(_NPC_SPECIES_OPTIONS)
+
+
+def _random_npc_gender(language: str = "ru") -> str:
+    """Pick a random localized gender display name for NPC.
+
+    Returns a display name (e.g. "Мужской" or "Male") rather than a key.
+    """
+    lang_key = "ru" if language == "ru" else "en"
+    gender_key = random.choice(list(_NPC_GENDER_OPTIONS[lang_key].keys()))
+    return _NPC_GENDER_OPTIONS[lang_key][gender_key]
+
+
 @app.post("/admin/start-game")
 async def admin_start_game(request: StartGameRequest):
     """Force-start the game: generate NPCs for missing roles, mark game as started,
@@ -2960,21 +3354,37 @@ async def admin_start_game(request: StartGameRequest):
             npcs_created.append(existing)
             continue
 
+        # Randomize species and gender for this NPC
+        npc_species = _random_npc_species()
+        npc_gender = _random_npc_gender(language)
+
+        # Generate creative name via LLM (with fallback)
+        npc_name_attempt = gm.generate_npc_name(
+            role_key=role_key,
+            role_name=role_name,
+            species=npc_species,
+            gender=npc_gender,
+            avatar_description=role_data.get("avatar_description", ""),
+            personality_traits=role_data.get("personality_traits", []),
+        )
+        # If LLM returned a name WITH role prefix (e.g. "Инженер Дмитрий Волков"),
+        # strip it — the role is already shown separately in UI
+        if npc_name_attempt:
+            # Remove leading role prefix if present (e.g. "Инженер " → "")
+            for prefix in [f"{role_name} ", f"{role_data.get('role_name_en', '')} "]:
+                if npc_name_attempt.startswith(prefix):
+                    npc_name_attempt = npc_name_attempt[len(prefix) :]
+                    break
+
         npc_data = {
             "npc_key": npc_key,
             "role_key": role_key,
-            "npc_name": NPC_TEMPLATES.get(
-                role_key.replace("chief_engineer", "engineer")
-                .replace("science_officer", "scientist")
-                .replace("communications_officer", "communications")
-                .replace("security_chief", "security"),
-                {},
-            ).get("default_name", f"NPC {role_name}"),
+            "npc_name": npc_name_attempt,
             "role": role_name,
             "role_description": role_data.get("role_description", ""),
             "personality_traits": role_data.get("personality_traits", []),
-            "species": "Various",
-            "gender": "Various",
+            "species": npc_species,
+            "gender": npc_gender,
             "avatar_description": role_data.get("avatar_description", ""),
             "game_id": game_id,
             "is_active": True,
@@ -2983,7 +3393,9 @@ async def admin_start_game(request: StartGameRequest):
         npc = create_npc_profile(npc_data)
         if npc:
             npcs_created.append(npc)
-            logger.info(f"[NPC] Created NPC {npc_key} for role {role_key}")
+            logger.info(
+                f"[NPC] Created NPC {npc_key} for role {role_key}: {npc_name_attempt} ({npc_species}, {npc_gender})"
+            )
 
     # 4. Mark game as started
     start_game(game_id)
@@ -2994,27 +3406,35 @@ async def admin_start_game(request: StartGameRequest):
     for pid in player_ids:
         profile = get_player_profile(pid)
         if profile:
+            avatar_desc = _extract_avatar_prompt(
+                profile.get("avatar_description", "") or ""
+            )
             all_participants.append(
                 {
                     "type": "player",
                     "player_id": pid,
+                    "player_name": profile.get("player_name", "") or "",
                     "role": profile["role"],
-                    "species": profile.get("species"),
+                    "species": profile.get("species", ""),
                     "personality_traits": profile.get("personality_traits", []),
                     "role_description": profile.get("role_description", ""),
+                    "avatar_description": avatar_desc,
+                    "species_description": profile.get("species_description", "") or "",
                 }
             )
 
     for npc in npcs_created:
+        avatar_desc = _extract_avatar_prompt(npc.get("avatar_description", "") or "")
         all_participants.append(
             {
                 "type": "npc",
                 "npc_key": npc["npc_key"],
                 "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
                 "role": npc["role"],
-                "species": npc.get("species"),
+                "species": npc.get("species", ""),
                 "personality_traits": npc.get("personality_traits", []),
                 "role_description": npc.get("role_description", ""),
+                "avatar_description": avatar_desc,
             }
         )
 
@@ -3123,17 +3543,26 @@ async def admin_start_game(request: StartGameRequest):
     )
 
     # Step A2: Generate scene image for this turn's briefing
+    # Uses LLM-generated scene_prompt if available (from global_circ), otherwise falls back to hardcoded prompt
     scene_url = None
     try:
-        scene_prompt = (
-            f"Sci-fi scene: {global_circ.get('setting', '')}. "
-            f"{global_narrative[:500]} "
-            f"Cinematic starship interior, crew interacting with holographic displays, "
-            f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
-        )
+        # Prefer LLM-generated scene_prompt
+        scene_prompt = global_circ.get("scene_prompt", "")
+        if not scene_prompt:
+            # Fallback: build from setting + narrative
+            scene_prompt = (
+                f"Sci-fi scene: {global_circ.get('setting', '')}. "
+                f"{global_narrative[:500]} "
+                f"Cinematic starship interior, crew interacting with holographic displays, "
+                f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+            )
+        # Remove [avatar: ...] markers before sending to image gen
+        import re
+
+        scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
         image_gen = create_image_generator()
         scene_url = await image_gen.generate_scene_image(
-            prompt=scene_prompt,
+            prompt=scene_prompt_clean,
             filename_prefix=f"scene_day{day_num}_{game_id}",
         )
         if scene_url:
@@ -3142,7 +3571,7 @@ async def admin_start_game(request: StartGameRequest):
                 image_url=scene_url,
                 game_id=game_id,
                 day=day_num,
-                prompt=scene_prompt,
+                prompt=scene_prompt_clean,
             )
             logger.info(
                 f"[SCENE] Turn scene image saved for day {day_num}: {scene_url}"
@@ -3251,6 +3680,24 @@ async def admin_start_game(request: StartGameRequest):
                     game_id,
                 )
                 if saved:
+                    # ── Generate NPC action image ────────────────────────
+                    npc_action_key = (day_num, game_id)
+                    npc_action_task = asyncio.create_task(
+                        _generate_npc_chosen_action_image(
+                            npc_key=participant["npc_key"],
+                            game_id=game_id,
+                            day=day_num,
+                            action_id=selected_id,
+                        )
+                    )
+                    _pending_action_tasks.setdefault(npc_action_key, set()).add(
+                        npc_action_task
+                    )
+                    npc_action_task.add_done_callback(
+                        lambda _t, k=npc_action_key: _pending_action_tasks.get(
+                            k, set()
+                        ).discard(_t)
+                    )
                     return {
                         **saved,
                         "name": participant.get("npc_name", participant["npc_key"]),
@@ -3426,7 +3873,9 @@ async def admin_start_game(request: StartGameRequest):
     )
     try:
         dialogues = gm.generate_crew_dialogues(
-            story=dialog_story, player_role=player_role
+            story=dialog_story,
+            player_role=player_role,
+            crew_members=_get_crew_members(game_id),
         )
         crew_dialogues_list = [
             {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
@@ -3502,6 +3951,7 @@ async def admin_start_game(request: StartGameRequest):
                     crew_dialogues=crew_dialogues_list,
                     is_first_turn=True,
                     global_narrative=global_narrative,
+                    was_restarted=request.was_restarted,
                 )
             )
     except Exception as push_err:
@@ -3546,6 +3996,75 @@ async def get_bridge_image_endpoint(
     if not url:
         raise HTTPException(status_code=404, detail=f"No {img_type} image found")
     return {"image_url": url, "game_id": game_id, "type": img_type}
+
+
+@app.get("/game/team")
+async def get_team_endpoint(game_id: str = "default_game"):
+    """Get the full team roster with avatar URLs and status.
+
+    Returns all participants (players + NPCs) without distinguishing
+    which is which. Each entry has: name, role, species, gender,
+    avatar_url, and is_dead status.
+    """
+    team: list[dict[str, Any]] = []
+
+    # Add real players
+    player_ids = get_players_in_game(game_id)
+    for pid in player_ids:
+        profile = get_player_profile(pid)
+        if not profile:
+            continue
+        avatar_url = profile.get("avatar_url") or None
+        team.append(
+            {
+                "name": profile.get("player_name", "")
+                or profile.get("role", "Crew Member"),
+                "role": profile.get("role", "Crew Member"),
+                "species": profile.get("species", "Unknown"),
+                "gender": profile.get("gender", "Unknown"),
+                "avatar_url": avatar_url,
+                "is_dead": bool(profile.get("is_dead", False)),
+            }
+        )
+
+    # Add NPCs (both alive and dead/inactive)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM npc_profiles WHERE game_id = ? ORDER BY created_at",
+        (game_id,),
+    )
+    npc_rows = cursor.fetchall()
+    conn.close()
+    for row in npc_rows:
+        avatar_desc = row["avatar_description"] or ""
+        avatar_url = _extract_avatar_url(avatar_desc)
+        npc_name = row["npc_name"] or ""
+        npc_role = row["role"] or "NPC"
+        # Translate raw species/gender keys to display names
+        raw_species = row["species"] or ""
+        raw_gender = row["gender"] or ""
+        npc_species = (
+            get_species_type_name(raw_species, "ru") if raw_species else "Unknown"
+        )
+        npc_gender = get_gender_type_name(raw_gender, "ru") if raw_gender else "Unknown"
+        # sqlite3.Row has no .get() — check column existence via try/except
+        try:
+            is_active = bool(row["is_active"])
+        except KeyError:
+            is_active = True
+        team.append(
+            {
+                "name": npc_name or npc_role,
+                "role": npc_role,
+                "species": npc_species,
+                "gender": npc_gender,
+                "avatar_url": avatar_url,
+                "is_dead": not is_active,
+            }
+        )
+
+    return {"game_id": game_id, "members": team, "count": len(team)}
 
 
 @app.post("/player/{player_id}/die")
@@ -3602,15 +4121,40 @@ async def admin_kick_player(request: KickPlayerRequest):
 
     kicked_player_id = taken_by
 
-    # 2. Load NPC templates for this role
-    npc_template = NPC_TEMPLATES.get(
-        role_key.replace("chief_engineer", "engineer")
-        .replace("science_officer", "scientist")
-        .replace("communications_officer", "communications")
-        .replace("security_chief", "security"),
-        {},
+    # 2. Get the kicked player's profile to preserve their name and identity
+    kicked_profile = get_player_profile(kicked_player_id)
+    npc_name = (
+        (kicked_profile.get("player_name", "") or "")
+        if kicked_profile
+        else role_data["role_name"]
+    ) or role_data["role_name"]
+    npc_traits = (
+        kicked_profile.get("personality_traits", [])
+        if kicked_profile
+        else role_data.get("personality_traits", [])
     )
-    npc_name = npc_template.get("default_name", f"NPC {role_data['role_name']}")
+    # Randomize species/gender if the kicked player has no profile data
+    _kick_lang = request.language if hasattr(request, "language") else "ru"
+    if kicked_profile:
+        npc_species = kicked_profile.get("species", "") or ""
+        npc_gender = kicked_profile.get("gender", "") or ""
+        if not npc_species:
+            npc_species = _random_npc_species()
+        if not npc_gender:
+            npc_gender = _random_npc_gender(_kick_lang)
+    else:
+        npc_species = _random_npc_species()
+        npc_gender = _random_npc_gender(_kick_lang)
+    npc_avatar_desc = (
+        kicked_profile.get("avatar_description", "")
+        if kicked_profile
+        else role_data.get("avatar_description", "")
+    )
+    npc_role_description = (
+        kicked_profile.get("role_description", "")
+        if kicked_profile
+        else role_data.get("role_description", "")
+    )
 
     # 3. Release the role and create NPC replacement
     reset_roles(game_id)
@@ -3634,17 +4178,17 @@ async def admin_kick_player(request: KickPlayerRequest):
     conn.commit()
     conn.close()
 
-    # Create NPC profile
+    # Create NPC profile — preserves the player's name, species, gender, and appearance
     npc_profile_data = {
         "npc_key": f"npc_{role_key}_{game_id}",
         "role_key": role_key,
         "npc_name": npc_name,
         "role": role_data["role_name"],
-        "role_description": role_data.get("role_description", ""),
-        "personality_traits": role_data.get("personality_traits", []),
-        "species": "Various",
-        "gender": "Various",
-        "avatar_description": role_data.get("avatar_description", ""),
+        "role_description": npc_role_description,
+        "personality_traits": npc_traits,
+        "species": npc_species,
+        "gender": npc_gender,
+        "avatar_description": npc_avatar_desc,
         "game_id": game_id,
         "is_active": True,
         "replaces_player_id": kicked_player_id,
@@ -3780,27 +4324,35 @@ async def admin_continue_game(
     for pid in player_ids:
         profile = get_player_profile(pid)
         if profile and not profile.get("is_dead", False):
+            avatar_desc = _extract_avatar_prompt(
+                profile.get("avatar_description", "") or ""
+            )
             all_participants.append(
                 {
                     "type": "player",
                     "player_id": pid,
+                    "player_name": profile.get("player_name", "") or "",
                     "role": profile["role"],
-                    "species": profile.get("species"),
+                    "species": profile.get("species", ""),
                     "personality_traits": profile.get("personality_traits", []),
                     "role_description": profile.get("role_description", ""),
+                    "avatar_description": avatar_desc,
+                    "species_description": profile.get("species_description", "") or "",
                 }
             )
 
     for npc in npcs:
+        avatar_desc = _extract_avatar_prompt(npc.get("avatar_description", "") or "")
         all_participants.append(
             {
                 "type": "npc",
                 "npc_key": npc["npc_key"],
                 "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
                 "role": npc["role"],
-                "species": npc.get("species"),
+                "species": npc.get("species", ""),
                 "personality_traits": npc.get("personality_traits", []),
                 "role_description": npc.get("role_description", ""),
+                "avatar_description": avatar_desc,
             }
         )
 
@@ -3840,16 +4392,25 @@ async def admin_continue_game(
     )
 
     # Step A2: Generate scene image for this turn's briefing
+    # Uses LLM-generated scene_prompt if available (from global_circ), otherwise falls back to hardcoded prompt
     try:
-        scene_prompt = (
-            f"Sci-fi scene: {global_circ.get('setting', '')}. "
-            f"{global_circ.get('narrative', '')[:500]} "
-            f"Cinematic starship interior, crew interacting with holographic displays, "
-            f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
-        )
+        # Prefer LLM-generated scene_prompt
+        scene_prompt = global_circ.get("scene_prompt", "")
+        if not scene_prompt:
+            # Fallback: build from setting + narrative
+            scene_prompt = (
+                f"Sci-fi scene: {global_circ.get('setting', '')}. "
+                f"{global_circ.get('narrative', '')[:500]} "
+                f"Cinematic starship interior, crew interacting with holographic displays, "
+                f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+            )
+        # Remove [avatar: ...] markers before sending to image gen
+        import re
+
+        scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
         image_gen = create_image_generator()
         scene_url = await image_gen.generate_scene_image(
-            prompt=scene_prompt,
+            prompt=scene_prompt_clean,
             filename_prefix=f"scene_day{day_num}_{game_id}",
         )
         if scene_url:
@@ -3858,7 +4419,7 @@ async def admin_continue_game(
                 image_url=scene_url,
                 game_id=game_id,
                 day=day_num,
-                prompt=scene_prompt,
+                prompt=scene_prompt_clean,
             )
             logger.info(
                 f"[SCENE] Turn scene image saved for day {day_num}: {scene_url}"
@@ -3933,6 +4494,24 @@ async def admin_continue_game(
                 game_id,
             )
             if saved:
+                # ── Generate NPC action image ────────────────────────────
+                npc_action_key = (day_num, game_id)
+                npc_action_task = asyncio.create_task(
+                    _generate_npc_chosen_action_image(
+                        npc_key=participant["npc_key"],
+                        game_id=game_id,
+                        day=day_num,
+                        action_id=selected_id,
+                    )
+                )
+                _pending_action_tasks.setdefault(npc_action_key, set()).add(
+                    npc_action_task
+                )
+                npc_action_task.add_done_callback(
+                    lambda _t, k=npc_action_key: _pending_action_tasks.get(
+                        k, set()
+                    ).discard(_t)
+                )
                 all_briefings.append(
                     {
                         **saved,
@@ -4095,7 +4674,9 @@ async def admin_continue_game(
     )
     try:
         dialogues = gm.generate_crew_dialogues(
-            story=dialog_story, player_role=player_role
+            story=dialog_story,
+            player_role=player_role,
+            crew_members=_get_crew_members(game_id),
         )
         crew_dialogues_list = [
             {"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues
