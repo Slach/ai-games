@@ -150,7 +150,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "role_scores": {
                     "chief_engineer": 3,
                     "tactical_officer": 1,
-                    "quartermaster": 1,
+                    "captain": 1,
                     "science_officer": 0,
                     "communications_officer": 0,
                     "security_chief": 0,
@@ -169,7 +169,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "communications_officer": 1,
                     "chief_engineer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "security_chief": 0,
                     "navigator": 0,
                     "medical_officer": 0,
@@ -186,7 +186,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "chief_engineer": 0,
                     "science_officer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "navigator": 0,
                     "medical_officer": 0,
                     "pilot": 0,
@@ -202,7 +202,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "chief_engineer": 0,
                     "science_officer": 0,
                     "communications_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "medical_officer": 0,
                     "xenobiologist": 0,
                     "pilot": 0,
@@ -213,7 +213,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "label": "Подготовить медицинский отсек к приёму пострадавших и проверить запасы медикаментов",
                 "role_scores": {
                     "medical_officer": 3,
-                    "quartermaster": 1,
+                    "captain": 1,
                     "chief_engineer": 0,
                     "science_officer": 0,
                     "communications_officer": 0,
@@ -242,7 +242,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "communications_officer": 0,
                     "security_chief": 0,
                     "medical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                 },
             },
@@ -251,7 +251,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "label": "Использовать обломки пород чтобы построить временное укрытие и усилить конструкцию",
                 "role_scores": {
                     "chief_engineer": 3,
-                    "quartermaster": 2,
+                    "captain": 2,
                     "security_chief": 1,
                     "science_officer": 0,
                     "communications_officer": 0,
@@ -267,7 +267,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "label": "Немедленно оказать первую помощь раненым и распределить ресурсы для выживания",
                 "role_scores": {
                     "medical_officer": 3,
-                    "quartermaster": 2,
+                    "captain": 2,
                     "communications_officer": 1,
                     "chief_engineer": 0,
                     "science_officer": 0,
@@ -290,7 +290,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "medical_officer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "pilot": 0,
                 },
             },
@@ -305,7 +305,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "science_officer": 0,
                     "navigator": 0,
                     "medical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                     "pilot": 0,
                 },
@@ -328,7 +328,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "navigator": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "pilot": 0,
                 },
             },
@@ -337,7 +337,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "label": "Собрать все данные о ситуации и предложить решение на основе анализа фактов",
                 "role_scores": {
                     "science_officer": 3,
-                    "quartermaster": 1,
+                    "captain": 1,
                     "chief_engineer": 1,
                     "communications_officer": 0,
                     "security_chief": 0,
@@ -360,7 +360,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "communications_officer": 0,
                     "navigator": 0,
                     "medical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                 },
             },
@@ -368,7 +368,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "value": "check_resources",
                 "label": "Проверить не вызван ли конфликт дефицитом ресурсов и перераспределить запасы",
                 "role_scores": {
-                    "quartermaster": 3,
+                    "captain": 3,
                     "chief_engineer": 1,
                     "medical_officer": 1,
                     "science_officer": 0,
@@ -392,7 +392,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "navigator": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "pilot": 0,
                 },
             },
@@ -414,7 +414,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "navigator": 0,
                     "medical_officer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "pilot": 0,
                 },
             },
@@ -430,7 +430,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "navigator": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "pilot": 0,
                 },
             },
@@ -440,7 +440,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "role_scores": {
                     "security_chief": 3,
                     "tactical_officer": 2,
-                    "quartermaster": 1,
+                    "captain": 1,
                     "chief_engineer": 0,
                     "science_officer": 0,
                     "communications_officer": 0,
@@ -461,7 +461,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "medical_officer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                     "pilot": 0,
                 },
@@ -478,7 +478,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "medical_officer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                 },
             },
@@ -493,7 +493,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "label": "Возглавить ремонтную команду и лично чинить критические системы",
                 "role_scores": {
                     "chief_engineer": 3,
-                    "quartermaster": 1,
+                    "captain": 1,
                     "security_chief": 0,
                     "science_officer": 0,
                     "communications_officer": 0,
@@ -516,7 +516,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "communications_officer": 0,
                     "security_chief": 0,
                     "medical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                 },
             },
@@ -532,7 +532,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "communications_officer": 0,
                     "navigator": 0,
                     "medical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                 },
             },
@@ -542,7 +542,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                 "role_scores": {
                     "medical_officer": 3,
                     "communications_officer": 1,
-                    "quartermaster": 1,
+                    "captain": 1,
                     "chief_engineer": 0,
                     "science_officer": 0,
                     "security_chief": 0,
@@ -563,7 +563,7 @@ STATIC_ONBOARDING_QUESTIONS = [
                     "security_chief": 0,
                     "medical_officer": 0,
                     "tactical_officer": 0,
-                    "quartermaster": 0,
+                    "captain": 0,
                     "xenobiologist": 0,
                     "pilot": 0,
                 },
@@ -594,7 +594,7 @@ LLM_PROMPTS = {
                 "role_scores": {{
                     "chief_engineer": 0, "science_officer": 0, "communications_officer": 0,
                     "security_chief": 0, "navigator": 0, "medical_officer": 0,
-                    "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0
+                    "tactical_officer": 0, "captain": 0, "xenobiologist": 0, "pilot": 0
                 }}
             }}
         ]
@@ -664,7 +664,7 @@ Structure:
                 "role_scores": {{
                     "chief_engineer": 0, "science_officer": 0, "communications_officer": 0,
                     "security_chief": 0, "navigator": 0, "medical_officer": 0,
-                    "tactical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 0
+                    "tactical_officer": 0, "captain": 0, "xenobiologist": 0, "pilot": 0
                 }}
             }}
         ]

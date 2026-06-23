@@ -21,6 +21,8 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from pydantic import BaseModel
 
+from database import SHIP_ROLE_KEYS
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,19 +167,7 @@ GAME_SPECIES_HYBRID_THRESHOLD = float(
 )
 GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
 
-# All valid ship role keys used for role_scores in onboarding options
-SHIP_ROLE_KEYS = [
-    "chief_engineer",
-    "science_officer",
-    "communications_officer",
-    "security_chief",
-    "navigator",
-    "medical_officer",
-    "tactical_officer",
-    "quartermaster",
-    "xenobiologist",
-    "pilot",
-]
+
 
 
 def _build_onboarding_questions_schema() -> dict:
@@ -1145,6 +1135,9 @@ class GameMasterAgent:
         questions_count = ONBOARDING_QUESTIONS_COUNT
         options_count = ONBOARDING_OPTIONS_COUNT
         role_keys_str = ", ".join(SHIP_ROLE_KEYS)
+        # Build example role_scores dynamically from actual role keys
+        _example = {k: (3 if k == "chief_engineer" else 1 if k in ("science_officer", "pilot") else 0) for k in SHIP_ROLE_KEYS}
+        example_role_scores_json = json.dumps(_example, ensure_ascii=False)
 
         if self.language == "ru":
             system = "Ты — дизайнер игр. Генерируешь вопросы для онбординга в космической игре."
@@ -1168,8 +1161,7 @@ class GameMasterAgent:
                 "Каждому варианту назначь от 1 до 3 ролей, которым это действие больше всего подходит, с очками от 1 до 3. "
                 "Остальным ролям поставь 0. Очки отражают насколько выбранное действие характерно для данной роли. "
                 "ПРИМЕР role_scores для действия 'Починить варп-двигатель': "
-                '{"chief_engineer": 3, "science_officer": 1, "tactical_officer": 0, "communications_officer": 0, '
-                '"security_chief": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 1}. '
+                f'{{{example_role_scores_json}}}. '
                 "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n"
                 "ВАЖНОЕ ДОПОЛНЕНИЕ про image_prompt:\n"
                 "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
@@ -1203,8 +1195,7 @@ class GameMasterAgent:
                 "For each option, assign 1-3 roles that best match this action, with points from 1 to 3. "
                 "Set 0 for all other roles. Points reflect how characteristic this action is for the given role. "
                 "EXAMPLE role_scores for action 'Repair the warp drive': "
-                '{"chief_engineer": 3, "science_officer": 1, "tactical_officer": 0, "communications_officer": 0, '
-                '"security_chief": 0, "navigator": 0, "medical_officer": 0, "quartermaster": 0, "xenobiologist": 0, "pilot": 1}. '
+                f'{{{example_role_scores_json}}}. '
                 "IMPORTANT: Within each question, options should give points to DIFFERENT roles — so each question helps distinguish players.\n\n"
                 "IMPORTANT NOTE about image_prompt:\n"
                 "The question text (text) and option labels (label) must be in the SAME language as the rest of the output.\n"
