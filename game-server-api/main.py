@@ -3076,7 +3076,11 @@ async def admin_start_game(request: StartGameRequest):
     player_briefings = [b for b in all_briefings if not b.get("is_npc")]
 
     async def _generate_char_image(b: dict) -> str | None:
-        """Generate a character image for a real player in the current setting."""
+        """Generate a character image for a real player in the current setting.
+
+        Uses LLM-based species-aware prompt generation for non-human characters,
+        with fallback to string concatenation if LLM fails.
+        """
         pid = b.get("player_id")
         if not pid:
             return None
@@ -3089,22 +3093,57 @@ async def admin_start_game(request: StartGameRequest):
         traits = profile.get("personality_traits", [])
         avatar_desc = profile.get("avatar_description", "") or ""
         species_desc = profile.get("species_description", "") or ""
+        species_type = profile.get("species", "") or ""
+        gender_type = profile.get("gender", "") or ""
         setting = global_circ.get("setting", "ship interior")
 
-        prompt = (
-            f"Sci-fi character portrait of {player_name}, the {role}, "
-            f"placed in the current environment: {setting[:200]}. "
-            f"Character appearance: {avatar_desc[:200]}. "
-            f"{species_desc[:150]}"
-            f"Personality: {', '.join(traits) if traits else 'professional'}. "
-            f"The character is reacting to the situation around them. "
-            f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
-            f"detailed uniform, 4K quality, Star Trek aesthetic."
-        )
+        # Try LLM-based species-aware prompt generation
+        prompt = ""
+        try:
+            # Build combined description (same as onboarding avatar flow)
+            parts = [avatar_desc]
+            if species_type and species_type not in ("Unknown", "Неизвестно"):
+                parts.append(f"Species type: {species_type}")
+            if gender_type and gender_type not in ("Unknown", "Неизвестно"):
+                parts.append(f"Gender type: {gender_type}")
+            if species_desc:
+                parts.append(f"Appearance: {species_desc}")
+            avatar_description_combined = "\n".join(parts)
+
+            prompt = await asyncio.to_thread(
+                gm.generate_avatar_prompt,
+                role=role,
+                traits=traits,
+                avatar_description=avatar_description_combined,
+            )
+        except Exception as e:
+            logger.warning(f"[CHAR_IMAGE] LLM prompt generation failed for {role}: {e}")
+
+        if not prompt:
+            # Fallback: hardcoded prompt
+            prompt = (
+                f"Sci-fi character portrait of {player_name}, the {role}, "
+                f"placed in the current environment: {setting[:200]}. "
+                f"Character appearance: {avatar_desc[:200]}. "
+                f"{species_desc[:150]}"
+                f"Personality: {', '.join(traits) if traits else 'professional'}. "
+                f"The character is reacting to the situation around them. "
+                f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
+                f"detailed uniform, 4K quality, Star Trek aesthetic."
+            )
 
         image_gen = create_image_generator()
-        url = await image_gen.generate_avatar_image(
+        avatar_url = profile.get("avatar_url") or None
+        character_description = role
+        if species_type and species_type not in ("Unknown", "Неизвестно"):
+            character_description += f", {species_type}"
+        if species_desc:
+            character_description += f". {species_desc[:200]}"
+
+        url = await image_gen.generate_action_image_with_reference(
             prompt=prompt,
+            reference_image_url=avatar_url,
+            character_description=character_description,
             filename_prefix=f"char_day{day_num}_{game_id}_p{pid}",
         )
         if url:
@@ -3710,7 +3749,11 @@ async def admin_continue_game(
     player_briefings = [b for b in all_briefings if not b.get("is_npc")]
 
     async def _generate_char_image(b: dict) -> str | None:
-        """Generate a character image for a real player in the current setting."""
+        """Generate a character image for a real player in the current setting.
+
+        Uses LLM-based species-aware prompt generation for non-human characters,
+        with fallback to string concatenation if LLM fails.
+        """
         pid = b.get("player_id")
         if not pid:
             return None
@@ -3723,22 +3766,56 @@ async def admin_continue_game(
         traits = profile.get("personality_traits", [])
         avatar_desc = profile.get("avatar_description", "") or ""
         species_desc = profile.get("species_description", "") or ""
+        species_type = profile.get("species", "") or ""
+        gender_type = profile.get("gender", "") or ""
         setting = global_circ.get("setting", "ship interior")
 
-        prompt = (
-            f"Sci-fi character portrait of {player_name}, the {role}, "
-            f"placed in the current environment: {setting[:200]}. "
-            f"Character appearance: {avatar_desc[:200]}. "
-            f"{species_desc[:150]}"
-            f"Personality: {', '.join(traits) if traits else 'professional'}. "
-            f"The character is reacting to the situation around them. "
-            f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
-            f"detailed uniform, 4K quality, Star Trek aesthetic."
-        )
+        # Try LLM-based species-aware prompt generation
+        prompt = ""
+        try:
+            # Build combined description (same as onboarding avatar flow)
+            parts = [avatar_desc]
+            if species_type and species_type not in ("Unknown", "Неизвестно"):
+                parts.append(f"Species type: {species_type}")
+            if gender_type and gender_type not in ("Unknown", "Неизвестно"):
+                parts.append(f"Gender type: {gender_type}")
+            if species_desc:
+                parts.append(f"Appearance: {species_desc}")
+            avatar_description_combined = "\n".join(parts)
+
+            prompt = gm.generate_avatar_prompt(
+                role=role,
+                traits=traits,
+                avatar_description=avatar_description_combined,
+            )
+        except Exception as e:
+            logger.warning(f"[CHAR_IMAGE] LLM prompt generation failed for {role}: {e}")
+
+        if not prompt:
+            # Fallback: hardcoded prompt
+            prompt = (
+                f"Sci-fi character portrait of {player_name}, the {role}, "
+                f"placed in the current environment: {setting[:200]}. "
+                f"Character appearance: {avatar_desc[:200]}. "
+                f"{species_desc[:150]}"
+                f"Personality: {', '.join(traits) if traits else 'professional'}. "
+                f"The character is reacting to the situation around them. "
+                f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
+                f"detailed uniform, 4K quality, Star Trek aesthetic."
+            )
 
         image_gen = create_image_generator()
-        url = await image_gen.generate_avatar_image(
+        avatar_url = profile.get("avatar_url") or None
+        character_description = role
+        if species_type and species_type not in ("Unknown", "Неизвестно"):
+            character_description += f", {species_type}"
+        if species_desc:
+            character_description += f". {species_desc[:200]}"
+
+        url = await image_gen.generate_action_image_with_reference(
             prompt=prompt,
+            reference_image_url=avatar_url,
+            character_description=character_description,
             filename_prefix=f"char_day{day_num}_{game_id}_p{pid}",
         )
         if url:
