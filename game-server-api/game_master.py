@@ -2215,6 +2215,127 @@ spatial presence\n"
             action_id = choices[0].get("id", "") if choices else ""
             return {"action_id": action_id, "rationale": "Fallback: system default"}
 
+    def generate_player_auto_choice(
+        self,
+        choices: list[dict[str, Any]],
+        player_profile: dict[str, Any],
+        personal_briefing: str,
+        global_circumstances: dict[str, Any] | None = None,
+        player_name: str = "",
+    ) -> dict[str, Any]:
+        """Generate an LLM-based auto-choice for a player who didn't choose in time.
+
+        Unlike NPC choice generation, this has more context:
+        - The player's personal briefing text
+        - The global circumstances (setting, conflict, narrative)
+        - The player's full profile (traits, role, species)
+
+        Args:
+            choices: List of action dicts with id, text (consequences stripped)
+            player_profile: Dict with role, personality_traits, species, etc.
+            personal_briefing: The player's personal briefing text for this turn
+            global_circumstances: Dict with setting, conflict, narrative, key_events
+            player_name: Optional player name for personalized prompt
+
+        Returns:
+            Dict with action_id and rationale.
+        """
+        role = player_profile.get("role", "Crew Member")
+        traits = player_profile.get("personality_traits", [])
+        species = player_profile.get("species", "")
+        display_name = player_name or role
+
+        # Strip consequences
+        clean_choices = []
+        for c in choices:
+            clean_choices.append({
+                "id": c.get("id", ""),
+                "text": c.get("text", c.get("description", "")),
+            })
+        choices_text = "\n".join(
+            [f"  [{c['id']}] {c['text']}" for c in clean_choices]
+        )
+
+        # Build global context snippet
+        gc_settings = ""
+        if global_circumstances:
+            setting = global_circumstances.get("setting", "")
+            conflict = global_circumstances.get("conflict", "")
+            narrative = global_circumstances.get("narrative", "")
+            gc_settings = (
+                f"\n\nLocation: {setting}\n"
+                f"Conflict: {conflict}\n"
+                f"Situation: {narrative[:500]}"
+            )
+
+        species_line = f"\nSpecies: {species}" if species else ""
+
+        if self.language == "ru":
+            system = (
+                f"Ты — Game Master. Игрок {display_name} ({role}) не успел сделать выбор, "
+                f"и ты принимаешь решение за него. Ты действуешь на основе характера персонажа "
+                f"текущей вводной и обстоятельств. Ты не видишь скрытые последствия действий."
+            )
+            user = (
+                f"Профиль персонажа:\n"
+                f"Имя: {display_name}\n"
+                f"Роль: {role}{species_line}\n"
+                f"Характер: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n"
+                f"\nПерсональная вводная:\n{personal_briefing}"
+                f"{gc_settings}"
+                f"\n\nДоступные действия (без последствий):\n{choices_text}\n\n"
+                f"Выбери одно действие, которое лучше всего соответствует характеру и роли игрока. "
+                f"Ты не знаешь последствий — действуй на основе личности персонажа."
+            )
+        else:
+            system = (
+                f"You are the Game Master. Player {display_name} ({role}) didn't make "
+                f"a choice in time, and you decide for them. You act based on the character's "
+                f"personality, their personal briefing, and the global circumstances. "
+                f"You do NOT see hidden consequences of actions."
+            )
+            user = (
+                f"Character profile:\n"
+                f"Name: {display_name}\n"
+                f"Role: {role}{species_line}\n"
+                f"Traits: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n"
+                f"\nPersonal briefing:\n{personal_briefing}"
+                f"{gc_settings}"
+                f"\n\nAvailable actions (no consequences shown):\n{choices_text}\n\n"
+                f"Choose the action that best matches the player's character and role. "
+                f"You don't know the consequences — act based on personality."
+            )
+
+        try:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=NPC_CHOICE_SCHEMA,
+                temperature=0.8,
+                max_tokens=512,
+            )
+            action_id = parsed.get("action_id", "")
+            rationale = parsed.get("rationale", "")
+
+            valid_ids = [c.get("id") for c in choices]
+            if action_id not in valid_ids:
+                logger.warning(
+                    f"[AUTO_CHOICE] LLM returned invalid choice '{action_id}' for "
+                    f"{display_name}, falling back to first available"
+                )
+                action_id = valid_ids[0] if valid_ids else ""
+                rationale = "Fallback: first available action"
+
+            logger.info(
+                f"[AUTO_CHOICE] Player {display_name} auto-chose '{action_id}': {rationale[:80]}..."
+            )
+            return {"action_id": action_id, "rationale": rationale}
+
+        except Exception as e:
+            logger.error(f"[AUTO_CHOICE] LLM failed for {display_name}: {e}")
+            action_id = choices[0].get("id", "") if choices else ""
+            return {"action_id": action_id, "rationale": "Fallback: LLM error"}
+
     # ============== Restructured Game Day Generation ==============
 
     def generate_global_circumstances(

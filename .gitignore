@@ -17,4 +17,5 @@ comfyui/web_custom_versions/
 .pi-lens/
 __pycache__/
 *.db
-*.pyc
+*.pyc*.db-shm
+*.db-wal

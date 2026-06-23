@@ -2144,6 +2144,116 @@ async def cmd_gm_restart_game(message: types.Message):
         await message.answer(gm_msgs["restart_game_error"].format(error=e))
 
 
+async def cmd_gm_status(message: types.Message):
+    """GM command: Show game status (players, NPCs, their choices).
+
+    Usage: /gm_status <game_id>
+    No images — text-only overview.
+    Only executable by the configured Game Master user.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(f"Unauthorized /gm_status attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer(gm_msgs["status_usage"])
+        return
+
+    game_id = parts[1].strip()
+    await message.answer(
+        gm_msgs["status_loading"].format(game_id=game_id), parse_mode="Markdown"
+    )
+
+    try:
+        result = await api_request(
+            "GET", "/game/status", params={"game_id": game_id}
+        )
+        if not result:
+            await message.answer(gm_msgs["status_error"].format(error="No response"))
+            return
+
+        # Build header
+        ship = (
+            gm_msgs.get("ship_alive", "\u2705 ")
+            if result.get("ship_alive")
+            else gm_msgs.get("ship_destroyed", "\u2620 ")
+        ) if False else (
+            "\u2705 \u0426\u0435\u043b" if BOT_LANGUAGE == "ru" else "\u2705 Intact"
+        ) if result.get("ship_alive") else (
+            "\u2620 \u0423\u043d\u0438\u0447\u0442\u043e\u0436\u0435\u043d" if BOT_LANGUAGE == "ru" else "\u2620 Destroyed"
+        )
+        status_label = result.get("status", "?")
+        lines = [
+            gm_msgs["status_header"].format(
+                game_id=game_id,
+                day=result.get("current_day", result.get("day", 1)),
+                status=status_label,
+                ship=ship,
+                player_count=result.get("player_count", 0),
+                alive_count=result.get("alive_count", 0),
+                npc_count=result.get("npc_count", 0),
+            )
+        ]
+
+        # Players
+        players = result.get("players", [])
+        if players:
+            lines.append(gm_msgs["status_players_header"])
+            for p in players:
+                icon = "\u2620" if p.get("is_dead") else (
+                    "\u2705" if p.get("has_chosen") else "\u23f3"
+                )
+                action = p.get("chosen_action", "") or (
+                    "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435..." if BOT_LANGUAGE == "ru" else "Waiting..."
+                )
+                if len(action) > 80:
+                    action = action[:77] + "..."
+                name = p.get("player_name", "") or str(p.get("player_id", "?"))
+                lines.append(
+                    gm_msgs["status_player_entry"].format(
+                        icon=icon,
+                        player_id=p.get("player_id", "?"),
+                        name=name,
+                        role=p.get("role", "?"),
+                        action=action,
+                    )
+                )
+        else:
+            lines.append(gm_msgs["status_no_players"])
+
+        # NPCs
+        npcs = result.get("npcs", [])
+        if npcs:
+            lines.append(gm_msgs["status_npcs_header"])
+            for n in npcs:
+                action = n.get("chosen_action_text", "") or (
+                    "\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445" if BOT_LANGUAGE == "ru" else "No data"
+                )
+                if len(action) > 80:
+                    action = action[:77] + "..."
+                lines.append(
+                    gm_msgs["status_npc_entry"].format(
+                        name=n.get("npc_name", "?"),
+                        role=n.get("role", "?"),
+                        action=action,
+                    )
+                )
+        else:
+            lines.append(gm_msgs["status_no_npcs"])
+
+        await message.answer("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"Failed to get game status for {game_id}: {e}")
+        await message.answer(gm_msgs["status_error"].format(error=e))
+
+
 async def handle_voice_message(message: types.Message):
     """Handle voice messages"""
     assert message.from_user is not None
@@ -2696,6 +2806,7 @@ async def main():
     dp.message.register(cmd_gm_continue_game, Command("gm_continue_game"))
     dp.message.register(cmd_gm_regenerate_turn, Command("gm_regenerate_turn"))
     dp.message.register(cmd_gm_restart_game, Command("gm_restart_game"))
+    dp.message.register(cmd_gm_status, Command("gm_status"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Onboarding name input handler — before general text handlers

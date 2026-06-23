@@ -48,13 +48,13 @@ HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
         "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/help - Эта справка",
-        "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр",
+        "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы",
         "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
         "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/help - This help",
-        "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games",
+        "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games\n/gm_status <id> - Game status: players, NPCs, choices",
         "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
 }
@@ -245,6 +245,16 @@ GM_COMMANDS = {
         "games_list_header": "📋 **Список игр:**",
         "games_list_entry": "{idx}. `{game_id}` — Игра: {title} ({player_count} игрока, {status_icon} {status})",
         "default_game_title": "Без названия",
+        "status_usage": "❌ Использование: /gm_status <game_id>\n\nПример: /gm_status abc123",
+        "status_loading": "⏳ Получение статуса игры `{game_id}`...",
+        "status_header": "📊 **Статус игры `{game_id}`**\n\n🎯 Ход: {day}\n🚀 Статус: {status}\n🛸 Корабль: {ship}\n👤 Игроков: {player_count} (живых: {alive_count})\n🤖 NPC: {npc_count}",
+        "status_players_header": "\n\n**👤 Игроки:**",
+        "status_player_entry": "{icon} `{player_id}` **{name}** — {role} | Выбор: {action}",
+        "status_npcs_header": "\n\n**🤖 NPC:**",
+        "status_npc_entry": "• **{name}** — {role} | Выбор: {action}",
+        "status_no_players": "\n\n_Нет игроков_",
+        "status_no_npcs": "\n\n_Нет NPC_",
+        "status_error": "❌ Ошибка получения статуса: {error}",
         "list_games_error": "❌ Ошибка получения списка игр: {error}",
     },
     LANGUAGE_EN: {
@@ -277,6 +287,16 @@ GM_COMMANDS = {
         "games_list_header": "📋 **Game list:**",
         "games_list_entry": "{idx}. `{game_id}` — {title} ({player_count} players, {status_icon} {status})",
         "default_game_title": "Untitled",
+        "status_usage": "❌ Usage: /gm_status <game_id>\n\nExample: /gm_status abc123",
+        "status_loading": "⏳ Fetching game status for `{game_id}`...",
+        "status_header": "📊 **Game `{game_id}` status**\n\n🎯 Turn: {day}\n🚀 Status: {status}\n🛸 Ship: {ship}\n👤 Players: {player_count} (alive: {alive_count})\n🤖 NPCs: {npc_count}",
+        "status_players_header": "\n\n**👤 Players:**",
+        "status_player_entry": "{icon} `{player_id}` **{name}** — {role} | Choice: {action}",
+        "status_npcs_header": "\n\n**🤖 NPCs:**",
+        "status_npc_entry": "• **{name}** — {role} | Choice: {action}",
+        "status_no_players": "\n\n_No players_",
+        "status_no_npcs": "\n\n_No NPCs_",
+        "status_error": "❌ Error fetching game status: {error}",
         "list_games_error": "❌ Error fetching game list: {error}",
     },
 }

@@ -233,89 +233,47 @@ class GameMasterScheduler:
     async def select_auto_action(
         self, player_id: int, day: int
     ) -> dict[str, Any] | None:
-        """Select default action for player who hasn't chosen within timeout"""
+        """Select default action for player who hasn't chosen within timeout.
+
+        Uses LLM endpoint on game-server-api which considers:
+        - Global circumstances (setting, conflict, narrative)
+        - Player's personal briefing for this turn
+        - Player profile (role, traits, species)
+        - Available actions (without hidden consequences)
+        """
         try:
-            logger.info(f"Auto-selecting action for player {player_id} on day {day}")
+            logger.info(
+                f"[AUTO_ACTION] Calling LLM auto-action for player {player_id} on day {day}"
+            )
 
-            async with aiohttp.ClientSession() as session:
-                # Get player profile to determine personality
-                async with session.get(
-                    f"{self.api_url}/players/{player_id}/profile"
-                ) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"Could not get profile for player {player_id}")
-                        return None
-
-                    profile = await resp.json()
-                    traits = profile.get("personality_traits", [])
-
-                # Get current day to see available actions
-                async with session.get(f"{self.api_url}/game/current-day") as resp:
-                    if resp.status != 200:
-                        logger.warning("Could not get current day")
-                        return None
-
-                    day_data = await resp.json()
-                    actions = day_data.get("player_actions", [])
-
-                # Select action based on traits
-                selected_action = None
-
-                if "логичный" in traits or "аналитический" in traits:
-                    selected_action = actions[0] if len(actions) > 0 else None
-                elif "смелый" in traits or "решительный" in traits:
-                    selected_action = (
-                        actions[1]
-                        if len(actions) > 1
-                        else (actions[0] if len(actions) > 0 else None)
-                    )
-                else:
-                    selected_action = (
-                        actions[2]
-                        if len(actions) > 2
-                        else (
-                            actions[1]
-                            if len(actions) > 1
-                            else (actions[0] if len(actions) > 0 else None)
+            async with aiohttp.ClientSession() as session, session.post(
+                f"{self.api_url}/game/auto-action/{player_id}/{day}",
+                params={
+                    "language": self.language,
+                    "game_id": self.game_id,
+                },
+            ) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        logger.info(
+                            f"[AUTO_ACTION] LLM selected '{result.get('action_id', '?')}' "
+                            f"for player {player_id}: "
+                            f"{result.get('action_text', '')[:60]}..."
                         )
-                    )
+                        return result
+                    else:
+                        error_text = await resp.text()
+                        logger.error(
+                            f"[AUTO_ACTION] LLM auto-action failed for "
+                            f"player {player_id}: {resp.status} - {error_text}"
+                        )
+                        return None
 
-                if selected_action:
-                    # Submit auto-selected action
-                    async with session.post(
-                        f"{self.api_url}/game/actions",
-                        json={
-                            "player_id": player_id,
-                            "day": day,
-                            "action_id": selected_action.get("id"),
-                            "choice": "auto_selected",
-                        },
-                    ) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            logger.info(
-                                f"Auto-selected action {selected_action.get('id')} for player {player_id}"
-                            )
-
-                            # Notify player of auto-selection
-                            async with session.post(
-                                f"{self.api_url}/game/messages",
-                                json={
-                                    "player_id": player_id,
-                                    "message": f"Game Master selected action for you: {selected_action.get('text')}. Your choice has been recorded.",
-                                    "message_type": "auto_selection",
-                                },
-                            ):
-                                pass  # Notification sent
-
-                            return result
-                        else:
-                            logger.error("Failed to submit auto-selected action")
-                            return None
-
-                return None
         except Exception as e:
-            logger.error(f"Failed to select auto action for player {player_id}: {e}")
+            logger.error(
+                f"[AUTO_ACTION] Failed to select auto action for "
+                f"player {player_id}: {e}"
+            )
             return None
 
     async def check_and_auto_select_actions(self, day: int):

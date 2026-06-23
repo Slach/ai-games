@@ -9,6 +9,7 @@ import os
 import random
 import string
 import traceback
+import contextlib
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -1444,6 +1445,88 @@ async def get_game_started_endpoint(game_id: str = "default_game"):
     return {"game_id": game_id, "started": started, "player_count": player_count}
 
 
+@app.get("/game/status")
+async def get_game_status_endpoint(game_id: str = "default_game"):
+    """Get game status: players, NPCs, their current choices, alive/dead."""
+    state = get_game_state(game_id)
+    title = get_game_title(game_id) or ""
+
+    current_day_num = max(1, state["day"] - 1)
+
+    # Real players
+    player_ids = get_players_in_game(game_id)
+    players_list = []
+    for pid in player_ids:
+        p = get_player_profile(pid)
+        if not p:
+            continue
+        # Check if they have a pending choice for the current day
+        briefing = get_player_briefing(current_day_num, pid, game_id=game_id)
+        has_chosen = (
+            briefing is not None
+            and briefing.get("selected_action_id") is not None
+        )
+        chosen_action_text = ""
+        if briefing and briefing.get("selected_action_id"):
+            for c in briefing.get("choices", []):
+                if c.get("id") == briefing["selected_action_id"]:
+                    chosen_action_text = c.get("text", c.get("description", ""))
+                    break
+
+        players_list.append(
+            {
+                "player_id": pid,
+                "player_name": p.get("player_name", "") or str(pid),
+                "role": p.get("role", ""),
+                "species": p.get("species", ""),
+                "is_dead": bool(p.get("is_dead", False)),
+                "has_chosen": has_chosen,
+                "chosen_action": chosen_action_text,
+            }
+        )
+
+    # NPCs
+    npcs_list = []
+    for npc in get_all_active_npcs(game_id):
+        # Get NPC's choice from the current day briefing
+        npc_key = npc["npc_key"]
+        all_briefings = get_all_briefings_for_day(current_day_num, game_id=game_id)
+        chosen_action_text = ""
+        for b in all_briefings:
+            if b.get("npc_key") == npc_key and b.get("selected_action_id"):
+                for c in b.get("choices", []):
+                    if c.get("id") == b["selected_action_id"]:
+                        chosen_action_text = c.get("text", c.get("description", ""))
+                        break
+                break
+
+        npcs_list.append(
+            {
+                "npc_key": npc_key,
+                "npc_name": npc.get("npc_name", npc_key),
+                "role": npc.get("role", ""),
+                "replaces_player_id": npc.get("replaces_player_id"),
+                "chosen_action_text": chosen_action_text,
+            }
+        )
+
+    return {
+        "game_id": game_id,
+        "title": title,
+        "day": state["day"],
+        "current_day": current_day_num,
+        "status": state["status"],
+        "ship_alive": state["ship_alive"],
+        "crew_health": state["crew_health"],
+        "game_started": is_game_started(game_id),
+        "player_count": len(players_list),
+        "alive_count": sum(1 for pl in players_list if not pl["is_dead"]),
+        "npc_count": len(npcs_list),
+        "players": players_list,
+        "npcs": npcs_list,
+    }
+
+
 @app.get("/game/day/{day_num}")
 async def get_game_day_endpoint(day_num: int, game_id: str = "default_game"):
     """Get specific day's episode"""
@@ -1639,6 +1722,153 @@ async def submit_player_action(request: PlayerActionRequest):
         logger.warning(f"Combined outcome check failed: {e}")
 
     return {"status": "accepted", "action": result}
+
+
+@app.post("/game/auto-action/{player_id}/{day}")
+async def auto_select_action(
+    player_id: int,
+    day: int,
+    language: str = "en",
+    game_id: str = "default_game",
+):
+    """Auto-select an action for a player who hasn't chosen in time.
+
+    Uses LLM with global circumstances + personal briefing + player profile
+    to make an in-character choice. Notifies the player about the auto-selection.
+    """
+    logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, day {day}")
+
+    # 1. Get player's briefing with choices
+    briefing = get_player_briefing(day, player_id, game_id=game_id)
+    if not briefing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No briefing for player {player_id} day {day}",
+        )
+
+    if briefing.get("selected_action_id"):
+        logger.info(
+            f"[AUTO_ACTION] Player {player_id} already chose {briefing['selected_action_id']}, skipping"
+        )
+        return {
+            "status": "already_chosen",
+            "action_id": briefing["selected_action_id"],
+        }
+
+    choices = briefing.get("choices", [])
+    if not choices:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No choices available for player {player_id} day {day}",
+        )
+
+    # 2. Get player profile
+    profile = get_player_profile(player_id)
+    if not profile:
+        raise HTTPException(
+            status_code=404, detail=f"Player {player_id} not found"
+        )
+
+    # 3. Get global circumstances
+    game_day = get_game_day(day, game_id=game_id)
+    global_circ = {}
+    if game_day:
+        gc_str = game_day.get("global_circumstances", "{}")
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            global_circ = json.loads(gc_str) if isinstance(gc_str, str) else gc_str
+
+    # 4. Generate LLM choice
+    gm = create_game_master_agent(language=language)
+    player_name = profile.get("player_name", "") or ""
+    decision = gm.generate_player_auto_choice(
+        choices=choices,
+        player_profile=profile,
+        personal_briefing=briefing.get("briefing", ""),
+        global_circumstances=global_circ,
+        player_name=player_name,
+    )
+
+    action_id = decision.get("action_id", "")
+    rationale = decision.get("rationale", "Auto-selected by Game Master")
+
+    if not action_id:
+        raise HTTPException(
+            status_code=500, detail="LLM returned no valid action"
+        )
+
+    # 5. Submit the action (same flow as submit_player_action)
+    chosen_consequence = ""
+    for c in choices:
+        if c.get("id") == action_id:
+            chosen_consequence = c.get("consequence", "")
+            break
+
+    update_briefing_choice(
+        briefing_id=briefing["id"],
+        selected_action_id=action_id,
+        choice_rationale=rationale,
+        consequence_result={"consequence": chosen_consequence},
+    )
+
+    save_player_action(
+        player_id=player_id,
+        day=day,
+        action_id=action_id,
+        choice="auto_selected",
+    )
+
+    # 6. Notify player about auto-selection
+    action_text = ""
+    for c in choices:
+        if c.get("id") == action_id:
+            action_text = c.get("text", c.get("description", ""))
+            break
+
+    if language == "ru":
+        notification = (
+            f"\u23f3 **\u0412\u0440\u0435\u043c\u044f \u0432\u044b\u0448\u043b\u043e!**\n\n"
+            f"\u0412\u044b \u043d\u0435 \u0443\u0441\u043f\u0435\u043b\u0438 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0432\u044b\u0431\u043e\u0440, "
+            f"\u043f\u043e\u044d\u0442\u043e\u043c\u0443 Game Master \u043f\u0440\u0438\u043d\u044f\u043b \u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u0437\u0430 \u0432\u0430\u0441:\n\n"
+            f"\u0412\u044b\u0431\u0440\u0430\u043d\u043e \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435: **{action_text}**\n\n"
+            f"_{rationale}_"
+        )
+    else:
+        notification = (
+            f"\u23f3 **Time is up!**\n\n"
+            f"You didn't make a choice in time, so the Game Master decided for you:\n\n"
+            f"Selected action: **{action_text}**\n\n"
+            f"_{rationale}_"
+        )
+
+    add_game_message(
+        player_id=player_id,
+        message=notification,
+        message_type="auto_selection",
+    )
+
+    # 7. Check if all players have now chosen
+    try:
+        remaining = get_players_who_need_to_choose(day, game_id=game_id)
+        if not remaining:
+            logger.info(
+                f"All players chose for day {day} (after auto-select), "
+                f"analyzing combined outcome"
+            )
+            asyncio.create_task(_analyze_day_outcome(day, game_id=game_id))
+    except Exception as e:
+        logger.warning(f"Combined outcome check after auto-select failed: {e}")
+
+    logger.info(
+        f"[AUTO_ACTION] Auto-selected '{action_id}' for player {player_id} "
+        f"day {day}: {action_text[:60]}..."
+    )
+
+    return {
+        "status": "selected",
+        "action_id": action_id,
+        "action_text": action_text,
+        "rationale": rationale,
+    }
 
 
 # ============== Message endpoints ==============
