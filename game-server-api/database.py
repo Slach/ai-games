@@ -35,6 +35,10 @@ def get_db_connection():
 # created with the new name in the up-to-date CREATE TABLE).
 MIGRATIONS: list[tuple[int, str]] = [
     (1, "ALTER TABLE player_profiles ADD COLUMN player_name TEXT DEFAULT NULL;"),
+    (
+        2,
+        "ALTER TABLE onboarding_sessions ADD COLUMN role_score_history TEXT DEFAULT '{}';",
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -514,6 +518,83 @@ def update_onboarding_session(
     conn.close()
 
     return get_onboarding_session(session_id)
+
+
+def update_onboarding_role_scores(
+    session_id: str,
+    role_scores: dict[str, int],
+) -> dict[str, Any] | None:
+    """Save role_score_history to an onboarding session after role assignment."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE onboarding_sessions
+           SET role_score_history = ?
+           WHERE session_id = ?""",
+        (json.dumps(role_scores, ensure_ascii=False), session_id),
+    )
+    conn.commit()
+    conn.close()
+    return get_onboarding_session(session_id)
+
+
+def get_recent_role_score_history(
+    game_id: str = "default_game",
+    limit: int = 10,
+) -> list[dict[str, int]]:
+    """Get the last N completed onboarding sessions' role_score_history for a game.
+
+    Returns a list of dicts {role_key: points} most recent first.
+    Only returns sessions that have non-empty role_score_history.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT osh.role_score_history
+           FROM onboarding_sessions osh
+           LEFT JOIN player_profiles pp ON pp.player_id = osh.player_id
+           WHERE osh.completed = 1
+             AND osh.role_score_history IS NOT NULL
+             AND osh.role_score_history != '{}'
+             AND (pp.game_id = ? OR ? = 'default_game')
+           ORDER BY osh.created_at DESC
+           LIMIT ?""",
+        (game_id, game_id, limit),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        try:
+            scores = json.loads(row["role_score_history"])
+            if scores:
+                result.append(scores)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return result
+
+
+def get_underrepresented_roles(
+    game_id: str = "default_game",
+    n_last: int = 10,
+) -> list[str]:
+    """Find roles that received the least total points across recent onboarding sessions.
+
+    Returns a list of role_keys sorted by total points ascending (most underrepresented first).
+    """
+    history = get_recent_role_score_history(game_id, limit=n_last)
+    if not history:
+        return []
+
+    totals: dict[str, int] = dict.fromkeys(SHIP_ROLE_KEYS, 0)
+    for scores in history:
+        for role_key, points in scores.items():
+            if role_key in totals:
+                totals[role_key] += points
+
+    # Sort by total points ascending (most underrepresented first)
+    sorted_roles = sorted(totals.keys(), key=lambda k: totals[k])
+    return sorted_roles
 
 
 # ============== Player Profiles ==============

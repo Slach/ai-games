@@ -168,8 +168,6 @@ GAME_SPECIES_HYBRID_THRESHOLD = float(
 GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
 
 
-
-
 def _build_onboarding_questions_schema() -> dict:
     """Build JSON schema for onboarding questions with configurable counts."""
     role_score_properties = {key: {"type": "integer"} for key in SHIP_ROLE_KEYS}
@@ -1128,15 +1126,36 @@ class GameMasterAgent:
 
     # ============== Onboarding ==============
 
-    def generate_onboarding_questions(self) -> list[dict[str, Any]]:
-        """Generate dynamic onboarding questions using LLM with json_schema."""
-        logger.info(f"Generating onboarding questions, language: {self.language}")
+    def generate_onboarding_questions(
+        self,
+        underrepresented_hint: str = "",
+    ) -> list[dict[str, Any]]:
+        """Generate dynamic onboarding questions using LLM with json_schema.
+
+        Args:
+            underrepresented_hint: Optional hint about which roles need more
+                attention based on recent onboarding history.
+                Example: "navigator, communications_officer, xenobiologist"
+        """
+        logger.info(
+            f"Generating onboarding questions, language: {self.language}, "
+            f"hint: {underrepresented_hint or 'none'}"
+        )
 
         questions_count = ONBOARDING_QUESTIONS_COUNT
         options_count = ONBOARDING_OPTIONS_COUNT
         role_keys_str = ", ".join(SHIP_ROLE_KEYS)
         # Build example role_scores dynamically from actual role keys
-        _example = {k: (3 if k == "chief_engineer" else 1 if k in ("science_officer", "pilot") else 0) for k in SHIP_ROLE_KEYS}
+        _example = {
+            k: (
+                3
+                if k == "chief_engineer"
+                else 1
+                if k in ("science_officer", "pilot")
+                else 0
+            )
+            for k in SHIP_ROLE_KEYS
+        }
         example_role_scores_json = json.dumps(_example, ensure_ascii=False)
 
         if self.language == "ru":
@@ -1161,10 +1180,15 @@ class GameMasterAgent:
                 "Каждому варианту назначь от 1 до 3 ролей, которым это действие больше всего подходит, с очками от 1 до 3. "
                 "Остальным ролям поставь 0. Очки отражают насколько выбранное действие характерно для данной роли. "
                 "ПРИМЕР role_scores для действия 'Починить варп-двигатель': "
-                f'{{{example_role_scores_json}}}. '
+                f"{example_role_scores_json}. "
                 "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n"
-                "ВАЖНОЕ ДОПОЛНЕНИЕ про image_prompt:\n"
-                "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
+                + (
+                    underrepresented_hint
+                    if not underrepresented_hint
+                    else f"🎯 ОСОБОЕ УКАЗАНИЕ: В предыдущих сессиях следующие роли получали меньше всего очков: {underrepresented_hint}. "
+                    f"Удели им особое внимание при составлении вопросов — создай для них минимум по 2-3 интересных варианта ответов.\n\n"
+                )
+                + "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
                 "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
                 "НЕ ВСТАВЛЯЙ английский текст в question.text или option.label — только в image_prompt.\n"
                 "Для КАЖДОГО вопроса сгенерируй image_prompt — детальный промпт на АНГЛИЙСКОМ для генерации изображения сцены. "
@@ -1195,9 +1219,15 @@ class GameMasterAgent:
                 "For each option, assign 1-3 roles that best match this action, with points from 1 to 3. "
                 "Set 0 for all other roles. Points reflect how characteristic this action is for the given role. "
                 "EXAMPLE role_scores for action 'Repair the warp drive': "
-                f'{{{example_role_scores_json}}}. '
+                f"{example_role_scores_json}. "
                 "IMPORTANT: Within each question, options should give points to DIFFERENT roles — so each question helps distinguish players.\n\n"
-                "IMPORTANT NOTE about image_prompt:\n"
+                + (
+                    underrepresented_hint
+                    if not underrepresented_hint
+                    else f"🎯 SPECIAL INSTRUCTION: In previous sessions the following roles received the fewest points: {underrepresented_hint}. "
+                    f"Pay special attention to these when creating questions — create at least 2-3 interesting options targeting each of them.\n\n"
+                )
+                + "IMPORTANT NOTE about image_prompt:\n"
                 "The question text (text) and option labels (label) must be in the SAME language as the rest of the output.\n"
                 "The image_prompt field is a SEPARATE JSON field that MUST be in English (for image generation).\n"
                 "DO NOT put English text in question.text or option.label — only in image_prompt.\n"
@@ -1351,7 +1381,11 @@ class GameMasterAgent:
 
         logger.info(f"[ROLE] Point-based assignment: role_key={best_key}, {reasoning}")
 
-        return {"role_key": best_key, "reasoning": reasoning}
+        return {
+            "role_key": best_key,
+            "reasoning": reasoning,
+            "role_points": role_points,
+        }
 
     def generate_game_title(self) -> dict[str, str]:
         """Generate a creative game title and welcome message."""

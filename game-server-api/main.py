@@ -62,6 +62,7 @@ from database import (
     get_players_who_need_to_choose,
     get_random_game_image,
     get_role_by_key,
+    get_underrepresented_roles,
     init_db,
     is_game_started,
     mark_player_dead,
@@ -80,6 +81,7 @@ from database import (
     update_game_state,
     update_game_title,
     update_mission_stage_progress,
+    update_onboarding_role_scores,
     update_onboarding_session,
     update_player_profile_last_poll,
 )
@@ -237,7 +239,31 @@ async def generate_dynamic_onboarding_questions(
         game_master = create_game_master_agent(language=language)
         logger.info("Game Master agent created successfully")
 
-        raw_questions = game_master.generate_onboarding_questions()
+        # Query underrepresented roles from recent onboarding history
+        try:
+            from language import SHIP_ROLES_I18N
+
+            underrepresented = get_underrepresented_roles(game_id, n_last=10)
+            if underrepresented:
+                # Take bottom 3-4 roles
+                target_roles = underrepresented[:4]
+                role_names = []
+                for rk in target_roles:
+                    i18n = SHIP_ROLES_I18N.get(rk, {})
+                    name = i18n.get(language, {}).get("role_name", rk)
+                    role_names.append(f"{name} ({rk})")
+                hint = ", ".join(role_names)
+                logger.info(f"Underrepresented roles: {hint}")
+            else:
+                hint = ""
+                logger.info("No underrepresented role history available")
+        except Exception as e:
+            logger.warning(f"Failed to query underrepresented roles: {e}")
+            hint = ""
+
+        raw_questions = game_master.generate_onboarding_questions(
+            underrepresented_hint=hint,
+        )
         logger.info(f"LLM returned {len(raw_questions)} questions")
 
         if raw_questions:
@@ -429,6 +455,7 @@ def generate_player_profile_from_answers(
     language: str = "ru",
     questions: list[dict[str, Any]] | None = None,
     player_name: str = "",
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Assign a role from the available ship roles based on accumulated role scores from onboarding answers."""
     available = get_available_roles(game_id, language=language)
@@ -578,6 +605,21 @@ def generate_player_profile_from_answers(
         "species_secondary": species_secondary_display,
         "gender_secondary": gender_secondary_display,
     }
+
+    # Save role_score_history for underrepresented role tracking
+    if session_id:
+        role_points = role_result.get("role_points", {})
+        if role_points:
+            try:
+                update_onboarding_role_scores(session_id, role_points)
+                logger.info(
+                    f"[ROLE] Saved role_score_history for session {session_id}: "
+                    f"{dict(sorted(role_points.items(), key=lambda x: x[1], reverse=True)[:5])}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[ROLE] Failed to save role_score_history for session {session_id}: {e}"
+                )
 
 
 # ============== FastAPI App ==============
@@ -914,6 +956,7 @@ async def submit_onboarding_answer(
             language=effective_language,
             questions=session_questions,
             player_name=player_name,
+            session_id=session_id,
         )
         create_player_profile(profile_data)
         result["profile"] = profile_data

@@ -85,6 +85,11 @@ allows for endless story possibilities within the chosen setting.
   without Telegram bot.
 - **Renaming files** - Always use `git mv <old> <new>` instead of `mv` +
   `git rm` to preserve file history.
+- **Database schema changes** — All changes to `database.py` must be done
+  through the `MIGRATIONS` list. Never add columns directly to `CREATE TABLE`
+  statements — only add them via a new migration entry. This keeps existing
+  databases in sync with fresh ones. See comment at the `MIGRATIONS`
+  definition for the rationale.
 
 ## Useful Commands
 
