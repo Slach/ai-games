@@ -246,28 +246,31 @@ class GameMasterScheduler:
                 f"[AUTO_ACTION] Calling LLM auto-action for player {player_id} on day {day}"
             )
 
-            async with aiohttp.ClientSession() as session, session.post(
-                f"{self.api_url}/game/auto-action/{player_id}/{day}",
-                params={
-                    "language": self.language,
-                    "game_id": self.game_id,
-                },
-            ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        logger.info(
-                            f"[AUTO_ACTION] LLM selected '{result.get('action_id', '?')}' "
-                            f"for player {player_id}: "
-                            f"{result.get('action_text', '')[:60]}..."
-                        )
-                        return result
-                    else:
-                        error_text = await resp.text()
-                        logger.error(
-                            f"[AUTO_ACTION] LLM auto-action failed for "
-                            f"player {player_id}: {resp.status} - {error_text}"
-                        )
-                        return None
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.api_url}/game/auto-action/{player_id}/{day}",
+                    params={
+                        "language": self.language,
+                        "game_id": self.game_id,
+                    },
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    result = await resp.json()
+                    logger.info(
+                        f"[AUTO_ACTION] LLM selected '{result.get('action_id', '?')}' "
+                        f"for player {player_id}: "
+                        f"{result.get('action_text', '')[:60]}..."
+                    )
+                    return result
+                else:
+                    error_text = await resp.text()
+                    logger.error(
+                        f"[AUTO_ACTION] LLM auto-action failed for "
+                        f"player {player_id}: {resp.status} - {error_text}"
+                    )
+                    return None
 
         except Exception as e:
             logger.error(

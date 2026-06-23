@@ -1311,8 +1311,10 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                         )
                         if title_data and title_data.get("title"):
                             game_title = title_data["title"]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error(
+                            "Failed to fetch game title for invite", exc_info=e
+                        )
 
                     invite_url = await create_start_link(
                         message.bot, f"{game_id}:{player_id}", encode=True
@@ -1678,8 +1680,8 @@ async def cmd_invite(message: types.Message):
                 )
                 if title_data and title_data.get("title"):
                     game_title = title_data["title"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Failed to fetch game title for invite", exc_info=e)
 
             invite_url = await create_start_link(
                 message.bot, f"{game_id}:{player_id}", encode=True
@@ -2150,6 +2152,9 @@ async def cmd_gm_status(message: types.Message):
     Usage: /gm_status <game_id>
     No images — text-only overview.
     Only executable by the configured Game Master user.
+
+    If the status message exceeds Telegram's character limit (~4000 safe),
+    it is split into 3 parts: header, players, NPCs.
     """
     assert message.from_user is not None
     player_id = message.from_user.id
@@ -2171,51 +2176,58 @@ async def cmd_gm_status(message: types.Message):
     )
 
     try:
-        result = await api_request(
-            "GET", "/game/status", params={"game_id": game_id}
-        )
+        result = await api_request("GET", "/game/status", params={"game_id": game_id})
         if not result:
             await message.answer(gm_msgs["status_error"].format(error="No response"))
             return
 
         # Build header
         ship = (
-            gm_msgs.get("ship_alive", "\u2705 ")
+            (
+                gm_msgs.get("ship_alive", "\u2705 ")
+                if result.get("ship_alive")
+                else gm_msgs.get("ship_destroyed", "\u2620 ")
+            )
+            if False
+            else (
+                "\u2705 \u0426\u0435\u043b" if BOT_LANGUAGE == "ru" else "\u2705 Intact"
+            )
             if result.get("ship_alive")
-            else gm_msgs.get("ship_destroyed", "\u2620 ")
-        ) if False else (
-            "\u2705 \u0426\u0435\u043b" if BOT_LANGUAGE == "ru" else "\u2705 Intact"
-        ) if result.get("ship_alive") else (
-            "\u2620 \u0423\u043d\u0438\u0447\u0442\u043e\u0436\u0435\u043d" if BOT_LANGUAGE == "ru" else "\u2620 Destroyed"
+            else (
+                "\u2620 \u0423\u043d\u0438\u0447\u0442\u043e\u0436\u0435\u043d"
+                if BOT_LANGUAGE == "ru"
+                else "\u2620 Destroyed"
+            )
         )
         status_label = result.get("status", "?")
-        lines = [
-            gm_msgs["status_header"].format(
-                game_id=game_id,
-                day=result.get("current_day", result.get("day", 1)),
-                status=status_label,
-                ship=ship,
-                player_count=result.get("player_count", 0),
-                alive_count=result.get("alive_count", 0),
-                npc_count=result.get("npc_count", 0),
-            )
-        ]
+        header = gm_msgs["status_header"].format(
+            game_id=game_id,
+            day=result.get("current_day", result.get("day", 1)),
+            status=status_label,
+            ship=ship,
+            player_count=result.get("player_count", 0),
+            alive_count=result.get("alive_count", 0),
+            npc_count=result.get("npc_count", 0),
+        )
 
-        # Players
+        # Build players section
+        players_text = ""
         players = result.get("players", [])
         if players:
-            lines.append(gm_msgs["status_players_header"])
+            players_parts = []
             for p in players:
-                icon = "\u2620" if p.get("is_dead") else (
-                    "\u2705" if p.get("has_chosen") else "\u23f3"
+                icon = (
+                    "\u2620"
+                    if p.get("is_dead")
+                    else ("\u2705" if p.get("has_chosen") else "\u23f3")
                 )
                 action = p.get("chosen_action", "") or (
-                    "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435..." if BOT_LANGUAGE == "ru" else "Waiting..."
+                    "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435..."
+                    if BOT_LANGUAGE == "ru"
+                    else "Waiting..."
                 )
-                if len(action) > 80:
-                    action = action[:77] + "..."
                 name = p.get("player_name", "") or str(p.get("player_id", "?"))
-                lines.append(
+                players_parts.append(
                     gm_msgs["status_player_entry"].format(
                         icon=icon,
                         player_id=p.get("player_id", "?"),
@@ -2224,30 +2236,50 @@ async def cmd_gm_status(message: types.Message):
                         action=action,
                     )
                 )
+            players_text = (
+                gm_msgs["status_players_header"] + "\n" + "\n\n".join(players_parts)
+            )
         else:
-            lines.append(gm_msgs["status_no_players"])
+            players_text = gm_msgs["status_no_players"]
 
-        # NPCs
+        # Build NPCs section
+        npcs_text = ""
         npcs = result.get("npcs", [])
         if npcs:
-            lines.append(gm_msgs["status_npcs_header"])
+            npcs_parts = []
             for n in npcs:
                 action = n.get("chosen_action_text", "") or (
-                    "\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445" if BOT_LANGUAGE == "ru" else "No data"
+                    "\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445"
+                    if BOT_LANGUAGE == "ru"
+                    else "No data"
                 )
-                if len(action) > 80:
-                    action = action[:77] + "..."
-                lines.append(
+                npcs_parts.append(
                     gm_msgs["status_npc_entry"].format(
                         name=n.get("npc_name", "?"),
                         role=n.get("role", "?"),
                         action=action,
                     )
                 )
+            npcs_text = gm_msgs["status_npcs_header"] + "\n" + "\n\n".join(npcs_parts)
         else:
-            lines.append(gm_msgs["status_no_npcs"])
+            npcs_text = gm_msgs["status_no_npcs"]
 
-        await message.answer("\n".join(lines), parse_mode="Markdown")
+        # Combine full message
+        full_message = header + "\n" + players_text + "\n\n" + npcs_text
+
+        # Telegram's limit is 4096 chars; use 3950 as safe threshold
+        MAX_STATUS_LEN = 3950
+
+        if len(full_message) <= MAX_STATUS_LEN:
+            await message.answer(full_message, parse_mode="Markdown")
+        else:
+            # Split into 3 parts
+            # Part 1: header
+            await message.answer(header, parse_mode="Markdown")
+            # Part 2: players
+            await message.answer(players_text, parse_mode="Markdown")
+            # Part 3: NPCs
+            await message.answer(npcs_text, parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"Failed to get game status for {game_id}: {e}")

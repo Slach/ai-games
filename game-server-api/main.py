@@ -1463,8 +1463,7 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
         # Check if they have a pending choice for the current day
         briefing = get_player_briefing(current_day_num, pid, game_id=game_id)
         has_chosen = (
-            briefing is not None
-            and briefing.get("selected_action_id") is not None
+            briefing is not None and briefing.get("selected_action_id") is not None
         )
         chosen_action_text = ""
         if briefing and briefing.get("selected_action_id"):
@@ -1736,7 +1735,9 @@ async def auto_select_action(
     Uses LLM with global circumstances + personal briefing + player profile
     to make an in-character choice. Notifies the player about the auto-selection.
     """
-    logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, day {day}")
+    logger.info(
+        f"[AUTO_ACTION] Auto-selecting action for player {player_id}, day {day}"
+    )
 
     # 1. Get player's briefing with choices
     briefing = get_player_briefing(day, player_id, game_id=game_id)
@@ -1765,9 +1766,7 @@ async def auto_select_action(
     # 2. Get player profile
     profile = get_player_profile(player_id)
     if not profile:
-        raise HTTPException(
-            status_code=404, detail=f"Player {player_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
 
     # 3. Get global circumstances
     game_day = get_game_day(day, game_id=game_id)
@@ -1792,9 +1791,7 @@ async def auto_select_action(
     rationale = decision.get("rationale", "Auto-selected by Game Master")
 
     if not action_id:
-        raise HTTPException(
-            status_code=500, detail="LLM returned no valid action"
-        )
+        raise HTTPException(status_code=500, detail="LLM returned no valid action")
 
     # 5. Submit the action (same flow as submit_player_action)
     chosen_consequence = ""

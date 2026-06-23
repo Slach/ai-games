@@ -2248,13 +2248,13 @@ spatial presence\n"
         # Strip consequences
         clean_choices = []
         for c in choices:
-            clean_choices.append({
-                "id": c.get("id", ""),
-                "text": c.get("text", c.get("description", "")),
-            })
-        choices_text = "\n".join(
-            [f"  [{c['id']}] {c['text']}" for c in clean_choices]
-        )
+            clean_choices.append(
+                {
+                    "id": c.get("id", ""),
+                    "text": c.get("text", c.get("description", "")),
+                }
+            )
+        choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
 
         # Build global context snippet
         gc_settings = ""
