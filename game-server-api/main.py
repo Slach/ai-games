@@ -2974,6 +2974,7 @@ async def admin_start_game(request: StartGameRequest):
                     global_circ,
                     gm_profile,
                     player_name,
+                    day_num,
                 )
             except Exception as e:
                 logger.error(
@@ -3672,7 +3673,7 @@ async def admin_continue_game(
             if p:
                 player_name = p.get("player_name", "") or ""
         briefing_data = gm.generate_player_briefing_and_choices(
-            global_circ, gm_profile, player_name
+            global_circ, gm_profile, player_name, day_num
         )
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])

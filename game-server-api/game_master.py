@@ -2357,6 +2357,7 @@ spatial presence\n"
         global_circumstances: dict[str, Any],
         player_profile: dict[str, Any],
         player_name: str = "",
+        day: int | None = None,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
@@ -2401,7 +2402,7 @@ spatial presence\n"
                 f"  Характер: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
                 "Создай:\n"
                 "1. personal_title — уникальный, атмосферный заголовок для ПЕРСОНАЛЬНОЙ вводной этого игрока. "
-                f"Формат: 'Ход {{day}} — {{{player_role}}} — {{персональное приветствие}}'. "
+                f"Формат: 'Ход {day} — {{{player_role}}} — {{персональное приветствие}}'. "
                 f"Приветствие должно включать имя персонажа ({display_name}) и его роль ({player_role}), "
                 "отражать его характер и текущую ситуацию. "
                 "Пример: 'Ход 1 — Инженер — Маркус, твои руки помнят гул реактора лучше любого сканера'.\n"
@@ -2430,7 +2431,7 @@ spatial presence\n"
                 f"  Traits: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
                 "Create:\n"
                 "1. personal_title — a unique atmospheric title for THIS player's personal intro. "
-                f"Format: 'Turn {{day}} — {{{player_role}}} — {{personal_greeting}}'. "
+                f"Format: 'Turn {day} — {{{player_role}}} — {{personal_greeting}}'. "
                 f"The greeting MUST include the character's name ({display_name}) and role ({player_role}), "
                 "reflecting their personality and the current situation. "
                 "Example: 'Turn 1 — Engineer — Marcus, your hands remember the reactor hum better than any scanner'.\n"
@@ -2461,10 +2462,10 @@ spatial presence\n"
         except Exception as e:
             role_label = player_role
             if self.language == "ru":
-                fallback_title = f"Ход — {role_label}"
+                fallback_title = f"Ход {day or ''} — {role_label}"
                 fallback_briefing = f"{display_name}, ты — {role_label}. Ты оцениваешь ситуацию спокойно и профессионально."
             else:
-                fallback_title = f"Turn — {role_label}"
+                fallback_title = f"Turn {day or ''} — {role_label}"
                 fallback_briefing = f"{display_name}, you are the {role_label}. You assess the situation calmly and professionally."
             logger.error(f"[DAY] Briefing generation failed for {player_id}: {e}")
             return {
