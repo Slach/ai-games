@@ -2218,11 +2218,18 @@ spatial presence\n"
         day: int,
         previous_summary: str = "",
         player_profiles: list[dict[str, Any]] | None = None,
+        mission_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate the shared global circumstances for a game day.
 
         This is the first step — creates the setting, conflict, and key events
         that all players and NPCs will experience from their own perspectives.
+
+        Args:
+            day: Current game day number
+            previous_summary: Summary of previous events
+            player_profiles: List of player/npc profiles
+            mission_context: Optional mission data to ensure story consistency
         """
         logger.info(f"[DAY] Generating global circumstances for Day {day}")
 
@@ -2235,6 +2242,52 @@ spatial presence\n"
                 player_lines.append(f"  - {pid}: {role}")
             player_descriptions = "\n".join(player_lines)
 
+        # Build mission context string if available
+        mission_str = ""
+        if mission_context:
+            mission_name = mission_context.get("name", "")
+            mission_desc = mission_context.get("description", "")
+            objectives = mission_context.get("objectives", [])
+
+            if self.language == "ru":
+                stage_label = "Этап"
+                mission_header = "КОНТЕКСТ МИССИИ"
+                mission_sub = "это текущая миссия, её сюжет обязателен для этого дня"
+                name_label = "Название"
+                desc_label = "Описание"
+                stages_header = "Этапы"
+                importance_text = (
+                    "ВАЖНО: Все обстоятельства дня должны строго соответствовать этой миссии. "
+                    "Не придумывай новый сеттинг — используй сеттинг из описания миссии."
+                )
+            else:
+                stage_label = "Stage"
+                mission_header = "MISSION CONTEXT"
+                mission_sub = (
+                    "this is the current mission, its story is mandatory for this day"
+                )
+                name_label = "Name"
+                desc_label = "Description"
+                stages_header = "Stages"
+                importance_text = (
+                    "IMPORTANT: All circumstances MUST be strictly consistent with this mission. "
+                    "Do not invent a new setting — use the setting from the mission description."
+                )
+
+            stages_str = "\n".join(
+                [
+                    f"  - {stage_label} {o.get('stage', '?')}: {o.get('name', '')} — {o.get('description', '')}"
+                    for o in objectives
+                ]
+            )
+            mission_str = (
+                f"\n{mission_header} ({mission_sub}):\n"
+                f"{name_label}: {mission_name}\n"
+                f"{desc_label}: {mission_desc}\n"
+                f"{stages_header}:\n{stages_str}\n"
+                f"{importance_text}\n"
+            )
+
         if self.language == "ru":
             system = (
                 "Ты — Game Master космической игры в стиле Star Trek. "
@@ -2244,12 +2297,15 @@ spatial presence\n"
             user = (
                 f"День: {day}\n"
                 f"Предыдущие события: {previous_summary or 'Первый день миссии'}\n"
-                f"Экипаж:\n{player_descriptions or '  Экипаж формируется'}\n\n"
+                f"Экипаж:\n{player_descriptions or '  Экипаж формируется'}\n"
+                f"{mission_str}\n"
                 "Создай общие обстоятельства дня:\n"
                 "1. Место действия — где находится корабль (звездная система, станция, явление космоса)\n"
                 "2. Конфликт — центральная проблема или тайна\n"
                 "3. Нарратив — описание ситуации от лица GM (2-3 абзаца)\n"
                 "4. Ключевые события — 3-5 фоновых событий, которые могут заметить все\n\n"
+                "ВАЖНО: Все обстоятельства дня должны соответствовать контексту миссии.\n"
+                "Не выдумывай новый независимый сюжет — развивай события в рамках миссии.\n"
                 "Всё на русском языке."
             )
         else:
@@ -2261,12 +2317,15 @@ spatial presence\n"
             user = (
                 f"Day: {day}\n"
                 f"Previous events: {previous_summary or 'First day of mission'}\n"
-                f"Crew:\n{player_descriptions or '  Crew forming'}\n\n"
+                f"Crew:\n{player_descriptions or '  Crew forming'}\n"
+                f"{mission_str}\n"
                 "Create shared circumstances for the day:\n"
                 "1. Setting — where the ship is located\n"
                 "2. Conflict — central problem or mystery\n"
                 "3. Narrative — GM voice description (2-3 paragraphs)\n"
-                "4. Key events — 3-5 background events everyone can perceive\n"
+                "4. Key events — 3-5 background events everyone can perceive\n\n"
+                "IMPORTANT: All circumstances must be consistent with the mission context. "
+                "Do not invent an independent plot — develop events within the mission framework.\n"
             )
 
         try:
@@ -2493,6 +2552,7 @@ spatial presence\n"
                 f"Локация: {setting}\n"
                 f"Конфликт: {conflict}\n"
                 f"Описание: {narrative}\n\n"
+                f"ПРЕДЫДУЩИЕ СОБЫТИЯ:\n{previous_summary or 'Это первый ход'}\n\n"
                 f"Статус миссии:\n{mission_text}\n\n"
                 f"Принятые решения (игроки имеют HIGH вес, NPC — NORMAL):\n{decisions_text}\n\n"
                 "Проанализируй все решения и создай единый связанный результат. "
@@ -2524,6 +2584,7 @@ spatial presence\n"
                 f"Setting: {setting}\n"
                 f"Conflict: {conflict}\n"
                 f"Narrative: {narrative}\n\n"
+                f"PREVIOUS EVENTS:\n{previous_summary or 'This is the first turn'}\n\n"
                 f"Mission status:\n{mission_text}\n\n"
                 f"All decisions (players = HIGH weight, NPCs = NORMAL):\n{decisions_text}\n\n"
                 "Analyze all decisions together and create a coherent combined result. "

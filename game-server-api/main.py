@@ -1981,6 +1981,62 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
     return " | ".join(parts) if parts else narrative[:500]
 
 
+def _build_cumulative_story_summary(
+    current_day: int,
+    language: str = "ru",
+    game_id: str = "default_game",
+) -> str:
+    """Build a cumulative story summary from ALL previous days.
+
+    Collects combined_outcome from every completed day (1 .. current_day - 1)
+    and concatenates them chronologically. This gives the LLM a complete
+    picture of the story so far, not just the last turn.
+
+    Args:
+        current_day: The upcoming day number (days before this are summarized)
+        language: Language for labels ("ru" or "en")
+        game_id: Game identifier
+
+    Returns:
+        A compact chronological summary string, or empty string if no prior days.
+    """
+    if current_day <= 1:
+        return ""
+
+    summaries = []
+    if language == "ru":
+        header = "=== ПРЕДЫДУЩИЕ ХОДЫ ==="
+        day_label = "Ход"
+    else:
+        header = "=== PREVIOUS TURNS ==="
+        day_label = "Turn"
+
+    for d in range(1, current_day):
+        day_record = get_game_day(d, game_id=game_id)
+        if not day_record:
+            continue
+
+        combined_outcome = day_record.get("combined_outcome", "")
+        day_summary = ""
+        if combined_outcome:
+            day_summary = _build_day_summary(combined_outcome, language=language)
+        elif day_record.get("story"):
+            day_summary = day_record["story"][:300]
+
+        if day_summary:
+            summaries.append(f"{day_label} {d}: {day_summary}")
+
+    if not summaries:
+        return ""
+
+    result = header + "\n" + "\n".join(summaries)
+    # Truncate to 3000 chars to avoid blowing up the LLM prompt
+    if len(result) > 3000:
+        result = result[:3000] + "..."
+
+    return result
+
+
 async def _analyze_day_outcome(
     day: int,
     language: str = "ru",
@@ -2070,15 +2126,12 @@ async def _analyze_day_outcome(
         # Also add NPC decisions from the combined outcome
         # NPC decisions were already analyzed during day generation
 
-        # Get previous day for context
-        previous_summary = ""
-        if day > 1:
-            prev_day = get_game_day(day - 1, game_id)
-            if prev_day:
-                raw_outcome = prev_day.get("combined_outcome") or prev_day.get(
-                    "story", ""
-                )
-                previous_summary = _build_day_summary(raw_outcome, language=language)
+        # Build cumulative summary from ALL previous turns for full story context
+        previous_summary = _build_cumulative_story_summary(
+            current_day=day,
+            language=language,
+            game_id=game_id,
+        )
 
         # Get mission context for progress tracking
         mission = get_mission(None, game_id)
@@ -2797,24 +2850,20 @@ async def admin_start_game(request: StartGameRequest):
     # 7. Generate the game day with the new restructured flow
     state = get_game_state(game_id)
     day_num = state["day"]
-    previous_summary = state.get("last_updated", "")
 
-    # Get previous day for story consistency
-    if day_num > 1:
-        prev_day = get_game_day(day_num - 1, game_id)
-        if prev_day:
-            if prev_day.get("combined_outcome"):
-                previous_summary = _build_day_summary(
-                    prev_day["combined_outcome"], language=language
-                )
-            elif prev_day.get("story"):
-                previous_summary = prev_day["story"]
+    # Build cumulative summary from ALL previous turns, not just the last one
+    previous_summary = _build_cumulative_story_summary(
+        current_day=day_num,
+        language=language,
+        game_id=game_id,
+    )
 
-    # Step A: Generate global circumstances
+    # Step A: Generate global circumstances (with mission context for story consistency)
     global_circ = gm.generate_global_circumstances(
         day=day_num,
         previous_summary=previous_summary,
         player_profiles=all_participants,
+        mission_context=mission_data,
     )
     global_narrative = global_circ.get("narrative", "")
 
@@ -3395,25 +3444,24 @@ async def admin_continue_game(
 
     logger.info(f"Participants: {len(all_participants)}")
 
-    # Get previous day for story consistency
-    previous_summary = ""
-    if day_num > 1:
-        prev_day = get_game_day(day_num - 1, game_id)
-        if prev_day:
-            if prev_day.get("combined_outcome"):
-                previous_summary = _build_day_summary(
-                    prev_day["combined_outcome"], language=language
-                )
-            elif prev_day.get("story"):
-                previous_summary = prev_day["story"]
+    # Build cumulative summary from ALL previous turns, not just the last one
+    previous_summary = _build_cumulative_story_summary(
+        current_day=day_num,
+        language=language,
+        game_id=game_id,
+    )
 
     gm = create_game_master_agent(language=language)
 
-    # Step A: Generate global circumstances
+    # Fetch mission data for story consistency
+    mission_data = get_mission(None, game_id) or {}
+
+    # Step A: Generate global circumstances (with mission context for story consistency)
     global_circ = gm.generate_global_circumstances(
         day=day_num,
         previous_summary=previous_summary,
         player_profiles=all_participants,
+        mission_context=mission_data,
     )
 
     # Save global circumstances
