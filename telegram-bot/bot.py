@@ -92,6 +92,7 @@ TELEGRAM_SOCKS_PROXY = os.getenv("TELEGRAM_SOCKS_PROXY", "")
 class OnboardingState(StatesGroup):
     """State machine for onboarding flow"""
 
+    waiting_for_name = State()
     waiting_for_answer = State()
     completed = State()
 
@@ -999,13 +1000,15 @@ async def start_onboarding_flow(
     state: FSMContext,
     player_id: int,
     game_id: str,
+    player_name: str = "",
 ):
-    """Start onboarding flow with a specific game_id."""
+    """Start onboarding flow with a specific game_id and optional player_name."""
     msgs = lang.get_onboarding(BOT_LANGUAGE)
 
     try:
         logger.info(
-            f"Starting onboarding for player_id={player_id}, game_id={game_id}, language={BOT_LANGUAGE}"
+            f"Starting onboarding for player_id={player_id}, game_id={game_id}, "
+            f"player_name={player_name}, language={BOT_LANGUAGE}"
         )
         result = await api_request(
             "POST",
@@ -1013,6 +1016,7 @@ async def start_onboarding_flow(
             data={
                 "player_id": player_id,
                 "game_id": game_id,
+                "player_name": player_name,
                 "language": BOT_LANGUAGE,
             },
             timeout_total=600,
@@ -1086,7 +1090,7 @@ async def start_onboarding_flow(
 
 
 async def game_selection_callback(callback: types.CallbackQuery, state: FSMContext):
-    """Handle game selection callback and continue onboarding."""
+    """Handle game selection callback — ask for player name first, then continue onboarding."""
     await callback.answer()
 
     data = callback.data or ""
@@ -1118,13 +1122,55 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
         with suppress(Exception):
             await message.edit_reply_markup(reply_markup=None)
 
-        await send_random_loading_image(message)
-        await start_onboarding_flow(message, state, player_id, game_id)
+        # Ask for player name first
+        msgs = lang.get_onboarding(BOT_LANGUAGE)
+        name_question = (
+            "🗣 **Как вас зовут?**\n\nНапишите имя вашего персонажа (или своё настоящее имя):"
+            if BOT_LANGUAGE == "ru"
+            else "🗣 **What is your name?**\n\nEnter your character name (or your real name):"
+        )
+        await message.answer(
+            name_question,
+            parse_mode="Markdown",
+        )
+
+        # Store game_id in FSM for later use
+        await state.update_data(
+            game_id=game_id,
+        )
+        await state.set_state(OnboardingState.waiting_for_name)
 
     except Exception as e:
         logger.error(f"Failed to process game selection for player {player_id}: {e}")
         error_msgs = lang.get_errors(BOT_LANGUAGE)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+
+
+async def handle_onboarding_name(message: types.Message, state: FSMContext):
+    """Handle player name input during onboarding."""
+    assert message.from_user is not None
+    player_id = message.from_user.id
+
+    player_name = message.text.strip() if message.text else ""
+    if not player_name or len(player_name) < 1 or len(player_name) > 50:
+        if BOT_LANGUAGE == "ru":
+            await message.answer("Пожалуйста, напишите имя длиной от 1 до 50 символов:")
+        else:
+            await message.answer("Please enter a name between 1 and 50 characters:")
+        return
+
+    logger.info(f"Player {player_id} entered name: {player_name}")
+
+    # Store name in FSM data and proceed to onboarding
+    data = await state.get_data()
+    game_id = data.get("game_id", "default_game")
+
+    await send_random_loading_image(message)
+
+    await state.update_data(player_name=player_name)
+
+    # Proceed to the actual onboarding flow
+    await start_onboarding_flow(message, state, player_id, game_id, player_name)
 
 
 async def cmd_start(message: types.Message, command: CommandObject, state: FSMContext):
@@ -2653,7 +2699,9 @@ async def main():
     dp.message.register(cmd_gm_restart_game, Command("gm_restart_game"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
-    # Onboarding answer handler - must be registered BEFORE general text handlers
+    # Onboarding name input handler — before general text handlers
+    dp.message.register(handle_onboarding_name, OnboardingState.waiting_for_name)
+
     # Onboarding answer handler - inline keyboard callback
     dp.callback_query.register(
         handle_onboarding_inline_answer, F.data.startswith("onb_ans:")

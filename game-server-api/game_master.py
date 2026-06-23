@@ -531,6 +531,10 @@ PLAYER_BRIEFING_CHOICES_SCHEMA = {
         "schema": {
             "type": "object",
             "properties": {
+                "personal_title": {
+                    "type": "string",
+                    "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {day} — {role} — {personal_greeting}' (on Russian) or 'Turn {day} — {role} — {personal_greeting}' (on English). The greeting MUST include the player's name and role. Example (Russian): 'Ход 1 — Инженер — Маркус, твои руки помнят гул реактора лучше любого сканера'. Example (English): 'Turn 1 — Engineer — Marcus, your hands remember the reactor hum better than any scanner'.",
+                },
                 "briefing": {
                     "type": "string",
                     "description": "Personal narrative for this specific player — what they see, hear, and feel from their unique perspective",
@@ -561,7 +565,7 @@ PLAYER_BRIEFING_CHOICES_SCHEMA = {
                     "description": "3-4 decision points with actions and hidden consequences",
                 },
             },
-            "required": ["briefing", "choices"],
+            "required": ["personal_title", "briefing", "choices"],
             "additionalProperties": False,
         },
     },
@@ -2352,11 +2356,13 @@ spatial presence\n"
         self,
         global_circumstances: dict[str, Any],
         player_profile: dict[str, Any],
+        player_name: str = "",
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
 
         Each player gets:
+        - A personal_title with name + role + greeting
         - A personal briefing (their unique perspective on the situation)
         - 3-4 choices with visible descriptions and hidden consequences
         """
@@ -2366,6 +2372,9 @@ spatial presence\n"
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
         logger.info(f"[DAY] Generating briefing for {player_id} ({player_role})")
+
+        # Use player_name if provided, otherwise fall back to role
+        display_name = player_name or player_role
 
         setting = global_circumstances.get("setting", "")
         conflict = global_circumstances.get("conflict", "")
@@ -2387,12 +2396,18 @@ spatial presence\n"
                 f"Общий нарратив: {narrative}\n\n"
                 f"Ключевые события:\n{key_events_text}\n\n"
                 f"Персонаж:\n"
+                f"  Имя: {display_name}\n"
                 f"  Роль: {player_role}\n"
                 f"  Характер: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
                 "Создай:\n"
-                "1. Персональную вводную (briefing) — что этот конкретный персонаж видит, слышит, чувствует. "
+                "1. personal_title — уникальный, атмосферный заголовок для ПЕРСОНАЛЬНОЙ вводной этого игрока. "
+                f"Формат: 'Ход {{day}} — {{{player_role}}} — {{персональное приветствие}}'. "
+                f"Приветствие должно включать имя персонажа ({display_name}) и его роль ({player_role}), "
+                "отражать его характер и текущую ситуацию. "
+                "Пример: 'Ход 1 — Инженер — Маркус, твои руки помнят гул реактора лучше любого сканера'.\n"
+                "2. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
-                "2. 3-4 варианта действий с последствиями — каждое действие должно быть логичным "
+                "3. 3-4 варианта действий с последствиями — каждое действие должно быть логичным "
                 "для этой роли, а последствия — скрытыми от игрока. "
                 "Последствия не должны быть очевидны из текста действия!\n\n"
                 "Всё на русском языке."
@@ -2410,12 +2425,18 @@ spatial presence\n"
                 f"Narrative: {narrative}\n\n"
                 f"Key events:\n{key_events_text}\n\n"
                 f"Character:\n"
+                f"  Name: {display_name}\n"
                 f"  Role: {player_role}\n"
                 f"  Traits: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
                 "Create:\n"
-                "1. Personal briefing — what this specific character sees, hears, feels. "
+                "1. personal_title — a unique atmospheric title for THIS player's personal intro. "
+                f"Format: 'Turn {{day}} — {{{player_role}}} — {{personal_greeting}}'. "
+                f"The greeting MUST include the character's name ({display_name}) and role ({player_role}), "
+                "reflecting their personality and the current situation. "
+                "Example: 'Turn 1 — Engineer — Marcus, your hands remember the reactor hum better than any scanner'.\n"
+                "2. briefing — personal narrative — what this specific character sees, hears, feels. "
                 "How their role and traits color their perception. (2-3 sentences)\n"
-                "2. 3-4 action choices with consequences — each action should be logical "
+                "3. 3-4 action choices with consequences — each action should be logical "
                 "for this role, with consequences hidden from the player. "
                 "Consequences should not be obvious from the action text!\n"
             )
@@ -2438,9 +2459,17 @@ spatial presence\n"
 
             return parsed
         except Exception as e:
+            role_label = player_role
+            if self.language == "ru":
+                fallback_title = f"Ход — {role_label}"
+                fallback_briefing = f"{display_name}, ты — {role_label}. Ты оцениваешь ситуацию спокойно и профессионально."
+            else:
+                fallback_title = f"Turn — {role_label}"
+                fallback_briefing = f"{display_name}, you are the {role_label}. You assess the situation calmly and professionally."
             logger.error(f"[DAY] Briefing generation failed for {player_id}: {e}")
             return {
-                "briefing": f"As {player_role}, you assess the situation calmly.",
+                "personal_title": fallback_title,
+                "briefing": fallback_briefing,
                 "choices": [
                     {
                         "id": "a1",

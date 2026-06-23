@@ -35,8 +35,13 @@ def _build_briefing_text(
     choices: list[dict[str, Any]],
     crew_dialogues: list[dict[str, str]],
     language: str,
+    personal_title: str = "",
 ) -> str:
-    """Build the full briefing message text for a player."""
+    """Build the full briefing message text for a player.
+
+    Uses personal_title (LLM-generated greeting with name+role) as the header
+    when available, falling back to the standard "Day {day}" title.
+    """
     current = get_current_day(language)
     crew_txt = ""
     if crew_dialogues:
@@ -50,8 +55,16 @@ def _build_briefing_text(
         f"{i + 1} - {_escape_md(a.get('text', a.get('description', '')))}"
         for i, a in enumerate(choices)
     )
+
+    # Use personal_title when available (LLM-generated with name + role + greeting)
+    # Fall back to standard title format
+    if personal_title:
+        title_line = f"🎯 *{personal_title}*"
+    else:
+        title_line = current.get("title", "Day {day}").format(day=day_num)
+
     return (
-        current.get("title", "Day {day}").format(day=day_num)
+        title_line
         + "\n\n"
         + current.get("briefing_header", "{briefing}").format(briefing=briefing)
         + crew_txt
@@ -170,9 +183,15 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     intro_title = current_msgs.get(
                         "global_intro_title", "Turn {day}"
                     ).format(day=day)
+                    # If global_narrative is long enough to need a separate
+                    # text message (step 3), only put the title in the caption
+                    # to avoid showing the same "Ход N — Общая вводная" twice.
                     caption = f"*{intro_title}*"
-                    if global_narrative:
-                        caption += f"\n\n{global_narrative[:900]}"
+                    narrative_too_long = (
+                        global_narrative and len(global_narrative) > 900
+                    )
+                    if not narrative_too_long and global_narrative:
+                        caption += f"\n\n{global_narrative}"
                     await bot.send_photo(
                         chat_id=player_id,
                         photo=photo,
@@ -192,7 +211,30 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     parse_mode="Markdown",
                 )
 
-            # 4. Send action image
+            # 4. Send character image (per-player personal intro image)
+            character_image_url = player_data.get("character_image_url")
+            personal_title = player_data.get("personal_title", "")
+
+            if character_image_url:
+                img_data = await _download_image(character_image_url)
+                if img_data:
+                    photo = BufferedInputFile(img_data, filename="character.png")
+                    # Use personal_title as caption, or build fallback
+                    caption_text = personal_title or (
+                        (
+                            "🎯 Ход {day} — {role}"
+                            if language == "ru"
+                            else "🎯 Turn {day} — {role}"
+                        ).format(day=day, role=player_data.get("role", ""))
+                    )
+                    await bot.send_photo(
+                        chat_id=player_id,
+                        photo=photo,
+                        caption=f"*{caption_text}*",
+                        parse_mode="Markdown",
+                    )
+
+            # 5. Send previous action image (if any)
             chosen_action_url = player_data.get("chosen_action_url")
             if chosen_action_url:
                 img_data = await _download_image(chosen_action_url)
@@ -200,12 +242,17 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     photo = BufferedInputFile(img_data, filename="action.png")
                     await bot.send_photo(chat_id=player_id, photo=photo)
 
-            # 5. Send briefing text + action choices
+            # 6. Send briefing text + action choices
             briefing = player_data.get("briefing", "")
             choices = player_data.get("choices", [])
             if briefing and choices:
                 text = _build_briefing_text(
-                    day, briefing, choices, crew_dialogues, language
+                    day,
+                    briefing,
+                    choices,
+                    crew_dialogues,
+                    language,
+                    personal_title=personal_title,
                 )
                 keyboard = create_keyboard_fn(choices)
                 await bot.send_message(

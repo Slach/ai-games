@@ -158,6 +158,7 @@ class StartOnboardingRequest(BaseModel):
     player_id: int
     game_id: str
     language: str = "en"
+    player_name: str = ""
 
 
 class GameMessageRequest(BaseModel):
@@ -423,6 +424,7 @@ def generate_player_profile_from_answers(
     game_id: str = "default_game",
     language: str = "ru",
     questions: list[dict[str, Any]] | None = None,
+    player_name: str = "",
 ) -> dict[str, Any]:
     """Assign a role from the available ship roles based on accumulated role scores from onboarding answers."""
     available = get_available_roles(game_id, language=language)
@@ -559,6 +561,7 @@ def generate_player_profile_from_answers(
 
     return {
         "player_id": player_id,
+        "player_name": player_name,
         "avatar_description": role_data["avatar_description"],
         "role": role_data["role_name"],
         "role_name_en": role_data["role_name_en"],
@@ -771,11 +774,15 @@ async def start_onboarding(request: StartOnboardingRequest):
         questions=[q.model_dump() for q in dynamic_questions],
         shuffle_seed=shuffle_seed,
     )
-    # onboarding_sessions table does not persist game_id yet; keep it in answers payload
+    # onboarding_sessions table does not persist game_id yet; keep them in answers payload
+    metadata = {
+        -1: request.game_id,  # store game_id as metadata
+        -2: request.player_name,  # store player_name as metadata
+    }
     update_onboarding_session(
         session["session_id"],
         0,
-        {-1: request.game_id},
+        metadata,
         False,
         request.language,
     )
@@ -881,13 +888,17 @@ async def submit_onboarding_answer(
     }
 
     if completed:
-        profile_answers = {k: v for k, v in answers.items() if str(k) != "-1"}
+        profile_answers = {
+            k: v for k, v in answers.items() if str(k) not in ("-1", "-2")
+        }
+        player_name = answers.get(-2) or answers.get("-2", "")
         profile_data = generate_player_profile_from_answers(
             session["player_id"],
             profile_answers,
             game_id=game_id,
             language=effective_language,
             questions=session_questions,
+            player_name=player_name,
         )
         create_player_profile(profile_data)
         result["profile"] = profile_data
@@ -2416,6 +2427,7 @@ def _build_player_briefings_for_push(
     """Build per-player briefing dicts for push payload from stored briefings.
 
     Fetches scene image (if available) from game_images table for this day.
+    Also fetches player_name for each real player to include in the payload.
     """
     # Fetch scene image for this day (if generated and saved)
     scene_url = get_random_game_image(type="scene", day=day_num, game_id=game_id)
@@ -2426,13 +2438,22 @@ def _build_player_briefings_for_push(
         player_id = b.get("player_id")
         if not player_id:
             continue
+        # Get player_name from profile
+        p = get_player_profile(player_id)
+        player_name = (p.get("player_name", "") or "") if p else ""
+        # Get personal_title from briefing (LLM-generated) or build fallback
+        personal_title = b.get("personal_title", "")
         players_data.append(
             {
                 "player_id": player_id,
+                "player_name": player_name,
+                "personal_title": personal_title,
+                "role": b.get("role", ""),
                 "briefing": b.get("briefing", ""),
                 "choices": b.get("choices", []),
                 "chosen_action_url": b.get("chosen_action_url"),
                 "scene_url": scene_url,
+                "character_image_url": b.get("character_image_url"),
             }
         )
     return players_data
@@ -2931,8 +2952,16 @@ async def admin_start_game(request: StartGameRequest):
     ) -> dict[str, Any] | None:
         """Generate briefing for one participant (player or NPC) under semaphore."""
         async with sem:
+            player_id = participant.get("player_id")
+            # Get player_name from profile if available
+            player_name = ""
+            if player_id:
+                p = get_player_profile(player_id)
+                if p:
+                    player_name = p.get("player_name", "") or ""
+
             gm_profile = {
-                "player_id": participant.get("player_id"),
+                "player_id": player_id,
                 "npc_key": participant.get("npc_key"),
                 "role": participant["role"],
                 "personality_traits": participant.get("personality_traits", []),
@@ -2941,7 +2970,10 @@ async def admin_start_game(request: StartGameRequest):
             try:
                 # LLM call — run in thread pool to avoid blocking the event loop
                 briefing_data = await asyncio.to_thread(
-                    gm.generate_player_briefing_and_choices, global_circ, gm_profile
+                    gm.generate_player_briefing_and_choices,
+                    global_circ,
+                    gm_profile,
+                    player_name,
                 )
             except Exception as e:
                 logger.error(
@@ -2951,6 +2983,7 @@ async def admin_start_game(request: StartGameRequest):
 
             briefing = briefing_data.get("briefing", "")
             choices = briefing_data.get("choices", [])
+            personal_title = briefing_data.get("personal_title", "")
 
             if participant["type"] == "npc":
                 # NPCs decide immediately without seeing consequences
@@ -3020,6 +3053,7 @@ async def admin_start_game(request: StartGameRequest):
                         **saved,
                         "name": str(participant["player_id"]),
                         "role": participant["role"],
+                        "personal_title": personal_title,
                     }
             return None
 
@@ -3031,6 +3065,73 @@ async def admin_start_game(request: StartGameRequest):
     logger.info(
         f"[BRIEFING] Generated {len(all_briefings)}/{len(all_participants)} briefings"
     )
+
+    # ── Generate per-player character images ────────────────────────
+    # Each player gets a character-in-scene image showing their avatar
+    # in the current setting. Used as the personal briefing image.
+    logger.info(
+        f"[CHAR_IMAGE] Generating {len([b for b in all_briefings if not b.get('is_npc')])} "
+        "per-player character images..."
+    )
+    player_briefings = [b for b in all_briefings if not b.get("is_npc")]
+
+    async def _generate_char_image(b: dict) -> str | None:
+        """Generate a character image for a real player in the current setting."""
+        pid = b.get("player_id")
+        if not pid:
+            return None
+        profile = get_player_profile(pid)
+        if not profile:
+            return None
+
+        role = profile.get("role", "Crew Member")
+        player_name = profile.get("player_name", "") or role
+        traits = profile.get("personality_traits", [])
+        avatar_desc = profile.get("avatar_description", "") or ""
+        species_desc = profile.get("species_description", "") or ""
+        setting = global_circ.get("setting", "ship interior")
+
+        prompt = (
+            f"Sci-fi character portrait of {player_name}, the {role}, "
+            f"placed in the current environment: {setting[:200]}. "
+            f"Character appearance: {avatar_desc[:200]}. "
+            f"{species_desc[:150]}"
+            f"Personality: {', '.join(traits) if traits else 'professional'}. "
+            f"The character is reacting to the situation around them. "
+            f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
+            f"detailed uniform, 4K quality, Star Trek aesthetic."
+        )
+
+        image_gen = create_image_generator()
+        url = await image_gen.generate_avatar_image(
+            prompt=prompt,
+            filename_prefix=f"char_day{day_num}_{game_id}_p{pid}",
+        )
+        if url:
+            save_game_image(
+                type="character",
+                image_url=url,
+                game_id=game_id,
+                day=day_num,
+                prompt=prompt,
+            )
+        return url
+
+    char_tasks = [_generate_char_image(b) for b in player_briefings]
+    if char_tasks:
+        char_urls = await asyncio.gather(*char_tasks, return_exceptions=True)
+        for b, url_or_err in zip(player_briefings, char_urls, strict=False):
+            if isinstance(url_or_err, str) and url_or_err:
+                b["character_image_url"] = url_or_err
+                personal_title = b.get("personal_title", "")
+                logger.info(
+                    f"[CHAR_IMAGE] Generated for player {b.get('player_id')}: "
+                    f"title='{personal_title[:60]}', url={url_or_err[:80]}"
+                )
+            elif isinstance(url_or_err, Exception):
+                logger.warning(
+                    f"[CHAR_IMAGE] Failed for player {b.get('player_id')}: {url_or_err}"
+                )
 
     # Step C: Analyze NPC choices (real players haven't chosen yet)
     npc_decisions = [b for b in all_briefings if b.get("is_npc")]
@@ -3526,9 +3627,17 @@ async def admin_continue_game(
             "personality_traits": participant.get("personality_traits", []),
             "role_description": participant.get("role_description", ""),
         }
-        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile)
+        player_name = ""
+        if participant["type"] == "player" and participant.get("player_id"):
+            p = get_player_profile(participant["player_id"])
+            if p:
+                player_name = p.get("player_name", "") or ""
+        briefing_data = gm.generate_player_briefing_and_choices(
+            global_circ, gm_profile, player_name
+        )
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])
+        personal_title = briefing_data.get("personal_title", "")
 
         if participant["type"] == "npc":
             npc_profile = get_npc_profile(participant["npc_key"]) or participant
@@ -3589,7 +3698,73 @@ async def admin_continue_game(
                         **saved,
                         "name": str(participant["player_id"]),
                         "role": participant["role"],
+                        "personal_title": personal_title,
                     }
+                )
+
+    # ── Generate per-player character images (live players only) ────
+    logger.info(
+        f"[CHAR_IMAGE] Generating {len([b for b in all_briefings if not b.get('is_npc')])} "
+        "per-player character images..."
+    )
+    player_briefings = [b for b in all_briefings if not b.get("is_npc")]
+
+    async def _generate_char_image(b: dict) -> str | None:
+        """Generate a character image for a real player in the current setting."""
+        pid = b.get("player_id")
+        if not pid:
+            return None
+        profile = get_player_profile(pid)
+        if not profile:
+            return None
+
+        role = profile.get("role", "Crew Member")
+        player_name = profile.get("player_name", "") or role
+        traits = profile.get("personality_traits", [])
+        avatar_desc = profile.get("avatar_description", "") or ""
+        species_desc = profile.get("species_description", "") or ""
+        setting = global_circ.get("setting", "ship interior")
+
+        prompt = (
+            f"Sci-fi character portrait of {player_name}, the {role}, "
+            f"placed in the current environment: {setting[:200]}. "
+            f"Character appearance: {avatar_desc[:200]}. "
+            f"{species_desc[:150]}"
+            f"Personality: {', '.join(traits) if traits else 'professional'}. "
+            f"The character is reacting to the situation around them. "
+            f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
+            f"detailed uniform, 4K quality, Star Trek aesthetic."
+        )
+
+        image_gen = create_image_generator()
+        url = await image_gen.generate_avatar_image(
+            prompt=prompt,
+            filename_prefix=f"char_day{day_num}_{game_id}_p{pid}",
+        )
+        if url:
+            save_game_image(
+                type="character",
+                image_url=url,
+                game_id=game_id,
+                day=day_num,
+                prompt=prompt,
+            )
+        return url
+
+    char_tasks = [_generate_char_image(b) for b in player_briefings]
+    if char_tasks:
+        char_urls = await asyncio.gather(*char_tasks, return_exceptions=True)
+        for b, url_or_err in zip(player_briefings, char_urls, strict=False):
+            if isinstance(url_or_err, str) and url_or_err:
+                b["character_image_url"] = url_or_err
+                personal_title = b.get("personal_title", "")
+                logger.info(
+                    f"[CHAR_IMAGE] Generated for player {b.get('player_id')}: "
+                    f"title='{personal_title[:60]}', url={url_or_err[:80]}"
+                )
+            elif isinstance(url_or_err, Exception):
+                logger.warning(
+                    f"[CHAR_IMAGE] Failed for player {b.get('player_id')}: {url_or_err}"
                 )
 
     # Step C: Analyze NPC choices

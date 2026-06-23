@@ -32,7 +32,9 @@ def get_db_connection():
 # Each migration runs once, even on fresh databases — so never reference
 # columns that may not exist yet (e.g. renaming a column that was already
 # created with the new name in the up-to-date CREATE TABLE).
-MIGRATIONS: list[tuple[int, str]] = []
+MIGRATIONS: list[tuple[int, str]] = [
+    (1, "ALTER TABLE player_profiles ADD COLUMN player_name TEXT DEFAULT NULL;"),
+]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
 
@@ -510,8 +512,8 @@ def create_player_profile(player_data: dict[str, Any]) -> dict[str, Any] | None:
         """INSERT OR REPLACE INTO player_profiles
            (player_id, avatar_url, avatar_description, role, role_description, personality_traits,
             game_id, last_poll, created_at, species, gender, species_description,
-            species_secondary, gender_secondary)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            species_secondary, gender_secondary, player_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             player_data["player_id"],
             player_data.get("avatar_url"),
@@ -527,6 +529,7 @@ def create_player_profile(player_data: dict[str, Any]) -> dict[str, Any] | None:
             player_data.get("species_description"),
             player_data.get("species_secondary"),
             player_data.get("gender_secondary"),
+            player_data.get("player_name"),
         ),
     )
 
@@ -567,6 +570,7 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
         "is_spectator": bool(row["is_spectator"])
         if row["is_spectator"] is not None
         else False,
+        "player_name": row["player_name"],
     }
 
 
