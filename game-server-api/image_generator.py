@@ -517,18 +517,12 @@ class ImageGenerator:
                 },
             },
             # Load CLIP Vision model (for IP-Adapter image encoding)
+            # NOTE: IPAdapterAdvanced expects the raw CLIP_VISION model,
+            # NOT the encoded output. The node handles encoding internally.
             "41": {
                 "class_type": "CLIPVisionLoader",
                 "inputs": {
                     "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
-                },
-            },
-            # Encode reference image with CLIP Vision
-            "42": {
-                "class_type": "CLIPVisionEncode",
-                "inputs": {
-                    "clip_vision": ["41", 0],
-                    "image": ["40", 0],
                 },
             },
             # Load IP-Adapter model
@@ -539,21 +533,16 @@ class ImageGenerator:
                 },
             },
             # Apply IP-Adapter to the base model (IPAdapterAdvanced)
-            # NOTE: IPAdapterApply was renamed to IPAdapter/Advanced in newer
-            # ComfyUI_IPAdapter_plus versions. IPAdapterAdvanced supports explicit
-            # clip_vision input and has more options.
-            #
-            # Fields: model, ipadapter, image (required)
-            #         weight, weight_type, combine_embeds, start_at, end_at,
-            #         embeds_scaling (required)
-            #         clip_vision, image_negative, attn_mask (optional)
+            # clip_vision receives the raw CLIP vision model (41),
+            # image receives the loaded reference image (40)
+            # IPAdapterAdvanced handles CLIP vision encoding internally.
             "44": {
                 "class_type": "IPAdapterAdvanced",
                 "inputs": {
                     "model": ["28", 0],
                     "ipadapter": ["43", 0],
                     "image": ["40", 0],
-                    "clip_vision": ["42", 0],
+                    "clip_vision": ["41", 0],
                     "weight": ipadapter_weight,
                     "weight_type": "linear",
                     "combine_embeds": "concat",

@@ -109,6 +109,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Track pending action image tasks keyed by (day, game_id) so that
+# _analyze_day_outcome can await them before pushing the outcome.
+# This ensures action images arrive BEFORE outcome text, not after.
+_pending_action_tasks: dict[tuple[int, str], set[asyncio.Task]] = {}
+
 
 def generate_game_id(length: int = 6) -> str:
     """Generate a unique alphanumeric game ID."""
@@ -1592,15 +1597,22 @@ async def submit_player_action(request: PlayerActionRequest):
     )
 
     # ── Generate comic panel for this player's action ────────────────
-    # Fire-and-forget: generates a comic-style image showing the player's
-    # character performing the chosen action, using their avatar as reference.
-    asyncio.create_task(
+    # Generates a comic-style image showing the player's character
+    # performing the chosen action, using their avatar as reference.
+    # Registered in _pending_action_tasks so _analyze_day_outcome can
+    # await completion before pushing the outcome.
+    action_key = (request.day, game_id)
+    action_task = asyncio.create_task(
         _generate_chosen_action_image(
             player_id=request.player_id,
             game_id=game_id,
             day=request.day,
             action_id=request.action_id,
         )
+    )
+    _pending_action_tasks.setdefault(action_key, set()).add(action_task)
+    action_task.add_done_callback(
+        lambda _t, k=action_key: _pending_action_tasks.get(k, set()).discard(_t)
     )
 
     # Check if all real players have now chosen — if so, trigger combined outcome analysis
@@ -2259,6 +2271,21 @@ async def _analyze_day_outcome(
         total_crew = len(all_briefings)  # all participants (players + NPCs)
         dead_this_turn = len(dead_crew)
         alive_crew = total_crew - dead_this_turn
+
+        # ── Await pending action image tasks ───────────────────────
+        # Ensures action images (showing the consequences of player
+        # actions) arrive BEFORE the outcome text, not after.
+        action_key = (day, game_id)
+        pending = list(_pending_action_tasks.pop(action_key, set()))
+        if pending:
+            logger.info(
+                f"[OUTCOME] Waiting for {len(pending)} action image(s) "
+                f"before pushing outcome for day {day}"
+            )
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    logger.warning(f"[OUTCOME] Action image task {i} failed: {r}")
 
         # Push outcome synchronously so message order is deterministic
         # (outcome arrives BEFORE new day briefings)

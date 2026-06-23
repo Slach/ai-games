@@ -1,5 +1,6 @@
 """HTTP server for receiving push briefings from game-server-api."""
 
+import asyncio
 import logging
 import os
 import re
@@ -16,6 +17,11 @@ from language import get_actions, get_bridge, get_current_day
 logger = logging.getLogger(__name__)
 
 PUSH_SERVER_PORT = int(os.getenv("PUSH_SERVER_PORT", "9090"))
+
+# Track pending action image deliveries so /push/outcome can wait for
+# action images to be sent to Telegram BEFORE the outcome message.
+# Key: (player_id, day) -> asyncio.Event()
+_pending_action_events: dict[tuple[int, int], asyncio.Event] = {}
 
 
 def _escape_md(text: str) -> str:
@@ -257,6 +263,11 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
             status=400,
         )
 
+    # Signal that this action image is being processed — outcome handler will wait.
+    # Use existing event if outcome handler already created a placeholder (race).
+    event_key = (player_id, day)
+    _pending_action_events.setdefault(event_key, asyncio.Event())
+
     try:
         logger.info(
             f"[PUSH_ACTION] Sending action image to player {player_id} for day {day}"
@@ -289,6 +300,11 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
         logger.error(f"[PUSH_ACTION] Failed to send to player {player_id}: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
+    finally:
+        # Signal that this action image has been processed (success or failure)
+        if event_key in _pending_action_events:
+            _pending_action_events[event_key].set()
+
 
 async def handle_push_outcome(request: web.Request) -> web.Response:
     """Handle POST /push/outcome from game-server-api.
@@ -320,6 +336,51 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             {"status": "error", "message": "Missing day or alive_players"},
             status=400,
         )
+
+    # ── Wait for pending action image deliveries ──────────────────
+    # Ensures action images arrive at Telegram API BEFORE the outcome
+    # message, even when aiohttp processes the outcome request
+    # concurrently with the action image request.
+    wait_events = []
+    for pid in alive_players:
+        event_key = (pid, day)
+        ev = _pending_action_events.get(event_key)
+        if ev is not None:
+            wait_events.append(ev)
+        else:
+            # Create a placeholder that may be set later (race: outcome
+            # request arrives before the action image handler started).
+            # If the action handler already registered an event, use it.
+            _pending_action_events.setdefault(event_key, asyncio.Event())
+            ev = _pending_action_events[event_key]
+            wait_events.append(ev)
+
+    if wait_events:
+        logger.info(
+            f"[PUSH_OUTCOME] Waiting for {len(wait_events)} action image delivery(es) "
+            f"before sending outcome for day {day}"
+        )
+        ACTION_WAIT_TIMEOUT = 30.0  # Max seconds to wait for action image delivery
+        results = await asyncio.gather(
+            *[
+                asyncio.wait_for(ev.wait(), timeout=ACTION_WAIT_TIMEOUT)
+                for ev in wait_events
+            ],
+            return_exceptions=True,
+        )
+        timed_out = 0
+        for r in results:
+            if isinstance(r, asyncio.TimeoutError):
+                timed_out += 1
+        if timed_out:
+            logger.warning(
+                f"[PUSH_OUTCOME] {timed_out}/{len(wait_events)} action image delivery(es) "
+                f"timed out, proceeding with outcome for day {day}"
+            )
+        else:
+            logger.info(
+                f"[PUSH_OUTCOME] All action images delivered, sending outcome for day {day}"
+            )
 
     # Build outcome message text
     current_msgs = get_current_day(language)

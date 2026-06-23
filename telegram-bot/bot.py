@@ -2698,7 +2698,10 @@ async def main():
         create_keyboard_fn=create_action_keyboard,
     )
 
-    # Start bot polling (aiogram)
+    # Start bot polling (aiogram).
+    # Delete webhook with drop_pending_updates to avoid re-processing
+    # old commands from Telegram's queue after bot restart/DB cleanup.
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
     # Clean up push server
