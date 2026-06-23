@@ -323,6 +323,21 @@ def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> b
         (player_id, role_key, game_id),
     )
     updated = cursor.rowcount > 0
+
+    if updated:
+        # If a real player takes a role that had an active NPC filling it,
+        # deactivate that NPC — the player replaces the NPC outright.
+        cursor.execute(
+            "UPDATE npc_profiles SET is_active = 0 WHERE role_key = ? AND game_id = ? AND is_active = 1",
+            (role_key, game_id),
+        )
+        deactivated = cursor.rowcount
+        if deactivated:
+            logger.info(
+                f"[ROLE] Player {player_id} replaced NPC(s) for role '{role_key}' "
+                f"— deactivated {deactivated} NPC(s)"
+            )
+
     conn.commit()
     conn.close()
     return updated

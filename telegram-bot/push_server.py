@@ -358,9 +358,16 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
     Delivers the combined day outcome (narrative + status + image) to all alive players.
     This is called after _analyze_day_outcome completes.
+
+    Dedup: tracks (player_id, day) pairs so that retries or duplicate calls
+    do not send the same outcome twice to the same player.
+    New players (not yet tracked) still receive the outcome on retry.
     """
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
+    last_sent_per_player: dict[int, int] = request.app.setdefault(
+        "last_sent_outcome_day", {}
+    )
 
     try:
         payload = await request.json()
@@ -370,6 +377,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         )
 
     day = payload.get("day")
+
     outcome_text = payload.get("outcome_text", "")
     alive_players = payload.get("alive_players", [])
     outcome_image_url = payload.get("outcome_image_url")
@@ -484,6 +492,10 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     sent_player_ids: list[int] = []
 
     for player_id in alive_players:
+        # Per-player dedup: skip if this player already got outcome for this day
+        if last_sent_per_player.get(player_id) == day:
+            continue
+
         try:
             # Send outcome image first if available
             if outcome_image_url:
@@ -502,6 +514,8 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             )
 
             sent_player_ids.append(player_id)
+            # Mark this player as having received this day's outcome
+            last_sent_per_player[player_id] = day
             logger.info(
                 f"[PUSH_OUTCOME] Outcome for day {day} sent to player {player_id}"
             )

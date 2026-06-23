@@ -701,7 +701,7 @@ async def _broadcast_new_player(
     """Notify existing players about a new crew member joining."""
     try:
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
-        player_name = str(new_player_id)  # Use player ID as name for now
+        player_name = profile.get("player_name", "") or str(new_player_id)
         notify_text = onboarding_msgs["new_player_joined"].format(
             player_name=player_name,
             role=escape_markdown(profile.get("role", "Crew Member")),
@@ -759,7 +759,7 @@ async def _broadcast_game_started(
     try:
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
         bridge_msgs = lang.get_bridge(BOT_LANGUAGE)
-        player_name = str(new_player_id)
+        player_name = profile.get("player_name", "") or str(new_player_id)
 
         # Fetch bridge image and mission info once for all players
         mission = None
@@ -1123,7 +1123,6 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             await message.edit_reply_markup(reply_markup=None)
 
         # Ask for player name first
-        msgs = lang.get_onboarding(BOT_LANGUAGE)
         name_question = (
             "🗣 **Как вас зовут?**\n\nНапишите имя вашего персонажа (или своё настоящее имя):"
             if BOT_LANGUAGE == "ru"

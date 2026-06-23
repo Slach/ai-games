@@ -24,7 +24,7 @@ TELEGRAM_BOT_OUTCOME_URL = os.getenv(
 )
 PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
 PUSH_BASE_DELAY = float(os.getenv("PUSH_BASE_DELAY", "1.0"))
-PUSH_REQUEST_TIMEOUT = int(os.getenv("PUSH_REQUEST_TIMEOUT", "30"))
+PUSH_REQUEST_TIMEOUT = int(os.getenv("PUSH_REQUEST_TIMEOUT", "120"))
 
 
 async def push_briefings(
