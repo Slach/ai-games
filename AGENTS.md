@@ -66,6 +66,30 @@ for local debugging without Telegram bot.
 - **Renaming files** - Always use `git mv <old> <new>` instead of `mv` + `git rm`
 to preserve file history.
 
+## Useful Commands
+
+### Apply code changes without wiping data (mutations, business logic, etc.)
+
+Stops only the target containers (preserving DB volumes and ComfyUI outputs), rebuilds them from the current source, and starts fresh containers.
+
+```bash
+docker compose up -d --force-recreate telegram-bot game-master game-server-api
+```
+
+### Full wipe — destroy all game data, ComfyUI outputs, and rebuild from scratch
+
+```bash
+docker compose down && rm -rfv ./*/*.db && rm -fv ./comfyui/output/*_.png && docker compose up -d --build
+```
+
+After running this, you must go through the admin panel to start a new game day (`/admin start-game`), since all sessions/game state is deleted.
+
+### Dump all service logs for analysis (e.g. attach to an LLM)
+
+```bash
+docker compose logs -t > /tmp/compose.logs
+```
+
 ## Current Working Features
 
 ✅ **Fully Functional:**
