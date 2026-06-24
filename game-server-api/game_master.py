@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from database import SHIP_ROLE_KEYS
 from openai import OpenAI
+from prompts import COMBINED_OUTCOME_SCHEMA, build_combined_outcome_prompts
 from openai.types.chat import (
     ChatCompletionSystemMessageParam,
     ChatCompletionUserMessageParam,
@@ -161,9 +162,7 @@ ONBOARDING_OPTIONS_COUNT = int(os.getenv("ONBOARDING_OPTIONS_COUNT", "5"))
 # the character is considered a hybrid. Range: 0.0 (always hybrid) to 1.0 (only tie).
 # Minimum ratio of second-place tag count to first-place for hybrid detection.
 # Range: 0.0 (always hybrid) to 1.0 (only tie).
-GAME_SPECIES_HYBRID_THRESHOLD = float(
-    os.getenv("GAME_SPECIES_HYBRID_THRESHOLD", "0.25")
-)
+GAME_SPECIES_HYBRID_THRESHOLD = float(os.getenv("GAME_SPECIES_HYBRID_THRESHOLD", "0.25"))
 GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
 
 
@@ -589,131 +588,6 @@ PLAYER_BRIEFING_CHOICES_SCHEMA = {
     },
 }
 
-COMBINED_OUTCOME_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "combined_outcome",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "outcome_narrative": {
-                    "type": "string",
-                    "description": "A coherent narrative describing what actually happened as a result of all choices made (2-3 paragraphs)",
-                },
-                "ship_status_change": {
-                    "type": "string",
-                    "description": "Narrative description of how the ship's condition changed",
-                },
-                "crew_morale_change": {
-                    "type": "string",
-                    "description": "How crew morale shifted",
-                },
-                "next_day_hook": {
-                    "type": "string",
-                    "description": "A teaser or hook for the next day's story",
-                },
-                "mission_progress": {
-                    "type": "array",
-                    "description": "Mission stage progress changes (positive = advance, negative = regression/setback)",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "stage": {"type": "integer"},
-                            "points": {
-                                "type": "integer",
-                                "description": "Progress points for this stage. Positive = advance toward goal, Negative = regression/setback",
-                            },
-                        },
-                        "required": ["stage", "points"],
-                        "additionalProperties": False,
-                    },
-                },
-                "dead_crew_members": {
-                    "type": "array",
-                    "description": "List of [name, role] who died this turn",
-                    "items": {
-                        "type": "array",
-                        "items": [{"type": "string"}, {"type": "string"}],
-                    },
-                },
-                "ship_destroyed": {
-                    "type": "boolean",
-                    "description": "Whether the ship was destroyed",
-                },
-                "ship_hull_integrity": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Ship hull structural integrity percentage (0 = destroyed, 100 = pristine)",
-                },
-                "ship_shields": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Shield strength percentage (0 = depleted, 100 = full)",
-                },
-                "ship_systems_offline": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of ship systems that are damaged/offline (e.g. 'warp drive', 'life support', 'weapons', 'communications', 'navigation')",
-                },
-                "crew_injured": {
-                    "type": "array",
-                    "description": "List of [name, role, severity] who were injured this turn. Severity: 'critical', 'moderate', 'minor'",
-                    "items": {
-                        "type": "array",
-                        "items": [
-                            {"type": "string"},
-                            {"type": "string"},
-                            {"type": "string"},
-                        ],
-                    },
-                },
-                "personal_outcomes": {
-                    "type": "array",
-                    "description": "Personal consequences for each crew member who made a decision this turn",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "character_name": {
-                                "type": "string",
-                                "description": "Character name (player name or NPC name)",
-                            },
-                            "role": {
-                                "type": "string",
-                                "description": "Role on the ship",
-                            },
-                            "outcome_text": {
-                                "type": "string",
-                                "description": "Personal consequence for this character (1-2 sentences)",
-                            },
-                        },
-                        "required": ["character_name", "role", "outcome_text"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "required": [
-                "outcome_narrative",
-                "ship_status_change",
-                "crew_morale_change",
-                "next_day_hook",
-                "mission_progress",
-                "dead_crew_members",
-                "ship_destroyed",
-                "ship_hull_integrity",
-                "ship_shields",
-                "ship_systems_offline",
-                "crew_injured",
-                "personal_outcomes",
-            ],
-            "additionalProperties": False,
-        },
-    },
-}
-
-
 MISSION_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -879,10 +753,7 @@ class GameMasterAgent:
         )
 
         self._init_default_npcs()
-        logger.info(
-            f"GameMasterAgent initialized: model={self.llm_model}, "
-            f"language={language}, max_tokens={self.llm_max_tokens}"
-        )
+        logger.info(f"GameMasterAgent initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
 
     def _init_default_npcs(self):
         """Initialize default NPCs with distinct personalities"""
@@ -928,9 +799,7 @@ class GameMasterAgent:
         """
         if max_tokens is None:
             max_tokens = self.llm_max_tokens
-        messages: list[
-            ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam
-        ] = [
+        messages: list[ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
@@ -940,9 +809,7 @@ class GameMasterAgent:
         logger.info(f"Model: {self.llm_model}")
         logger.info(f"Temperature: {temperature}")
         logger.info(f"Max tokens: {max_tokens}")
-        logger.info(
-            f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}"
-        )
+        logger.info(f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}")
         logger.info("--- SYSTEM PROMPT ---")
         for line in system_prompt.split("\n"):
             logger.info(line)
@@ -970,43 +837,28 @@ class GameMasterAgent:
             logger.info("=== LLM RESPONSE (structured) ===")
             logger.info(f"Finish reason: {finish_reason}")
             if response.usage:
-                logger.info(
-                    f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}"
-                )
+                logger.info(f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}")
             logger.info("--- RESPONSE CONTENT ---")
             for line in (content or "").split("\n"):
                 logger.info(line)
             logger.info("=== END LLM RESPONSE ===")
 
             if content is None:
-                raise ValueError(
-                    f"LLM returned content=None. Finish reason: {finish_reason}. "
-                    f"Usage: {response.usage}"
-                )
+                raise ValueError(f"LLM returned content=None. Finish reason: {finish_reason}. Usage: {response.usage}")
             return json.loads(content)
 
         except Exception as e:
-            logger.warning(
-                f"Structured output failed ({e}), falling back to plain JSON extraction"
-            )
+            logger.warning(f"Structured output failed ({e}), falling back to plain JSON extraction")
             # Log raw response from the first attempt if available
             if response is not None:
                 try:
                     first_content = response.choices[0].message.content
-                    logger.warning(
-                        f"Raw LLM response on first attempt:\n"
-                        f"type(content)={type(first_content).__name__}\n"
-                        f"content={repr(first_content)}\n"
-                        f"finish_reason={response.choices[0].finish_reason}"
-                    )
+                    logger.warning(f"Raw LLM response on first attempt:\ntype(content)={type(first_content).__name__}\ncontent={repr(first_content)}\nfinish_reason={response.choices[0].finish_reason}")
                 except Exception as log_err:
                     logger.warning(f"Could not log raw response: {log_err}")
 
             # Fallback: ask for JSON in plain text, then parse
-            json_instruction = (
-                "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no code blocks, no explanation. "
-                "Pure JSON only."
-            )
+            json_instruction = "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no code blocks, no explanation. Pure JSON only."
 
             # Log fallback request (with json instruction appended)
             logger.info("=== LLM REQUEST (fallback text) ===")
@@ -1036,11 +888,7 @@ class GameMasterAgent:
             logger.info("=== END LLM RESPONSE (fallback) ===")
 
             if content is None or content.strip() == "":
-                raise ValueError(
-                    f"LLM returned empty content on fallback call. "
-                    f"Finish reason: {finish_reason}. "
-                    f"Raw response:\n{str(response)}"
-                ) from e
+                raise ValueError(f"LLM returned empty content on fallback call. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
 
             content = content.strip()
             # Clean and parse
@@ -1048,11 +896,7 @@ class GameMasterAgent:
             try:
                 return json.loads(content)
             except json.JSONDecodeError as parse_err:
-                logger.error(
-                    f"Fallback JSON parse failed: {parse_err}\n"
-                    f"Raw content:\n{content}\n"
-                    f"Finish reason: {finish_reason}"
-                )
+                logger.error(f"Fallback JSON parse failed: {parse_err}\nRaw content:\n{content}\nFinish reason: {finish_reason}")
                 raise
 
     def _call_llm_text(
@@ -1063,9 +907,7 @@ class GameMasterAgent:
         max_tokens: int = 2048,
     ) -> str:
         """Call LLM and return raw text response (for free-form text)."""
-        messages: list[
-            ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam
-        ] = [
+        messages: list[ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
@@ -1098,9 +940,7 @@ class GameMasterAgent:
         logger.info("=== LLM RESPONSE (text) ===")
         logger.info(f"Finish reason: {finish_reason}")
         if response.usage:
-            logger.info(
-                f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}"
-            )
+            logger.info(f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}")
         logger.info("--- RESPONSE CONTENT ---")
         for line in content.split("\n"):
             logger.info(line)
@@ -1136,25 +976,13 @@ class GameMasterAgent:
                 attention based on recent onboarding history.
                 Example: "navigator, communications_officer, xenobiologist"
         """
-        logger.info(
-            f"Generating onboarding questions, language: {self.language}, "
-            f"hint: {underrepresented_hint or 'none'}"
-        )
+        logger.info(f"Generating onboarding questions, language: {self.language}, hint: {underrepresented_hint or 'none'}")
 
         questions_count = ONBOARDING_QUESTIONS_COUNT
         options_count = ONBOARDING_OPTIONS_COUNT
         role_keys_str = ", ".join(SHIP_ROLE_KEYS)
         # Build example role_scores dynamically from actual role keys
-        _example = {
-            k: (
-                3
-                if k == "chief_engineer"
-                else 1
-                if k in ("science_officer", "pilot")
-                else 0
-            )
-            for k in SHIP_ROLE_KEYS
-        }
+        _example = {k: (3 if k == "chief_engineer" else 1 if k in ("science_officer", "pilot") else 0) for k in SHIP_ROLE_KEYS}
         example_role_scores_json = json.dumps(_example, ensure_ascii=False)
 
         if self.language == "ru":
@@ -1184,8 +1012,7 @@ class GameMasterAgent:
                 + (
                     underrepresented_hint
                     if not underrepresented_hint
-                    else f"🎯 ОСОБОЕ УКАЗАНИЕ: В предыдущих сессиях следующие роли получали меньше всего очков: {underrepresented_hint}. "
-                    f"Удели им особое внимание при составлении вопросов — создай для них минимум по 2-3 интересных варианта ответов.\n\n"
+                    else f"🎯 ОСОБОЕ УКАЗАНИЕ: В предыдущих сессиях следующие роли получали меньше всего очков: {underrepresented_hint}. Удели им особое внимание при составлении вопросов — создай для них минимум по 2-3 интересных варианта ответов.\n\n"
                 )
                 + "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
                 "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
@@ -1261,18 +1088,14 @@ class GameMasterAgent:
                     continue
                 # Skip overly short labels (single letters, "A", "B", etc.)
                 if len(label.strip()) < 5:
-                    logger.warning(
-                        f"Skipping short option label: '{label}' in question: {q.get('text', '')}"
-                    )
+                    logger.warning(f"Skipping short option label: '{label}' in question: {q.get('text', '')}")
                     continue
                 seen_labels.add(label)
                 unique_options.append(opt)
 
             # If we filtered out too many, keep original options
             if len(unique_options) < 2 and len(options) >= 2:
-                logger.warning(
-                    f"Question had invalid options, using original: {q.get('text', '')}"
-                )
+                logger.warning(f"Question had invalid options, using original: {q.get('text', '')}")
                 unique_options = options
 
             q["options"] = unique_options
@@ -1303,11 +1126,7 @@ class GameMasterAgent:
         Returns:
             Dict with role_key and reasoning (score breakdown).
         """
-        logger.info(
-            f"[ROLE] Assigning role from {len(answers)} answers, "
-            f"{len(available_roles)} roles available, "
-            f"questions provided: {questions is not None}"
-        )
+        logger.info(f"[ROLE] Assigning role from {len(answers)} answers, {len(available_roles)} roles available, questions provided: {questions is not None}")
 
         if not available_roles:
             raise ValueError("No roles available")
@@ -1321,32 +1140,21 @@ class GameMasterAgent:
 
             for question_id, selected_label in answers.items():
                 # Answers dict keys are strings after json.loads from DB (SQLite JSON stores all keys as strings)
-                qid = (
-                    int(question_id)
-                    if not isinstance(question_id, int)
-                    else question_id
-                )
+                qid = int(question_id) if not isinstance(question_id, int) else question_id
                 q_data = question_map.get(qid)
                 if not q_data:
-                    logger.warning(
-                        f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data"
-                    )
+                    logger.warning(f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data")
                     continue
 
                 # Find the selected option by matching label
                 selected_option = None
                 for opt in q_data.get("options", []):
-                    if (
-                        opt.get("label") == selected_label
-                        or opt.get("value") == selected_label
-                    ):
+                    if opt.get("label") == selected_label or opt.get("value") == selected_label:
                         selected_option = opt
                         break
 
                 if not selected_option:
-                    logger.warning(
-                        f"[ROLE] Answer '{selected_label}' not found in options for Q{question_id}"
-                    )
+                    logger.warning(f"[ROLE] Answer '{selected_label}' not found in options for Q{question_id}")
                     continue
 
                 # Add role_scores from the selected option
@@ -1357,20 +1165,12 @@ class GameMasterAgent:
 
         # Sort available roles by their accumulated points (descending)
         available_keys = {r["role_key"] for r in available_roles}
-        scored_available = [
-            (key, role_points.get(key, 0))
-            for key in sorted(
-                role_points.keys(), key=lambda k: role_points[k], reverse=True
-            )
-            if key in available_keys
-        ]
+        scored_available = [(key, role_points.get(key, 0)) for key in sorted(role_points.keys(), key=lambda k: role_points[k], reverse=True) if key in available_keys]
 
         if not scored_available:
             # Fallback: pick first available
             best_key = available_roles[0]["role_key"]
-            logger.warning(
-                f"[ROLE] No scored roles available, falling back to {best_key}"
-            )
+            logger.warning(f"[ROLE] No scored roles available, falling back to {best_key}")
         else:
             best_key, best_score = scored_available[0]
 
@@ -1397,6 +1197,8 @@ class GameMasterAgent:
                 "Название должно быть в формате: название корабля + подзаголовок миссии. "
                 "Пример стиля: «Звёздный Крейсер Аврора: За горизонтом известного». "
                 "Приветствие должно быть атмосферным — будто игрок заходит на борт корабля. "
+                "ВАЖНО: не используй символы звёздочка (*) или подчёркивание (_) в тексте приветствия — "
+                "они сломают форматирование при отправке игроку. Используй только обычный текст. "
                 "Все тексты на русском языке."
             )
         else:
@@ -1406,6 +1208,8 @@ class GameMasterAgent:
                 "Title format: ship name + mission tagline. "
                 "Example style: 'Star Cruiser Aurora: Beyond the Known Horizon'. "
                 "The welcome should be atmospheric — as if the player is stepping aboard the ship. "
+                "IMPORTANT: do not use asterisk (*) or underscore (_) characters in the welcome text — "
+                "they will break formatting when sent to the player. Use plain text only. "
                 "All text in English."
             )
 
@@ -1421,19 +1225,12 @@ class GameMasterAgent:
 
     # ============== Daily Story ==============
 
-    def generate_daily_story(
-        self, day: int, previous_summary: str = "", player_role: str = ""
-    ) -> GameStory:
+    def generate_daily_story(self, day: int, previous_summary: str = "", player_role: str = "") -> GameStory:
         """Generate daily story using LLM with json_schema."""
-        logger.info(
-            f"[STORY] Starting story generation for Day {day}, language: {self.language}"
-        )
+        logger.info(f"[STORY] Starting story generation for Day {day}, language: {self.language}")
 
         if self.language == "ru":
-            system = (
-                "Ты — Game Master космической исследовательской игры в стиле Star Trek. "
-                "Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
-            )
+            system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
             player_role_display = player_role or "Член экипажа"
             user = (
                 f"День: {day}\n"
@@ -1446,10 +1243,7 @@ class GameMasterAgent:
                 "Всё на русском языке."
             )
         else:
-            system = (
-                "You are a Game Master for a Star Trek-style space exploration game. "
-                "Create compelling daily episodes with conflicts and player choices."
-            )
+            system = "You are a Game Master for a Star Trek-style space exploration game. Create compelling daily episodes with conflicts and player choices."
             player_role_display = player_role or "Crew member"
             user = (
                 f"Day: {day}\n"
@@ -1475,9 +1269,7 @@ class GameMasterAgent:
             narrative=parsed.get("narrative", ""),
             decision_points=parsed.get("decision_points", []),
         )
-        logger.info(
-            f"[STORY] Story generated: setting='{story.setting}...', {len(story.decision_points)} actions"
-        )
+        logger.info(f"[STORY] Story generated: setting='{story.setting}...', {len(story.decision_points)} actions")
         return story
 
     # ============== NPC Dialogues ==============
@@ -1497,9 +1289,7 @@ class GameMasterAgent:
                 Each dict should have 'name' (display name) and 'role'.
                 When provided, replaces the default NPC_TEMPLATES system.
         """
-        logger.info(
-            f"[NPC] Starting NPC dialogue generation, language: {self.language}"
-        )
+        logger.info(f"[NPC] Starting NPC dialogue generation, language: {self.language}")
 
         if self.language == "ru":
             lang_note = "Отвечай на русском."
@@ -1512,12 +1302,7 @@ class GameMasterAgent:
             # Use real crew profiles from the database
             dialogue_targets = []
             for m in crew_members:
-                name = (
-                    m.get("name")
-                    or m.get("npc_name")
-                    or m.get("player_name")
-                    or m.get("role", "Crew")
-                )
+                name = m.get("name") or m.get("npc_name") or m.get("player_name") or m.get("role", "Crew")
                 role = m.get("role", "Crew Member")
                 species = m.get("species", "") or ""
                 traits = m.get("personality_traits", []) or []
@@ -1558,24 +1343,12 @@ class GameMasterAgent:
                 logger.info(f"[NPC] Generating dialogue for {npc_name} ({npc_role})")
 
                 if "speech_style" in target:
-                    personality_block = (
-                        f"Personality: {target['personality']}\n"
-                        f"Speech style: {target['speech_style']}\n"
-                    )
+                    personality_block = f"Personality: {target['personality']}\nSpeech style: {target['speech_style']}\n"
                 else:
-                    personality_block = (
-                        f"Personality: {target['personality']}\n"
-                        f"Species: {target.get('species', '')}\n"
-                    )
+                    personality_block = f"Personality: {target['personality']}\nSpecies: {target.get('species', '')}\n"
 
-                system = (
-                    f"You are {npc_name}, {npc_role}.\n{personality_block}{lang_note}"
-                )
-                user = (
-                    f"Game context: {story.narrative}\n"
-                    f"Player role: {player_role_display}\n\n"
-                    f"Generate a short in-character reaction (1-2 sentences)."
-                )
+                system = f"You are {npc_name}, {npc_role}.\n{personality_block}{lang_note}"
+                user = f"Game context: {story.narrative}\nPlayer role: {player_role_display}\n\nGenerate a short in-character reaction (1-2 sentences)."
 
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -1603,13 +1376,9 @@ class GameMasterAgent:
 
     # ============== Content Prompts ==============
 
-    def generate_content_prompts(
-        self, story: GameStory, dialogues: list[NPCDialogue], player_role: str
-    ) -> ContentPrompts:
+    def generate_content_prompts(self, story: GameStory, dialogues: list[NPCDialogue], player_role: str) -> ContentPrompts:
         """Generate prompts for content generation (image, video, comic)."""
-        logger.info(
-            f"[CONTENT] Starting content prompt generation, language: {self.language}"
-        )
+        logger.info(f"[CONTENT] Starting content prompt generation, language: {self.language}")
 
         if self.language == "ru":
             lang_note = "Промпты пиши на английском (для генерации изображений)."
@@ -1617,12 +1386,7 @@ class GameMasterAgent:
             lang_note = "Write prompts in English for image generation."
 
         system = "You are an AI art prompt engineer. Generate detailed, high-quality prompts for image/video generation."
-        user = (
-            f"Story: {story.narrative}\n"
-            f"Player role: {player_role}\n\n"
-            f"Generate content prompts for image, video, 3D scene, and comic strip.\n"
-            f"{lang_note}"
-        )
+        user = f"Story: {story.narrative}\nPlayer role: {player_role}\n\nGenerate content prompts for image, video, 3D scene, and comic strip.\n{lang_note}"
 
         parsed = self._call_llm(
             system_prompt=system,
@@ -1642,30 +1406,16 @@ class GameMasterAgent:
 
     # ============== Player Message ==============
 
-    def process_player_message(
-        self, player_id: int, message: str, player_profile: dict[str, Any]
-    ) -> str:
+    def process_player_message(self, player_id: int, message: str, player_profile: dict[str, Any]) -> str:
         """Process a player message and generate Game Master response."""
         player_role = player_profile.get("role", "Crew Member")
 
         if self.language == "ru":
-            system = (
-                "Ты — Game Master космической исследовательской игры в стиле Star Trek. "
-                "Отвечай в стиле Game Master, направляя叙事. "
-                "Будь увлекательным и атмосферным."
-            )
+            system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Отвечай в стиле Game Master, направляя叙事. Будь увлекательным и атмосферным."
         else:
-            system = (
-                "You are the Game Master of a Star Trek-style space exploration game. "
-                "Respond in character as the Game Master, guiding the narrative forward. "
-                "Keep it engaging and atmospheric."
-            )
+            system = "You are the Game Master of a Star Trek-style space exploration game. Respond in character as the Game Master, guiding the narrative forward. Keep it engaging and atmospheric."
 
-        user = (
-            f"Player (role: {player_role}) sent this message:\n\n"
-            f'"{message}"\n\n'
-            "Respond in character as Game Master."
-        )
+        user = f'Player (role: {player_role}) sent this message:\n\n"{message}"\n\nRespond in character as Game Master.'
 
         try:
             parsed = self._call_llm(
@@ -1692,15 +1442,12 @@ class GameMasterAgent:
             },
             "humanoid": {
                 "intro": "humanoid alien character avatar",
-                "appearance": "- Character appearance: humanoid anatomy with subtle alien features "
-                "(unusual skin/hair/eye color, distinct ears/ridges, etc.)",
+                "appearance": "- Character appearance: humanoid anatomy with subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.)",
                 "framing": "- Portrait style, upper body",
             },
             "non_humanoid": {
                 "intro": "non-humanoid alien character",
-                "appearance": "- The character's ACTUAL physical form from the description — "
-                "alien anatomy (tentacles, carapace, exoskeleton, multiple limbs, etc.)\n"
-                "- Do NOT add human features (face, hair, eyes) unless explicitly described",
+                "appearance": "- The character's ACTUAL physical form from the description — alien anatomy (tentacles, carapace, exoskeleton, multiple limbs, etc.)\n- Do NOT add human features (face, hair, eyes) unless explicitly described",
                 "framing": "- Full body or 3/4 view showing the alien physiology",
             },
             "energy": {
@@ -1786,9 +1533,7 @@ spatial presence\n"
         )
 
         avatar_prompt = parsed.get("avatar_prompt", "")
-        logger.info(
-            f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}..."
-        )
+        logger.info(f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}...")
         return avatar_prompt
 
     def generate_chosen_action_prompt(
@@ -1901,10 +1646,7 @@ spatial presence\n"
                 continue
             selected_option = None
             for opt in q_data.get("options", []):
-                if (
-                    opt.get("value") == selected_value
-                    or opt.get("label") == selected_value
-                ):
+                if opt.get("value") == selected_value or opt.get("label") == selected_value:
                     selected_option = opt
                     break
             if not selected_option:
@@ -1924,9 +1666,7 @@ spatial presence\n"
 
         Returns dict with primary species, secondary (for hybrid), and hybrid flag.
         """
-        tag_counts = GameMasterAgent._count_tags_from_answers(
-            answers, "species_tags", questions
-        )
+        tag_counts = GameMasterAgent._count_tags_from_answers(answers, "species_tags", questions)
         if not tag_counts:
             return {"primary": "", "secondary": "", "hybrid": False}
 
@@ -1937,9 +1677,7 @@ spatial presence\n"
         hybrid = False
         if len(sorted_tags) > 1:
             second_count = sorted_tags[1][1]
-            if second_count == primary_count or (
-                second_count >= max(2, primary_count * GAME_SPECIES_HYBRID_THRESHOLD)
-            ):
+            if second_count == primary_count or (second_count >= max(2, primary_count * GAME_SPECIES_HYBRID_THRESHOLD)):
                 secondary = sorted_tags[1][0]
                 hybrid = True
 
@@ -1954,9 +1692,7 @@ spatial presence\n"
 
         Returns dict with primary gender, secondary (for hybrid), and hybrid flag.
         """
-        tag_counts = GameMasterAgent._count_tags_from_answers(
-            answers, "gender_tags", questions
-        )
+        tag_counts = GameMasterAgent._count_tags_from_answers(answers, "gender_tags", questions)
         if not tag_counts:
             return {"primary": "", "secondary": "", "hybrid": False}
 
@@ -1967,9 +1703,7 @@ spatial presence\n"
         hybrid = False
         if len(sorted_tags) > 1:
             second_count = sorted_tags[1][1]
-            if second_count == primary_count or (
-                second_count >= max(2, primary_count * GAME_GENDER_HYBRID_THRESHOLD)
-            ):
+            if second_count == primary_count or (second_count >= max(2, primary_count * GAME_GENDER_HYBRID_THRESHOLD)):
                 secondary = sorted_tags[1][0]
                 hybrid = True
 
@@ -1992,16 +1726,8 @@ spatial presence\n"
         gender_secondary = gender_result.get("secondary", "")
 
         if self.language == "ru":
-            species_note = (
-                f"Тип расы: {species_display}"
-                + (f" (гибрид с {species_secondary})" if species_hybrid else "")
-                + f"\nТип пола: {gender_display}"
-                + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
-            )
-            system = (
-                "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. "
-                "Опиши, как выглядят и ощущают себя существа такого типа. Будь атмосферным и детальным."
-            )
+            species_note = f"Тип расы: {species_display}" + (f" (гибрид с {species_secondary})" if species_hybrid else "") + f"\nТип пола: {gender_display}" + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
+            system = "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. Опиши, как выглядят и ощущают себя существа такого типа. Будь атмосферным и детальным."
             user = (
                 f"Создай яркое нарративное описание персонажа для космической игры Star Trek.\n\n"
                 f"Роль: {role}\n"
@@ -2013,16 +1739,8 @@ spatial presence\n"
                 f"Текст на русском языке, 3-5 предложений, атмосферный и кинематографичный."
             )
         else:
-            species_note = (
-                f"Species type: {species_display}"
-                + (f" (hybrid with {species_secondary})" if species_hybrid else "")
-                + f"\nGender type: {gender_display}"
-                + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
-            )
-            system = (
-                "You are a creative sci-fi writer crafting descriptions of alien characters. "
-                "Describe how beings of this type look and feel. Be atmospheric and detailed."
-            )
+            species_note = f"Species type: {species_display}" + (f" (hybrid with {species_secondary})" if species_hybrid else "") + f"\nGender type: {gender_display}" + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
+            system = "You are a creative sci-fi writer crafting descriptions of alien characters. Describe how beings of this type look and feel. Be atmospheric and detailed."
             user = (
                 f"Create a vivid narrative description of a character for a Star Trek-style space game.\n\n"
                 f"Role: {role}\n"
@@ -2047,9 +1765,7 @@ spatial presence\n"
             return species_desc
         except Exception as e:
             logger.warning(f"[SPECIES] LLM description failed, using fallback: {e}")
-            return self._fallback_species_gender_description(
-                species_display, gender_display, species_hybrid, species_secondary, role
-            )
+            return self._fallback_species_gender_description(species_display, gender_display, species_hybrid, species_secondary, role)
 
     def _fallback_species_gender_description(
         self,
@@ -2069,12 +1785,7 @@ spatial presence\n"
                 "cybernetic": "Ты — кибернетическая форма жизни. Части тебя можно чинить, улучшать и переносить.",
                 "symbiotic": 'Ты — симбиотическая форма жизни. Твоё "я" рождается в союзе нескольких существ.',
             }
-            if (
-                hybrid
-                and secondary
-                and species_type in species_map
-                and secondary in species_map
-            ):
+            if hybrid and secondary and species_type in species_map and secondary in species_map:
                 base = f"{species_map.get(species_type, species_type)} В тебе также есть черты: {species_map.get(secondary, secondary).lower()}"
             else:
                 base = species_map.get(species_type, f"Твой вид — {species_type}.")
@@ -2089,12 +1800,7 @@ spatial presence\n"
                 "cybernetic": "You are a cybernetic life form. Parts of you can be repaired, upgraded, and transferred.",
                 "symbiotic": 'You are a symbiotic life form. Your "self" is born from the union of several beings.',
             }
-            if (
-                hybrid
-                and secondary
-                and species_type in species_map
-                and secondary in species_map
-            ):
+            if hybrid and secondary and species_type in species_map and secondary in species_map:
                 base = f"{species_map.get(species_type, species_type)} You also bear traits of: {species_map.get(secondary, secondary)}."
             else:
                 base = species_map.get(species_type, f"Your species is {species_type}.")
@@ -2127,10 +1833,7 @@ spatial presence\n"
 
         # Build aggregated tag description from accumulated tags
         sorted_tags = sorted(accumulated_tags.items(), key=lambda x: x[1], reverse=True)
-        accumulated_desc = " and ".join(
-            f"{tag} ({count}){' times' if count > 1 else ''}"
-            for tag, count in sorted_tags[:3]
-        )
+        accumulated_desc = " and ".join(f"{tag} ({count}){' times' if count > 1 else ''}" for tag, count in sorted_tags[:3])
 
         options_text = ""
         for opt in options:
@@ -2138,9 +1841,7 @@ spatial presence\n"
             opt_label = opt.get("label", "")
             tags = opt.get(tag_type, [])
             tag_str = ", ".join(tags)
-            options_text += (
-                f"  - value='{opt_value}' label='{opt_label}' tags: {tag_str}\n"
-            )
+            options_text += f"  - value='{opt_value}' label='{opt_label}' tags: {tag_str}\n"
 
         system_prompt = (
             "You are a creative sci-fi portrait prompt writer. "
@@ -2185,14 +1886,10 @@ spatial presence\n"
         prompts_dict = _get_prompts_from_llm(user_prompt)
 
         # 2. Retry for missing options
-        missing_options = [
-            opt.get("value") for opt in options if opt.get("value") not in prompts_dict
-        ]
+        missing_options = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
 
         if missing_options:
-            logger.info(
-                f"[OPTION_PROMPTS] Missing {len(missing_options)} prompts. Retrying for: {missing_options}"
-            )
+            logger.info(f"[OPTION_PROMPTS] Missing {len(missing_options)} prompts. Retrying for: {missing_options}")
             retry_user_prompt = (
                 f"You previously missed some options. Please generate prompts ONLY for these "
                 f"specific option values: {missing_options}. "
@@ -2207,40 +1904,28 @@ spatial presence\n"
             prompts_dict.update(retry_prompts)
 
         # 3. Final fallback for any remaining missing options
-        final_missing = [
-            opt.get("value") for opt in options if opt.get("value") not in prompts_dict
-        ]
+        final_missing = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
         if final_missing:
-            logger.warning(
-                f"[OPTION_PROMPTS] Still missing {len(final_missing)} prompts after retry. Using fallback."
-            )
+            logger.warning(f"[OPTION_PROMPTS] Still missing {len(final_missing)} prompts after retry. Using fallback.")
             for opt in options:
                 opt_val = opt.get("value")
                 if opt_val not in prompts_dict:
                     tags = opt.get(tag_type, [])
                     tag_str = ", ".join(tags) if tags else "character"
-                    prompts_dict[opt_val] = (
-                        f"Star Trek character portrait, {tag_str} traits, cinematic lighting, uniform, 4K quality, portrait, upper_body."
-                    )
+                    prompts_dict[opt_val] = f"Star Trek character portrait, {tag_str} traits, cinematic lighting, uniform, 4K quality, portrait, upper_body."
 
-        logger.info(
-            f"[OPTION_PROMPTS] Successfully resolved {len(prompts_dict)}/{len(options)} prompts"
-        )
+        logger.info(f"[OPTION_PROMPTS] Successfully resolved {len(prompts_dict)}/{len(options)} prompts")
         return prompts_dict
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
-    def generate_npc_choice(
-        self, choices: list[dict[str, Any]], npc_profile: dict[str, Any]
-    ) -> dict[str, Any]:
+    def generate_npc_choice(self, choices: list[dict[str, Any]], npc_profile: dict[str, Any]) -> dict[str, Any]:
         """NPC makes a choice using LLM without seeing the consequences.
 
         The NPC only sees the action text IDs and descriptions — no consequences.
         This ensures NPC decisions are role-played in-character.
         """
-        logger.info(
-            f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')}"
-        )
+        logger.info(f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')}")
 
         npc_name = npc_profile.get("npc_name", "Unknown")
         npc_role = npc_profile.get("role", "Crew Member")
@@ -2260,31 +1945,13 @@ spatial presence\n"
         choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
 
         if self.language == "ru":
-            system = (
-                f"Ты — {npc_name}, {npc_role} на космическом корабле. "
-                f"Твой характер: {', '.join(traits) if isinstance(traits, list) else traits}. "
-                f"Ты видишь ТОЛЬКО описания действий без последствий. "
-                f"Сделай выбор на основе своей личности и роли."
-            )
-            user = (
-                f"Текущая ситуация на корабле требует твоего решения.\n\n"
-                f"Доступные действия:\n{choices_text}\n\n"
-                f"Выбери одно действие, которое лучше всего соответствует твоему характеру и роли. "
-                f"Ты не знаешь последствий — действуй интуитивно."
-            )
+            system = f"Ты — {npc_name}, {npc_role} на космическом корабле. Твой характер: {', '.join(traits) if isinstance(traits, list) else traits}. Ты видишь ТОЛЬКО описания действий без последствий. Сделай выбор на основе своей личности и роли."
+            user = f"Текущая ситуация на корабле требует твоего решения.\n\nДоступные действия:\n{choices_text}\n\nВыбери одно действие, которое лучше всего соответствует твоему характеру и роли. Ты не знаешь последствий — действуй интуитивно."
         else:
             system = (
-                f"You are {npc_name}, {npc_role} aboard a starship. "
-                f"Your personality: {', '.join(traits) if isinstance(traits, list) else traits}. "
-                f"You see ONLY action descriptions with no consequences. "
-                f"Make a choice based on your personality and role."
+                f"You are {npc_name}, {npc_role} aboard a starship. Your personality: {', '.join(traits) if isinstance(traits, list) else traits}. You see ONLY action descriptions with no consequences. Make a choice based on your personality and role."
             )
-            user = (
-                f"The current situation requires your decision.\n\n"
-                f"Available actions:\n{choices_text}\n\n"
-                f"Choose the action that best matches your character and role. "
-                f"You don't know the consequences — act on instinct."
-            )
+            user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character and role. You don't know the consequences — act on instinct."
 
         try:
             parsed = self._call_llm(
@@ -2300,10 +1967,7 @@ spatial presence\n"
             # Validate the choice is among available options
             valid_ids = [c.get("id") for c in choices]
             if action_id not in valid_ids:
-                logger.warning(
-                    f"[NPC] LLM returned invalid choice '{action_id}' for {npc_name}, "
-                    f"falling back to first available"
-                )
+                logger.warning(f"[NPC] LLM returned invalid choice '{action_id}' for {npc_name}, falling back to first available")
                 action_id = valid_ids[0] if valid_ids else ""
                 rationale = "Fallback: first available action"
 
@@ -2363,20 +2027,12 @@ spatial presence\n"
             setting = global_circumstances.get("setting", "")
             conflict = global_circumstances.get("conflict", "")
             narrative = global_circumstances.get("narrative", "")
-            gc_settings = (
-                f"\n\nLocation: {setting}\n"
-                f"Conflict: {conflict}\n"
-                f"Situation: {narrative[:500]}"
-            )
+            gc_settings = f"\n\nLocation: {setting}\nConflict: {conflict}\nSituation: {narrative[:500]}"
 
         species_line = f"\nSpecies: {species}" if species else ""
 
         if self.language == "ru":
-            system = (
-                f"Ты — Game Master. Игрок {display_name} ({role}) не успел сделать выбор, "
-                f"и ты принимаешь решение за него. Ты действуешь на основе характера персонажа "
-                f"текущей вводной и обстоятельств. Ты не видишь скрытые последствия действий."
-            )
+            system = f"Ты — Game Master. Игрок {display_name} ({role}) не успел сделать выбор, и ты принимаешь решение за него. Ты действуешь на основе характера персонажа текущей вводной и обстоятельств. Ты не видишь скрытые последствия действий."
             user = (
                 f"Профиль персонажа:\n"
                 f"Имя: {display_name}\n"
@@ -2420,16 +2076,11 @@ spatial presence\n"
 
             valid_ids = [c.get("id") for c in choices]
             if action_id not in valid_ids:
-                logger.warning(
-                    f"[AUTO_CHOICE] LLM returned invalid choice '{action_id}' for "
-                    f"{display_name}, falling back to first available"
-                )
+                logger.warning(f"[AUTO_CHOICE] LLM returned invalid choice '{action_id}' for {display_name}, falling back to first available")
                 action_id = valid_ids[0] if valid_ids else ""
                 rationale = "Fallback: first available action"
 
-            logger.info(
-                f"[AUTO_CHOICE] Player {display_name} auto-chose '{action_id}': {rationale[:80]}..."
-            )
+            logger.info(f"[AUTO_CHOICE] Player {display_name} auto-chose '{action_id}': {rationale[:80]}...")
             return {"action_id": action_id, "rationale": rationale}
 
         except Exception as e:
@@ -2476,9 +2127,7 @@ spatial presence\n"
                     appearance_parts.append(species_desc)
                 if avatar_desc:
                     appearance_parts.append(avatar_desc)
-                appearance_str = (
-                    f" ({'; '.join(appearance_parts)})" if appearance_parts else ""
-                )
+                appearance_str = f" ({'; '.join(appearance_parts)})" if appearance_parts else ""
                 player_lines.append(f"  - {name} ({role}){appearance_str}")
             player_descriptions = "\n".join(player_lines)
 
@@ -2496,37 +2145,18 @@ spatial presence\n"
                 name_label = "Название"
                 desc_label = "Описание"
                 stages_header = "Этапы"
-                importance_text = (
-                    "ВАЖНО: Все обстоятельства дня должны строго соответствовать этой миссии. "
-                    "Не придумывай новый сеттинг — используй сеттинг из описания миссии."
-                )
+                importance_text = "ВАЖНО: Все обстоятельства дня должны строго соответствовать этой миссии. Не придумывай новый сеттинг — используй сеттинг из описания миссии."
             else:
                 stage_label = "Stage"
                 mission_header = "MISSION CONTEXT"
-                mission_sub = (
-                    "this is the current mission, its story is mandatory for this day"
-                )
+                mission_sub = "this is the current mission, its story is mandatory for this day"
                 name_label = "Name"
                 desc_label = "Description"
                 stages_header = "Stages"
-                importance_text = (
-                    "IMPORTANT: All circumstances MUST be strictly consistent with this mission. "
-                    "Do not invent a new setting — use the setting from the mission description."
-                )
+                importance_text = "IMPORTANT: All circumstances MUST be strictly consistent with this mission. Do not invent a new setting — use the setting from the mission description."
 
-            stages_str = "\n".join(
-                [
-                    f"  - {stage_label} {o.get('stage', '?')}: {o.get('name', '')} — {o.get('description', '')}"
-                    for o in objectives
-                ]
-            )
-            mission_str = (
-                f"\n{mission_header} ({mission_sub}):\n"
-                f"{name_label}: {mission_name}\n"
-                f"{desc_label}: {mission_desc}\n"
-                f"{stages_header}:\n{stages_str}\n"
-                f"{importance_text}\n"
-            )
+            stages_str = "\n".join([f"  - {stage_label} {o.get('stage', '?')}: {o.get('name', '')} — {o.get('description', '')}" for o in objectives])
+            mission_str = f"\n{mission_header} ({mission_sub}):\n{name_label}: {mission_name}\n{desc_label}: {mission_desc}\n{stages_header}:\n{stages_str}\n{importance_text}\n"
 
         if self.language == "ru":
             system = (
@@ -2589,9 +2219,7 @@ spatial presence\n"
                 response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
                 max_tokens=4096,
             )
-            logger.info(
-                f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'"
-            )
+            logger.info(f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'")
             return parsed
         except Exception as e:
             logger.error(f"[DAY] Global circumstances generation failed: {e}")
@@ -2617,9 +2245,7 @@ spatial presence\n"
         - A personal briefing (their unique perspective on the situation)
         - 3-4 choices with visible descriptions and hidden consequences
         """
-        player_id = player_profile.get("player_id") or player_profile.get(
-            "npc_key", "?"
-        )
+        player_id = player_profile.get("player_id") or player_profile.get("npc_key", "?")
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
         logger.info(f"[DAY] Generating briefing for {player_id} ({player_role})")
@@ -2639,11 +2265,11 @@ spatial presence\n"
                 "Ты — Game Master космической игры. Создаёшь ПЕРСОНАЛЬНУЮ вводную для игрока, "
                 "основываясь на общих обстоятельствах дня. "
                 "Каждый игрок видит ситуацию со своей уникальной точки зрения.\n\n"
-                "ВАЖНО: Игра страдает от однообразия — игроки жалуются, что ходы скучные, "
-                "корабль не получает повреждений, экипаж не гибнет, миссия не продвигается. "
-                "Твоя задача — создавать ДРАМАТИЧЕСКИЕ, ОСЯЗАЕМЫЕ последствия. "
-                "Каждый ход ДОЛЖЕН что-то МЕНЯТЬ: приближать или отдалять цель миссии, "
-                "повреждать корабль, ранить или убивать членов экипажа."
+                "Каждый ход ДОЛЖЕН ДВИГАТЬ ИСТОРИЮ ВПЕРЁД — неожиданные повороты, открытия, "
+                "новые союзники или враги, находки, ухудшение или улучшение ситуации. "
+                "Смелые и правильные решения → миссия продвигается, открываются новые возможности. "
+                "Пассивные или плохие решения → последствия: повреждения, потери, регресс миссии. "
+                "Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО, а не просто 'наказать' игрока."
             )
             user = (
                 f"Общие обстоятельства дня:\n"
@@ -2691,11 +2317,11 @@ spatial presence\n"
                 "You are a Game Master. You create PERSONAL briefings for each player "
                 "based on the shared global circumstances. "
                 "Each player sees the situation from their unique perspective.\n\n"
-                "CRITICAL: The game suffers from stale repetition — players report that turns are dull, "
-                "the ship never gets damaged, crew members never die, and mission goals never advance. "
-                "Your job is to create DRAMATIC, TANGIBLE consequences. "
-                "Every turn MUST CHANGE something: advance or regress the mission, "
-                "damage the ship, injure or kill crew members."
+                "Every turn MUST MOVE THE STORY FORWARD — unexpected twists, discoveries, "
+                "new allies or enemies, findings, situation improvements or deteriorations. "
+                "Bold correct decisions → mission advances, new opportunities open. "
+                "Passive or wrong decisions → consequences: damage, losses, mission regression. "
+                "The goal is INTERESTING and UNPREDICTABLE outcomes, not just 'punishing' the player."
             )
             user = (
                 f"Global circumstances:\n"
@@ -2792,6 +2418,7 @@ spatial presence\n"
         all_decisions: list[dict[str, Any]],
         previous_summary: str = "",
         mission_context: dict[str, Any] | None = None,
+        crew_roster: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Analyze all player and NPC choices together with their hidden consequences
         to produce a coherent combined outcome narrative.
@@ -2805,14 +2432,14 @@ spatial presence\n"
             all_decisions: All player and NPC decisions with consequences
             previous_summary: Summary of previous turn for continuity
             mission_context: Current mission state for progress tracking
+            crew_roster: Full roster of all crew members (name, role) to prevent
+                the LLM from inventing non-existent crew members.
 
         Returns:
             Dict with outcome_narrative, ship_status_change, crew_morale_change,
             next_day_hook, mission_progress, dead_crew_members
         """
-        logger.info(
-            f"[DAY] Analyzing combined outcome from {len(all_decisions)} decisions"
-        )
+        logger.info(f"[DAY] Analyzing combined outcome from {len(all_decisions)} decisions")
 
         # Weight is indicated in the decision text passed to LLM
         decisions_text = ""
@@ -2825,13 +2452,19 @@ spatial presence\n"
             rationale = d.get("rationale", "")
             is_player = bool(d.get("player_id"))
             weight = "HIGH (PLAYER)" if is_player else "NORMAL (NPC)"
-            decisions_text += (
-                f"\n--- Decision {i} (Weight: {weight}) ---\n"
-                f"Character: {name} ({role})\n"
-                f"Chose: {action_text} ({action})\n"
-                f"Rationale: {rationale}\n"
-                f"HIDDEN CONSEQUENCE: {consequence}\n"
-            )
+            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role})\nChose: {action_text} ({action})\nRationale: {rationale}\nHIDDEN CONSEQUENCE: {consequence}\n"
+
+        # Full crew roster — prevents the LLM from inventing non-existent crew members
+        roster_text = ""
+        if crew_roster:
+            roster_lines = []
+            for r in crew_roster:
+                cname = r.get("name", "?")
+                crole = r.get("role", "?")
+                is_dead = r.get("is_dead", False)
+                status = "DEAD" if is_dead else "ALIVE"
+                roster_lines.append(f"  - {cname} ({crole}) — {status}")
+            roster_text = "\nFull crew roster (ONLY these characters exist on the ship):\n" + "\n".join(roster_lines) + "\n"
 
         # Mission context for progress tracking
         mission_text = ""
@@ -2846,121 +2479,23 @@ spatial presence\n"
                 desc = obj.get("description", "")
                 threshold = obj.get("success_threshold", 5)
                 progress = stage_progress.get(str(stage), 0)
-                status = (
-                    "COMPLETED"
-                    if stage < current_stage
-                    else ("CURRENT" if stage == current_stage else "UPCOMING")
-                )
-                mission_text += (
-                    f"  Stage {stage}: {name} - {desc}\n"
-                    f"    Progress: {progress}/{threshold}\n"
-                    f"    Status: {status}\n"
-                )
+                status = "COMPLETED" if stage < current_stage else ("CURRENT" if stage == current_stage else "UPCOMING")
+                mission_text += f"  Stage {stage}: {name} - {desc}\n    Progress: {progress}/{threshold}\n    Status: {status}\n"
 
         setting = global_circumstances.get("setting", "")
         conflict = global_circumstances.get("conflict", "")
         narrative = global_circumstances.get("narrative", "")
 
-        if self.language == "ru":
-            system = (
-                "Ты — Game Master космической игры. Ты анализируешь ВСЕ решения, принятые "
-                "игроками и NPC, вместе с их СКРЫТЫМИ последствиями, и создаёшь единый "
-                "связный результат хода.\n\n"
-                "ВАЖНЕЙШИЕ ПРАВИЛА:\n"
-                "1. Решения ИГРОКОВ (Weight: HIGH) имеют БОЛЬШИЙ вес, чем решения NPC\n"
-                "2. Прогресс миссии нелинейный — правильные действия НАКАПЛИВАЮТСЯ, "
-                "неправильные — ОТКАТЫВАЮТ прогресс назад\n"
-                "3. Члены экипажа ДОЛЖНЫ получать ранения и погибать — без этого игра скучна\n"
-                "4. Корабль ДОЛЖЕН получать реальные повреждения (корпус, щиты, системы)\n"
-                "5. Сюжет ДОЛЖЕН ДВИГАТЬСЯ — каждый ход приближает к цели миссии ИЛИ отдаляет от неё\n"
-                "6. Игнорирование угрозы → эскалация угрозы\n"
-                "7. Неправильные действия → повреждения, регресс миссии, гибель экипажа\n"
-                "8. НИЧЕГО НЕ ДЕЛАТЬ — это тоже выбор, и он имеет последствия (обычно плохие)\n"
-                "9. У каждого персонажа должен быть ПЕРСОНАЛЬНЫЙ ИСХОД в personal_outcomes\n"
-                "10. Прошлые повреждения корабля СОХРАНЯЮТСЯ — их нельзя просто 'забыть'"
-            )
-            user = (
-                f"Общие обстоятельства:\n"
-                f"Локация: {setting}\n"
-                f"Конфликт: {conflict}\n"
-                f"Описание: {narrative}\n\n"
-                f"ПРЕДЫДУЩИЕ СОБЫТИЯ:\n{previous_summary or 'Это первый ход'}\n\n"
-                f"Статус миссии:\n{mission_text}\n\n"
-                f"Принятые решения (игроки имеют HIGH вес, NPC — NORMAL):\n{decisions_text}\n\n"
-                "Проанализируй все решения и создай единый связанный результат. "
-                "Учти, что решения ИГРОКОВ важнее решений NPC.\n\n"
-                "КРИТИЧЕСКИ ВАЖНО: Каждый ход что-то ДОЛЖНО МЕНЯТЬСЯ. "
-                "Неодалживай. Если решения были неудачными — корабль получает повреждения, "
-                "экипаж гибнет, миссия откатывается назад. "
-                "Если решения были удачными — миссия продвигается, но всё равно "
-                "могут быть потери (война требует жертв).\n\n"
-                "Верни JSON с полями:\n"
-                "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца). Должен быть ДРАМАТИЧЕСКИМ.\n"
-                "2. ship_status_change — как изменилось состояние корабля (текст)\n"
-                "3. crew_morale_change — как изменился моральный дух экипажа (текст)\n"
-                "4. next_day_hook — зацепка для следующего хода, которая создаёт ожидание\n"
-                "5. mission_progress — МАССИВ объектов [{{'stage': N, 'points': +/-M}}]. "
-                "Положительные = прогресс, отрицательные = регресс/откат.\n"
-                "6. dead_crew_members — список [[name, role]] погибших. Должен быть непустым, если были рискованные действия.\n"
-                "7. ship_destroyed — true/false\n"
-                "8. ship_hull_integrity — целостность корпуса в % (0-100). УМЕНЬШАЕТСЯ от повреждений.\n"
-                "9. ship_shields — состояние щитов в % (0-100)\n"
-                "10. ship_systems_offline — массив строк: какие системы корабля вышли из строя "
-                "(например ['warp drive', 'life support', 'weapons', 'communications'])\n"
-                "11. crew_injured — список [[name, role, severity]] раненых. severity: 'critical', 'moderate', 'minor'.\n"
-                "12. personal_outcomes — МАССИВ объектов {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
-                "для КАЖДОГО персонажа, принимавшего решение.\n\n"
-                "Всё на русском языке."
-            )
-        else:
-            system = (
-                "You are a Game Master. You analyze ALL decisions made by "
-                "players and NPCs together with their HIDDEN consequences, "
-                "and produce a single coherent turn outcome.\n\n"
-                "CRITICAL RULES:\n"
-                "1. PLAYER decisions (Weight: HIGH) matter MORE than NPC decisions\n"
-                "2. Mission progress is NON-LINEAR — correct actions ACCUMULATE, "
-                "wrong actions REGRESS progress backward\n"
-                "3. Crew members MUST get injured and die — without this the game is boring\n"
-                "4. The ship MUST take REAL damage (hull, shields, systems)\n"
-                "5. The story MUST MOVE — every turn brings the mission closer OR pushes it further away\n"
-                "6. Ignoring a threat → threat escalation\n"
-                "7. Wrong actions → damage, mission regression, crew death\n"
-                "8. DOING NOTHING is also a choice and has consequences (usually bad)\n"
-                "9. Every character must have a PERSONAL OUTCOME in personal_outcomes\n"
-                "10. Past ship damage PERSISTS — it cannot be simply 'forgotten'"
-            )
-            user = (
-                f"Global circumstances:\n"
-                f"Setting: {setting}\n"
-                f"Conflict: {conflict}\n"
-                f"Narrative: {narrative}\n\n"
-                f"PREVIOUS EVENTS:\n{previous_summary or 'This is the first turn'}\n\n"
-                f"Mission status:\n{mission_text}\n\n"
-                f"All decisions (players = HIGH weight, NPCs = NORMAL):\n{decisions_text}\n\n"
-                "Analyze all decisions together and create a coherent combined result. "
-                "Remember that PLAYER decisions matter more than NPC decisions.\n\n"
-                "CRITICALLY IMPORTANT: Every turn MUST CHANGE something. "
-                "Do not stall. If decisions were bad — the ship takes damage, "
-                "crew members die, the mission regresses. "
-                "If decisions were good — the mission advances, but there can still be casualties.\n\n"
-                "Return JSON with fields:\n"
-                "1. outcome_narrative — what happened (2-3 paragraphs). Must be DRAMATIC.\n"
-                "2. ship_status_change — narrative of ship condition change\n"
-                "3. crew_morale_change — how morale shifted\n"
-                "4. next_day_hook — teaser for the next turn that creates anticipation\n"
-                "5. mission_progress — ARRAY of [{{'stage': N, 'points': +/-M}}]. "
-                "Positive = progress, Negative = regression/setback.\n"
-                "6. dead_crew_members — list of [name, role] who died. Should NOT be empty if risky actions were taken.\n"
-                "7. ship_destroyed — true/false\n"
-                "8. ship_hull_integrity — hull integrity % (0-100). DECREASES with damage.\n"
-                "9. ship_shields — shield strength % (0-100)\n"
-                "10. ship_systems_offline — array of offline/damaged systems "
-                "(e.g. ['warp drive', 'life support', 'weapons', 'communications'])\n"
-                "11. crew_injured — list of [name, role, severity] injured. severity: 'critical', 'moderate', 'minor'.\n"
-                "12. personal_outcomes — ARRAY of {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
-                "for EVERY character who made a decision.\n"
-            )
+        system, user = build_combined_outcome_prompts(
+            language=self.language,
+            setting=setting,
+            conflict=conflict,
+            narrative=narrative,
+            previous_summary=previous_summary,
+            mission_text=mission_text,
+            decisions_text=decisions_text,
+            roster_text=roster_text,
+        )
 
         try:
             parsed = self._call_llm(
@@ -2969,15 +2504,12 @@ spatial presence\n"
                 response_schema=COMBINED_OUTCOME_SCHEMA,
                 max_tokens=4096,
             )
-            logger.info(
-                f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}..."
-            )
+            logger.info(f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
             return parsed
         except Exception as e:
             logger.error(f"[DAY] Combined outcome analysis failed: {e}")
             return {
-                "outcome_narrative": narrative
-                or "The day passed without major incident.",
+                "outcome_narrative": narrative or "The day passed without major incident.",
                 "ship_status_change": "No significant change.",
                 "crew_morale_change": "Stable.",
                 "next_day_hook": "Tomorrow brings new challenges.",
@@ -2995,30 +2527,18 @@ spatial presence\n"
 
     # ============== Mission Generation ==============
 
-    def generate_mission(
-        self, all_participants: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def generate_mission(self, all_participants: list[dict[str, Any]]) -> dict[str, Any]:
         """Generate a mission with stages/objectives for the game.
 
         Each stage has a success_threshold; progress accumulates non-linearly
         from player/NPC actions across turns.
         """
-        logger.info(
-            f"[MISSION] Generating mission for {len(all_participants)} participants"
-        )
+        logger.info(f"[MISSION] Generating mission for {len(all_participants)} participants")
 
-        crew_desc = "\n".join(
-            [
-                f"  - {p.get('role', '?')} ({p.get('type', '?')})"
-                for p in all_participants
-            ]
-        )
+        crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')})" for p in all_participants])
 
         if self.language == "ru":
-            system = (
-                "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. "
-                "Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10."
-            )
+            system = "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10."
             user = (
                 f"Экипаж:\n{crew_desc}\n\n"
                 "Создай миссию с:\n"
@@ -3030,10 +2550,7 @@ spatial presence\n"
                 "Всё на русском языке."
             )
         else:
-            system = (
-                "You are a Game Master. Create a mission for a starship crew. "
-                "The mission is divided into 2-4 stages, each with progress from 1 to 10."
-            )
+            system = "You are a Game Master. Create a mission for a starship crew. The mission is divided into 2-4 stages, each with progress from 1 to 10."
             user = (
                 f"Crew:\n{crew_desc}\n\n"
                 "Create a mission with:\n"
@@ -3056,22 +2573,15 @@ spatial presence\n"
             return result
         except Exception as e:
             logger.error(f"[MISSION] Generation failed: {e}")
-            fallback_name = (
-                "Первый контакт" if self.language == "ru" else "First Contact"
-            )
-            fallback_desc = (
-                "Исследовать неизвестный сигнал в секторе 7-Альфа. "
-                "Установить контакт с цивилизацией."
-            )
+            fallback_name = "Первый контакт" if self.language == "ru" else "First Contact"
+            fallback_desc = "Исследовать неизвестный сигнал в секторе 7-Альфа. Установить контакт с цивилизацией."
             return {
                 "name": fallback_name,
                 "description": fallback_desc,
                 "objectives": [
                     {
                         "stage": 1,
-                        "name": "Разведка"
-                        if self.language == "ru"
-                        else "Reconnaissance",
+                        "name": "Разведка" if self.language == "ru" else "Reconnaissance",
                         "description": "Приблизиться к источнику сигнала",
                         "success_threshold": 3,
                     },
@@ -3102,27 +2612,14 @@ spatial presence\n"
         Uses crew roles, species/gender descriptions, and mission context
         to create a cinematic scene with the full crew on the bridge.
         """
-        logger.info(
-            f"[BRIDGE] Generating bridge image prompt for {len(all_participants)} crew"
-        )
+        logger.info(f"[BRIDGE] Generating bridge image prompt for {len(all_participants)} crew")
 
-        crew_desc = "\n".join(
-            [
-                f"  - {p.get('role', '?')} ({p.get('type', '?')}): "
-                f"species={p.get('species') or '?'}, "
-                f"traits={', '.join(p.get('personality_traits', []))}"
-                for p in all_participants
-            ]
-        )
+        crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, traits={', '.join(p.get('personality_traits', []))}" for p in all_participants])
 
         mission_name = mission.get("name", "Unknown mission")
         mission_desc = mission.get("description", "")
 
-        system = (
-            "You are an expert cinematic prompt engineer for AI image generation. "
-            "Create detailed English prompts for a starship bridge scene with the full crew. "
-            "Focus on composition, lighting, crew positioning, and space opera aesthetic."
-        )
+        system = "You are an expert cinematic prompt engineer for AI image generation. Create detailed English prompts for a starship bridge scene with the full crew. Focus on composition, lighting, crew positioning, and space opera aesthetic."
         user = (
             f"Mission: {mission_name}\n"
             f"Mission description: {mission_desc}\n\n"
@@ -3144,18 +2641,12 @@ spatial presence\n"
                 max_tokens=4096,
                 temperature=0.8,
             )
-            logger.info(
-                f"[BRIDGE] Prompt generated: {str(result.get('bridge_prompt', ''))[:100]}..."
-            )
+            logger.info(f"[BRIDGE] Prompt generated: {str(result.get('bridge_prompt', ''))[:100]}...")
             return result
         except Exception as e:
             logger.error(f"[BRIDGE] Generation failed: {e}")
             return {
-                "bridge_prompt": (
-                    "Star Trek starship bridge interior, full crew at their stations, "
-                    "holographic displays glowing, viewport showing starfield and nebula, "
-                    "cinematic lighting, dramatic composition, 4K quality, space opera aesthetic."
-                ),
+                "bridge_prompt": ("Star Trek starship bridge interior, full crew at their stations, holographic displays glowing, viewport showing starfield and nebula, cinematic lighting, dramatic composition, 4K quality, space opera aesthetic."),
                 "brief_description": "Мостик корабля в готовности к выполнению миссии.",
                 "crew_descriptions": [
                     {
@@ -3309,9 +2800,7 @@ spatial presence\n"
 
     # ============== NPC Avatar Prompts (simplified, random) ==============
 
-    def generate_npc_avatar_prompts(
-        self, npc_roles: list[dict[str, Any]]
-    ) -> list[dict[str, str]]:
+    def generate_npc_avatar_prompts(self, npc_roles: list[dict[str, Any]]) -> list[dict[str, str]]:
         """Generate simplified avatar prompts for NPCs at game start.
 
         Unlike human players who go through full onboarding with species/gender interviews,
@@ -3319,27 +2808,16 @@ spatial presence\n"
         """
         logger.info(f"[NPC_AVATAR] Generating avatar prompts for {len(npc_roles)} NPCs")
 
-        roles_text = "\n".join(
-            [
-                f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} - "
-                f"{r.get('avatar_description', '')} - traits: {', '.join(r.get('personality_traits', []))}"
-                for r in npc_roles
-            ]
-        )
+        roles_text = "\n".join([f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={r.get('species', 'random')} gender={r.get('gender', 'random')} | traits: {', '.join(r.get('personality_traits', []))}" for r in npc_roles])
 
-        system = (
-            "You are a creative sci-fi character prompt writer. "
-            "Generate VARIED, DIVERSE character portrait prompts in English. "
-            "Each prompt should describe a DIFFERENT looking character — "
-            "vary species features (humanoid, alien, cybernetic, etc.), "
-            "body types, ages, and appearances. "
-            "Keep each prompt unique to avoid same-looking NPCs."
-        )
+        system = "You are a creative sci-fi character portrait prompt writer. Generate VARIED, DIVERSE character portrait prompts in English. "
         user = (
             f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
             "For EACH role, generate a unique, detailed English image prompt for a "
-            "Star Trek-style character portrait. RANDOMIZE species/gender/appearance "
-            "for variety. ~50 words per prompt. "
+            "Star Trek-style character portrait. "
+            "CRITICAL: RESPECT the species and gender specified for each role. "
+            "Use those exact values — do not randomize them. "
+            "~50 words per prompt, cinematic lighting, uniform, 4K quality portrait, upper body. "
             'Output as JSON array: [{"role_key": ..., "prompt": ...}]'
         )
 
@@ -3366,35 +2844,19 @@ spatial presence\n"
                 fallback.append(
                     {
                         "role_key": r.get("role_key", "?"),
-                        "prompt": (
-                            f"Star Trek character portrait of a {r.get('role_name', '?')}, "
-                            f"{sp} species, cinematic lighting, uniform, "
-                            f"4K quality, portrait, upper body. Unique appearance."
-                        ),
+                        "prompt": (f"Star Trek character portrait of a {r.get('role_name', '?')}, {sp} species, cinematic lighting, uniform, 4K quality, portrait, upper body. Unique appearance."),
                     }
                 )
             return fallback
 
-    def generate_default_action(
-        self, story: GameStory, player_profile: dict[str, Any]
-    ) -> dict[str, Any]:
+    def generate_default_action(self, story: GameStory, player_profile: dict[str, Any]) -> dict[str, Any]:
         """Generate a default action when player doesn't choose"""
         traits = player_profile.get("personality_traits", [])
         actions = story.decision_points
 
-        if (
-            "логичный" in traits
-            or "аналитический" in traits
-            or "logical" in traits
-            or "analytical" in traits
-        ):
+        if "логичный" in traits or "аналитический" in traits or "logical" in traits or "analytical" in traits:
             return actions[0] if actions else {}
-        elif (
-            "смелый" in traits
-            or "решительный" in traits
-            or "bold" in traits
-            or "decisive" in traits
-        ):
+        elif "смелый" in traits or "решительный" in traits or "bold" in traits or "decisive" in traits:
             return actions[1] if len(actions) > 1 else (actions[0] if actions else {})
         else:
             return actions[2] if len(actions) > 2 else (actions[0] if actions else {})

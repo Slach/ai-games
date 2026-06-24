@@ -751,10 +751,7 @@ PROMPTS = {
         },
         "role_assignment": {
             "system": "Роль определяется по сумме очков из ответов на вопросы. Анализ LLM не требуется.",
-            "user": (
-                "Ответы игрока уже содержат role_scores. "
-                "Роль выбирается детерминированно по максимальной сумме очков."
-            ),
+            "user": ("Ответы игрока уже содержат role_scores. Роль выбирается детерминированно по максимальной сумме очков."),
         },
         "game_title": {
             "system": "Ты — креативный писатель-фантаст. Придумываешь названия и описания для космических приключений.",
@@ -767,10 +764,7 @@ PROMPTS = {
             ),
         },
         "daily_story": {
-            "system": (
-                "Ты — Game Master космической исследовательской игры в стиле Star Trek. "
-                "Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
-            ),
+            "system": ("Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."),
             "user": (
                 "День: {day}\n"
                 "Предыдущий день: {previous_summary}\n"
@@ -790,11 +784,7 @@ PROMPTS = {
             "lang_note": "Промпты пиши на английском (для генерации изображений).",
         },
         "player_message": {
-            "system": (
-                "Ты — Game Master космической исследовательской игры в стиле Star Trek. "
-                "Отвечай в стиле Game Master, направляя叙事. "
-                "Будь увлекательным и атмосферным."
-            ),
+            "system": ("Ты — Game Master космической исследовательской игры в стиле Star Trek. Отвечай в стиле Game Master, направляя叙事. Будь увлекательным и атмосферным."),
         },
     },
     LANGUAGE_EN: {
@@ -811,10 +801,7 @@ PROMPTS = {
         },
         "role_assignment": {
             "system": "Role is determined by sum of points from question answers. LLM analysis not required.",
-            "user": (
-                "Player answers already contain role_scores. "
-                "Role is selected deterministically by highest point sum."
-            ),
+            "user": ("Player answers already contain role_scores. Role is selected deterministically by highest point sum."),
         },
         "game_title": {
             "system": "You are a creative sci-fi writer. You create titles and descriptions for space adventures.",
@@ -827,10 +814,7 @@ PROMPTS = {
             ),
         },
         "daily_story": {
-            "system": (
-                "You are a Game Master for a Star Trek-style space exploration game. "
-                "Create compelling daily episodes with conflicts and player choices."
-            ),
+            "system": ("You are a Game Master for a Star Trek-style space exploration game. Create compelling daily episodes with conflicts and player choices."),
             "user": (
                 "Day: {day}\n"
                 "Previous day: {previous_summary}\n"
@@ -849,11 +833,7 @@ PROMPTS = {
             "lang_note": "Write prompts in English for image generation.",
         },
         "player_message": {
-            "system": (
-                "You are the Game Master of a Star Trek-style space exploration game. "
-                "Respond in character as the Game Master, guiding the narrative forward. "
-                "Keep it engaging and atmospheric."
-            ),
+            "system": ("You are the Game Master of a Star Trek-style space exploration game. Respond in character as the Game Master, guiding the narrative forward. Keep it engaging and atmospheric."),
         },
     },
 }
@@ -875,3 +855,290 @@ def get_llm_directive(directive_key: str, language: str = LANGUAGE_RU) -> str:
     """Get LLM directive for a specific prompt type and language"""
     directives = LLM_DIRECTIVES.get(language, LLM_DIRECTIVES[LANGUAGE_RU])
     return directives.get(directive_key, "")
+
+
+# ============== Combined Outcome (turn consequences) ==============
+
+COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "combined_outcome",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "outcome_narrative": {
+                    "type": "string",
+                    "description": "A coherent narrative describing what actually happened as a result of all choices made (2-3 paragraphs)",
+                },
+                "ship_status_change": {
+                    "type": "string",
+                    "description": "Narrative description of how the ship's condition changed",
+                },
+                "crew_morale_change": {
+                    "type": "string",
+                    "description": "How crew morale shifted",
+                },
+                "next_day_hook": {
+                    "type": "string",
+                    "description": "A teaser or hook for the next day's story",
+                },
+                "mission_progress": {
+                    "type": "array",
+                    "description": "Mission stage progress changes (positive = advance, negative = regression/setback)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "stage": {"type": "integer"},
+                            "points": {
+                                "type": "integer",
+                                "description": "Progress points for this stage. Positive = advance toward goal, Negative = regression/setback",
+                            },
+                        },
+                        "required": ["stage", "points"],
+                        "additionalProperties": False,
+                    },
+                },
+                "dead_crew_members": {
+                    "type": "array",
+                    "description": "List of [name, role] who died this turn",
+                    "items": {
+                        "type": "array",
+                        "items": [{"type": "string"}, {"type": "string"}],
+                    },
+                },
+                "ship_destroyed": {
+                    "type": "boolean",
+                    "description": "Whether the ship was destroyed",
+                },
+                "ship_hull_integrity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Ship hull structural integrity percentage (0 = destroyed, 100 = pristine)",
+                },
+                "ship_shields": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Shield strength percentage (0 = depleted, 100 = full)",
+                },
+                "ship_systems_offline": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of ship systems that are damaged/offline (e.g. 'warp drive', 'life support', 'weapons', 'communications', 'navigation')",
+                },
+                "crew_injured": {
+                    "type": "array",
+                    "description": "List of [name, role, severity] who were injured this turn. Severity: 'critical', 'moderate', 'minor'",
+                    "items": {
+                        "type": "array",
+                        "items": [
+                            {"type": "string"},
+                            {"type": "string"},
+                            {"type": "string"},
+                        ],
+                    },
+                },
+                "personal_outcomes": {
+                    "type": "array",
+                    "description": "Personal consequences for each crew member who made a decision this turn",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "character_name": {
+                                "type": "string",
+                                "description": "Character name (player name or NPC name)",
+                            },
+                            "role": {
+                                "type": "string",
+                                "description": "Role on the ship",
+                            },
+                            "outcome_text": {
+                                "type": "string",
+                                "description": "Personal consequence for this character (1-2 sentences)",
+                            },
+                        },
+                        "required": ["character_name", "role", "outcome_text"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": [
+                "outcome_narrative",
+                "ship_status_change",
+                "crew_morale_change",
+                "next_day_hook",
+                "mission_progress",
+                "dead_crew_members",
+                "ship_destroyed",
+                "ship_hull_integrity",
+                "ship_shields",
+                "ship_systems_offline",
+                "crew_injured",
+                "personal_outcomes",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_COMBINED_OUTCOME_SYSTEM_RU = (
+    "Ты — Game Master космической игры. Ты анализируешь ВСЕ решения, принятые "
+    "игроками и NPC, вместе с их СКРЫТЫМИ последствиями, и создаёшь единый "
+    "связный результат хода.\n\n"
+    "ВАЖНЕЙШИЕ ПРАВИЛА:\n"
+    "1. Решения ИГРОКОВ (Weight: HIGH) имеют БОЛЬШИЙ вес, чем решения NPC\n"
+    "2. Прогресс миссии нелинейный — правильные действия НАКАПЛИВАЮТСЯ, "
+    "неправильные — ОТКАТЫВАЮТ прогресс назад\n"
+    "3. Смелые и правильные решения игроков → продвижение миссии, находки, успехи.\n"
+    "4. Пассивные, трусливые или ошибочные решения → повреждения корабля, регресс миссии, ранения и гибель экипажа.\n"
+    "5. Сюжет ДОЛЖЕН ДВИГАТЬСЯ — каждый ход приближает к цели миссии ИЛИ отдаляет от неё, в зависимости от качества решений.\n"
+    "6. Игнорирование угрозы → эскалация угрозы\n"
+    "7. У каждого персонажа должен быть ПЕРСОНАЛЬНЫЙ ИСХОД в personal_outcomes — последствия его выбора.\n"
+    "8. Прошлые повреждения корабля СОХРАНЯЮТСЯ — их нельзя просто 'забыть'.\n"
+    "9. Гибель членов экипажа возможна, но только как СЛЕДСТВИЕ неудачных решений или рискованных действий. "
+    "Если игрок действует умно и смело — экипаж в безопасности, миссия продвигается.\n"
+    "10. Смерти и ранения НЕ должны быть 'фоном' — каждая потеря должна быть значимой и вытекать из конкретного решения."
+)
+
+_COMBINED_OUTCOME_USER_RU = (
+    "Общие обстоятельства:\n"
+    "Локация: {setting}\n"
+    "Конфликт: {conflict}\n"
+    "Описание: {narrative}\n\n"
+    "ПРЕДЫДУЩИЕ СОБЫТИЯ:\n{previous_summary}\n\n"
+    "Статус миссии:\n{mission_text}\n\n"
+    "Принятые решения (игроки имеют HIGH вес, NPC — NORMAL):\n{decisions_text}\n\n"
+    "{roster_text}\n"
+    "Проанализируй все решения и создай единый связанный результат. "
+    "Учти, что решения ИГРОКОВ важнее решений NPC.\n\n"
+    "КРИТИЧЕСКИ ВАЖНО: Каждый ход что-то ДОЛЖНО МЕНЯТЬСЯ. "
+    "Сюжет должен двигаться в зависимости от решений игрока.\n"
+    "- Если игрок выбрал смелое, правильное действие → миссия продвигается, находятся ресурсы, союзники, открываются новые возможности.\n"
+    "- Если игрок выбрал пассивное, трусливое или ошибочное действие → миссия откатывается, корабль получает повреждения, экипаж страдает.\n"
+    "- Если игрок игнорирует угрозу → угроза эскалируется.\n\n"
+    "Верни JSON с полями:\n"
+    "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца). Должен быть ДРАМАТИЧЕСКИМ.\n"
+    "2. ship_status_change — как изменилось состояние корабля (текст)\n"
+    "3. crew_morale_change — как изменился моральный дух экипажа (текст)\n"
+    "4. next_day_hook — зацепка для следующего хода, которая создаёт ожидание\n"
+    "5. mission_progress — МАССИВ объектов [{{'stage': N, 'points': +/-M}}]. "
+    "Положительные = прогресс, отрицательные = регресс/откат.\n"
+    "6. dead_crew_members — список [[name, role]] погибших из СПИСКА ЭКИПАЖА (full crew roster). "
+    "Убивать можно ТОЛЬКО персонажей из списка экипажа. НЕ выдумывай новых членов экипажа. "
+    "Если безопасных смертей нет — можно оставить пустым.\n"
+    "ВАЖНО: Если в outcome_narrative кто-то погиб (включая 'офицер связи погиб', 'погиб под обломками', "
+    "'не выжил' и т.д.), этот персонаж ОБЯЗАТЕЛЬНО должен быть в dead_crew_members. "
+    "Не пиши о смерти в нарративе и не добавляй в dead_crew_members — это баг.\n"
+    "Также: если персонаж впал в кому или находится при смерти — добавь его в crew_injured с severity='critical'.\n"
+    "7. ship_destroyed — true/false\n"
+    "8. ship_hull_integrity — целостность корпуса в % (0-100). УМЕНЬШАЕТСЯ от повреждений.\n"
+    "9. ship_shields — состояние щитов в % (0-100)\n"
+    "10. ship_systems_offline — массив строк: какие системы корабля вышли из строя "
+    "(например ['warp drive', 'life support', 'weapons', 'communications'])\n"
+    "11. crew_injured — список [[name, role, severity]] раненых. severity: 'critical', 'moderate', 'minor'.\n"
+    "12. personal_outcomes — МАССИВ объектов {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
+    "для КАЖДОГО персонажа, принимавшего решение.\n\n"
+    "Всё на русском языке."
+)
+
+_COMBINED_OUTCOME_SYSTEM_EN = (
+    "You are a Game Master. You analyze ALL decisions made by "
+    "players and NPCs together with their HIDDEN consequences, "
+    "and produce a single coherent turn outcome.\n\n"
+    "CRITICAL RULES:\n"
+    "1. PLAYER decisions (Weight: HIGH) matter MORE than NPC decisions\n"
+    "2. Mission progress is NON-LINEAR — correct actions ACCUMULATE, "
+    "wrong actions REGRESS progress backward\n"
+    "3. Bold and correct player decisions → mission progress, discoveries, successes.\n"
+    "4. Passive, cowardly, or wrong decisions → ship damage, mission regression, injuries and crew deaths.\n"
+    "5. The story MUST MOVE — every turn brings the mission closer OR pushes it further away, depending on decision quality.\n"
+    "6. Ignoring a threat → threat escalation\n"
+    "7. Every character must have a PERSONAL OUTCOME in personal_outcomes — consequences of their choice.\n"
+    "8. Past ship damage PERSISTS — it cannot be simply 'forgotten'.\n"
+    "9. Crew deaths are possible, but only as a CONSEQUENCE of bad decisions or risky actions. "
+    "If the player acts smartly and boldly — the crew is safe, the mission advances.\n"
+    "10. Deaths and injuries should NOT be 'background noise' — every loss must be meaningful and stem from a specific decision."
+)
+
+_COMBINED_OUTCOME_USER_EN = (
+    "Global circumstances:\n"
+    "Setting: {setting}\n"
+    "Conflict: {conflict}\n"
+    "Narrative: {narrative}\n\n"
+    "PREVIOUS EVENTS:\n{previous_summary}\n\n"
+    "Mission status:\n{mission_text}\n\n"
+    "All decisions (players = HIGH weight, NPCs = NORMAL):\n{decisions_text}\n\n"
+    "{roster_text}\n"
+    "Analyze all decisions together and create a coherent combined result. "
+    "Remember that PLAYER decisions matter more than NPC decisions.\n\n"
+    "CRITICALLY IMPORTANT: Every turn MUST CHANGE something. "
+    "The story must move based on the player's decisions.\n"
+    "- If the player chose a bold, correct action → mission advances, resources are found, allies appear, new opportunities open.\n"
+    "- If the player chose a passive, cowardly, or wrong action → mission regresses, ship takes damage, crew suffers.\n"
+    "- If the player ignores a threat → the threat escalates.\n\n"
+    "Return JSON with fields:\n"
+    "1. outcome_narrative — what happened (2-3 paragraphs). Must be DRAMATIC.\n"
+    "2. ship_status_change — narrative of ship condition change\n"
+    "3. crew_morale_change — how morale shifted\n"
+    "4. next_day_hook — teaser for the next turn that creates anticipation\n"
+    "5. mission_progress — ARRAY of [{{'stage': N, 'points': +/-M}}]. "
+    "Positive = progress, Negative = regression/setback.\n"
+    "6. dead_crew_members — list of [name, role] from the CREW ROSTER. "
+    "Can ONLY kill characters listed in the full crew roster. Do NOT invent non-existent crew members. "
+    "May be left empty if no safe deaths.\n"
+    "IMPORTANT: If outcome_narrative mentions someone dying (including 'was killed', 'died under debris', "
+    "'did not survive', etc.), that character MUST appear in dead_crew_members. "
+    "Writing about a death in the narrative without adding it to dead_crew_members is a bug.\n"
+    "Also: if a character falls into a coma or is near death — add them to crew_injured with severity='critical'.\n"
+    "7. ship_destroyed — true/false\n"
+    "8. ship_hull_integrity — hull integrity % (0-100). DECREASES with damage.\n"
+    "9. ship_shields — shield strength % (0-100)\n"
+    "10. ship_systems_offline — array of offline/damaged systems "
+    "(e.g. ['warp drive', 'life support', 'weapons', 'communications'])\n"
+    "11. crew_injured — list of [name, role, severity] injured. severity: 'critical', 'moderate', 'minor'.\n"
+    "12. personal_outcomes — ARRAY of {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
+    "for EVERY character who made a decision.\n"
+)
+
+
+def build_combined_outcome_prompts(
+    language: str,
+    *,
+    setting: str,
+    conflict: str,
+    narrative: str,
+    previous_summary: str,
+    mission_text: str,
+    decisions_text: str,
+    roster_text: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for combined outcome analysis.
+
+    Returns:
+        (system_prompt, user_prompt)
+    """
+    if language == LANGUAGE_RU:
+        system = _COMBINED_OUTCOME_SYSTEM_RU
+        user = _COMBINED_OUTCOME_USER_RU.format(
+            setting=setting,
+            conflict=conflict,
+            narrative=narrative,
+            previous_summary=previous_summary or "Это первый ход",
+            mission_text=mission_text,
+            decisions_text=decisions_text,
+            roster_text=roster_text,
+        )
+    else:
+        system = _COMBINED_OUTCOME_SYSTEM_EN
+        user = _COMBINED_OUTCOME_USER_EN.format(
+            setting=setting,
+            conflict=conflict,
+            narrative=narrative,
+            previous_summary=previous_summary or "This is the first turn",
+            mission_text=mission_text,
+            decisions_text=decisions_text,
+            roster_text=roster_text,
+        )
+    return system, user
