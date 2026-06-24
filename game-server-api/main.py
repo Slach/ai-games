@@ -604,6 +604,7 @@ def generate_player_profile_from_answers(
         "species_description": species_description,
         "species_secondary": species_secondary_display,
         "gender_secondary": gender_secondary_display,
+        "species_primary_key": species_primary,
     }
 
     # Save role_score_history for underrepresented role tracking
@@ -1013,6 +1014,7 @@ async def complete_onboarding(session_id: str):
             role=profile["role"],
             traits=profile["personality_traits"],
             avatar_description=avatar_description_combined,
+            species_category=profile.get("species_primary_key") or "",
         )
         logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
     except Exception as e:
@@ -1242,6 +1244,7 @@ async def _generate_player_avatar(
             role=profile["role"],
             traits=profile["personality_traits"],
             avatar_description=avatar_description_combined,
+            species_category=profile.get("species_primary_key") or "",
         )
         logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
     except Exception as e:
@@ -2147,6 +2150,7 @@ async def _generate_chosen_action_image(
                 setting=setting,
                 species_desc=species_desc,
                 species_type=species,
+                species_category=profile.get("species_primary_key") or "",
             )
             logger.info(f"[ACTION_IMAGE] LLM prompt for {role}: {prompt[:120]}...")
         except Exception as llm_err:
@@ -2294,6 +2298,7 @@ async def _generate_npc_chosen_action_image(
                 avatar_description=avatar_desc_clean,
                 action_text=action_text,
                 setting=setting,
+                species_category=npc_profile.get("species_primary_key") or "",
             )
         except Exception as llm_err:
             logger.warning(
@@ -3124,6 +3129,7 @@ async def generate_chosen_action_image(
             setting=day_data["story"][:300],
             species_desc=profile.get("species_description", ""),
             species_type=profile.get("species", ""),
+            species_category=profile.get("species_primary_key") or "",
         )
     except Exception as e:
         logger.warning(f"[ADMIN] LLM prompt failed: {e}")
@@ -3838,6 +3844,7 @@ async def admin_start_game(request: StartGameRequest):
                 role=role,
                 traits=traits,
                 avatar_description=avatar_description_combined,
+                species_category=profile.get("species_primary_key") or "",
             )
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] LLM prompt generation failed for {role}: {e}")
@@ -4634,6 +4641,7 @@ async def admin_continue_game(
                 role=role,
                 traits=traits,
                 avatar_description=avatar_description_combined,
+                species_category=profile.get("species_primary_key") or "",
             )
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] LLM prompt generation failed for {role}: {e}")

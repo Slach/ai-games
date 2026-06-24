@@ -1683,130 +1683,6 @@ class GameMasterAgent:
 
     # ============== Avatar Prompt ==============
 
-    def _detect_species_category(self, text: str) -> str:
-        """Detect species category from avatar/species description text.
-
-        Returns one of: 'human', 'humanoid', 'non_humanoid', 'energy',
-                        'cybernetic', 'symbiotic'
-        Matches both English and Russian species type names and common descriptors.
-        """
-        t = text.lower()
-
-        # Species type keywords (use stems for Russian morphology variants)
-        categories = [
-            (
-                "energy",
-                [
-                    "energy being",
-                    "энергетическ",  # covers энергетический, энергетическая, энергетическое
-                    "plasma",
-                    "energy field",
-                    "gaseous",
-                    "frequency",
-                    "resonance",
-                    "light being",
-                    "energy pattern",
-                    "field of energy",
-                    "electromagnetic",
-                    "plasma being",
-                    "non corporeal",
-                    "incorporeal",
-                    "ethereal",
-                    "gaseous being",
-                ],
-            ),
-            (
-                "cybernetic",
-                [
-                    "cybernetic",
-                    "кибернетическ",  # covers кибернетический, кибернетическая
-                    "robotic",
-                    "mechanical",
-                    "synthetic",
-                    "machine",
-                    "android",
-                    "construct",
-                    "digital",
-                    "cyborg",
-                    "prosthetic",
-                    "circuit",
-                    "processor",
-                    "mech",
-                    "artificial intelligence",
-                    "artificial being",
-                ],
-            ),
-            (
-                "symbiotic",
-                [
-                    "symbiotic",
-                    "симбиотическ",  # covers симбиотический, симбиотическая, симбиотическое
-                    "симбионт",
-                    "symbiont",
-                    "composite",
-                    "multiple beings",
-                    "host",
-                    "union",
-                    "collective",
-                    "союз существ",
-                    "коллектив",
-                    "несколько существ",
-                    "hive mind",
-                    "shared consciousness",
-                    "multiple consciousness",
-                    "two beings",
-                    "joined",
-                    "merged",
-                ],
-            ),
-            (
-                "non_humanoid",
-                [
-                    "non_humanoid",
-                    "негуманоид",
-                    "tentacle",
-                    "carapace",
-                    "exoskeleton",
-                    "crystalline",
-                    "кристаллическ",  # covers кристаллический, кристаллические, кристаллическая
-                    "панцирь",
-                    "щупальц",  # covers щупальца, щупальце
-                    "экзоскелет",
-                    "бесформенн",  # covers бесформенный, бесформенная
-                    "no face",
-                    "no head",
-                    "slime",
-                    "amorphous",
-                    "without face",
-                    "without head",
-                    "no humanoid form",
-                    "multiple limbs",
-                    "multiple leg",
-                    "alien anatomy",
-                    "non human",
-                    "silicon based",
-                    "gelatinous",
-                    "multi legged",
-                    "non humanoid",
-                ],
-            ),
-            (
-                "humanoid",
-                [
-                    "humanoid",
-                    "гуманоид",
-                    "humanoid with",
-                    "humanoid alien",
-                ],
-            ),
-        ]
-
-        for category, keywords in categories:
-            if any(kw in t for kw in keywords):
-                return category
-
-        return "human"
-
     def _species_prompt_instructions(self, category: str) -> dict:
         """Return (focus_instructions, framing) for a given species category."""
         prompts = {
@@ -1857,13 +1733,26 @@ spatial presence\n"
         return prompts.get(category, prompts["human"])
 
     def generate_avatar_prompt(
-        self, role: str, traits: list[str], avatar_description: str
+        self,
+        role: str,
+        traits: list[str],
+        avatar_description: str,
+        species_category: str = "",
     ) -> str:
-        """Generate an image prompt for player avatar using LLM with json_schema."""
+        """Generate an image prompt for player avatar using LLM with json_schema.
+
+        Args:
+            role: Player's role on the ship
+            traits: Personality traits
+            avatar_description: Full avatar visual description
+            species_category: Species category from onboarding (human, humanoid,
+                              non_humanoid, energy, cybernetic, symbiotic).
+                              Empty string = fallback to 'human'.
+        """
         logger.info(f"[AVATAR] Generating avatar prompt for role: {role}")
 
-        species_cat = self._detect_species_category(avatar_description)
-        logger.info(f"[AVATAR] Detected species category: {species_cat}")
+        species_cat = species_category or "human"
+        logger.info(f"[AVATAR] Using species category: {species_cat}")
         instr = self._species_prompt_instructions(species_cat)
 
         system = (
@@ -1912,6 +1801,7 @@ spatial presence\n"
         setting: str,
         species_desc: str = "",
         species_type: str = "",
+        species_category: str = "",
     ) -> str:
         """Generate an image prompt for the chosen action scene using LLM.
 
@@ -1926,13 +1816,16 @@ spatial presence\n"
             setting: Story setting / environment
             species_desc: Extra species appearance details
             species_type: Species type label
+            species_category: Species category from onboarding (human, humanoid,
+                              non_humanoid, energy, cybernetic, symbiotic).
+                              Empty string = fallback to 'human'.
 
         Returns:
             LLM-generated image prompt string
         """
         logger.info(f"[ACTION_PROMPT] Generating chosen action prompt for {role}")
 
-        species_cat = self._detect_species_category(avatar_description)
+        species_cat = species_category or "human"
         instr = self._species_prompt_instructions(species_cat)
 
         # Combine avatar context for character appearance

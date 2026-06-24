@@ -39,6 +39,10 @@ MIGRATIONS: list[tuple[int, str]] = [
         2,
         "ALTER TABLE onboarding_sessions ADD COLUMN role_score_history TEXT DEFAULT '{}';",
     ),
+    (
+        3,
+        "ALTER TABLE player_profiles ADD COLUMN species_primary_key TEXT DEFAULT NULL;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -609,8 +613,8 @@ def create_player_profile(player_data: dict[str, Any]) -> dict[str, Any] | None:
         """INSERT OR REPLACE INTO player_profiles
            (player_id, avatar_url, avatar_description, role, role_description, personality_traits,
             game_id, last_poll, created_at, species, gender, species_description,
-            species_secondary, gender_secondary, player_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            species_secondary, gender_secondary, player_name, species_primary_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             player_data["player_id"],
             player_data.get("avatar_url"),
@@ -627,6 +631,7 @@ def create_player_profile(player_data: dict[str, Any]) -> dict[str, Any] | None:
             player_data.get("species_secondary"),
             player_data.get("gender_secondary"),
             player_data.get("player_name"),
+            player_data.get("species_primary_key"),
         ),
     )
 
@@ -663,6 +668,7 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
         "species_description": row["species_description"],
         "species_secondary": row["species_secondary"],
         "gender_secondary": row["gender_secondary"],
+        "species_primary_key": row["species_primary_key"],
         "is_dead": bool(row["is_dead"]) if row["is_dead"] is not None else False,
         "is_spectator": bool(row["is_spectator"])
         if row["is_spectator"] is not None
