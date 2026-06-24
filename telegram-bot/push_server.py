@@ -8,10 +8,9 @@ from collections.abc import Callable
 from typing import Any
 
 import aiohttp
-from aiohttp import web
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
-
+from aiohttp import web
 from language import get_actions, get_bridge, get_current_day, get_notifications
 
 logger = logging.getLogger(__name__)

@@ -11,6 +11,7 @@ import os
 import re
 from typing import Any, cast
 
+from database import SHIP_ROLE_KEYS
 from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionSystemMessageParam,
@@ -20,8 +21,6 @@ from openai.types.shared_params.response_format_json_schema import (
     ResponseFormatJSONSchema,
 )
 from pydantic import BaseModel
-
-from database import SHIP_ROLE_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -3023,7 +3022,8 @@ spatial presence\n"
             user = (
                 f"Экипаж:\n{crew_desc}\n\n"
                 "Создай миссию с:\n"
-                "1. Название миссии (в формате 'Кодовое имя: описание')\n"
+                "1. Название миссии — только кодовое имя и описание (формат: 'Кодовое имя: описание'). "
+                "ВАЖНО: слово 'Миссия' в названии НЕ пиши — оно будет добавлено автоматически в интерфейсе.\n"
                 "2. Описание — что нужно сделать, 2-3 абзаца\n"
                 "3. 2-4 этапа с целями, каждый с success_threshold (1-10)\n"
                 "Этапы должны быть последовательными, но достижимыми нелинейно.\n"
@@ -3037,7 +3037,8 @@ spatial presence\n"
             user = (
                 f"Crew:\n{crew_desc}\n\n"
                 "Create a mission with:\n"
-                "1. Mission name (format: 'Code Name: description')\n"
+                "1. Mission name — code name and description only (format: 'Code Name: description'). "
+                "IMPORTANT: do NOT include the word 'Mission' in the name — it will be added automatically by the UI.\n"
                 "2. Description — what needs to be done, 2-3 paragraphs\n"
                 "3. 2-4 stages with objectives, each with success_threshold (1-10)\n"
                 "Stages should be sequential but achievable non-linearly."
@@ -3056,9 +3057,7 @@ spatial presence\n"
         except Exception as e:
             logger.error(f"[MISSION] Generation failed: {e}")
             fallback_name = (
-                "Миссия «Первый контакт»"
-                if self.language == "ru"
-                else "Mission 'First Contact'"
+                "Первый контакт" if self.language == "ru" else "First Contact"
             )
             fallback_desc = (
                 "Исследовать неизвестный сигнал в секторе 7-Альфа. "

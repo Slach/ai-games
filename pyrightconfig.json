@@ -10,10 +10,11 @@
         "comfyui",
         "docs",
         "**/__pycache__",
-        "**/.git", 
-        "**/node_modules", 
-        "**/.*", 
+        "**/.git",
+        "**/node_modules",
+        "**/.*",
         ".venv"
     ],
-    "pythonVersion": "3.12"
+    "pythonVersion": "3.12",
+    "maxLineLength": 255
 }
