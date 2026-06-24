@@ -3686,6 +3686,9 @@ async def admin_start_game(request: StartGameRequest):
             briefing = briefing_data.get("briefing", "")
             choices = briefing_data.get("choices", [])
             personal_title = briefing_data.get("personal_title", "")
+            if personal_title and day_num:
+                prefix = "Ход " if language == "ru" else "Turn "
+                personal_title = f"{prefix}{day_num} — {personal_title}"
 
             if participant["type"] == "npc":
                 # NPCs decide immediately without seeing consequences
@@ -4500,6 +4503,9 @@ async def admin_continue_game(
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])
         personal_title = briefing_data.get("personal_title", "")
+        if personal_title and day_num:
+            prefix = "Ход " if language == "ru" else "Turn "
+            personal_title = f"{prefix}{day_num} — {personal_title}"
 
         if participant["type"] == "npc":
             npc_profile = get_npc_profile(participant["npc_key"]) or participant

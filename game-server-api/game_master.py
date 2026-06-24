@@ -2866,10 +2866,10 @@ spatial presence\n"
         except Exception as e:
             role_label = player_role
             if self.language == "ru":
-                fallback_title = f"Ход {day or ''} — {role_label}"
+                fallback_title = f"{display_name} — {role_label}"
                 fallback_briefing = f"{display_name}, ты — {role_label}. Ты оцениваешь ситуацию спокойно и профессионально."
             else:
-                fallback_title = f"Turn {day or ''} — {role_label}"
+                fallback_title = f"{display_name} — {role_label}"
                 fallback_briefing = f"{display_name}, you are the {role_label}. You assess the situation calmly and professionally."
             logger.error(f"[DAY] Briefing generation failed for {player_id}: {e}")
             return {
