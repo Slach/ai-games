@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 import aiohttp
 import language as lang
+from retry import call_with_retry
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -1555,15 +1556,16 @@ async def cmd_team(message: types.Message):
             # Telegram limits media groups to 10 items
             for i in range(0, len(media_group), 10):
                 batch = media_group[i : i + 10]
-                try:
-                    await message.answer_media_group(media=batch)
-                except Exception as e:
-                    logger.error(f"[TEAM] Failed to send media group batch: {e}")
+                await call_with_retry(
+                    lambda: message.answer_media_group(media=batch),
+                )
 
         # Send roster text after images
-        await message.answer(
-            roster_text,
-            parse_mode="Markdown",
+        await call_with_retry(
+            lambda: message.answer(
+                roster_text,
+                parse_mode="Markdown",
+            ),
         )
 
     except Exception as e:
@@ -1705,32 +1707,28 @@ async def cmd_gm_start_game(message: types.Message):
         await message.answer(gm_msgs["start_game_usage"])
         return
 
-    await message.answer(gm_msgs["starting_game"].format(game_id=game_id), parse_mode="Markdown")
+    await message.answer(
+        f"🚀 Запущена генерация игры `{game_id}`...\n⏳ Создаю NPC, миссию и бриффинги. Это может занять несколько минут.\n📬 Вы получите уведомление, когда игра будет готова.",
+        parse_mode="Markdown",
+    )
 
     try:
         result = await api_request(
             "POST",
             "/admin/start-game",
             data={"game_id": game_id, "language": BOT_LANGUAGE},
-            timeout_total=600,
+            timeout_total=60,
         )
-        if result and result.get("status") == "success":
-            day_num = result.get("day", 1)
-            player_count = result.get("player_count", 0)
-            npc_count = result.get("npc_count", 0)
-            msg = gm_msgs["game_started"].format(
-                game_id=game_id,
-                day_num=day_num,
-                player_count=player_count,
-                npc_count=npc_count,
-            )
-            await message.answer(msg, parse_mode="Markdown")
-            # Bridge, mission & briefings are delivered via push_briefings
+        if result and result.get("status") == "accepted":
+            logger.info(f"Start game {game_id} accepted by server")
         else:
+            logger.warning(f"Start game {game_id}: unexpected response {result}")
             await message.answer(gm_msgs["start_game_error"].format(error=result))
     except Exception as e:
-        logger.error(f"Failed to start game {game_id}: {e}")
-        await message.answer(gm_msgs["start_game_error"].format(error=e))
+        logger.error(f"Failed to start start-game request for {game_id}: {e}")
+        await message.answer(
+            f"❌ Не удалось запустить игру: {e}",
+        )
 
 
 async def cmd_gm_kick(message: types.Message):
@@ -1865,32 +1863,29 @@ async def cmd_gm_continue_game(message: types.Message):
         await message.answer(gm_msgs["continue_game_usage"])
         return
 
-    await message.answer(gm_msgs["continuing_game"].format(game_id=game_id), parse_mode="Markdown")
+    await message.answer(
+        f"🚀 Запущена генерация хода для игры `{game_id}`...\n⏳ Это может занять несколько минут.\n📬 Вы получите уведомление, когда ход будет готов.",
+        parse_mode="Markdown",
+    )
 
     try:
         result = await api_request(
             "POST",
             "/admin/continue-game",
             params={"game_id": game_id, "language": BOT_LANGUAGE},
-            timeout_total=600,
+            timeout_total=60,
         )
-        if result and result.get("status") == "success":
+        if result and result.get("status") == "accepted":
             day_num = result.get("day", 1)
-            players = result.get("players", 0)
-            npcs = result.get("npcs", 0)
-            total = result.get("total_participants", 0)
-            msg = gm_msgs["game_continued"].format(
-                day_num=day_num,
-                players=players,
-                npcs=npcs,
-                total=total,
-            )
-            await message.answer(msg, parse_mode="Markdown")
+            logger.info(f"Continue game {game_id} accepted by server for day {day_num}")
         else:
+            logger.warning(f"Continue game {game_id}: unexpected response {result}")
             await message.answer(gm_msgs["continue_game_error"].format(error=result))
     except Exception as e:
-        logger.error(f"Failed to continue game {game_id}: {e}")
-        await message.answer(gm_msgs["continue_game_error"].format(error=e))
+        logger.error(f"Failed to start continue-game request for {game_id}: {e}")
+        await message.answer(
+            f"❌ Не удалось запустить генерацию хода: {e}",
+        )
 
 
 async def cmd_gm_regenerate_turn(message: types.Message):
@@ -1920,7 +1915,7 @@ async def cmd_gm_regenerate_turn(message: types.Message):
         return
 
     await message.answer(
-        gm_msgs["regenerating_turn"].format(game_id=game_id),
+        f"🔄 Запущена перегенерация хода для игры `{game_id}`...\n⏳ Это может занять несколько минут.\n📬 Вы получите уведомление, когда ход будет готов.",
         parse_mode="Markdown",
     )
 
@@ -1929,23 +1924,19 @@ async def cmd_gm_regenerate_turn(message: types.Message):
             "POST",
             "/admin/regenerate-turn",
             params={"game_id": game_id, "language": BOT_LANGUAGE},
-            timeout_total=600,
+            timeout_total=60,
         )
-        if result and result.get("status") == "success":
+        if result and result.get("status") == "accepted":
             day_num = result.get("day", 1)
-            players = result.get("players", 0)
-            npcs = result.get("npcs", 0)
-            msg = gm_msgs["turn_regenerated"].format(
-                day_num=day_num,
-                players=players,
-                npcs=npcs,
-            )
-            await message.answer(msg, parse_mode="Markdown")
+            logger.info(f"Regenerate turn for game {game_id} accepted by server for day {day_num}")
         else:
+            logger.warning(f"Regenerate turn {game_id}: unexpected response {result}")
             await message.answer(gm_msgs["regenerate_turn_error"].format(error=result))
     except Exception as e:
-        logger.error(f"Failed to regenerate turn for game {game_id}: {e}")
-        await message.answer(gm_msgs["regenerate_turn_error"].format(error=e))
+        logger.error(f"Failed to start regenerate-turn request for {game_id}: {e}")
+        await message.answer(
+            f"❌ Не удалось запустить перегенерацию хода: {e}",
+        )
 
 
 async def cmd_gm_restart_game(message: types.Message):
@@ -2007,7 +1998,7 @@ async def cmd_gm_restart_game(message: types.Message):
         except Exception as e:
             logger.warning(f"Failed to reset dedup cache for restart: {e}")
 
-        # Step 2: Immediately start the game (generate Day 1)
+        # Step 2: Start background game generation (async, returns immediately)
         start_result = await api_request(
             "POST",
             "/admin/start-game",
@@ -2016,22 +2007,19 @@ async def cmd_gm_restart_game(message: types.Message):
                 "language": BOT_LANGUAGE,
                 "was_restarted": True,
             },
-            timeout_total=600,
+            timeout_total=60,
         )
-        if start_result and start_result.get("status") == "success":
-            msg = gm_msgs["game_restarted"].format(
-                game_id=game_id,
-                deleted_days=result.get("deleted_days", 0),
-                deleted_briefings=result.get("deleted_briefings", 0),
-                deleted_actions=result.get("deleted_actions", 0),
-                deleted_messages=result.get("deleted_messages", 0),
-                deleted_mission=result.get("deleted_mission", False),
-                day_num=start_result.get("day", 1),
-                player_count=start_result.get("player_count", 0),
-                npc_count=start_result.get("npc_count", 0),
+        if start_result and start_result.get("status") == "accepted":
+            logger.info(f"Restart game {game_id}: reset complete, background generation started")
+            await message.answer(
+                f"✅ **Игра `{game_id}` сброшена!**\n\n"
+                f"🗑 Удалено ходов: {result.get('deleted_days', 0)}\n"
+                f"🗑 Удалено брифингов: {result.get('deleted_briefings', 0)}\n"
+                f"🗑 Удалено действий: {result.get('deleted_actions', 0)}\n\n"
+                f"🚀 Запущена генерация новой игры...\n"
+                f"📬 Вы получите уведомление, когда игра будет готова.",
+                parse_mode="Markdown",
             )
-            await message.answer(msg, parse_mode="Markdown")
-            # Bridge, mission & briefings are delivered via push_briefings
         else:
             await message.answer(gm_msgs["restart_game_error"].format(error="Сброс выполнен, но запуск не удался: " + str(start_result)))
     except Exception as e:
@@ -2233,6 +2221,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
 
     _, question_id_str, option_idx_str = parts
     option_idx = int(option_idx_str)
+    callback_question_id = int(question_id_str)
     player_id = callback.from_user.id
     error_msgs = lang.get_errors(BOT_LANGUAGE)
 
@@ -2242,7 +2231,13 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     current_question_id = state_data.get("current_question_id")
     current_options = state_data.get("current_options")
 
-    logger.info(f"Inline onboarding answer: player={player_id}, question_id={question_id_str}, option_idx={option_idx}, session_id={session_id}")
+    logger.info(f"Inline onboarding answer: player={player_id}, callback_question_id={callback_question_id}, option_idx={option_idx}, session_id={session_id}")
+
+    # Ignore stale button presses from old messages
+    if current_question_id is not None and callback_question_id != current_question_id:
+        logger.warning(f"Stale keyboard press: callback_question_id={callback_question_id} != current_question_id={current_question_id}, ignoring")
+        await callback.answer("Этот вопрос уже неактивен. Ответьте на текущий вопрос." if BOT_LANGUAGE == "ru" else "This question is no longer active. Answer the current question.", show_alert=False)
+        return
 
     if not session_id:
         logger.error(f"No session_id in state for player {player_id}")

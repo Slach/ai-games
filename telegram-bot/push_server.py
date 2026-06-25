@@ -9,13 +9,25 @@ from typing import Any
 
 import aiohttp
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InputMediaPhoto
+from aiogram.exceptions import TelegramBadRequest
 from aiohttp import web
 from language import get_actions, get_bridge, get_current_day, get_notifications
+from retry import call_with_retry
 
 logger = logging.getLogger(__name__)
 
+
+class _HealthCheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
+logging.getLogger("aiohttp.access").addFilter(_HealthCheckFilter())
+
+
 PUSH_SERVER_PORT = int(os.getenv("PUSH_SERVER_PORT", "9090"))
+GAME_MASTER_ID = int(os.getenv("TELEGRAM_BOT_GAME_MASTER_ID", "0"))
 
 # Track pending action image deliveries so /push/outcome can wait for
 # action images to be sent to Telegram BEFORE the outcome message.
@@ -60,35 +72,6 @@ def _build_briefing_text(
     return title_line + "\n\n" + current.get("briefing_header", "{briefing}").format(briefing=briefing) + crew_txt + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
 
 
-async def _call_with_retry(
-    fn: Callable[[], Any],
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 10.0,
-) -> Any:
-    """Call an async function with exponential backoff on network errors.
-
-    Retries on aiohttp.ClientError, TimeoutError, OSError (covers proxy
-    timeouts, DNS failures, connection resets). All other errors (e.g.
-    Telegram API rejecting a message) are re-raised immediately since
-    they won't succeed on retry.
-    """
-    last_exc = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn()
-        except (aiohttp.ClientError, TimeoutError, OSError, asyncio.TimeoutError) as e:
-            last_exc = e
-            if attempt < max_retries:
-                delay = min(base_delay * (2**attempt), max_delay)
-                logger.warning(f"[RETRY] Attempt {attempt + 1}/{max_retries + 1} failed: {e}. Retrying in {delay:.1f}s...")
-                await asyncio.sleep(delay)
-        except Exception:
-            raise  # Non-retryable — re-raise immediately
-    logger.error(f"[RETRY] All {max_retries + 1} attempts failed: {last_exc}")
-    raise last_exc  # type: ignore[misc]
-
-
 async def _download_image(url: str, timeout: int = 30) -> bytes | None:
     """Download an image from URL and return raw bytes."""
 
@@ -107,7 +90,7 @@ async def _download_image(url: str, timeout: int = 30) -> bytes | None:
             )
 
     try:
-        return await _call_with_retry(_do_download, max_retries=2, base_delay=0.5)
+        return await call_with_retry(_do_download, max_retries=2, base_delay=0.5)
     except Exception as e:
         logger.warning(f"[PUSH] Failed to download image: {e}")
     return None
@@ -158,7 +141,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                 notif_msgs = get_notifications(language)
                 restart_msg = notif_msgs.get("game_restarted", "")
                 if restart_msg:
-                    await _call_with_retry(
+                    await call_with_retry(
                         lambda: bot.send_message(
                             chat_id=player_id,
                             text=restart_msg,
@@ -176,7 +159,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                 img_data = await _download_image(bridge_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="bridge.png")
-                    await _call_with_retry(
+                    await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
@@ -185,7 +168,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                         )
                     )
                 else:
-                    await _call_with_retry(
+                    await call_with_retry(
                         lambda: bot.send_message(
                             chat_id=player_id,
                             text=caption,
@@ -198,7 +181,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     desc = mission.get("description", "")
                     if desc:
                         bridge_msgs = get_bridge(language)
-                        await _call_with_retry(
+                        await call_with_retry(
                             lambda: bot.send_message(
                                 chat_id=player_id,
                                 text=bridge_msgs.get("mission_desc", "{description}").format(description=desc),
@@ -221,7 +204,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     narrative_too_long = global_narrative and len(global_narrative) > 900
                     if not narrative_too_long and global_narrative:
                         caption += f"\n\n{global_narrative}"
-                    await _call_with_retry(
+                    await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
@@ -234,7 +217,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
             if global_narrative and len(global_narrative) > 900:
                 current_msgs = get_current_day(language)
                 intro_title = current_msgs.get("global_intro_title", "Turn {day}").format(day=day)
-                await _call_with_retry(
+                await call_with_retry(
                     lambda: bot.send_message(
                         chat_id=player_id,
                         text=f"*{intro_title}*\n\n{global_narrative}",
@@ -252,7 +235,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     photo = BufferedInputFile(img_data, filename="character.png")
                     # Use personal_title as caption, or build fallback
                     caption_text = personal_title or (("🎯 Ход {day} — {role}" if language == "ru" else "🎯 Turn {day} — {role}").format(day=day, role=player_data.get("role", "")))
-                    await _call_with_retry(
+                    await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
@@ -267,7 +250,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                 img_data = await _download_image(chosen_action_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="action.png")
-                    await _call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo))
+                    await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo))
 
             # 6. Send briefing text + action choices
             briefing = player_data.get("briefing", "")
@@ -282,7 +265,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     personal_title=personal_title,
                 )
                 keyboard = create_keyboard_fn(choices)
-                await _call_with_retry(
+                await call_with_retry(
                     lambda: bot.send_message(
                         chat_id=player_id,
                         text=text,
@@ -355,7 +338,7 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
                 caption = action_text
             else:
                 caption = msgs.get("action_caption", "")
-            await _call_with_retry(
+            await call_with_retry(
                 lambda: bot.send_photo(
                     chat_id=player_id,
                     photo=photo,
@@ -412,6 +395,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     ship_systems_offline = payload.get("ship_systems_offline")
     total_crew_count = payload.get("total_crew_count")
     alive_crew_count = payload.get("alive_crew_count")
+    action_images = payload.get("action_images", [])
 
     if not day or not alive_players:
         return web.json_response(
@@ -453,6 +437,28 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         else:
             logger.info(f"[PUSH_OUTCOME] All action images delivered, sending outcome for day {day}")
 
+    # ── Pre-download action images for the album ─────────────────
+    # Download all action images once, so we don't re-download for each player.
+    # Maps player_id/npc_key -> BufferedInputFile. Used for the group album.
+    _prefetched_action_photos: dict[int | str, BufferedInputFile | None] = {}
+    if action_images:
+        logger.info(f"[PUSH_OUTCOME] Pre-downloading {len(action_images)} action images for album")
+        for img_entry in action_images:
+            img_url = img_entry.get("image_url")
+            if not img_url:
+                continue
+            pid = img_entry.get("player_id")
+            npc_key = img_entry.get("npc_key")
+            key = pid if pid is not None else (npc_key or f"npc_{len(_prefetched_action_photos)}")
+            if key in _prefetched_action_photos:
+                continue
+            img_data = await _download_image(img_url)
+            if img_data:
+                _prefetched_action_photos[key] = BufferedInputFile(img_data, filename=f"action_{key}.png")
+            else:
+                _prefetched_action_photos[key] = None
+        logger.info(f"[PUSH_OUTCOME] Pre-downloaded {sum(1 for v in _prefetched_action_photos.values() if v)}/{len(action_images)} action images")
+
     # Build outcome message text
     current_msgs = get_current_day(language)
     outcome_title = current_msgs.get("outcome_title", "Day {day} - Outcome").format(day=day)
@@ -460,85 +466,139 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
     if ship_status:
         if language == "ru":
-            status_text = "\U0001f6a2 Корабль цел" if ship_status == "alive" else "\U0001f4a5 Корабль уничтожен!"
+            status_text = "🚢 Корабль цел" if ship_status == "alive" else "💥 Корабль уничтожен!"
         else:
-            status_text = "\U0001f6a2 Ship is intact" if ship_status == "alive" else "\U0001f4a5 Ship destroyed!"
+            status_text = "🚢 Ship is intact" if ship_status == "alive" else "💥 Ship destroyed!"
         parts.append("")
         parts.append(status_text)
+
+    # Ship hull and shield status
+    if ship_hull_integrity is not None or ship_shields is not None:
+        parts.append("")
+        hull_str = f"🛡 Корпус: {ship_hull_integrity}%" if language == "ru" else f"🛡 Hull: {ship_hull_integrity}%"
+        shield_str = f"🟡 Щиты: {ship_shields}%" if language == "ru" else f"🟡 Shields: {ship_shields}%"
+        parts.append(f"{hull_str}  |  {shield_str}")
 
     # Crew count: "9 из 10 членов экипажа живы" or "10 / 10 crew alive"
     if total_crew_count is not None and alive_crew_count is not None:
         parts.append("")
         if language == "ru":
-            parts.append(f"\U0001f465 {alive_crew_count} из {total_crew_count} {'членов экипажа живы' if alive_crew_count > 1 else 'член экипажа жив'}")
+            parts.append(f"👥 {alive_crew_count} из {total_crew_count} {'членов экипажа живы' if alive_crew_count > 1 else 'член экипажа жив'}")
         else:
-            parts.append(f"\U0001f465 {alive_crew_count} / {total_crew_count} crew alive")
+            parts.append(f"👥 {alive_crew_count} / {total_crew_count} crew alive")
 
     if death_notices:
         if language == "ru":
             parts.append("")
-            parts.append("\u2620 \u041f\u043e\u0442\u0435\u0440\u0438 \u044d\u043a\u0438\u043f\u0430\u0436\u0430:")
+            parts.append("☠ Потери экипажа:")
         else:
             parts.append("")
-            parts.append("\u2620 Crew losses:")
+            parts.append("☠ Crew losses:")
         for notice in death_notices:
             role = notice.get("role", "")
             name = notice.get("name", "")
-            parts.append(f"\u2022 {role} — {name}")
+            parts.append(f"• {role} — {name}")
 
     if mission_progress:
         parts.append("")
         if language == "ru":
-            parts.append("\U0001f3c6 \u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u043c\u0438\u0441\u0441\u0438\u0438:")
+            parts.append("🏆 Прогресс миссии:")
         else:
-            parts.append("\U0001f3c6 Mission progress:")
+            parts.append("🏆 Mission progress:")
         for entry in mission_progress:
             stage = entry.get("stage", "?")
             points = entry.get("points", 0)
-            direction = "\U0001f7e2 +" if points > 0 else ("\U0001f534 " if points < 0 else "\u26aa ")
-            parts.append(f"  {direction}{points} \u044d\u0442\u0430\u043f {stage}" if language == "ru" else f"  {direction}{points} stage {stage}")
+            direction = "🟢 +" if points > 0 else ("🔴 " if points < 0 else "⚪ ")
+            parts.append(f"  {direction}{points} этап {stage}" if language == "ru" else f"  {direction}{points} stage {stage}")
 
     if ship_systems_offline:
         parts.append("")
         offline_list = ", ".join(ship_systems_offline)
         if language == "ru":
-            parts.append(f"\U0001f6a7 \u0421\u0438\u0441\u0442\u0435\u043c\u044b \u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u044b: {offline_list}")
+            parts.append(f"🚧 Системы отключены: {offline_list}")
         else:
-            parts.append(f"\U0001f6a7 Systems offline: {offline_list}")
+            parts.append(f"🚧 Systems offline: {offline_list}")
 
     if injury_notices:
         parts.append("")
         if language == "ru":
-            parts.append("\U0001f915 \u0420\u0430\u043d\u0435\u043d\u044b\u0435:")
+            parts.append("🤕 Раненые:")
         else:
-            parts.append("\U0001f915 Injured:")
+            parts.append("🤕 Injured:")
         for notice in injury_notices:
             name = notice.get("name", "")
             role = notice.get("role", "")
             severity = notice.get("severity", "")
             severity_label = {
-                "critical": "\U0001f534 \u043a\u0440\u0438\u0442\u0438\u0447\u0435\u0441\u043a\u043e\u0435" if language == "ru" else "critical",
-                "moderate": "\U0001f7e1 \u0441\u0440\u0435\u0434\u043d\u0435\u0435" if language == "ru" else "moderate",
-                "minor": "\U0001f7e2 \u043b\u0451\u0433\u043a\u043e\u0435" if language == "ru" else "minor",
+                "critical": "🔴 критическое" if language == "ru" else "critical",
+                "moderate": "🟡 среднее" if language == "ru" else "moderate",
+                "minor": "🟢 лёгкое" if language == "ru" else "minor",
             }.get(severity, severity)
-            parts.append(f"\u2022 {role} — {name} ({severity_label})")
+            parts.append(f"• {role} — {name} ({severity_label})")
 
     if personal_outcomes:
         parts.append("")
         if language == "ru":
-            parts.append("\U0001f3ac \u041f\u043e\u0441\u043b\u0435\u0434\u0441\u0442\u0432\u0438\u044f \u0445\u043e\u0434\u0430:")
+            parts.append("🎬 Последствия хода:")
         else:
-            parts.append("\U0001f3ac Turn consequences:")
+            parts.append("🎬 Turn consequences:")
         for po in personal_outcomes:
             char_name = po.get("character_name", "")
             char_role = po.get("role", "")
             outcome_txt = po.get("outcome_text", "")
             if char_name and outcome_txt:
-                parts.append(f"\u2022 {char_name} ({char_role}): {outcome_txt}")
+                parts.append(f"• {char_name} ({char_role}): {outcome_txt}")
+                parts.append("")  # blank line between items
 
     outcome_message = "\n".join(parts)
 
     sent_player_ids: list[int] = []
+
+    # ── Helper: send album of OTHER players' and NPCs' actions ─────
+    async def _send_others_album(target_player_id: int):
+        """Send a media group album of actions by other players/NPCs (not this player)."""
+        if not action_images:
+            return
+
+        # Build InputMediaPhoto list: exclude target player's own actions
+        media_items = []
+        for img_entry in action_images:
+            pid = img_entry.get("player_id")
+            caption = img_entry.get("caption", "")
+            img_url = img_entry.get("image_url")
+            if not img_url:
+                continue
+            # Skip this player's own action — they already got it via push_player_chosen_action
+            if pid == target_player_id:
+                continue
+            # Get pre-downloaded photo
+            key: int | str = pid if pid is not None else (img_entry.get("npc_key") or f"npc_{hash(img_url)}")
+            photo = _prefetched_action_photos.get(key)
+            if photo is None:
+                continue
+            if not caption:
+                caption = language == "ru" and f"Ход {day}" or f"Turn {day}"
+            media_items.append(InputMediaPhoto(media=photo, caption=caption))
+
+        if not media_items:
+            return
+
+        # Telegram limits media groups to 10 items per call; split into chunks
+        max_group_size = 10
+        for chunk_start in range(0, len(media_items), max_group_size):
+            chunk = media_items[chunk_start : chunk_start + max_group_size]
+            try:
+                await call_with_retry(
+                    lambda: bot.send_media_group(
+                        chat_id=target_player_id,
+                        media=chunk,
+                    )
+                )
+                logger.info(f"[PUSH_OUTCOME] Sent actions album (chunk {chunk_start // max_group_size + 1}) to player {target_player_id}: {len(chunk)} images")
+            except TelegramBadRequest as album_err:
+                logger.warning(f"[PUSH_OUTCOME] Failed to send actions album to player {target_player_id}: {album_err}")
+            except Exception as album_err:
+                logger.warning(f"[PUSH_OUTCOME] Actions album error for player {target_player_id}: {album_err}")
 
     for player_id in alive_players:
         # Per-player dedup: skip if this player already got outcome for this day
@@ -546,20 +606,23 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             continue
 
         try:
-            # Send outcome image first if available
+            # 1. Send album of other players' and NPCs' actions FIRST
+            await _send_others_album(player_id)
+
+            # 2. Send outcome image
             if outcome_image_url:
                 img_data = await _download_image(outcome_image_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="outcome_image.png")
-                    await _call_with_retry(
+                    await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
                         )
                     )
 
-            # Send outcome narrative
-            await _call_with_retry(
+            # 3. Send outcome narrative
+            await call_with_retry(
                 lambda: bot.send_message(
                     chat_id=player_id,
                     text=outcome_message,
@@ -582,6 +645,51 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             "sent": sent_player_ids,
         }
     )
+
+
+async def handle_gm_notification(request: web.Request) -> web.Response:
+    """Handle POST /push/gm-notification from game-server-api.
+
+    Sends a Telegram message to the Game Master about turn generation
+    progress, success, or failure.
+    """
+    bot: Bot = request.app["bot"]
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    game_id = payload.get("game_id", "")
+    day = payload.get("day", 0)
+    status = payload.get("status", "")  # "success" or "error"
+    error = payload.get("error", "")
+    players = payload.get("players", 0)
+    npcs = payload.get("npcs", 0)
+
+    if status == "success":
+        msg = f"✅ **Ход {day} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {day}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
+    else:
+        msg = f"❌ **Ошибка генерации хода {day} игры `{game_id}`**\n\n{error}"
+
+    # Send to GM if we have a bot and GM ID
+    if bot and GAME_MASTER_ID > 0:
+        try:
+            await call_with_retry(
+                lambda: bot.send_message(
+                    chat_id=GAME_MASTER_ID,
+                    text=msg,
+                    parse_mode="Markdown",
+                )
+            )
+            logger.info(f"[PUSH_GM] Notification sent to GM for game {game_id} day {day}: {status}")
+        except Exception as e:
+            logger.error(f"[PUSH_GM] Failed to send GM notification: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+    else:
+        logger.warning(f"[PUSH_GM] Cannot send GM notification: bot={bool(bot)}, GAME_MASTER_ID={GAME_MASTER_ID}")
+
+    return web.json_response({"status": "ok"})
 
 
 async def handle_health(request: web.Request) -> web.Response:
@@ -633,6 +741,7 @@ async def start_push_server(
     app.router.add_post("/push/briefings", handle_push_briefings)
     app.router.add_post("/push/player-action", handle_push_player_chosen_action)
     app.router.add_post("/push/outcome", handle_push_outcome)
+    app.router.add_post("/push/gm-notification", handle_gm_notification)
     app.router.add_get("/health", handle_health)
 
     runner = web.AppRunner(app)

@@ -1,16 +1,24 @@
 
+# AI Games
+
 ## Technology Stack
 
 - **Python** - Primary backend language for game logic and AI integration
 - **TypeScript** - Frontend and client-side development for Telegram Mini App
 
-#### Python Code Style
+### Python Code Style
 
 - **All imports must be at the top of the file.** Never place `import` or
   `from ... import` statements inside functions, methods, `if` blocks,
   `try/except` blocks, or any other conditional/local scope. This ensures
   clarity, consistency, and avoids hidden import paths that make code harder
   to read and debug.
+
+- **Use actual UTF-8 characters, not `\uXXXX` escape sequences.** Never write
+  `\u041a\u043e\u0440\u043f\u0443\u0441` — write `Корпус` directly.
+  Unicode escapes make source files unreadable and harder to maintain.
+  Python handles UTF-8 source files natively; there is no technical reason to
+  use escape sequences.
 
 ### AI Systems
 
@@ -33,7 +41,12 @@
 
 ## Important Rules
 
-- **Fix causes, not symptoms.** Never add workarounds, post-processing, or data-cleaning functions that paper over incorrect output from an upstream source (LLM, external API, etc.). Instead, fix the upstream — correct the prompt, fix the API caller, or adjust the data format at the source. A `_clean_*` or `_sanitize_*` shim means you chose to treat the symptom instead of the disease.
+- **Fix causes, not symptoms.** Never add workarounds, post-processing, or
+  data-cleaning functions that paper over incorrect output from an upstream
+  source (LLM, external API, etc.). Instead, fix the upstream — correct the
+  prompt, fix the API caller, or adjust the data format at the source. A
+  `_clean_*` or `_sanitize_*` shim means you chose to treat the symptom
+  instead of the disease.
 
 - Avoid over-engineering. Only make changes that are directly requested or clearly necessary. Keep solutions
 simple and focused.

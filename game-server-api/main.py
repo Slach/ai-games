@@ -104,7 +104,7 @@ from prompts import (
     OnboardingQuestion,
     build_interleaved_species_gender_questions,
 )
-from push_client import push_briefings, push_day_outcome, push_player_chosen_action
+from push_client import push_briefings, push_day_outcome, push_gm_notification, push_player_chosen_action
 from pydantic import BaseModel, TypeAdapter
 
 # Configure logging
@@ -3089,10 +3089,63 @@ def _random_npc_gender(language: str = "ru") -> str:
     return _NPC_GENDER_OPTIONS[lang_key][gender_key]
 
 
+async def _background_start_wrapper(request: StartGameRequest, day_num: int):
+    """Run start-game in background, notify GM on completion."""
+    try:
+        result = await _original_start_game(request)
+        if result and result.get("status") == "success":
+            await push_gm_notification(
+                game_id=request.game_id,
+                day=day_num,
+                status="success",
+                players=result.get("player_count", 0),
+                npcs=result.get("npc_count", 0),
+            )
+    except Exception as e:
+        logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}")
+        await push_gm_notification(
+            game_id=request.game_id,
+            day=day_num,
+            status="error",
+            error=str(e),
+        )
+
+
 @app.post("/admin/start-game")
 async def admin_start_game(request: StartGameRequest):
-    """Force-start the game: generate NPCs for missing roles, mark game as started,
-    generate the first (or next) game day with per-player briefings."""
+    """Force-start the game in background.
+
+    Validates prerequisites, starts background generation,
+    returns immediately. GM gets push notification when done.
+    """
+    logger.info("=== ADMIN START GAME (async) ===")
+    logger.info(f"game_id={request.game_id}, language={request.language}")
+
+    game_id = request.game_id
+
+    # Validate: game must have players
+    player_ids = get_players_in_game(game_id)
+    if len(player_ids) == 0:
+        raise HTTPException(status_code=400, detail="No players have joined the game yet")
+
+    state = get_game_state(game_id)
+    day_num = state["day"]
+
+    # Start background generation
+    asyncio.create_task(_background_start_wrapper(request, day_num))
+
+    logger.info(f"Background game start for {game_id}, current day={day_num}")
+
+    return {
+        "status": "accepted",
+        "day": day_num,
+        "player_count": len(player_ids),
+        "message": f"Game start for {game_id} accepted. You will be notified when ready.",
+    }
+
+
+async def _original_start_game(request: StartGameRequest):
+    """Original start-game logic (runs in background)."""
     logger.info("=== ADMIN START GAME ===")
     logger.info(f"game_id={request.game_id}, language={request.language}")
 
@@ -3997,6 +4050,37 @@ async def admin_analyze_day(
     }
 
 
+async def _background_continue_wrapper(
+    game_id: str,
+    language: str,
+    force_resend: bool,
+    day_num: int,
+):
+    """Run continue-game in background, notify GM on completion."""
+    try:
+        result = await _original_continue_game(
+            game_id=game_id,
+            language=language,
+            force_resend=force_resend,
+        )
+        if result and result.get("status") == "success":
+            await push_gm_notification(
+                game_id=game_id,
+                day=day_num,
+                status="success",
+                players=result.get("players", 0),
+                npcs=result.get("npcs", 0),
+            )
+    except Exception as e:
+        logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}")
+        await push_gm_notification(
+            game_id=game_id,
+            day=day_num,
+            status="error",
+            error=str(e),
+        )
+
+
 @app.post("/admin/continue-game")
 async def admin_continue_game(
     game_id: str = "default_game",
@@ -4005,12 +4089,52 @@ async def admin_continue_game(
 ):
     """Generate the next turn (day) in the game.
 
-    Generates a new game day with global circumstances, per-player briefings,
-    and NPC dialogues. Advances game state by one day.
-
-    This is essentially /admin/start-game but without the NPC/mission
-    setup — it continues an already-started game.
+    Starts background generation and returns immediately.
+    GM will receive a push notification via Telegram when done.
     """
+    logger.info("=== ADMIN CONTINUE GAME ===")
+    logger.info(f"game_id={game_id}, language={language}")
+
+    state = get_game_state(game_id)
+    day_num = state["day"]
+
+    # Check game is active
+    if state["status"] != "active" or not state["ship_alive"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Game is not active (ship destroyed or status is not 'active')",
+        )
+
+    # Start background generation task
+    asyncio.create_task(
+        _background_continue_wrapper(
+            game_id=game_id,
+            language=language,
+            force_resend=force_resend,
+            day_num=day_num,
+        )
+    )
+
+    logger.info(f"Background turn generation started for day {day_num}")
+
+    return {
+        "status": "accepted",
+        "day": day_num,
+        "message": f"Turn generation started for day {day_num}. You'll be notified when complete.",
+    }
+
+
+async def _original_continue_game(
+    game_id: str = "default_game",
+    language: str = "ru",
+    force_resend: bool = False,
+):
+    """Original continue-game logic (runs in background)."""
+    logger.info("=== ADMIN CONTINUE GAME ===")
+    logger.info(f"game_id={game_id}, language={language}")
+
+    state = get_game_state(game_id)
+    day_num = state["day"]
     logger.info("=== ADMIN CONTINUE GAME ===")
     logger.info(f"game_id={game_id}, language={language}")
 
@@ -4459,7 +4583,21 @@ async def admin_regenerate_turn(
     update_game_state(regenerate_day, "active", game_id=game_id)
 
     # Now regenerate the day using the continue-game logic
-    return await admin_continue_game(game_id=game_id, language=language, force_resend=True)
+    # admin_continue_game now starts background processing and returns immediately
+    await admin_continue_game(game_id=game_id, language=language, force_resend=True)
+
+    logger.info(f"Background regeneration started for Day {regenerate_day}")
+
+    return {
+        "status": "accepted",
+        "day": regenerate_day,
+        "message": f"Regeneration started for day {regenerate_day}. You will be notified when complete.",
+        "deleted": {
+            "briefings": deleted_briefings,
+            "actions": deleted_actions,
+            "day_record": bool(deleted_day),
+        },
+    }
 
 
 @app.post("/admin/restart-game")

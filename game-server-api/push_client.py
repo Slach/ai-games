@@ -22,6 +22,10 @@ TELEGRAM_BOT_OUTCOME_URL = os.getenv(
     "TELEGRAM_BOT_OUTCOME_URL",
     "http://telegram-bot:9090/push/outcome",
 )
+TELEGRAM_BOT_GM_NOTIFICATION_URL = os.getenv(
+    "TELEGRAM_BOT_GM_NOTIFICATION_URL",
+    "http://telegram-bot:9090/push/gm-notification",
+)
 PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
 PUSH_BASE_DELAY = float(os.getenv("PUSH_BASE_DELAY", "1.0"))
 PUSH_REQUEST_TIMEOUT = int(os.getenv("PUSH_REQUEST_TIMEOUT", "120"))
@@ -97,34 +101,22 @@ async def push_briefings(
                     body = await resp.json()
                     sent_count = len(body.get("sent", []))
                     already = body.get("already_sent", False)
-                    logger.info(
-                        f"[PUSH] Delivered day {day} for game {game_id}: "
-                        f"{'already_sent' if already else sent_count} players"
-                    )
+                    logger.info(f"[PUSH] Delivered day {day} for game {game_id}: {'already_sent' if already else sent_count} players")
                     return True
                 else:
                     error_text = await resp.text()
-                    logger.warning(
-                        f"[PUSH] Attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
-                        f"HTTP {resp.status} - {error_text}"
-                    )
+                    logger.warning(f"[PUSH] Attempt {attempt + 1}/{PUSH_MAX_RETRIES}: HTTP {resp.status} - {error_text}")
                     last_exception = Exception(f"HTTP {resp.status}: {error_text}")
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(
-                f"[PUSH] Attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
-                f"{type(e).__name__}: {e}. Retrying in {jitter:.1f}s..."
-            )
+            logger.warning(f"[PUSH] Attempt {attempt + 1}/{PUSH_MAX_RETRIES}: {type(e).__name__}: {e}. Retrying in {jitter:.1f}s...")
             last_exception = e
 
         # Wait before retry (skip on last attempt)
         if attempt < PUSH_MAX_RETRIES - 1:
             await asyncio.sleep(jitter)
 
-    logger.error(
-        f"[PUSH] Failed to deliver day {day} for game {game_id} "
-        f"after {PUSH_MAX_RETRIES} attempts: {last_exception}"
-    )
+    logger.error(f"[PUSH] Failed to deliver day {day} for game {game_id} after {PUSH_MAX_RETRIES} attempts: {last_exception}")
     return False
 
 
@@ -150,25 +142,17 @@ async def _post_with_retry(url: str, payload: dict, label: str) -> bool:
                     return True
                 else:
                     error_text = await resp.text()
-                    logger.warning(
-                        f"[PUSH] {label} attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
-                        f"HTTP {resp.status} - {error_text}"
-                    )
+                    logger.warning(f"[PUSH] {label} attempt {attempt + 1}/{PUSH_MAX_RETRIES}: HTTP {resp.status} - {error_text}")
                     last_exception = Exception(f"HTTP {resp.status}: {error_text}")
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(
-                f"[PUSH] {label} attempt {attempt + 1}/{PUSH_MAX_RETRIES}: "
-                f"{type(e).__name__}: {e}. Retrying in {jitter:.1f}s..."
-            )
+            logger.warning(f"[PUSH] {label} attempt {attempt + 1}/{PUSH_MAX_RETRIES}: {type(e).__name__}: {e}. Retrying in {jitter:.1f}s...")
             last_exception = e
 
         if attempt < PUSH_MAX_RETRIES - 1:
             await asyncio.sleep(jitter)
 
-    logger.error(
-        f"[PUSH] {label} failed after {PUSH_MAX_RETRIES} attempts: {last_exception}"
-    )
+    logger.error(f"[PUSH] {label} failed after {PUSH_MAX_RETRIES} attempts: {last_exception}")
     return False
 
 
@@ -192,6 +176,42 @@ async def push_player_chosen_action(
     }
     label = f"action player={player_id} day={day}"
     return await _post_with_retry(TELEGRAM_BOT_ACTION_URL, payload, label)
+
+
+async def push_gm_notification(
+    game_id: str,
+    day: int,
+    status: str,
+    error: str = "",
+    players: int = 0,
+    npcs: int = 0,
+) -> bool:
+    """Push a notification to the Game Master about turn generation status.
+
+    Called after background turn generation completes (success or failure)
+    so the GM gets a Telegram message without waiting for the HTTP response.
+
+    Args:
+        game_id: Game identifier
+        day: Day/turn number that was being generated
+        status: "success" or "error"
+        error: Error message (only when status="error")
+        players: Number of players (only when status="success")
+        npcs: Number of NPCs (only when status="success")
+
+    Returns:
+        True if delivered successfully, False after all retries exhausted.
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "day": day,
+        "status": status,
+        "error": error,
+        "players": players,
+        "npcs": npcs,
+    }
+    label = f"gm-notification game={game_id} day={day} status={status}"
+    return await _post_with_retry(TELEGRAM_BOT_GM_NOTIFICATION_URL, payload, label)
 
 
 async def push_day_outcome(

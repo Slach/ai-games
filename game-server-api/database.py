@@ -1352,6 +1352,35 @@ def get_all_active_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
     ]
 
 
+def get_all_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
+    """Get ALL NPCs (active and inactive) in a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM npc_profiles WHERE game_id = ? ORDER BY created_at",
+        (game_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "npc_key": row["npc_key"],
+            "role_key": row["role_key"],
+            "npc_name": row["npc_name"],
+            "role": row["role"],
+            "role_description": row["role_description"],
+            "personality_traits": json.loads(row["personality_traits"] or "[]"),
+            "species": row["species"],
+            "gender": row["gender"],
+            "avatar_description": row["avatar_description"],
+            "game_id": row["game_id"],
+            "is_active": bool(row["is_active"]),
+            "replaces_player_id": row.get("replaces_player_id"),
+        }
+        for row in rows
+    ]
+
+
 def get_npc_by_role(
     role_key: str, game_id: str = "default_game"
 ) -> dict[str, Any] | None:
