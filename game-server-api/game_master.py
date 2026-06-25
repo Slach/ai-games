@@ -540,54 +540,6 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
     },
 }
 
-PLAYER_BRIEFING_CHOICES_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "player_briefing",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "personal_title": {
-                    "type": "string",
-                    "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {day} — {role} — {personal_greeting}' (Russian) or 'Turn {day} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
-                },
-                "briefing": {
-                    "type": "string",
-                    "description": "Personal narrative for this specific player — what they see, hear, and feel from their unique perspective",
-                },
-                "choices": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "description": "Short unique identifier for this action, e.g. 'action_1', 'scan_hull', 'retreat'",
-                            },
-                            "text": {
-                                "type": "string",
-                                "description": "Action description visible to the player",
-                            },
-                            "consequence": {
-                                "type": "string",
-                                "description": "Hidden consequence result — NOT visible to the player when making the choice",
-                            },
-                        },
-                        "required": ["id", "text", "consequence"],
-                        "additionalProperties": False,
-                    },
-                    "minItems": 3,
-                    "maxItems": 4,
-                    "description": "3-4 decision points with actions and hidden consequences",
-                },
-            },
-            "required": ["personal_title", "briefing", "choices"],
-            "additionalProperties": False,
-        },
-    },
-}
-
 MISSION_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -744,6 +696,9 @@ class GameMasterAgent:
         self.llm_model = os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B")
         self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", "32768"))
         self.llm_max_avatar_tokens = int(os.getenv("LLM_MAX_AVATAR_TOKENS", "4096"))
+        self.turn_good_actions = int(os.getenv("GAME_TURN_GOOD_ACTIONS", "3"))
+        self.turn_bad_actions = int(os.getenv("GAME_TURN_BAD_ACTIONS", "1"))
+        self.turn_neutral_actions = int(os.getenv("GAME_TURN_NEUTRAL_ACTIONS", "1"))
         self.language = language
         self.npcs: dict[str, dict[str, Any]] = {}
 
@@ -754,6 +709,57 @@ class GameMasterAgent:
 
         self._init_default_npcs()
         logger.info(f"GameMasterAgent initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
+
+    def _get_player_briefing_schema(self) -> dict[str, object]:
+        """Build the player briefing JSON schema with dynamic maxItems."""
+        total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "player_briefing",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "personal_title": {
+                            "type": "string",
+                            "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {day} — {role} — {personal_greeting}' (Russian) or 'Turn {day} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
+                        },
+                        "briefing": {
+                            "type": "string",
+                            "description": "Personal narrative for this specific player — what they see, hear, and feel from their unique perspective",
+                        },
+                        "choices": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "description": "Short unique identifier for this action, e.g. 'action_1', 'scan_hull', 'retreat'",
+                                    },
+                                    "text": {
+                                        "type": "string",
+                                        "description": "Action description visible to the player",
+                                    },
+                                    "consequence": {
+                                        "type": "string",
+                                        "description": "Hidden consequence result — NOT visible to the player when making the choice",
+                                    },
+                                },
+                                "required": ["id", "text", "consequence"],
+                                "additionalProperties": False,
+                            },
+                            "minItems": max(1, total_actions),
+                            "maxItems": total_actions,
+                            "description": "Action choices with hidden consequences for the player to pick from",
+                        },
+                    },
+                    "required": ["personal_title", "briefing", "choices"],
+                    "additionalProperties": False,
+                },
+            },
+        }
 
     def _init_default_npcs(self):
         """Initialize default NPCs with distinct personalities"""
@@ -790,12 +796,18 @@ class GameMasterAgent:
         response_schema: dict[str, Any],
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        enable_thinking: bool = False,
     ) -> dict[str, Any]:
         """
         Call LLM with json_schema structured output.
 
         Falls back to plain text + JSON extraction if the endpoint
         does not support response_format (e.g. older llama.cpp).
+
+        Args:
+            enable_thinking: If True, allows the LLM to use reasoning/thinking tokens
+                before generating the final output. Use for complex multi-step
+                reasoning tasks like consequence analysis.
         """
         if max_tokens is None:
             max_tokens = self.llm_max_tokens
@@ -809,6 +821,7 @@ class GameMasterAgent:
         logger.info(f"Model: {self.llm_model}")
         logger.info(f"Temperature: {temperature}")
         logger.info(f"Max tokens: {max_tokens}")
+        logger.info(f"Enable thinking: {enable_thinking}")
         logger.info(f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}")
         logger.info("--- SYSTEM PROMPT ---")
         for line in system_prompt.split("\n"):
@@ -818,7 +831,7 @@ class GameMasterAgent:
             logger.info(line)
         logger.info("=== END LLM REQUEST ===")
 
-        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+        extra_body = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
         response = None
         try:
             # Try structured output first
@@ -2243,7 +2256,7 @@ spatial presence\n"
         Each player gets:
         - A personal_title with name + role + greeting
         - A personal briefing (their unique perspective on the situation)
-        - 3-4 choices with visible descriptions and hidden consequences
+        - Action choices with visible descriptions and hidden consequences
         """
         player_id = player_profile.get("player_id") or player_profile.get("npc_key", "?")
         player_role = player_profile.get("role", "Crew Member")
@@ -2259,6 +2272,7 @@ spatial presence\n"
         key_events = global_circumstances.get("key_events", [])
 
         key_events_text = "\n".join([f"  - {e}" for e in key_events])
+        total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
 
         if self.language == "ru":
             system = (
@@ -2289,15 +2303,16 @@ spatial presence\n"
                 "Пример: 'Маркус — Инженер — твои руки помнят гул реактора лучше любого сканера'.\n"
                 "2. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
-                "3. 3-4 варианта действий с последствиями.\n\n"
+                f"3. Ровно {total_actions} вариантов действий с последствиями: "
+                f"{self.turn_good_actions} хороших, {self.turn_bad_actions} плохое, {self.turn_neutral_actions} нейтральное.\n\n"
                 "КРИТИЧЕСКИЕ ТРЕБОВАНИЯ К ВАРИАНТАМ ДЕЙСТВИЙ:\n"
                 "- Каждое действие ДОЛЖНО иметь РЕАЛЬНЫЙ РИСК. Успех приближает к цели миссии, "
                 "провал — отдаляет. Последствия должны быть РАДИКАЛЬНЫМИ.\n"
                 "- Последствия НЕ ДОЛЖНЫ быть очевидны из текста действия! Игрок ВЫБИРАЕТ вслепую.\n"
                 "- Последствия могут включать: гибель членов экипажа, повреждение систем корабля "
                 "(варп-двигатель, щиты, жизнеобеспечение), потерю ресурсов, ранения.\n"
-                "- Одно из действий должно быть БЕЗОПАСНЫМ (ничего не делать / ждать), "
-                "но оно НЕ продвигает миссию и может УХУДШИТЬ ситуацию.\n"
+                "- Нейтральное действие — безопасное (ничего не делать / ждать), "
+                "оно НЕ продвигает миссию и может УХУДШИТЬ ситуацию.\n"
                 "- Разные варианты должны давать РАЗНЫЕ уровни риска и награды.\n"
                 "- Варианты должны соответствовать РОЛИ персонажа.\n\n"
                 "ПРИМЕР ХОРОШИХ ВАРИАНТОВ (последствия не видны игроку):\n"
@@ -2341,15 +2356,16 @@ spatial presence\n"
                 "Example: 'Marcus — Engineer — your hands remember the reactor hum better than any scanner'.\n"
                 "2. briefing — personal narrative — what this specific character sees, hears, feels. "
                 "How their role and traits color their perception. (2-3 sentences)\n"
-                "3. 3-4 action choices with consequences.\n\n"
+                f"3. Exactly {total_actions} action choices with consequences: "
+                f"{self.turn_good_actions} good, {self.turn_bad_actions} bad, {self.turn_neutral_actions} neutral.\n\n"
                 "CRITICAL REQUIREMENTS FOR ACTION CHOICES:\n"
                 "- Every action MUST have REAL RISK. Success advances the mission, failure regresses it. "
                 "Consequences must be RADICAL.\n"
                 "- Consequences must NOT be obvious from the action text! The player chooses BLIND.\n"
                 "- Consequences can include: crew death, ship system damage (warp drive, shields, "
                 "life support), resource loss, crew injuries.\n"
-                "- One option MUST be a SAFE choice (do nothing / wait), "
-                "but it does NOT advance the mission and may WORSEN the situation.\n"
+                "- The neutral option is the safe choice (do nothing / wait), "
+                "it does NOT advance the mission and may WORSEN the situation.\n"
                 "- Different options must have DIFFERENT risk-reward profiles.\n"
                 "- Options must match the character's ROLE.\n\n"
                 "EXAMPLE OF GOOD OPTIONS (consequences hidden from player):\n"
@@ -2368,7 +2384,7 @@ spatial presence\n"
             parsed = self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=PLAYER_BRIEFING_CHOICES_SCHEMA,
+                response_schema=self._get_player_briefing_schema(),
                 max_tokens=4096,
             )
             logger.info(f"[DAY] Briefing generated for {player_id}")
@@ -2480,7 +2496,9 @@ spatial presence\n"
                 threshold = obj.get("success_threshold", 5)
                 progress = stage_progress.get(str(stage), 0)
                 status = "COMPLETED" if stage < current_stage else ("CURRENT" if stage == current_stage else "UPCOMING")
-                mission_text += f"  Stage {stage}: {name} - {desc}\n    Progress: {progress}/{threshold}\n    Status: {status}\n"
+                display_progress = min(progress, threshold) if status == "COMPLETED" else progress
+                progress_note = " (capped at threshold — stage already completed)" if status == "COMPLETED" else ""
+                mission_text += f"  Stage {stage}: {name} - {desc}\n    Progress: {display_progress}/{threshold}{progress_note}\n    Status: {status}\n"
 
         setting = global_circumstances.get("setting", "")
         conflict = global_circumstances.get("conflict", "")
@@ -2503,6 +2521,7 @@ spatial presence\n"
                 user_prompt=user,
                 response_schema=COMBINED_OUTCOME_SCHEMA,
                 max_tokens=4096,
+                enable_thinking=True,  # reasoning budget for consequence generation
             )
             logger.info(f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
             return parsed
@@ -2667,6 +2686,7 @@ spatial presence\n"
         gender: str,
         avatar_description: str,
         personality_traits: list[str],
+        avoid_names: set[str] | None = None,
     ) -> str:
         """Generate a creative name for an NPC using LLM.
 
@@ -2680,6 +2700,7 @@ spatial presence\n"
             gender: Gender type (e.g. 'male', 'female', 'neutral', etc.)
             avatar_description: Visual description of the character
             personality_traits: Personality traits for this role
+            avoid_names: Set of names already used — the generated name must not be in this set
 
         Returns:
             Generated name string, or fallback format "Роль Имя" on failure.
@@ -2708,7 +2729,8 @@ spatial presence\n"
                 f"Пол: {gender}\n"
                 f"Описание внешности: {avatar_description}\n"
                 f"Черты характера: {', '.join(personality_traits)}\n\n"
-                "Придумай уникальное, креативное имя для этого персонажа. "
+                + (f"УЖЕ ИСПОЛЬЗУЕТСЯ: {', '.join(sorted(avoid_names))}. НЕ используй эти имена — выбери другое.\n\n" if avoid_names else "")
+                + "Придумай уникальное, креативное имя для этого персонажа. "
                 "Имя должно быть на русском языке и соответствовать описанию.\n"
                 "ПРИМЕРЫ (для русской локализации):\n"
                 "  - Инженер-человек: 'Инженер Дмитрий Волков'\n"
@@ -2737,7 +2759,8 @@ spatial presence\n"
                 f"Gender: {gender}\n"
                 f"Appearance: {avatar_description}\n"
                 f"Personality traits: {', '.join(personality_traits)}\n\n"
-                "Invent a unique, creative name for this character. "
+                + (f"ALREADY IN USE: {', '.join(sorted(avoid_names))}. DO NOT use these names — choose a different one.\n\n" if avoid_names else "")
+                + "Invent a unique, creative name for this character. "
                 "The name MUST match their species and gender.\n"
                 "EXAMPLES:\n"
                 "  - Human Engineer: 'Chief Engineer Marcus Chen'\n"
@@ -2810,16 +2833,30 @@ spatial presence\n"
 
         roles_text = "\n".join([f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={r.get('species', 'random')} gender={r.get('gender', 'random')} | traits: {', '.join(r.get('personality_traits', []))}" for r in npc_roles])
 
-        system = "You are a creative sci-fi character portrait prompt writer. Generate VARIED, DIVERSE character portrait prompts in English. "
+        system = "You are an expert AI art prompt engineer specializing in sci-fi character portraits. Generate VARIED, DIVERSE character portrait prompts in English."
+
+        # Species-specific instructions mirroring _species_prompt_instructions
+        species_rules = {
+            "human": "The character is human. Describe face, expression, uniform details. Portrait style, upper body.",
+            "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Portrait style, upper body.",
+            "non_humanoid": "The character is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline structure, multiple limbs, amorphous form, etc.). Do NOT add human features (face, hair, eyes, human-like torso) unless explicitly described. Do NOT use 'wearing a uniform' or 'upper body' framing. Start the prompt with the species description (e.g. 'A towering crystalline entity', 'A mass of pulsating bio-gel', 'An insectoid being with chitinous armor'). Full body or 3/4 view showing the alien physiology.",
+            "cybernetic": "The character is CYBERNETIC/SYNTHETIC — mechanical or cybernetic body (metal, circuits, synthetic components, digital displays). If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts. Start the prompt with the species/mechanical description. Full body or 3/4 view.",
+            "energy": "The character is an ENERGY BEING — no solid physical body, composed of energy, plasma, or light. Describe the visual signature (glow, frequency patterns, luminosity). Do NOT add human features or solid anatomy. Start the prompt with the energy-form description. Full body view.",
+            "symbiotic": "The character is a SYMBIOTIC/COMPOSITE being — a hybrid of multiple organisms. Describe how different parts coexist. Do NOT default to a single humanoid body. Start the prompt with the composite nature. Full body view.",
+        }
+
         user = (
             f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
             "For EACH role, generate a unique, detailed English image prompt for a "
-            "Star Trek-style character portrait. "
+            "Star Trek-style character portrait.\n\n"
             "CRITICAL: RESPECT the species and gender specified for each role. "
-            "Use those exact values — do not randomize them. "
-            "~50 words per prompt, cinematic lighting, uniform, 4K quality portrait, upper body. "
-            'Output as JSON array: [{"role_key": ..., "prompt": ...}]'
+            "Use those exact values — do not randomize them.\n\n"
+            "Species-specific rules (FOLLOW THEM EXACTLY):\n"
         )
+        for sp_key in ["human", "humanoid", "non_humanoid", "cybernetic", "energy", "symbiotic"]:
+            if sp_key in species_rules:
+                user += f"  - {sp_key}: {species_rules[sp_key]}\n"
+        user += '\n~50 words per prompt. Cinematic lighting. Sci-fi/space opera aesthetic. 4K quality. Output as JSON array: [{"role_key": ..., "prompt": ...}]'
 
         try:
             result = self._call_llm(
@@ -2836,15 +2873,25 @@ spatial presence\n"
             logger.error(f"[NPC_AVATAR] Generation failed: {e}")
             # Fallback: simple role-based prompts
             fallback = []
-            species_options = ["human", "humanoid", "cybernetic", "non_humanoid"]
-            import random
+
+            fallback_framing = {
+                "human": "human, portrait style, upper body, uniform",
+                "humanoid": "humanoid alien with subtle alien features, portrait style, upper body, uniform",
+                "non_humanoid": "non-humanoid alien being with alien anatomy, do NOT add human features, full body or 3/4 view, no uniform",
+                "cybernetic": "cybernetic/synthetic being with mechanical body, full body or 3/4 view",
+                "energy": "energy being composed of plasma or light, no solid body, full body view",
+                "symbiotic": "symbiotic composite being, hybrid of multiple organisms, full body view",
+            }
 
             for r in npc_roles:
-                sp = random.choice(species_options)
+                sp = r.get("species", "human").lower()
+                if sp not in fallback_framing:
+                    sp = "human"
+                framing = fallback_framing[sp]
                 fallback.append(
                     {
                         "role_key": r.get("role_key", "?"),
-                        "prompt": (f"Star Trek character portrait of a {r.get('role_name', '?')}, {sp} species, cinematic lighting, uniform, 4K quality, portrait, upper body. Unique appearance."),
+                        "prompt": (f"Star Trek character portrait of a {r.get('role_name', '?')}, {framing}. Cinematic lighting, space opera aesthetic, 4K quality, highly detailed. Unique appearance."),
                     }
                 )
             return fallback
