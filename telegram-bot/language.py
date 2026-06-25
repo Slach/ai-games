@@ -47,13 +47,13 @@ ONBOARDING = {
 HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
-        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/help - Эта справка",
+        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/team - Ваш экипаж\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/help - Эта справка",
         "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы",
         "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
-        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/help - This help",
+        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/team - Your crew\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/help - This help",
         "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games\n/gm_status <id> - Game status: players, NPCs, choices",
         "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
@@ -224,18 +224,10 @@ def get_team(language: str = LANGUAGE_RU):
 # Notification messages sent to players (via push)
 NOTIFICATIONS = {
     LANGUAGE_RU: {
-        "game_restarted": (
-            "⚠️ **Игра была перезапущена Game Master-ом!**\n\n"
-            "Все предыдущие ходы удалены. История начинается заново.\n"
-            "Ваш персонаж и роль сохранены.\n"
-        ),
+        "game_restarted": ("⚠️ **Игра была перезапущена Game Master-ом!**\n\nВсе предыдущие ходы удалены. История начинается заново.\nВаш персонаж и роль сохранены.\n"),
     },
     LANGUAGE_EN: {
-        "game_restarted": (
-            "⚠️ **The game has been restarted by the Game Master!**\n\n"
-            "All previous turns have been deleted. The story begins anew.\n"
-            "Your character and role are preserved.\n"
-        ),
+        "game_restarted": ("⚠️ **The game has been restarted by the Game Master!**\n\nAll previous turns have been deleted. The story begins anew.\nYour character and role are preserved.\n"),
     },
 }
 
@@ -251,6 +243,7 @@ MENU = {
         "start": "/start",
         "profile": "/profile",
         "today": "/today",
+        "team": "/team",
         "help": "/help",
         "invite": "/invite",
     },
@@ -258,6 +251,7 @@ MENU = {
         "start": "/start",
         "profile": "/profile",
         "today": "/today",
+        "team": "/team",
         "help": "/help",
         "invite": "/invite",
     },

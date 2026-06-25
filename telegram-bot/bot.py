@@ -180,16 +180,12 @@ async def create_aiohttp_session(
     try:
         host, port, username, password = parse_proxy_url(proxy_url)
 
-        connector = ProxyConnector(
-            host=host, port=port, username=username or None, password=password or None
-        )
+        connector = ProxyConnector(host=host, port=port, username=username or None, password=password or None)
 
         return aiohttp.ClientSession(connector=connector)
 
     except Exception as e:
-        logger.warning(
-            f"Failed to configure proxy {proxy_url}: {e}. Using direct connection."
-        )
+        logger.warning(f"Failed to configure proxy {proxy_url}: {e}. Using direct connection.")
         return aiohttp.ClientSession()
 
 
@@ -260,9 +256,7 @@ def create_bot_session(proxy_url: str | None = None):
 
     try:
         # Ensure proxy URL has socks5:// prefix
-        if not proxy_url.startswith("socks5://") and not proxy_url.startswith(
-            "socks5h://"
-        ):
+        if not proxy_url.startswith("socks5://") and not proxy_url.startswith("socks5h://"):
             proxy_url = f"socks5://{proxy_url}"
 
         session = AiohttpSession(proxy=proxy_url)
@@ -270,9 +264,7 @@ def create_bot_session(proxy_url: str | None = None):
         return session
 
     except Exception as e:
-        logger.warning(
-            f"Failed to configure proxy {proxy_url}: {e}. Using direct connection."
-        )
+        logger.warning(f"Failed to configure proxy {proxy_url}: {e}. Using direct connection.")
         return AiohttpSession()
 
 
@@ -314,9 +306,7 @@ async def send_image_from_api_url(
     return False
 
 
-async def send_random_loading_image(
-    message: types.Message, caption_key: str = "loading_caption"
-) -> bool:
+async def send_random_loading_image(message: types.Message, caption_key: str = "loading_caption") -> bool:
     """Fetch and send a random loading image from the API with a caption.
 
     Args:
@@ -336,9 +326,7 @@ async def send_random_loading_image(
     return False
 
 
-async def send_random_splash_image(
-    message: types.Message, caption: str = "", reply_markup=None
-) -> bool:
+async def send_random_splash_image(message: types.Message, caption: str = "", reply_markup=None) -> bool:
     """Fetch and send a random splash image from the API with optional caption.
 
     Args:
@@ -352,9 +340,7 @@ async def send_random_splash_image(
         result = await api_request("GET", "/content/splash-image")
         image_url = result.get("image_url") if result else None
         if image_url:
-            return await send_image_from_api_url(
-                message, image_url, caption=caption, reply_markup=reply_markup
-            )
+            return await send_image_from_api_url(message, image_url, caption=caption, reply_markup=reply_markup)
     except Exception as e:
         logger.warning(f"Failed to get/send splash image: {e}")
     return False
@@ -375,12 +361,8 @@ async def send_question_with_image(
     image_url = question.get("image_url")
     options = question.get("options", [])
     # Separate each option with a blank line for readability
-    options_text = "\n\n".join(
-        [f"{i + 1}. {opt['label']}" for i, opt in enumerate(options)]
-    )
-    question_text = lang.get_onboarding(language)["question_prefix"].format(
-        id=question["id"], text=question["text"]
-    )
+    options_text = "\n\n".join([f"{i + 1}. {opt['label']}" for i, opt in enumerate(options)])
+    question_text = lang.get_onboarding(language)["question_prefix"].format(id=question["id"], text=question["text"])
     if options_text:
         question_text += f"\n\n---\n\n{options_text}"
 
@@ -393,9 +375,7 @@ async def send_question_with_image(
                 )
                 if resp.status == 200:
                     photo_data = await resp.read()
-                    photo = BufferedInputFile(
-                        photo_data, filename=f"q_{question['id']}.png"
-                    )
+                    photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
                     await bot_or_message.answer_photo(
                         photo=photo,
                         caption=question_text,
@@ -426,9 +406,7 @@ async def send_question_with_image(
                     )
                     if resp.status == 200:
                         photo_data = await resp.read()
-                        photo = BufferedInputFile(
-                            photo_data, filename=f"opt_{question['id']}_{i}.png"
-                        )
+                        photo = BufferedInputFile(photo_data, filename=f"opt_{question['id']}_{i}.png")
                         caption = f"{i + 1}. {opt['label']}"
                         media_group.append(
                             InputMediaPhoto(
@@ -438,9 +416,7 @@ async def send_question_with_image(
                             )
                         )
                     else:
-                        logger.warning(
-                            f"Failed to download option image {i}: {resp.status}"
-                        )
+                        logger.warning(f"Failed to download option image {i}: {resp.status}")
             except Exception as e:
                 logger.warning(f"Failed to download option image {i}: {e}")
 
@@ -494,8 +470,8 @@ def _build_share_text(msgs: dict, game_title: str = "") -> str:
     if game_title:
         # Strip any existing guillemets from the title to avoid double-wrapping
         # e.g. incoming «Title» wrapped again produces ««Title»»
-        clean_title = game_title.strip("\u00ab\u00bb")
-        return f"{base} \u00ab{clean_title}\u00bb!"
+        clean_title = game_title.strip("«»")
+        return f"{base} «{clean_title}»!"
     return f"{base}!"
 
 
@@ -508,9 +484,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             timeout_total=300,
         )
         if result is None:
-            logger.error(
-                f"Onboarding completion returned no result for player {player_id}"
-            )
+            logger.error(f"Onboarding completion returned no result for player {player_id}")
             return
         avatar_url = result.get("avatar_url")
         profile = result.get("profile", {})
@@ -528,20 +502,12 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         gender_secondary = profile.get("gender_secondary")
 
         if species_secondary:
-            species_display = (
-                f"Гибрид: {species_primary} + {species_secondary}"
-                if BOT_LANGUAGE == "ru"
-                else f"Hybrid: {species_primary} + {species_secondary}"
-            )
+            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {species_primary} + {species_secondary}"
         else:
             species_display = species_primary
 
         if gender_secondary:
-            gender_display = (
-                f"Гибрид: {gender_primary} + {gender_secondary}"
-                if BOT_LANGUAGE == "ru"
-                else f"Hybrid: {gender_primary} + {gender_secondary}"
-            )
+            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {gender_primary} + {gender_secondary}"
         else:
             gender_display = gender_primary
 
@@ -600,19 +566,11 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         if BOT_USERNAME:
             game_id = profile.get("game_id", "")
             if game_id:
-                invite_url = await create_start_link(
-                    bot, f"{game_id}:{player_id}", encode=True
-                )
+                invite_url = await create_start_link(bot, f"{game_id}:{player_id}", encode=True)
                 share_text = _build_share_text(onboarding_msgs, game_title)
                 share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(share_text, safe='')}"
                 # Escape the URL for Markdown to handle underscores in bot username
-                invite_text = (
-                    onboarding_msgs["invite_title"]
-                    + "\n\n"
-                    + onboarding_msgs["invite_message"].format(
-                        invite_url=escape_markdown(invite_url)
-                    )
-                )
+                invite_text = onboarding_msgs["invite_title"] + "\n\n" + onboarding_msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
 
                 invite_keyboard = InlineKeyboardMarkup(
                     inline_keyboard=[
@@ -657,14 +615,10 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     profile = {}
                 text = onboarding_msgs["onboarding_complete"].format(
                     role=escape_markdown(profile.get("role", "Crew Member")),
-                    role_description=escape_markdown(
-                        profile.get("role_description", "")
-                    ),
+                    role_description=escape_markdown(profile.get("role_description", "")),
                     species=escape_markdown(profile.get("species", "Unknown")),
                     gender=escape_markdown(profile.get("gender", "Unknown")),
-                    traits=escape_markdown(
-                        "\n- ".join(profile.get("personality_traits", []))
-                    ),
+                    traits=escape_markdown("\n- ".join(profile.get("personality_traits", []))),
                 )
             except Exception:
                 text = onboarding_msgs["onboarding_complete"].format(
@@ -690,14 +644,10 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     reply_markup=create_main_menu_keyboard(),
                 )
         except Exception:
-            logger.error(
-                f"Failed to send fallback message to player {player_id}", exc_info=True
-            )
+            logger.error(f"Failed to send fallback message to player {player_id}", exc_info=True)
 
 
-async def _broadcast_new_player(
-    new_player_id: int, profile: dict, other_player_ids: list, bot: Bot
-):
+async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_ids: list, bot: Bot):
     """Notify existing players about a new crew member joining."""
     try:
         onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
@@ -716,18 +666,14 @@ async def _broadcast_new_player(
                     parse_mode="Markdown",
                 )
                 avatar_url = profile.get("avatar_url")
-                await _send_avatar_to_player(
-                    bot, other_id, avatar_url, player_name, profile
-                )
+                await _send_avatar_to_player(bot, other_id, avatar_url, player_name, profile)
             except Exception as e:
                 logger.warning(f"Failed to notify player {other_id}: {e}")
     except Exception as e:
         logger.error(f"Broadcast new player failed: {e}")
 
 
-async def _send_avatar_to_player(
-    bot: Bot, chat_id: int, avatar_url: str | None, player_name: str, profile: dict
-):
+async def _send_avatar_to_player(bot: Bot, chat_id: int, avatar_url: str | None, player_name: str, profile: dict):
     """Fetch a player's avatar from its URL and send it as a photo to the given chat."""
     if not avatar_url:
         return
@@ -749,9 +695,7 @@ async def _send_avatar_to_player(
         logger.warning(f"Failed to send avatar to {chat_id}: {e}")
 
 
-async def _broadcast_game_started(
-    new_player_id: int, profile: dict, other_player_ids: list[int], bot: Bot
-):
+async def _broadcast_game_started(new_player_id: int, profile: dict, other_player_ids: list[int], bot: Bot):
     """Notify all players that the game has started (the new player triggered >= 3 players).
 
     Also sends bridge image + mission info to all existing players.
@@ -784,26 +728,18 @@ async def _broadcast_game_started(
                         text=onboarding_msgs["game_starting_broadcast"].format(
                             player_name=player_name,
                             role=escape_markdown(profile.get("role", "")),
-                            role_description=escape_markdown(
-                                profile.get("role_description", "")
-                            ),
+                            role_description=escape_markdown(profile.get("role_description", "")),
                         ),
                         parse_mode="Markdown",
                     )
                     avatar_url = profile.get("avatar_url")
-                    await _send_avatar_to_player(
-                        bot, other_id, avatar_url, player_name, profile
-                    )
+                    await _send_avatar_to_player(bot, other_id, avatar_url, player_name, profile)
                 # Send bridge image with mission info to all
                 if bridge and bridge.get("image_url"):
                     caption = bridge_msgs["title"]
                     if mission:
-                        caption += "\n\n" + bridge_msgs["mission_header"].format(
-                            name=mission.get("name", "")
-                        )
-                        caption += "\n\n" + bridge_msgs["mission_desc"].format(
-                            description=mission.get("description", "")
-                        )
+                        caption += "\n\n" + bridge_msgs["mission_header"].format(name=mission.get("name", ""))
+                        caption += "\n\n" + bridge_msgs["mission_desc"].format(description=mission.get("description", ""))
                     # Fetch and send bridge photo directly to this chat
                     try:
                         async with (
@@ -815,9 +751,7 @@ async def _broadcast_game_started(
                         ):
                             if img_resp.status == 200:
                                 photo_data = await img_resp.read()
-                                photo = BufferedInputFile(
-                                    photo_data, filename="bridge.png"
-                                )
+                                photo = BufferedInputFile(photo_data, filename="bridge.png")
                                 await bot.send_photo(
                                     chat_id=other_id,
                                     photo=photo,
@@ -825,13 +759,9 @@ async def _broadcast_game_started(
                                     parse_mode="Markdown",
                                 )
                     except Exception as e:
-                        logger.warning(
-                            f"Failed to send bridge image to player {other_id}: {e}"
-                        )
+                        logger.warning(f"Failed to send bridge image to player {other_id}: {e}")
             except Exception as e:
-                logger.warning(
-                    f"Failed to notify player {other_id} about game start: {e}"
-                )
+                logger.warning(f"Failed to notify player {other_id} about game start: {e}")
     except Exception as e:
         logger.error(f"Broadcast game started failed: {e}")
 
@@ -880,9 +810,7 @@ def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboar
         )
     builder.adjust(len(options))  # one row, Telegram wraps if too wide
 
-    logger.info(
-        f"Created onboarding inline keyboard for question_id={question_id} with {len(options)} buttons"
-    )
+    logger.info(f"Created onboarding inline keyboard for question_id={question_id} with {len(options)} buttons")
 
     return builder.as_markup()
 
@@ -892,9 +820,8 @@ def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
     menu = lang.get_menu(BOT_LANGUAGE)
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"])],
-            [KeyboardButton(text=menu["today"]), KeyboardButton(text=menu["invite"])],
-            [KeyboardButton(text=menu["help"])],
+            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"]), KeyboardButton(text=menu["today"])],
+            [KeyboardButton(text=menu["team"]), KeyboardButton(text=menu["invite"]), KeyboardButton(text=menu["help"])],
         ],
         resize_keyboard=True,
     )
@@ -909,11 +836,7 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
     for idx, action in enumerate(actions, start=1):
-        builder.add(
-            InlineKeyboardButton(
-                text=f"[{idx}]", callback_data=f"action:{action['id']}"
-            )
-        )
+        builder.add(InlineKeyboardButton(text=f"[{idx}]", callback_data=f"action:{action['id']}"))
     # All actions in a single row for maximum compactness
     builder.adjust(len(actions))
     return builder.as_markup()
@@ -922,9 +845,7 @@ def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
 def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
     """Create keyboard with game information"""
     builder = InlineKeyboardBuilder()
-    builder.add(
-        InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_game:{game_id}")
-    )
+    builder.add(InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_game:{game_id}"))
     return builder.as_markup()
 
 
@@ -1006,10 +927,7 @@ async def start_onboarding_flow(
     msgs = lang.get_onboarding(BOT_LANGUAGE)
 
     try:
-        logger.info(
-            f"Starting onboarding for player_id={player_id}, game_id={game_id}, "
-            f"player_name={player_name}, language={BOT_LANGUAGE}"
-        )
+        logger.info(f"Starting onboarding for player_id={player_id}, game_id={game_id}, player_name={player_name}, language={BOT_LANGUAGE}")
         result = await api_request(
             "POST",
             "/onboarding/start",
@@ -1028,11 +946,7 @@ async def start_onboarding_flow(
         welcome_text = result.get("welcome_message") or msgs["welcome"]
         game_title = result.get("game_title", "")
         if game_title:
-            welcome_text = (
-                f"**{game_title}**\n\n{welcome_text}"
-                if welcome_text
-                else f"**{game_title}**"
-            )
+            welcome_text = f"**{game_title}**\n\n{welcome_text}" if welcome_text else f"**{game_title}**"
 
         # Send splash image with game description as caption
         # NOTE: No main menu keyboard during onboarding — buttons show only after completion
@@ -1068,12 +982,8 @@ async def start_onboarding_flow(
             current_options=question["options"],
         )
 
-        logger.info(
-            f"First onboarding question: id={question['id']}, text={question['text']}..."
-        )
-        logger.info(
-            f"Question options: {[opt['label'] for opt in question['options']]}"
-        )
+        logger.info(f"First onboarding question: id={question['id']}, text={question['text']}...")
+        logger.info(f"Question options: {[opt['label'] for opt in question['options']]}")
         if question.get("image_url"):
             logger.info(f"Question has image: {question['image_url']}")
 
@@ -1082,9 +992,7 @@ async def start_onboarding_flow(
         await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
-        logger.error(
-            f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}"
-        )
+        logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}")
         error_msgs = lang.get_errors(BOT_LANGUAGE)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
@@ -1102,9 +1010,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
     message = callback.message
 
     if not isinstance(message, types.Message):
-        logger.warning(
-            f"Callback message not accessible for player {player_id}, data={data}"
-        )
+        logger.warning(f"Callback message not accessible for player {player_id}, data={data}")
         return
 
     try:
@@ -1123,11 +1029,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             await message.edit_reply_markup(reply_markup=None)
 
         # Ask for player name first
-        name_question = (
-            "🗣 **Как вас зовут?**\n\nНапишите имя вашего персонажа (или своё настоящее имя):"
-            if BOT_LANGUAGE == "ru"
-            else "🗣 **What is your name?**\n\nEnter your character name (or your real name):"
-        )
+        name_question = "🗣 **Как вас зовут?**\n\nНапишите имя вашего персонажа (или своё настоящее имя):" if BOT_LANGUAGE == "ru" else "🗣 **What is your name?**\n\nEnter your character name (or your real name):"
         await message.answer(
             name_question,
             parse_mode="Markdown",
@@ -1182,14 +1084,10 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
     # Check if player already has an active onboarding session in memory
     player_state = get_player_state(player_id)
     if player_state.get("onboarding_session_id"):
-        logger.info(
-            f"Player {player_id} already has active onboarding session: {player_state['onboarding_session_id']}"
-        )
+        logger.info(f"Player {player_id} already has active onboarding session: {player_state['onboarding_session_id']}")
         current_options = player_state.get("current_options", [])
         if current_options:
-            keyboard = create_onboarding_keyboard(
-                current_options, player_state.get("current_question_id", 1)
-            )
+            keyboard = create_onboarding_keyboard(current_options, player_state.get("current_question_id", 1))
         else:
             # No options stored — remove any reply keyboard
             keyboard = types.ReplyKeyboardRemove()
@@ -1205,9 +1103,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
             payload = decode_payload(command.args)
             if payload and ":" in payload:
                 game_id, referrer_id_str = payload.split(":", 1)
-                referrer_id = (
-                    int(referrer_id_str) if referrer_id_str.isdigit() else None
-                )
+                referrer_id = int(referrer_id_str) if referrer_id_str.isdigit() else None
             elif payload:
                 game_id = payload
         except Exception as e:
@@ -1216,17 +1112,11 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
     if game_id:
         logger.info(f"Player {player_id} started with game_id={game_id} from deep link")
         if referrer_id:
-            logger.info(
-                f"Referrer detected: {referrer_id} invited {player_id} "
-                f"into game {game_id}"
-            )
+            logger.info(f"Referrer detected: {referrer_id} invited {player_id} into game {game_id}")
             # Persist the referral (deduplicated; self-referrals ignored).
             try:
                 if record_reference(player_id, referrer_id, game_id):
-                    logger.info(
-                        f"Recorded new reference: referrer={referrer_id} "
-                        f"-> referred={player_id} game={game_id}"
-                    )
+                    logger.info(f"Recorded new reference: referrer={referrer_id} -> referred={player_id} game={game_id}")
             except Exception as ref_err:
                 logger.warning(f"Failed to record reference for {player_id}: {ref_err}")
 
@@ -1288,9 +1178,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                                 )
                                 avatar_sent = True
                 except Exception as avatar_err:
-                    logger.warning(
-                        f"Failed to send welcome_back avatar for {player_id}: {avatar_err}"
-                    )
+                    logger.warning(f"Failed to send welcome_back avatar for {player_id}: {avatar_err}")
 
             if not avatar_sent:
                 await message.answer(
@@ -1306,30 +1194,15 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     # Fetch game title for share text
                     game_title = ""
                     try:
-                        title_data = await api_request(
-                            "GET", "/game/title", params={"game_id": game_id}
-                        )
+                        title_data = await api_request("GET", "/game/title", params={"game_id": game_id})
                         if title_data and title_data.get("title"):
                             game_title = title_data["title"]
                     except Exception as e:
-                        logger.error(
-                            "Failed to fetch game title for invite", exc_info=e
-                        )
+                        logger.error("Failed to fetch game title for invite", exc_info=e)
 
-                    invite_url = await create_start_link(
-                        message.bot, f"{game_id}:{player_id}", encode=True
-                    )
-                    share_url = (
-                        f"https://t.me/share/url?url={quote(invite_url, safe='')}"
-                        f"&text={quote(_build_share_text(msgs, game_title), safe='')}"
-                    )
-                    invite_text = (
-                        msgs.get("invite_title", "")
-                        + "\n\n"
-                        + msgs.get("invite_message", "").format(
-                            invite_url=escape_markdown(invite_url)
-                        )
-                    )
+                    invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
+                    share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(_build_share_text(msgs, game_title), safe='')}"
+                    invite_text = msgs.get("invite_title", "") + "\n\n" + msgs.get("invite_message", "").format(invite_url=escape_markdown(invite_url))
                     invite_keyboard = InlineKeyboardMarkup(
                         inline_keyboard=[
                             [
@@ -1347,14 +1220,10 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                             reply_markup=invite_keyboard,
                         )
                     except Exception as e:
-                        logger.warning(
-                            f"Failed to send invite to player {player_id}: {e}"
-                        )
+                        logger.warning(f"Failed to send invite to player {player_id}: {e}")
 
             # Update player state with game info
-            update_player_state(
-                player_id, game_id=profile.get("game_id", "default_game")
-            )
+            update_player_state(player_id, game_id=profile.get("game_id", "default_game"))
 
         else:
             if not game_id:
@@ -1390,20 +1259,12 @@ async def cmd_profile(message: types.Message):
         gender_secondary = profile.get("gender_secondary")
 
         if species_secondary:
-            species_display = (
-                f"Гибрид: {species_primary} + {species_secondary}"
-                if BOT_LANGUAGE == "ru"
-                else f"Hybrid: {species_primary} + {species_secondary}"
-            )
+            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {species_primary} + {species_secondary}"
         else:
             species_display = species_primary
 
         if gender_secondary:
-            gender_display = (
-                f"Гибрид: {gender_primary} + {gender_secondary}"
-                if BOT_LANGUAGE == "ru"
-                else f"Hybrid: {gender_primary} + {gender_secondary}"
-            )
+            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {gender_primary} + {gender_secondary}"
         else:
             gender_display = gender_primary
 
@@ -1419,9 +1280,7 @@ async def cmd_profile(message: types.Message):
         avatar_description = profile.get("avatar_description")
 
         if avatar_url:
-            logger.info(
-                f"Fetching avatar for profile of player {player_id}: {avatar_url}"
-            )
+            logger.info(f"Fetching avatar for profile of player {player_id}: {avatar_url}")
             try:
                 async with aiohttp.ClientSession() as session:
                     resp = await session.get(
@@ -1440,21 +1299,15 @@ async def cmd_profile(message: types.Message):
                             )
                         return
                     else:
-                        logger.warning(
-                            f"Failed to download avatar for profile: {resp.status}"
-                        )
+                        logger.warning(f"Failed to download avatar for profile: {resp.status}")
             except Exception as avatar_err:
                 logger.warning(f"Error downloading avatar for profile: {avatar_err}")
 
             # Fallback: avatar URL exists but download failed — show description if available
             if avatar_description:
-                profile_text += "\n\n" + msgs["visualization"].format(
-                    avatar=avatar_description
-                )
+                profile_text += "\n\n" + msgs["visualization"].format(avatar=avatar_description)
         elif avatar_description:
-            profile_text += "\n\n" + msgs["visualization"].format(
-                avatar=avatar_description
-            )
+            profile_text += "\n\n" + msgs["visualization"].format(avatar=avatar_description)
 
         await message.answer(profile_text, parse_mode="Markdown")
 
@@ -1494,9 +1347,7 @@ async def cmd_today(message: types.Message):
             choices = briefing.get("choices", [])
             keyboard = create_action_keyboard(choices) if choices else None
 
-            actions_text = "\n\n".join(
-                [f"{i + 1} - {a['text']}" for i, a in enumerate(choices)]
-            )
+            actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(choices)])
 
             # Fetch NPC dialogues for crew behavior context
             crew_dialogues_today = []
@@ -1522,9 +1373,7 @@ async def cmd_today(message: types.Message):
                     line = f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
                     dialogue_lines.append(line)
                 crew_separator = "\n---\n"
-                crew_behavior_text = (
-                    f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
-                )
+                crew_behavior_text = f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
 
             # Send action image first, if available
             chosen_action_url = briefing.get("chosen_action_url")
@@ -1541,23 +1390,14 @@ async def cmd_today(message: types.Message):
                             await message.answer_photo(
                                 photo=photo,
                             )
-                            logger.info(
-                                f"[TODAY] Sent action image for player {player_id}, day {briefing['day']}"
-                            )
+                            logger.info(f"[TODAY] Sent action image for player {player_id}, day {briefing['day']}")
                         else:
-                            logger.warning(
-                                f"[TODAY] Failed to download action image: {resp.status}"
-                            )
+                            logger.warning(f"[TODAY] Failed to download action image: {resp.status}")
                 except Exception as e:
                     logger.warning(f"[TODAY] Failed to send action image: {e}")
 
             await message.answer(
-                msgs["briefing_header"].format(briefing=briefing["briefing"])
-                + crew_behavior_text
-                + "\n\n"
-                + msgs["actions"].format(actions=actions_text)
-                + "\n\n"
-                + msgs["select_action"],
+                msgs["briefing_header"].format(briefing=briefing["briefing"]) + crew_behavior_text + "\n\n" + msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"],
                 parse_mode="Markdown",
                 reply_markup=keyboard,
             )
@@ -1574,12 +1414,7 @@ async def cmd_today(message: types.Message):
                 keyboard = create_action_keyboard(day["player_actions"])
 
             # Build actions text
-            actions_text = "\n\n".join(
-                [
-                    f"{i + 1} - {a['text']}"
-                    for i, a in enumerate(day.get("player_actions", []))
-                ]
-            )
+            actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(day.get("player_actions", []))])
 
             # Build crew behavior text from NPC dialogues (integrated, no separate section)
             crew_behavior_text = ""
@@ -1589,16 +1424,10 @@ async def cmd_today(message: types.Message):
                     line = f"*{d['npc']}*: {d['dialogue']}"
                     dialogue_lines.append(line)
                 crew_separator = "\n---\n"
-                crew_behavior_text = (
-                    f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
-                )
+                crew_behavior_text = f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
 
             await message.answer(
-                msgs["title"].format(day=day["day"]) + "\n\n"
-                f"{msgs['story'].format(story=day['story'])}"
-                + crew_behavior_text
-                + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n"
-                f"{msgs['select_action']}",
+                msgs["title"].format(day=day["day"]) + f"\n\n{msgs['story'].format(story=day['story'])}" + crew_behavior_text + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
                 parse_mode="Markdown",
                 reply_markup=keyboard,
             )
@@ -1632,12 +1461,8 @@ async def cmd_bridge(message: types.Message):
         if bridge and bridge.get("image_url"):
             caption = bridge_msgs["title"]
             if mission:
-                caption += "\n\n" + bridge_msgs["mission_header"].format(
-                    name=mission.get("name", "")
-                )
-                caption += "\n\n" + bridge_msgs["mission_desc"].format(
-                    description=mission.get("description", "")
-                )
+                caption += "\n\n" + bridge_msgs["mission_header"].format(name=mission.get("name", ""))
+                caption += "\n\n" + bridge_msgs["mission_desc"].format(description=mission.get("description", ""))
             await send_image_from_api_url(message, bridge["image_url"], caption=caption)
         else:
             await message.answer(bridge_msgs["error"])
@@ -1654,9 +1479,7 @@ async def cmd_team(message: types.Message):
 
     try:
         # Get player profile to find game_id
-        profile = await api_request(
-            "GET", f"/players/{player_id}/profile", ignore_codes=(404,)
-        )
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
         if not profile:
             await message.answer(msgs["no_team"])
             return
@@ -1682,17 +1505,9 @@ async def cmd_team(message: types.Message):
             species = m.get("species", "?") or "?"
             gender = m.get("gender", "?") or "?"
             if m.get("is_dead"):
-                roster_lines.append(
-                    msgs["entry_dead"].format(
-                        name=name, role=role, species=species, gender=gender
-                    )
-                )
+                roster_lines.append(msgs["entry_dead"].format(name=name, role=role, species=species, gender=gender))
             else:
-                roster_lines.append(
-                    msgs["entry"].format(
-                        name=name, role=role, species=species, gender=gender
-                    )
-                )
+                roster_lines.append(msgs["entry"].format(name=name, role=role, species=species, gender=gender))
 
         roster_text = msgs["roster"].format(details="\n".join(roster_lines))
 
@@ -1722,9 +1537,7 @@ async def cmd_team(message: types.Message):
                     )
                     if resp.status == 200:
                         photo_data = await resp.read()
-                        photo = BufferedInputFile(
-                            photo_data, filename=f"team_{name}.png"
-                        )
+                        photo = BufferedInputFile(photo_data, filename=f"team_{name}.png")
                         caption = f"{name} — {role} | {species} | {gender}"
                         media_group.append(
                             InputMediaPhoto(
@@ -1733,9 +1546,7 @@ async def cmd_team(message: types.Message):
                             )
                         )
                     else:
-                        logger.warning(
-                            f"[TEAM] Failed to download avatar for {name}: {resp.status}"
-                        )
+                        logger.warning(f"[TEAM] Failed to download avatar for {name}: {resp.status}")
             except Exception as e:
                 logger.warning(f"[TEAM] Error downloading avatar for {name}: {e}")
 
@@ -1767,9 +1578,7 @@ async def cmd_invite(message: types.Message):
     msgs = lang.get_onboarding(BOT_LANGUAGE)
 
     try:
-        profile = await api_request(
-            "GET", f"/players/{player_id}/profile", ignore_codes=(404,)
-        )
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
         if not profile:
             await message.answer(
                 lang.get_profile(BOT_LANGUAGE)["no_profile"],
@@ -1789,27 +1598,16 @@ async def cmd_invite(message: types.Message):
             # Fetch game title for share text
             game_title = ""
             try:
-                title_data = await api_request(
-                    "GET", "/game/title", params={"game_id": game_id}
-                )
+                title_data = await api_request("GET", "/game/title", params={"game_id": game_id})
                 if title_data and title_data.get("title"):
                     game_title = title_data["title"]
             except Exception as e:
                 logger.error("Failed to fetch game title for invite", exc_info=e)
 
-            invite_url = await create_start_link(
-                message.bot, f"{game_id}:{player_id}", encode=True
-            )
+            invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
             share_text = _build_share_text(msgs, game_title)
-            share_url = (
-                f"https://t.me/share/url?url={quote(invite_url, safe='')}"
-                f"&text={quote(share_text, safe='')}"
-            )
-            invite_text = (
-                msgs["invite_title"]
-                + "\n\n"
-                + msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
-            )
+            share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(share_text, safe='')}"
+            invite_text = msgs["invite_title"] + "\n\n" + msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
 
             invite_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1859,9 +1657,7 @@ async def cmd_help(message: types.Message):
     # Fetch game title dynamically from API
     game_title = "🎮 Game"
     try:
-        title_data = await api_request(
-            "GET", "/game/title", params={"game_id": "default_game"}
-        )
+        title_data = await api_request("GET", "/game/title", params={"game_id": "default_game"})
         if title_data and title_data.get("title"):
             game_title = f"🎮 {title_data['title']}"
     except Exception as e:
@@ -1909,9 +1705,7 @@ async def cmd_gm_start_game(message: types.Message):
         await message.answer(gm_msgs["start_game_usage"])
         return
 
-    await message.answer(
-        gm_msgs["starting_game"].format(game_id=game_id), parse_mode="Markdown"
-    )
+    await message.answer(gm_msgs["starting_game"].format(game_id=game_id), parse_mode="Markdown")
 
     try:
         result = await api_request(
@@ -1992,11 +1786,7 @@ async def cmd_gm_kick(message: types.Message):
             )
             await message.answer(msg, parse_mode="Markdown")
         else:
-            error_detail = (
-                result.get("detail", gm_msgs["unknown_error"])
-                if result
-                else gm_msgs["no_api_response"]
-            )
+            error_detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
             await message.answer(gm_msgs["kick_error"].format(error=error_detail))
     except Exception as e:
         logger.error(f"Failed to kick player: {e}")
@@ -2029,13 +1819,9 @@ async def cmd_gm_list_games(message: types.Message):
         lines = [gm_msgs["games_list_header"], ""]
         for idx, game in enumerate(games, start=1):
             game_id = game.get("game_id", "unknown")
-            title = (
-                game.get("title") or game.get("name") or gm_msgs["default_game_title"]
-            )
+            title = game.get("title") or game.get("name") or gm_msgs["default_game_title"]
             player_count = game.get("player_count", 0)
-            status = game.get("status") or (
-                "started" if game.get("started") else "waiting"
-            )
+            status = game.get("status") or ("started" if game.get("started") else "waiting")
             status_icon = "🚀" if status == "started" else "⏳"
             lines.append(
                 gm_msgs["games_list_entry"].format(
@@ -2079,9 +1865,7 @@ async def cmd_gm_continue_game(message: types.Message):
         await message.answer(gm_msgs["continue_game_usage"])
         return
 
-    await message.answer(
-        gm_msgs["continuing_game"].format(game_id=game_id), parse_mode="Markdown"
-    )
+    await message.answer(gm_msgs["continuing_game"].format(game_id=game_id), parse_mode="Markdown")
 
     try:
         result = await api_request(
@@ -2211,9 +1995,7 @@ async def cmd_gm_restart_game(message: types.Message):
         # will skip delivery because _last_sent_briefing_day still has the old day 1
         # from the previous game session (loaded from persistent DB at startup).
         try:
-            players_result = await api_request(
-                "GET", "/players", params={"game_id": game_id}
-            )
+            players_result = await api_request("GET", "/players", params={"game_id": game_id})
             if players_result:
                 for p in players_result:
                     if isinstance(p, dict):
@@ -2221,10 +2003,7 @@ async def cmd_gm_restart_game(message: types.Message):
                         if pid is not None and pid in _last_sent_briefing_day:
                             del _last_sent_briefing_day[pid]
                             update_player_state(pid, last_briefing_day_sent=None)
-                            logger.info(
-                                f"[DEDUP] Reset briefing cache for player {pid} "
-                                f"(game restart)"
-                            )
+                            logger.info(f"[DEDUP] Reset briefing cache for player {pid} (game restart)")
         except Exception as e:
             logger.warning(f"Failed to reset dedup cache for restart: {e}")
 
@@ -2254,11 +2033,7 @@ async def cmd_gm_restart_game(message: types.Message):
             await message.answer(msg, parse_mode="Markdown")
             # Bridge, mission & briefings are delivered via push_briefings
         else:
-            await message.answer(
-                gm_msgs["restart_game_error"].format(
-                    error="Сброс выполнен, но запуск не удался: " + str(start_result)
-                )
-            )
+            await message.answer(gm_msgs["restart_game_error"].format(error="Сброс выполнен, но запуск не удался: " + str(start_result)))
     except Exception as e:
         logger.error(f"Failed to restart game {game_id}: {e}")
         await message.answer(gm_msgs["restart_game_error"].format(error=e))
@@ -2289,9 +2064,7 @@ async def cmd_gm_status(message: types.Message):
         return
 
     game_id = parts[1].strip()
-    await message.answer(
-        gm_msgs["status_loading"].format(game_id=game_id), parse_mode="Markdown"
-    )
+    await message.answer(gm_msgs["status_loading"].format(game_id=game_id), parse_mode="Markdown")
 
     try:
         result = await api_request("GET", "/game/status", params={"game_id": game_id})
@@ -2301,21 +2074,11 @@ async def cmd_gm_status(message: types.Message):
 
         # Build header
         ship = (
-            (
-                gm_msgs.get("ship_alive", "\u2705 ")
-                if result.get("ship_alive")
-                else gm_msgs.get("ship_destroyed", "\u2620 ")
-            )
+            (gm_msgs.get("ship_alive", "✅ ") if result.get("ship_alive") else gm_msgs.get("ship_destroyed", "☠ "))
             if False
-            else (
-                "\u2705 \u0426\u0435\u043b" if BOT_LANGUAGE == "ru" else "\u2705 Intact"
-            )
+            else ("✅ Цел" if BOT_LANGUAGE == "ru" else "✅ Intact")
             if result.get("ship_alive")
-            else (
-                "\u2620 \u0423\u043d\u0438\u0447\u0442\u043e\u0436\u0435\u043d"
-                if BOT_LANGUAGE == "ru"
-                else "\u2620 Destroyed"
-            )
+            else ("☠ Уничтожен" if BOT_LANGUAGE == "ru" else "☠ Destroyed")
         )
         status_label = result.get("status", "?")
         header = gm_msgs["status_header"].format(
@@ -2334,16 +2097,8 @@ async def cmd_gm_status(message: types.Message):
         if players:
             players_parts = []
             for p in players:
-                icon = (
-                    "\u2620"
-                    if p.get("is_dead")
-                    else ("\u2705" if p.get("has_chosen") else "\u23f3")
-                )
-                action = p.get("chosen_action", "") or (
-                    "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435..."
-                    if BOT_LANGUAGE == "ru"
-                    else "Waiting..."
-                )
+                icon = "☠" if p.get("is_dead") else ("✅" if p.get("has_chosen") else "⏳")
+                action = p.get("chosen_action", "") or ("Ожидание..." if BOT_LANGUAGE == "ru" else "Waiting...")
                 name = p.get("player_name", "") or str(p.get("player_id", "?"))
                 players_parts.append(
                     gm_msgs["status_player_entry"].format(
@@ -2354,9 +2109,7 @@ async def cmd_gm_status(message: types.Message):
                         action=action,
                     )
                 )
-            players_text = (
-                gm_msgs["status_players_header"] + "\n" + "\n\n".join(players_parts)
-            )
+            players_text = gm_msgs["status_players_header"] + "\n" + "\n\n".join(players_parts)
         else:
             players_text = gm_msgs["status_no_players"]
 
@@ -2366,11 +2119,7 @@ async def cmd_gm_status(message: types.Message):
         if npcs:
             npcs_parts = []
             for n in npcs:
-                action = n.get("chosen_action_text", "") or (
-                    "\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445"
-                    if BOT_LANGUAGE == "ru"
-                    else "No data"
-                )
+                action = n.get("chosen_action_text", "") or ("Нет данных" if BOT_LANGUAGE == "ru" else "No data")
                 npcs_parts.append(
                     gm_msgs["status_npc_entry"].format(
                         name=n.get("npc_name", "?"),
@@ -2466,9 +2215,7 @@ async def handle_text_message(message: types.Message):
         await message.answer(msgs["error"].format(error=str(e)))
 
 
-async def handle_onboarding_inline_answer(
-    callback: types.CallbackQuery, state: FSMContext
-):
+async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: FSMContext):
     """Handle onboarding answer selection from inline keyboard buttons.
 
     Callback data format: onb_ans:<question_id>:<option_index>
@@ -2495,10 +2242,7 @@ async def handle_onboarding_inline_answer(
     current_question_id = state_data.get("current_question_id")
     current_options = state_data.get("current_options")
 
-    logger.info(
-        f"Inline onboarding answer: player={player_id}, question_id={question_id_str}, option_idx={option_idx}, "
-        f"session_id={session_id}"
-    )
+    logger.info(f"Inline onboarding answer: player={player_id}, question_id={question_id_str}, option_idx={option_idx}, session_id={session_id}")
 
     if not session_id:
         logger.error(f"No session_id in state for player {player_id}")
@@ -2506,9 +2250,7 @@ async def handle_onboarding_inline_answer(
         return
 
     if not current_options or option_idx < 0 or option_idx >= len(current_options):
-        logger.error(
-            f"Invalid option_idx {option_idx} for {len(current_options) if current_options else 0} options"
-        )
+        logger.error(f"Invalid option_idx {option_idx} for {len(current_options) if current_options else 0} options")
         await msg.answer(error_msgs["invalid_format"])
         return
 
@@ -2522,19 +2264,14 @@ async def handle_onboarding_inline_answer(
             await callback.bot.set_message_reaction(
                 chat_id=player_id,
                 message_id=msg.message_id,
-                reaction=[ReactionTypeEmoji(emoji="\U0001f440")],  # 👀 eyes
+                reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
                 is_big=False,
             )
         except Exception as reaction_err:
-            logger.warning(
-                f"Failed to set reaction for player {player_id}: {reaction_err}"
-            )
+            logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
 
     try:
-        logger.info(
-            f"Submitting onboarding answer (inline): session_id={session_id}, "
-            f"question_id={current_question_id}, answer_value='{answer_value}'"
-        )
+        logger.info(f"Submitting onboarding answer (inline): session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
             "POST",
             f"/onboarding/{session_id}/answer",
@@ -2548,39 +2285,27 @@ async def handle_onboarding_inline_answer(
 
         # Answer processed successfully — update reaction to checkmark
         if callback.bot is None:
-            logger.warning(
-                f"callback.bot is None for player {player_id}, cannot set reaction"
-            )
+            logger.warning(f"callback.bot is None for player {player_id}, cannot set reaction")
         else:
             try:
                 await callback.bot.set_message_reaction(
                     chat_id=player_id,
                     message_id=msg.message_id,
-                    reaction=[ReactionTypeEmoji(emoji="\U0001f44d")],  # 👍 thumbs up
+                    reaction=[ReactionTypeEmoji(emoji="👍")],  # 👍 thumbs up
                     is_big=False,
                 )
             except Exception as reaction_err:
-                logger.warning(
-                    f"Failed to update reaction for player {player_id}: {reaction_err}"
-                )
+                logger.warning(f"Failed to update reaction for player {player_id}: {reaction_err}")
 
         if result.get("completed"):
             profile = result.get("profile") or {}
-            logger.info(
-                f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}"
-            )
+            logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
 
             try:
-                verify_profile = await api_request(
-                    "GET", f"/players/{player_id}/profile"
-                )
-                logger.info(
-                    f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}"
-                )
+                verify_profile = await api_request("GET", f"/players/{player_id}/profile")
+                logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
             except Exception as verify_error:
-                logger.error(
-                    f"Profile verification failed for player {player_id}: {verify_error}"
-                )
+                logger.error(f"Profile verification failed for player {player_id}: {verify_error}")
 
             await state.clear()
             update_player_state(
@@ -2595,19 +2320,13 @@ async def handle_onboarding_inline_answer(
 
             # Avatar generation + onboarding message
             if msg.bot is None:
-                logger.error(
-                    f"message.bot is None for player {player_id}, cannot generate avatar"
-                )
+                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar")
             else:
-                asyncio.create_task(
-                    _generate_and_send_avatar(player_id, session_id, msg.bot)
-                )
+                asyncio.create_task(_generate_and_send_avatar(player_id, session_id, msg.bot))
         else:
             next_question = result.get("next_question")
             if next_question:
-                logger.info(
-                    f"Next onboarding question (inline): id={next_question['id']}, text={next_question['text']}..."
-                )
+                logger.info(f"Next onboarding question (inline): id={next_question['id']}, text={next_question['text']}...")
                 await state.update_data(
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
@@ -2617,18 +2336,12 @@ async def handle_onboarding_inline_answer(
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
                 )
-                keyboard = create_onboarding_keyboard(
-                    next_question["options"], next_question["id"]
-                )
-                await send_question_with_image(
-                    msg, next_question, keyboard, BOT_LANGUAGE
-                )
+                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+                await send_question_with_image(msg, next_question, keyboard, BOT_LANGUAGE)
 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer (inline): {e}")
-        await callback.message.answer(
-            error_msgs["onboarding_error"].format(error=str(e))
-        )
+        await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
 async def onboarding_answer(message: types.Message, state: FSMContext):
@@ -2643,9 +2356,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     player_id = message.from_user.id
     error_msgs = lang.get_errors(BOT_LANGUAGE)
 
-    logger.info(
-        f"Onboarding answer handler called: player={player_id}, text='{answer_text}'"
-    )
+    logger.info(f"Onboarding answer handler called: player={player_id}, text='{answer_text}'")
 
     # Get current question data from state
     state_data = await state.get_data()
@@ -2653,9 +2364,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     current_question_id = state_data.get("current_question_id")
     current_options = state_data.get("current_options")
 
-    logger.info(
-        f"State data: session_id={session_id}, question_id={current_question_id}, options_count={len(current_options) if current_options else 0}"
-    )
+    logger.info(f"State data: session_id={session_id}, question_id={current_question_id}, options_count={len(current_options) if current_options else 0}")
 
     if not session_id:
         logger.error(f"No session_id in state for player {player_id}")
@@ -2663,9 +2372,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         return
 
     if not current_options:
-        logger.error(
-            f"No current_options in state for player {player_id}, state_data={state_data}"
-        )
+        logger.error(f"No current_options in state for player {player_id}, state_data={state_data}")
         await message.answer(error_msgs["invalid_format"])
         return
 
@@ -2681,10 +2388,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             logger.info(f"Numeric match: idx={idx}, label='{matched_label}'")
 
     if not answer_value:
-        logger.warning(
-            f"No matching option found! Player text: '{answer_text}', "
-            f"Available options: {[opt['label'] for opt in current_options]}"
-        )
+        logger.warning(f"No matching option found! Player text: '{answer_text}', Available options: {[opt['label'] for opt in current_options]}")
         await message.answer(error_msgs["invalid_format"])
         return
 
@@ -2694,19 +2398,14 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             await message.bot.set_message_reaction(
                 chat_id=player_id,
                 message_id=message.message_id,
-                reaction=[ReactionTypeEmoji(emoji="\U0001f440")],  # 👀 eyes
+                reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
                 is_big=False,
             )
         except Exception as reaction_err:
-            logger.warning(
-                f"Failed to set reaction for player {player_id}: {reaction_err}"
-            )
+            logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
 
     try:
-        logger.info(
-            f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, "
-            f"matched_label='{matched_label}', answer_value='{answer_value}'"
-        )
+        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, matched_label='{matched_label}', answer_value='{answer_value}'")
         result = await api_request(
             "POST",
             f"/onboarding/{session_id}/answer",
@@ -2724,31 +2423,21 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 await message.bot.set_message_reaction(
                     chat_id=player_id,
                     message_id=message.message_id,
-                    reaction=[ReactionTypeEmoji(emoji="\U0001f44d")],  # 👍 thumbs up
+                    reaction=[ReactionTypeEmoji(emoji="👍")],  # 👍 thumbs up
                     is_big=False,
                 )
             except Exception as reaction_err:
-                logger.warning(
-                    f"Failed to update reaction for player {player_id}: {reaction_err}"
-                )
+                logger.warning(f"Failed to update reaction for player {player_id}: {reaction_err}")
 
         if result.get("completed"):
             profile = result.get("profile") or {}
-            logger.info(
-                f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}"
-            )
+            logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
 
             try:
-                verify_profile = await api_request(
-                    "GET", f"/players/{player_id}/profile"
-                )
-                logger.info(
-                    f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}"
-                )
+                verify_profile = await api_request("GET", f"/players/{player_id}/profile")
+                logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
             except Exception as verify_error:
-                logger.error(
-                    f"Profile verification failed for player {player_id}: {verify_error}"
-                )
+                logger.error(f"Profile verification failed for player {player_id}: {verify_error}")
 
             await state.clear()
             update_player_state(
@@ -2763,32 +2452,19 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
             # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             if message.bot is None:
-                logger.error(
-                    f"message.bot is None for player {player_id}, cannot generate avatar"
-                )
+                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar")
             else:
-                asyncio.create_task(
-                    _generate_and_send_avatar(player_id, session_id, message.bot)
-                )
+                asyncio.create_task(_generate_and_send_avatar(player_id, session_id, message.bot))
 
         else:
             next_question = result.get("next_question")
             if next_question:
-                logger.info(
-                    f"Next onboarding question: id={next_question['id']}, text={next_question['text']}..."
-                )
-                logger.info(
-                    f"Next question options: {[opt['label'] for opt in next_question['options']]}"
-                )
+                logger.info(f"Next onboarding question: id={next_question['id']}, text={next_question['text']}...")
+                logger.info(f"Next question options: {[opt['label'] for opt in next_question['options']]}")
                 if next_question.get("image_url"):
-                    logger.info(
-                        f"Next question has image: {next_question['image_url']}"
-                    )
+                    logger.info(f"Next question has image: {next_question['image_url']}")
                 # Store next question data in state for matching
-                logger.info(
-                    f"Storing next question in state: question_id={next_question['id']}, "
-                    f"options={[opt['label'] for opt in next_question['options']]}"
-                )
+                logger.info(f"Storing next question in state: question_id={next_question['id']}, options={[opt['label'] for opt in next_question['options']]}")
                 await state.update_data(
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
@@ -2798,12 +2474,8 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
                 )
-                keyboard = create_onboarding_keyboard(
-                    next_question["options"], next_question["id"]
-                )
-                await send_question_with_image(
-                    message, next_question, keyboard, BOT_LANGUAGE
-                )
+                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+                await send_question_with_image(message, next_question, keyboard, BOT_LANGUAGE)
 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}")
@@ -2844,9 +2516,7 @@ async def action_selection(callback: types.CallbackQuery):
 
         msgs = lang.get_actions(BOT_LANGUAGE)
         if callback.message:
-            await callback.message.answer(
-                msgs["recorded"], reply_markup=create_main_menu_keyboard()
-            )
+            await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard())
         await callback.answer()
 
     except Exception as e:
@@ -2879,27 +2549,16 @@ async def refresh_game(callback: types.CallbackQuery):
         msgs = lang.get_current_day(BOT_LANGUAGE)
 
         # Build actions text
-        actions_text = "\n\n".join(
-            [
-                f"{i + 1} - {a['text']}"
-                for i, a in enumerate(day.get("player_actions", []))
-            ]
-        )
+        actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(day.get("player_actions", []))])
 
         # Build NPC dialogues text
         crew_dialogues_text = ""
         if day.get("crew_dialogues"):
-            crew_dialogues_text = "\n".join(
-                [f"- {d['npc']}: {d['dialogue']}" for d in day["crew_dialogues"]]
-            )
+            crew_dialogues_text = "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in day["crew_dialogues"]])
 
         if isinstance(callback.message, types.Message):
             await callback.message.edit_text(
-                msgs["title"].format(day=day["day"]) + "\n\n"
-                f"{msgs['story'].format(story=day['story'])}\n\n"
-                f"{msgs['crew_dialogues']}\n{crew_dialogues_text}"
-                + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n"
-                f"{msgs['select_action']}",
+                msgs["title"].format(day=day["day"]) + f"\n\n{msgs['story'].format(story=day['story'])}\n\n{msgs['crew_dialogues']}\n{crew_dialogues_text}" + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
                 parse_mode="Markdown",
                 reply_markup=create_action_keyboard(day.get("player_actions", [])),
             )
@@ -2908,9 +2567,7 @@ async def refresh_game(callback: types.CallbackQuery):
 
     except Exception as e:
         logger.error(f"Failed to refresh game for player {player_id}: {e}")
-        await callback.answer(
-            lang.get_messages(BOT_LANGUAGE)["error"].format(error=str(e))
-        )
+        await callback.answer(lang.get_messages(BOT_LANGUAGE)["error"].format(error=str(e)))
 
 
 # ============== Polling Loop ==============
@@ -2964,9 +2621,7 @@ async def main():
     dp.message.register(handle_onboarding_name, OnboardingState.waiting_for_name)
 
     # Onboarding answer handler - inline keyboard callback
-    dp.callback_query.register(
-        handle_onboarding_inline_answer, F.data.startswith("onb_ans:")
-    )
+    dp.callback_query.register(handle_onboarding_inline_answer, F.data.startswith("onb_ans:"))
     # Fallback for manually typed text answers (if user types instead of pressing button)
     dp.message.register(onboarding_answer, OnboardingState.waiting_for_answer)
 
@@ -2974,9 +2629,7 @@ async def main():
     dp.message.register(handle_text_message, F.text & ~F.command)
 
     # Callback query handlers
-    dp.callback_query.register(
-        game_selection_callback, F.data.startswith("select_game:")
-    )
+    dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
 
