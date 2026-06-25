@@ -43,6 +43,18 @@ MIGRATIONS: list[tuple[int, str]] = [
         3,
         "ALTER TABLE player_profiles ADD COLUMN species_primary_key TEXT DEFAULT NULL;",
     ),
+    (
+        4,
+        """
+        DELETE FROM player_briefings
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM player_briefings
+            GROUP BY day, COALESCE(player_id, -1), COALESCE(npc_key, ''), game_id
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_player_briefing
+        ON player_briefings(day, COALESCE(player_id, -1), COALESCE(npc_key, ''), game_id);
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -270,9 +282,7 @@ def _ensure_game_state(game_id: str):
     conn.close()
 
 
-def _enrich_role_with_i18n(
-    role_key: str, taken_by: int | None = None, language: str = LANGUAGE_RU
-) -> dict[str, Any]:
+def _enrich_role_with_i18n(role_key: str, taken_by: int | None = None, language: str = LANGUAGE_RU) -> dict[str, Any]:
     ru = get_ship_role_i18n(role_key, LANGUAGE_RU)
     en = get_ship_role_i18n(role_key, LANGUAGE_EN)
     localized = get_ship_role_i18n(role_key, language)
@@ -280,23 +290,15 @@ def _enrich_role_with_i18n(
         "role_key": role_key,
         "role_name": localized.get("role_name", ru.get("role_name", "")),
         "role_name_en": en.get("role_name", ""),
-        "role_description": localized.get(
-            "role_description", ru.get("role_description", "")
-        ),
+        "role_description": localized.get("role_description", ru.get("role_description", "")),
         "role_description_en": en.get("role_description", ""),
-        "avatar_description": localized.get(
-            "avatar_description", ru.get("avatar_description", "")
-        ),
-        "personality_traits": localized.get(
-            "personality_traits", ru.get("personality_traits", [])
-        ),
+        "avatar_description": localized.get("avatar_description", ru.get("avatar_description", "")),
+        "personality_traits": localized.get("personality_traits", ru.get("personality_traits", [])),
         **({"taken_by": taken_by} if taken_by is not None else {}),
     }
 
 
-def get_available_roles(
-    game_id: str = "default_game", language: str = LANGUAGE_RU
-) -> list[dict[str, Any]]:
+def get_available_roles(game_id: str = "default_game", language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -308,20 +310,13 @@ def get_available_roles(
     return [_enrich_role_with_i18n(row["role_key"], language=language) for row in rows]
 
 
-def get_all_roles(
-    game_id: str = "default_game", language: str = LANGUAGE_RU
-) -> list[dict[str, Any]]:
+def get_all_roles(game_id: str = "default_game", language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT role_key, taken_by FROM ship_roles WHERE game_id = ?", (game_id,)
-    )
+    cursor.execute("SELECT role_key, taken_by FROM ship_roles WHERE game_id = ?", (game_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [
-        _enrich_role_with_i18n(row["role_key"], row["taken_by"], language)
-        for row in rows
-    ]
+    return [_enrich_role_with_i18n(row["role_key"], row["taken_by"], language) for row in rows]
 
 
 def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> bool:
@@ -342,10 +337,7 @@ def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> b
         )
         deactivated = cursor.rowcount
         if deactivated:
-            logger.info(
-                f"[ROLE] Player {player_id} replaced NPC(s) for role '{role_key}' "
-                f"— deactivated {deactivated} NPC(s)"
-            )
+            logger.info(f"[ROLE] Player {player_id} replaced NPC(s) for role '{role_key}' — deactivated {deactivated} NPC(s)")
 
     conn.commit()
     conn.close()
@@ -373,9 +365,7 @@ def get_role_by_key(
 def reset_roles(game_id: str = "default_game"):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE ship_roles SET taken_by = NULL WHERE game_id = ?", (game_id,)
-    )
+    cursor.execute("UPDATE ship_roles SET taken_by = NULL WHERE game_id = ?", (game_id,))
     conn.commit()
     conn.close()
 
@@ -431,9 +421,7 @@ def get_onboarding_session(session_id: str) -> dict[str, Any] | None:
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT * FROM onboarding_sessions WHERE session_id = ?", (session_id,)
-    )
+    cursor.execute("SELECT * FROM onboarding_sessions WHERE session_id = ?", (session_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -670,9 +658,7 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
         "gender_secondary": row["gender_secondary"],
         "species_primary_key": row["species_primary_key"],
         "is_dead": bool(row["is_dead"]) if row["is_dead"] is not None else False,
-        "is_spectator": bool(row["is_spectator"])
-        if row["is_spectator"] is not None
-        else False,
+        "is_spectator": bool(row["is_spectator"]) if row["is_spectator"] is not None else False,
         "player_name": row["player_name"],
     }
 
@@ -680,9 +666,7 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
 # ============== Game Days ==============
 
 
-def create_game_day(
-    day_data: dict[str, Any], game_id: str = "default_game"
-) -> dict[str, Any] | None:
+def create_game_day(day_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
     """Create a new game day"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -719,9 +703,7 @@ def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | No
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT * FROM game_days WHERE day = ? AND game_id = ?", (day, game_id)
-    )
+    cursor.execute("SELECT * FROM game_days WHERE day = ? AND game_id = ?", (day, game_id))
     row = cursor.fetchone()
     conn.close()
 
@@ -808,9 +790,7 @@ def get_player_actions(player_id: int, day: int | None = None) -> list[dict[str,
     result = []
     for row in rows:
         action_dict = dict(row)
-        action_dict["consequence_result"] = json.loads(
-            row["consequence_result"] or "{}"
-        )
+        action_dict["consequence_result"] = json.loads(row["consequence_result"] or "{}")
         result.append(action_dict)
 
     return result
@@ -819,9 +799,7 @@ def get_player_actions(player_id: int, day: int | None = None) -> list[dict[str,
 # ============== Game Messages ==============
 
 
-def add_game_message(
-    player_id: int, message: str, message_type: str = "text"
-) -> dict[str, Any]:
+def add_game_message(player_id: int, message: str, message_type: str = "text") -> dict[str, Any]:
     """Add a game message"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -921,14 +899,10 @@ def update_game_state(
 def is_game_active(game_id: str = "default_game") -> bool:
     """Check if game is still active (ship and crew alive)"""
     state = get_game_state(game_id)
-    return (
-        state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
-    )
+    return state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
 
 
-def end_game(
-    reason: str = "game_over", game_id: str = "default_game"
-) -> dict[str, Any]:
+def end_game(reason: str = "game_over", game_id: str = "default_game") -> dict[str, Any]:
     """End the game by setting ship destroyed and crew health to 0"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1019,9 +993,7 @@ def join_game(game_id: str, player_id: int) -> bool:
     cursor = conn.cursor()
 
     # Check if player is already in another game
-    cursor.execute(
-        "SELECT game_id FROM player_profiles WHERE player_id = ?", (player_id,)
-    )
+    cursor.execute("SELECT game_id FROM player_profiles WHERE player_id = ?", (player_id,))
     existing_game = cursor.fetchone()
 
     if existing_game and existing_game["game_id"]:
@@ -1053,9 +1025,7 @@ def get_players_in_game(game_id: str) -> list[int]:
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT player_id FROM player_profiles WHERE game_id = ?", (game_id,)
-    )
+    cursor.execute("SELECT player_id FROM player_profiles WHERE game_id = ?", (game_id,))
     rows = cursor.fetchall()
     conn.close()
 
@@ -1148,9 +1118,7 @@ def get_player_count_in_game(game_id: str = "default_game") -> int:
     """Get the number of players in a game"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) as cnt FROM player_profiles WHERE game_id = ?", (game_id,)
-    )
+    cursor.execute("SELECT COUNT(*) as cnt FROM player_profiles WHERE game_id = ?", (game_id,))
     row = cursor.fetchone()
     conn.close()
     return row["cnt"] if row else 0
@@ -1381,9 +1349,7 @@ def get_all_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
     ]
 
 
-def get_npc_by_role(
-    role_key: str, game_id: str = "default_game"
-) -> dict[str, Any] | None:
+def get_npc_by_role(role_key: str, game_id: str = "default_game") -> dict[str, Any] | None:
     """Find an active NPC by role key."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1429,9 +1395,7 @@ def deactivate_npc(npc_key: str) -> bool:
 # ============== Player Kicks ==============
 
 
-def record_kick(
-    kicked_player_id: int, replaced_by_npc_key: str, reason: str = ""
-) -> dict[str, Any]:
+def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "") -> dict[str, Any]:
     """Record a player kick."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1477,14 +1441,12 @@ def is_player_kicked(player_id: int) -> bool:
 # ============== Player Briefings (per-player game day content) ==============
 
 
-def save_player_briefing(
-    briefing_data: dict[str, Any], game_id: str = "default_game"
-) -> dict[str, Any] | None:
+def save_player_briefing(briefing_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
     """Save a per-player daily briefing with choices and consequences."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """INSERT INTO player_briefings
+        """INSERT OR REPLACE INTO player_briefings
            (day, player_id, npc_key, is_npc, briefing, choices,
             selected_action_id, choice_rationale, consequence_result, chosen_action_url, created_at, game_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -1511,9 +1473,7 @@ def save_player_briefing(
     return briefing_data
 
 
-def get_player_briefing(
-    day: int, player_id: int, game_id: str = "default_game"
-) -> dict[str, Any] | None:
+def get_player_briefing(day: int, player_id: int, game_id: str = "default_game") -> dict[str, Any] | None:
     """Get a player's briefing for a specific day."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1547,9 +1507,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
     }
 
 
-def get_all_briefings_for_day(
-    day: int, game_id: str = "default_game"
-) -> list[dict[str, Any]]:
+def get_all_briefings_for_day(day: int, game_id: str = "default_game") -> list[dict[str, Any]]:
     """Get all briefings (player + NPC) for a specific day."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1591,9 +1549,7 @@ def update_briefing_choice(
     return updated
 
 
-def update_briefing_chosen_action_url(
-    briefing_id: int, chosen_action_url: str | None
-) -> bool:
+def update_briefing_chosen_action_url(briefing_id: int, chosen_action_url: str | None) -> bool:
     """Store a chosen action image URL in a player's briefing."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1607,9 +1563,7 @@ def update_briefing_chosen_action_url(
     return updated
 
 
-def get_players_who_need_to_choose(
-    day: int, game_id: str = "default_game"
-) -> list[dict[str, Any]]:
+def get_players_who_need_to_choose(day: int, game_id: str = "default_game") -> list[dict[str, Any]]:
     """Get real players who haven't made their choice for the day yet."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1636,9 +1590,7 @@ def get_players_who_need_to_choose(
     return result
 
 
-def update_game_day_outcome(
-    day: int, combined_outcome: str, game_id: str = "default_game"
-) -> bool:
+def update_game_day_outcome(day: int, combined_outcome: str, game_id: str = "default_game") -> bool:
     """Update the combined outcome for a game day after all choices are analyzed."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1652,9 +1604,7 @@ def update_game_day_outcome(
     return updated
 
 
-def update_game_day_global_circumstances(
-    day: int, circumstances: str, game_id: str = "default_game"
-) -> bool:
+def update_game_day_global_circumstances(day: int, circumstances: str, game_id: str = "default_game") -> bool:
     """Update global circumstances for a game day."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1671,9 +1621,7 @@ def update_game_day_global_circumstances(
 # ============== Mission Management ==============
 
 
-def create_mission(
-    mission_data: dict[str, Any], game_id: str = "default_game"
-) -> dict[str, Any] | None:
+def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
     """Create a mission for a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1698,9 +1646,7 @@ def create_mission(
     return get_mission(mission_id, game_id)
 
 
-def get_mission(
-    mission_id: int | None = None, game_id: str = "default_game"
-) -> dict[str, Any] | None:
+def get_mission(mission_id: int | None = None, game_id: str = "default_game") -> dict[str, Any] | None:
     """Get the latest mission for a game, or a specific mission by ID."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1839,9 +1785,7 @@ def delete_game_day(day: int, game_id: str = "default_game") -> bool:
     """Delete a specific game day."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM game_days WHERE day = ? AND game_id = ?", (day, game_id)
-    )
+    cursor.execute("DELETE FROM game_days WHERE day = ? AND game_id = ?", (day, game_id))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -1863,9 +1807,7 @@ def delete_player_briefings_for_day(day: int, game_id: str = "default_game") -> 
     """Delete all briefings (player + NPC) for a specific game day."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM player_briefings WHERE day = ? AND game_id = ?", (day, game_id)
-    )
+    cursor.execute("DELETE FROM player_briefings WHERE day = ? AND game_id = ?", (day, game_id))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -1965,9 +1907,7 @@ def delete_game_images(game_id: str = "default_game") -> int:
     but preserve loading images since they are shared."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM game_images WHERE game_id = ? AND type != 'loading'", (game_id,)
-    )
+    cursor.execute("DELETE FROM game_images WHERE game_id = ? AND type != 'loading'", (game_id,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
