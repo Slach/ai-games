@@ -19,3 +19,4 @@ __pycache__/
 *.db
 *.pyc*.db-shm
 *.db-wal
+*.db-shm\n*.db-wal
