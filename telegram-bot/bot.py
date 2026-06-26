@@ -817,18 +817,25 @@ def wrap_text(text: str, width: int = 35) -> str:
     return "\n".join(lines)
 
 
-def create_onboarding_keyboard(options: list, question_id: int) -> InlineKeyboardMarkup:
+def create_onboarding_keyboard(options: list, question_id: int, selected_index: int | None = None) -> InlineKeyboardMarkup:
     """Create inline keyboard for onboarding options.
 
     Buttons show numbers [1] [2] [3] etc. attached to the message
     itself — unlike ReplyKeyboardMarkup, these CANNOT be dismissed
     by the user, ensuring they always have a way to answer.
+
+    If selected_index is provided, that button gets a ✅ prefix
+    to visually indicate the player's choice.
     """
     builder = InlineKeyboardBuilder()
     for idx in range(len(options)):
+        if selected_index == idx:
+            text = f"✅ [{idx + 1}]"
+        else:
+            text = f"[{idx + 1}]"
         builder.add(
             InlineKeyboardButton(
-                text=f"[{idx + 1}]",
+                text=text,
                 callback_data=f"onb_ans:{question_id}:{idx}",
             )
         )
@@ -1254,8 +1261,9 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
 
     # Check if player already has an active onboarding session in memory
     player_state = get_player_state(player_id)
-    if player_state.get("onboarding_session_id"):
-        logger.info(f"Player {player_id} already has active onboarding session: {player_state['onboarding_session_id']}")
+    session_id = player_state.get("onboarding_session_id")
+    if session_id:
+        logger.info(f"Player {player_id} already has active onboarding session: {session_id}")
         current_options = player_state.get("current_options", [])
         current_question_text = player_state.get("current_question_text")
         current_question_image_url = player_state.get("current_question_image_url")
@@ -1271,16 +1279,77 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 "image_url": current_question_image_url,
             }
             await send_question_with_image(message, question, keyboard, player_lang)
+            await state.set_state(OnboardingState.waiting_for_answer)
         else:
-            # No question data stored — send plain text with keyboard
-            if current_options:
-                keyboard = create_onboarding_keyboard(current_options, current_question_id)
+            # No cached question data — fetch current question from API
+            try:
+                session_data = await api_request(
+                    "GET",
+                    f"/onboarding/{session_id}",
+                    params={"language": player_lang},
+                    ignore_codes=(404,),
+                )
+            except Exception as e:
+                logger.error(f"Failed to fetch onboarding session {session_id}: {e}")
+                session_data = None
+
+            if session_data and session_data.get("completed"):
+                # Session already completed but player never got completion flow.
+                # Trigger avatar generation and completion.
+                logger.info(f"Session {session_id} already completed for player {player_id}, triggering completion")
+                await message.answer(
+                    msgs["onboarding_complete_restored"],
+                    parse_mode="Markdown",
+                )
+                await state.clear()
+                update_player_state(
+                    player_id,
+                    onboarding_session_id=None,
+                    current_question_id=None,
+                    current_options=None,
+                )
+                if message.bot is not None:
+                    asyncio.create_task(_generate_and_send_avatar(player_id, session_id, message.bot))
+                return
+
+            if session_data and session_data.get("next_question"):
+                next_question = session_data["next_question"]
+                logger.info(f"Restored onboarding question from API: id={next_question['id']}")
+                await state.update_data(
+                    session_id=session_id,
+                    game_id=session_data.get("game_id", "default_game"),
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                )
+                update_player_state(
+                    player_id,
+                    onboarding_session_id=session_id,
+                    current_question_id=next_question["id"],
+                    current_options=next_question["options"],
+                    current_question_text=next_question["text"],
+                    current_question_image_url=next_question.get("image_url"),
+                )
+                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+                await send_question_with_image(message, next_question, keyboard, player_lang)
+                await state.set_state(OnboardingState.waiting_for_answer)
             else:
-                keyboard = types.ReplyKeyboardRemove()
-            await message.answer(
-                msgs["already_in_onboarding"],
-                reply_markup=keyboard,
-            )
+                # Nothing useful came back — guide the player to reset
+                logger.error(f"Stale onboarding session {session_id} for player {player_id}: no question data available")
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=msgs["clear_session_button"],
+                                callback_data=f"onb_clear:{session_id}",
+                            )
+                        ]
+                    ]
+                )
+                await message.answer(
+                    msgs["stale_onboarding_session"],
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
         return
 
     game_id, referrer_id = None, None
@@ -2687,7 +2756,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         if result is None:
             raise Exception("No response from API when submitting onboarding answer")
 
-        # Answer processed successfully — update reaction to checkmark
+        # Answer processed successfully — update reaction and keyboard
         if callback.bot is None:
             logger.warning(f"callback.bot is None for player {player_id}, cannot set reaction")
         else:
@@ -2700,6 +2769,13 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                 )
             except Exception as reaction_err:
                 logger.warning(f"Failed to update reaction for player {player_id}: {reaction_err}")
+
+        # Update the inline keyboard to show ✅ on the selected option
+        try:
+            updated_keyboard = create_onboarding_keyboard(current_options, callback_question_id, selected_index=option_idx)
+            await msg.edit_reply_markup(reply_markup=updated_keyboard)
+        except Exception as kb_err:
+            logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
 
         if result.get("completed"):
             profile = result.get("profile") or {}
@@ -2748,6 +2824,46 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer (inline): {e}")
         await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+
+
+async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Clear a stale onboarding session and restart the flow.
+
+    Called when the user presses the "Clear and Start Over" button
+    after getting a stale_onboarding_session message.
+    """
+    await callback.answer()
+    assert callback.data is not None
+    assert callback.message is not None
+    msg: types.Message = callback.message
+    player_id = callback.from_user.id
+
+    parts = callback.data.split(":")
+    if len(parts) != 2:
+        return
+
+    stale_session_id = parts[1]
+    logger.info(f"Clearing stale onboarding session {stale_session_id} for player {player_id}")
+
+    # Clear local player state
+    update_player_state(
+        player_id,
+        onboarding_session_id=None,
+        current_question_id=None,
+        current_options=None,
+        current_question_text=None,
+        current_question_image_url=None,
+    )
+
+    # Remove the inline keyboard from the stale message
+    try:
+        await msg.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.warning(f"Failed to remove keyboard: {e}")
+
+    # Restart from language selection
+    await state.clear()
+    await show_player_language_selection(msg, state)
 
 
 async def onboarding_answer(message: types.Message, state: FSMContext):
@@ -3062,6 +3178,7 @@ async def main():
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
     dp.callback_query.register(reset_confirm_callback, F.data.startswith("reset_confirm:"))
+    dp.callback_query.register(clear_onboarding_callback, F.data.startswith("onb_clear:"))
 
     # Load last_briefing_day_sent from DB so dedup survives bot restarts
     global _last_sent_briefing_day
