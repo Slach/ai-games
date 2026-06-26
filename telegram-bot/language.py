@@ -12,6 +12,12 @@ LANGUAGE_FLAGS = {
 }
 
 
+HELLO = {
+    LANGUAGE_RU: "Здравствуйте",
+    LANGUAGE_EN: "Hello",
+}
+
+
 LANGUAGE_NAMES = {
     LANGUAGE_RU: {
         LANGUAGE_RU: "Русский",
@@ -41,6 +47,7 @@ ONBOARDING = {
         "already_in_onboarding": "Вы уже проходите онбординг. Пожалуйста, ответьте на текущий вопрос.",
         "game_starting_broadcast": "🚀 Игра начинается! {player_name} присоединился, и команда в полном составе!\n\n**{player_name}** — **{role}**\n\n{role_description}",
         "select_language": "🌐 **Выберите язык игры:**",
+        "language_confirmation": "✅ **Выбран язык:** {language} {flag}",
         "name_question": "🗣 **Как вас зовут?**\n\nНапишите имя вашего персонажа (или своё настоящее имя):",
         "name_length_error": "Пожалуйста, напишите имя длиной от 1 до 50 символов:",
         "game_name_confirmation": "✅ Ваше игровое имя: {name}",
@@ -62,6 +69,7 @@ ONBOARDING = {
         "already_in_onboarding": "You are already in onboarding. Please answer the current question.",
         "game_starting_broadcast": "🚀 The game is starting! {player_name} has joined, and the crew is assembled!\n\n**{player_name}** — **{role}**\n\n{role_description}",
         "select_language": "🌐 **Choose game language:**",
+        "language_confirmation": "✅ **Language selected:** {language} {flag}",
         "name_question": "🗣 **What is your name?**\n\nEnter your character name (or your real name):",
         "name_length_error": "Please enter a name between 1 and 50 characters:",
         "game_name_confirmation": "✅ Your game name: {name}",
@@ -117,7 +125,7 @@ CURRENT_DAY = {
     LANGUAGE_RU: {
         "title": "🎯 **Ход {day}**",
         "story": "*Общая вводная:*\n{story}",
-        "crew_dialogues": "*NPC диалоги:*",
+        "crew_dialogues": "*Поведение экипажа:*",
         "actions": "*Ваши варианты действий:*\n{actions}",
         "select_action": "Выберите действие ниже:",
         "briefing_header": "{briefing}",
@@ -128,7 +136,7 @@ CURRENT_DAY = {
     LANGUAGE_EN: {
         "title": "🎯 **Turn {day}**",
         "story": "*Global scenario:*\n{story}",
-        "crew_dialogues": "*NPC dialogues:*",
+        "crew_dialogues": "*Crew behavior:*",
         "actions": "*Your action choices:*\n{actions}",
         "select_action": "Select an action below:",
         "briefing_header": "{briefing}",
@@ -219,10 +227,12 @@ SPECTATOR = {
     LANGUAGE_RU: {
         "player_dead": "💀 **Вы погибли при исполнении!**\n\nВаш персонаж пал в бою. Вы остаётесь зрителем и можете наблюдать за развитием сюжета.\n\nЧтобы присоединиться к новой игре или вернуться в текущую в новой роли, нажмите /start",
         "still_watching": "👁 **Вы наблюдаете за развитием событий...**\n\nКак зритель, вы видите сюжет, но не можете влиять на него.\nНажмите /start чтобы присоединиться к новой игре или вернуться в новой роли.",
+        "start_over_button": "🔄 Начать заново / Start Over",
     },
     LANGUAGE_EN: {
         "player_dead": "💀 **You died in the line of duty!**\n\nYour character fell in battle. You remain a spectator and can watch the story unfold.\n\nTo join a new game or return to the current one in a new role, press /start",
         "still_watching": "👁 **You are watching the story unfold...**\n\nAs a spectator, you see the plot but cannot influence it.\nPress /start to join a new game or return in a new role.",
+        "start_over_button": "🔄 Start Over",
     },
 }
 
@@ -294,18 +304,25 @@ GM_COMMANDS = {
         "unauthorized": "⛔ У вас нет прав на использование этой команды.",
         "start_game_usage": "❌ Использование: /gm_start_game <game_id>\n\nПример: /gm_start_game abc123",
         "starting_game": "🚀 Запуск игры `{game_id}`...",
+        "game_generation_started": "🚀 Запущена генерация игры `{game_id}`...\n⏳ Создаю NPC, миссию и бриффинги. Это может занять несколько минут.\n📬 Вы получите уведомление, когда игра будет готова.",
+        "start_game_failed": "❌ Не удалось запустить игру: {error}",
         "continue_game_usage": "❌ Использование: /gm_continue_game <game_id>\n\nПример: /gm_continue_game abc123",
         "continuing_game": "🚀 Генерация следующего хода для игры `{game_id}`...",
+        "turn_generation_started": "🚀 Запущена генерация хода для игры `{game_id}`...\n⏳ Это может занять несколько минут.\n📬 Вы получите уведомление, когда ход будет готов.",
+        "continue_game_failed": "❌ Не удалось запустить генерацию хода: {error}",
         "game_continued": "✅ **Следующий ход сгенерирован!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n🎭 Участников: {total}",
         "continue_game_error": "❌ Ошибка генерации хода: {error}",
         "regenerate_turn_usage": "❌ Использование: /gm_regenerate_turn <game_id>\n\nПример: /gm_regenerate_turn abc123",
         "regenerating_turn": "🔄 Перегенерация текущего хода для игры `{game_id}`...",
+        "turn_regeneration_started": "🔄 Запущена перегенерация хода для игры `{game_id}`...\n⏳ Это может занять несколько минут.\n📬 Вы получите уведомление, когда ход будет готов.",
+        "regenerate_turn_failed": "❌ Не удалось запустить перегенерацию хода: {error}",
         "turn_regenerated": "✅ **Текущий ход перегенерирован!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {players}\n🤖 NPC: {npcs}",
         "regenerate_turn_error": "❌ Ошибка перегенерации хода: {error}",
         "restart_game_usage": "❌ Использование: /gm_restart_game <game_id>\n\nПример: /gm_restart_game abc123",
         "restarting_game": "🔄 Перезапуск игры `{game_id}`...",
         "game_restarted": "✅ **Игра перезапущена!**\n\n🎮 Игра: `{game_id}`\n🗑 Удалено ходов: {deleted_days}\n🗑 Удалено брифингов: {deleted_briefings}\n🗑 Удалено действий: {deleted_actions}\n🗑 Удалено сообщений: {deleted_messages}\n🗑 Удалена миссия: {deleted_mission}\n\n🎯 Ход: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC создано: {npc_count}\n🚀 Миссия сгенерирована",
         "restart_game_error": "❌ Ошибка перезапуска игры: {error}",
+        "restart_cleanup_done": "✅ **Игра `{game_id}` сброшена!**\n\n🗑 Удалено ходов: {deleted_days}\n🗑 Удалено брифингов: {deleted_briefings}\n🗑 Удалено действий: {deleted_actions}\n\n🚀 Запущена генерация новой игры...\n📬 Вы получите уведомление, когда игра будет готова.",
         "game_started": "✅ **Игра `{game_id}` запущена!**\n\n🎯 Ход: {day_num}\n👤 Игроков: {player_count}\n🤖 NPC создано: {npc_count}\n🚀 Миссия сгенерирована\n🖼 Картинка рубки готова\n\nКоманда собрана, вводные разосланы!",
         "briefings_sent": "",
         "start_game_error": "❌ Ошибка запуска игры: {error}",
@@ -335,6 +352,11 @@ GM_COMMANDS = {
         "status_no_npcs": "\n\n_Нет NPC_",
         "status_error": "❌ Ошибка получения статуса: {error}",
         "list_games_error": "❌ Ошибка получения списка игр: {error}",
+        "set_language_usage": "❌ Использование: /gm_set_language <game_id> <ru|en>\n\nПример: /gm_set_language abc123 en",
+        "set_language_invalid": "❌ Язык должен быть `ru` или `en`.",
+        "set_language_progress": "⏳ Устанавливаю язык `{lang_code}` для игры `{game_id}`...",
+        "set_language_success": "✅ **Язык игры `{game_id}` установлен на `{lang_code}`**\n\n🌐 Теперь все новые игроки будут проходить онбординг на языке: {lang_code}",
+        "set_language_error": "❌ Ошибка: {detail}",
     },
     LANGUAGE_EN: {
         "unauthorized": "⛔ You don't have permission to use this command.",
@@ -381,6 +403,18 @@ GM_COMMANDS = {
         "status_no_npcs": "\n\n_No NPCs_",
         "status_error": "❌ Error fetching game status: {error}",
         "list_games_error": "❌ Error fetching game list: {error}",
+        "game_generation_started": "🚀 Game generation started for `{game_id}`...\n⏳ Creating NPCs, mission and briefings. This may take a few minutes.\n📬 You will be notified when the game is ready.",
+        "start_game_failed": "❌ Failed to start game: {error}",
+        "turn_generation_started": "🚀 Turn generation started for game `{game_id}`...\n⏳ This may take a few minutes.\n📬 You will be notified when the turn is ready.",
+        "continue_game_failed": "❌ Failed to start turn generation: {error}",
+        "turn_regeneration_started": "🔄 Turn regeneration started for game `{game_id}`...\n⏳ This may take a few minutes.\n📬 You will be notified when the turn is ready.",
+        "regenerate_turn_failed": "❌ Failed to start turn regeneration: {error}",
+        "restart_cleanup_done": "✅ **Game `{game_id}` reset!**\n\n🗑 Days deleted: {deleted_days}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n\n🚀 Starting new game generation...\n📬 You will be notified when the game is ready.",
+        "set_language_usage": "❌ Usage: /gm_set_language <game_id> <ru|en>\n\nExample: /gm_set_language abc123 en",
+        "set_language_invalid": "❌ Language must be `ru` or `en`.",
+        "set_language_progress": "⏳ Setting language `{lang_code}` for game `{game_id}`...",
+        "set_language_success": "✅ **Game `{game_id}` language set to `{lang_code}`**\n\n🌐 Now all new players will go through onboarding in: {lang_code}",
+        "set_language_error": "❌ Error: {detail}",
     },
 }
 

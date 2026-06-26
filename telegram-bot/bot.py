@@ -855,17 +855,23 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 # ============== Handlers ==============
 
 
-async def create_new_game(player_id: int, language: str = "ru") -> str:
-    """Create a new game with the given language and return its game_id."""
+async def create_new_game(player_id: int, language: str = "ru") -> tuple[str, str]:
+    """Create a new game with the given language.
+
+    Returns (game_id, game_name).
+    """
     result = await api_request(
         "POST",
         "/admin/create-game",
         data={"name": f"Game by {player_id}", "language": language},
     )
-    game_id = result.get("game_id") if result else None
+    if not result:
+        raise Exception("No response from /admin/create-game")
+    game_id = result.get("game_id")
     if not game_id:
         raise Exception("No game_id returned from /admin/create-game")
-    return game_id
+    game_name = result.get("name", "") or game_id
+    return game_id, game_name
 
 
 async def show_player_language_selection(message: types.Message, state: FSMContext):
@@ -874,11 +880,11 @@ async def show_player_language_selection(message: types.Message, state: FSMConte
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{lang.get_language_flag('ru')} {lang.get_language_name('ru', BOT_LANGUAGE)}",
+                    text=f"{lang.HELLO['ru']} {lang.get_language_flag('ru')}",
                     callback_data="player_lang:ru",
                 ),
                 InlineKeyboardButton(
-                    text=f"{lang.get_language_flag('en')} {lang.get_language_name('en', BOT_LANGUAGE)}",
+                    text=f"{lang.HELLO['en']} {lang.get_language_flag('en')}",
                     callback_data="player_lang:en",
                 ),
             ],
@@ -919,6 +925,15 @@ async def player_language_selection_callback(callback: types.CallbackQuery, stat
 
     with suppress(Exception):
         await message.edit_reply_markup(reply_markup=None)
+
+    # Confirm language selection
+    onboarding_msgs = lang.get_onboarding(lang_code)
+    lang_flag = lang.get_language_flag(lang_code)
+    lang_name = lang.get_language_name(lang_code, lang_code)
+    await message.answer(
+        onboarding_msgs["language_confirmation"].format(language=lang_name, flag=lang_flag),
+        parse_mode="Markdown",
+    )
 
     # Now show game list in chosen language
     await show_game_selection(message, state, language=lang_code)
@@ -1096,13 +1111,20 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
     try:
         if game_id_or_new == "new":
             # Create game with player's language
-            game_id = await create_new_game(player_id, language=player_lang)
+            game_id, game_name = await create_new_game(player_id, language=player_lang)
 
             if not game_id:
                 raise Exception("No game_id returned from create_new_game")
 
-            # Ask for player name
             onboarding_msgs = lang.get_onboarding(player_lang)
+
+            # Show game name confirmation
+            await message.answer(
+                f"🎮 **{game_name}**",
+                parse_mode="Markdown",
+            )
+
+            # Ask for player name
             await message.answer(
                 onboarding_msgs["name_question"],
                 parse_mode="Markdown",
@@ -1167,6 +1189,14 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
     data = await state.get_data()
     game_id = data.get("game_id", "default_game")
     game_language = data.get("game_language", "")
+    effective_lang = game_language or BOT_LANGUAGE
+
+    # Confirm player's name in chosen language
+    onboarding_msgs = lang.get_onboarding(effective_lang)
+    await message.answer(
+        onboarding_msgs["game_name_confirmation"].format(name=player_name),
+        parse_mode="Markdown",
+    )
 
     await send_random_loading_image(message)
 
@@ -1234,7 +1264,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text="🔄 Начать заново / Start Over",
+                                text=spectator_msgs["start_over_button"],
                                 callback_data="select_game:new",
                             )
                         ],
@@ -1487,7 +1517,7 @@ async def cmd_today(message: types.Message):
                     line = f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
                     dialogue_lines.append(line)
                 crew_separator = "\n---\n"
-                crew_behavior_text = f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
+                crew_behavior_text = f"\n\n{msgs['crew_dialogues']}\n{crew_separator.join(dialogue_lines)}"
 
             # Send action image first, if available
             chosen_action_url = briefing.get("chosen_action_url")
@@ -1538,7 +1568,7 @@ async def cmd_today(message: types.Message):
                     line = f"*{d['npc']}*: {d['dialogue']}"
                     dialogue_lines.append(line)
                 crew_separator = "\n---\n"
-                crew_behavior_text = f"\n\n*Поведение экипажа:*\n{crew_separator.join(dialogue_lines)}"
+                crew_behavior_text = f"\n\n{msgs['crew_dialogues']}\n{crew_separator.join(dialogue_lines)}"
 
             await message.answer(
                 msgs["title"].format(day=day["day"]) + f"\n\n{msgs['story'].format(story=day['story'])}" + crew_behavior_text + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
@@ -1821,7 +1851,7 @@ async def cmd_gm_start_game(message: types.Message):
         return
 
     await message.answer(
-        f"🚀 Запущена генерация игры `{game_id}`...\n⏳ Создаю NPC, миссию и бриффинги. Это может занять несколько минут.\n📬 Вы получите уведомление, когда игра будет готова.",
+        gm_msgs["game_generation_started"].format(game_id=game_id),
         parse_mode="Markdown",
     )
 
@@ -1840,7 +1870,7 @@ async def cmd_gm_start_game(message: types.Message):
     except Exception as e:
         logger.error(f"Failed to start start-game request for {game_id}: {e}")
         await message.answer(
-            f"❌ Не удалось запустить игру: {e}",
+            gm_msgs["start_game_failed"].format(error=e),
         )
 
 
@@ -1979,7 +2009,7 @@ async def cmd_gm_continue_game(message: types.Message):
         return
 
     await message.answer(
-        f"🚀 Запущена генерация хода для игры `{game_id}`...\n⏳ Это может занять несколько минут.\n📬 Вы получите уведомление, когда ход будет готов.",
+        gm_msgs["turn_generation_started"].format(game_id=game_id),
         parse_mode="Markdown",
     )
 
@@ -1999,7 +2029,7 @@ async def cmd_gm_continue_game(message: types.Message):
     except Exception as e:
         logger.error(f"Failed to start continue-game request for {game_id}: {e}")
         await message.answer(
-            f"❌ Не удалось запустить генерацию хода: {e}",
+            gm_msgs["continue_game_failed"].format(error=e),
         )
 
 
@@ -2030,7 +2060,7 @@ async def cmd_gm_regenerate_turn(message: types.Message):
         return
 
     await message.answer(
-        f"🔄 Запущена перегенерация хода для игры `{game_id}`...\n⏳ Это может занять несколько минут.\n📬 Вы получите уведомление, когда ход будет готов.",
+        gm_msgs["turn_regeneration_started"].format(game_id=game_id),
         parse_mode="Markdown",
     )
 
@@ -2050,7 +2080,7 @@ async def cmd_gm_regenerate_turn(message: types.Message):
     except Exception as e:
         logger.error(f"Failed to start regenerate-turn request for {game_id}: {e}")
         await message.answer(
-            f"❌ Не удалось запустить перегенерацию хода: {e}",
+            gm_msgs["regenerate_turn_failed"].format(error=e),
         )
 
 
@@ -2126,17 +2156,20 @@ async def cmd_gm_restart_game(message: types.Message):
         )
         if start_result and start_result.get("status") == "accepted":
             logger.info(f"Restart game {game_id}: reset complete, background generation started")
+            deleted_days = result.get("deleted_days", 0)
+            deleted_briefings = result.get("deleted_briefings", 0)
+            deleted_actions = result.get("deleted_actions", 0)
             await message.answer(
-                f"✅ **Игра `{game_id}` сброшена!**\n\n"
-                f"🗑 Удалено ходов: {result.get('deleted_days', 0)}\n"
-                f"🗑 Удалено брифингов: {result.get('deleted_briefings', 0)}\n"
-                f"🗑 Удалено действий: {result.get('deleted_actions', 0)}\n\n"
-                f"🚀 Запущена генерация новой игры...\n"
-                f"📬 Вы получите уведомление, когда игра будет готова.",
+                gm_msgs["restart_cleanup_done"].format(
+                    game_id=game_id,
+                    deleted_days=deleted_days,
+                    deleted_briefings=deleted_briefings,
+                    deleted_actions=deleted_actions,
+                ),
                 parse_mode="Markdown",
             )
         else:
-            await message.answer(gm_msgs["restart_game_error"].format(error="Сброс выполнен, но запуск не удался: " + str(start_result)))
+            await message.answer(gm_msgs["restart_game_error"].format(error=start_result))
     except Exception as e:
         logger.error(f"Failed to restart game {game_id}: {e}")
         await message.answer(gm_msgs["restart_game_error"].format(error=e))
@@ -2267,18 +2300,18 @@ async def cmd_gm_set_language(message: types.Message):
 
     parts = (message.text or "").split()
     if len(parts) < 3:
-        await message.answer("❌ Использование: /gm_set_language <game_id> <ru|en>\n\nПример: /gm_set_language abc123 en")
+        await message.answer(gm_msgs["set_language_usage"])
         return
 
     game_id = parts[1].strip()
     lang_code = parts[2].strip().lower()
 
     if lang_code not in ("ru", "en"):
-        await message.answer("❌ Язык должен быть `ru` или `en`.")
+        await message.answer(gm_msgs["set_language_invalid"])
         return
 
     await message.answer(
-        f"⏳ Устанавливаю язык `{lang_code}` для игры `{game_id}`...",
+        gm_msgs["set_language_progress"].format(lang_code=lang_code, game_id=game_id),
         parse_mode="Markdown",
     )
 
@@ -2290,15 +2323,15 @@ async def cmd_gm_set_language(message: types.Message):
         )
         if result and result.get("status") == "success":
             await message.answer(
-                f"✅ **Язык игры `{game_id}` установлен на `{lang_code}`**\n\n🌐 Теперь все новые игроки будут проходить онбординг на языке: {lang_code}",
+                gm_msgs["set_language_success"].format(game_id=game_id, lang_code=lang_code),
                 parse_mode="Markdown",
             )
         else:
-            detail = result.get("detail", "Неизвестная ошибка") if result else "Нет ответа от API"
-            await message.answer(f"❌ Ошибка: {detail}")
+            detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
+            await message.answer(gm_msgs["set_language_error"].format(detail=detail))
     except Exception as e:
         logger.error(f"Failed to set language for game {game_id}: {e}")
-        await message.answer(f"❌ Ошибка: {e}")
+        await message.answer(gm_msgs["set_language_error"].format(detail=e))
 
 
 async def handle_voice_message(message: types.Message):
