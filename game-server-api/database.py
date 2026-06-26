@@ -55,10 +55,6 @@ MIGRATIONS: list[tuple[int, str]] = [
         ON player_briefings(day, COALESCE(player_id, -1), COALESCE(npc_key, ''), game_id);
         """.strip(),
     ),
-    (
-        5,
-        "ALTER TABLE games ADD COLUMN language TEXT DEFAULT 'ru';",
-    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
