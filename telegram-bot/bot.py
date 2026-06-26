@@ -2743,6 +2743,13 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         except Exception as reaction_err:
             logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
 
+    # Immediately update the inline keyboard to show ✅ on the selected option
+    try:
+        updated_keyboard = create_onboarding_keyboard(current_options, callback_question_id, selected_index=option_idx)
+        await msg.edit_reply_markup(reply_markup=updated_keyboard)
+    except Exception as kb_err:
+        logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
+
     try:
         logger.info(f"Submitting onboarding answer (inline): session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
@@ -2756,7 +2763,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         if result is None:
             raise Exception("No response from API when submitting onboarding answer")
 
-        # Answer processed successfully — update reaction and keyboard
+        # Answer processed successfully — update reaction to checkmark
         if callback.bot is None:
             logger.warning(f"callback.bot is None for player {player_id}, cannot set reaction")
         else:
@@ -2769,13 +2776,6 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                 )
             except Exception as reaction_err:
                 logger.warning(f"Failed to update reaction for player {player_id}: {reaction_err}")
-
-        # Update the inline keyboard to show ✅ on the selected option
-        try:
-            updated_keyboard = create_onboarding_keyboard(current_options, callback_question_id, selected_index=option_idx)
-            await msg.edit_reply_markup(reply_markup=updated_keyboard)
-        except Exception as kb_err:
-            logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
 
         if result.get("completed"):
             profile = result.get("profile") or {}
