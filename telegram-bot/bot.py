@@ -493,8 +493,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         game_just_started = result.get("game_just_started", False)
         other_player_ids = result.get("other_player_ids", [])
         game_title = result.get("game_title", "")
+        game_language = result.get("language", BOT_LANGUAGE)
 
-        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+        onboarding_msgs = lang.get_onboarding(game_language)
 
         # Format species/gender with hybrid display
         species_primary = profile.get("species", "Unknown") or "Unknown"
@@ -502,13 +503,14 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         gender_primary = profile.get("gender", "Unknown") or "Unknown"
         gender_secondary = profile.get("gender_secondary")
 
+        profile_msgs = lang.get_profile(game_language)
         if species_secondary:
-            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {species_primary} + {species_secondary}"
+            species_display = profile_msgs["hybrid_species"].format(primary=species_primary, secondary=species_secondary)
         else:
             species_display = species_primary
 
         if gender_secondary:
-            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {gender_primary} + {gender_secondary}"
+            gender_display = profile_msgs["hybrid_gender"].format(primary=gender_primary, secondary=gender_secondary)
         else:
             gender_display = gender_primary
 
@@ -853,12 +855,12 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 # ============== Handlers ==============
 
 
-async def create_new_game(player_id: int) -> str:
-    """Create a new game and return its game_id."""
+async def create_new_game(player_id: int, language: str = "ru") -> str:
+    """Create a new game with the given language and return its game_id."""
     result = await api_request(
         "POST",
         "/admin/create-game",
-        data={"name": f"Game by {player_id}"},
+        data={"name": f"Game by {player_id}", "language": language},
     )
     game_id = result.get("game_id") if result else None
     if not game_id:
@@ -866,9 +868,66 @@ async def create_new_game(player_id: int) -> str:
     return game_id
 
 
-async def show_game_selection(message: types.Message, state: FSMContext):
+async def show_player_language_selection(message: types.Message, state: FSMContext):
+    """Show language selection for the player before showing game list."""
+    lang_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{lang.get_language_flag('ru')} {lang.get_language_name('ru', BOT_LANGUAGE)}",
+                    callback_data="player_lang:ru",
+                ),
+                InlineKeyboardButton(
+                    text=f"{lang.get_language_flag('en')} {lang.get_language_name('en', BOT_LANGUAGE)}",
+                    callback_data="player_lang:en",
+                ),
+            ],
+        ]
+    )
+    await message.answer(
+        lang.get_onboarding(BOT_LANGUAGE)["select_language"],
+        parse_mode="Markdown",
+        reply_markup=lang_keyboard,
+    )
+    await state.set_state(GameSelectionState.waiting_for_game_selection)
+
+
+async def player_language_selection_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Handle player's language choice, then show game list."""
+    await callback.answer()
+
+    data = callback.data or ""
+    if not data.startswith("player_lang:"):
+        return
+
+    lang_code = data.split(":", 1)[1]
+    if lang_code not in ("ru", "en"):
+        return
+
+    player_id = callback.from_user.id
+    message = callback.message
+
+    if not isinstance(message, types.Message):
+        return
+
+    # Store player's language preference
+    await state.update_data(player_language=lang_code)
+    update_player_state(player_id, language=lang_code)
+
+    # Remove language keyboard
+    from contextlib import suppress
+
+    with suppress(Exception):
+        await message.edit_reply_markup(reply_markup=None)
+
+    # Now show game list in chosen language
+    await show_game_selection(message, state, language=lang_code)
+
+
+async def show_game_selection(message: types.Message, state: FSMContext, language: str = ""):
     """Show available games or option to create a new one."""
-    msgs = lang.get_onboarding(BOT_LANGUAGE)
+    effective_lang = language or BOT_LANGUAGE
+    msgs = lang.get_onboarding(effective_lang)
 
     try:
         result = await api_request("GET", "/admin/list-games")
@@ -883,7 +942,8 @@ async def show_game_selection(message: types.Message, state: FSMContext):
             name = game.get("title") or game.get("name") or game_id
             player_count = game.get("player_count", 0)
             started = "🚀" if game.get("started") else "⏳"
-            btn_text = f"{started} {name} ({player_count} players)"
+            game_lang_flag = lang.get_language_flag(game.get("language", "ru"))
+            btn_text = f"{game_lang_flag} {started} {name} ({player_count})"
             keyboard.append(
                 [
                     InlineKeyboardButton(
@@ -913,7 +973,7 @@ async def show_game_selection(message: types.Message, state: FSMContext):
 
     except Exception as e:
         logger.error(f"Failed to fetch games list: {e}")
-        error_msgs = lang.get_errors(BOT_LANGUAGE)
+        error_msgs = lang.get_errors(effective_lang)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
@@ -923,12 +983,17 @@ async def start_onboarding_flow(
     player_id: int,
     game_id: str,
     player_name: str = "",
+    language: str = "",
 ):
-    """Start onboarding flow with a specific game_id and optional player_name."""
-    msgs = lang.get_onboarding(BOT_LANGUAGE)
+    """Start onboarding flow with a specific game_id and optional player_name.
+
+    Uses game language from state if set, otherwise falls back to BOT_LANGUAGE.
+    """
+    effective_language = language or BOT_LANGUAGE
+    msgs = lang.get_onboarding(effective_language)
 
     try:
-        logger.info(f"Starting onboarding for player_id={player_id}, game_id={game_id}, player_name={player_name}, language={BOT_LANGUAGE}")
+        logger.info(f"Starting onboarding for player_id={player_id}, game_id={game_id}, player_name={player_name}, language={effective_language}")
         result = await api_request(
             "POST",
             "/onboarding/start",
@@ -936,7 +1001,7 @@ async def start_onboarding_flow(
                 "player_id": player_id,
                 "game_id": game_id,
                 "player_name": player_name,
-                "language": BOT_LANGUAGE,
+                "language": effective_language,
             },
             timeout_total=600,
         )
@@ -989,17 +1054,21 @@ async def start_onboarding_flow(
             logger.info(f"Question has image: {question['image_url']}")
 
         keyboard = create_onboarding_keyboard(question["options"], question["id"])
-        await send_question_with_image(message, question, keyboard, BOT_LANGUAGE)
+        await send_question_with_image(message, question, keyboard, effective_language)
         await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
         logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}")
-        error_msgs = lang.get_errors(BOT_LANGUAGE)
+        error_msgs = lang.get_errors(effective_language)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
 async def game_selection_callback(callback: types.CallbackQuery, state: FSMContext):
-    """Handle game selection callback — ask for player name first, then continue onboarding."""
+    """Handle game selection callback.
+
+    For "new" games: create with player's stored language.
+    For existing games: ask for player name, using the game's language.
+    """
     await callback.answer()
 
     data = callback.data or ""
@@ -1014,37 +1083,70 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
         logger.warning(f"Callback message not accessible for player {player_id}, data={data}")
         return
 
+    # Read player's stored language preference
+    state_data = await state.get_data()
+    player_lang = state_data.get("player_language", BOT_LANGUAGE)
+
+    # Remove selection keyboard to avoid duplicate taps
+    from contextlib import suppress
+
+    with suppress(Exception):
+        await message.edit_reply_markup(reply_markup=None)
+
     try:
         if game_id_or_new == "new":
-            game_id = await create_new_game(player_id)
+            # Create game with player's language
+            game_id = await create_new_game(player_id, language=player_lang)
+
+            if not game_id:
+                raise Exception("No game_id returned from create_new_game")
+
+            # Ask for player name
+            onboarding_msgs = lang.get_onboarding(player_lang)
+            await message.answer(
+                onboarding_msgs["name_question"],
+                parse_mode="Markdown",
+            )
+
+            await state.update_data(
+                game_id=game_id,
+                game_language=player_lang,
+            )
+            await state.set_state(OnboardingState.waiting_for_name)
         else:
             game_id = game_id_or_new
 
-        if not game_id:
-            raise Exception("No game_id selected")
+            if not game_id:
+                raise Exception("No game_id selected")
 
-        # Remove selection keyboard to avoid duplicate taps
-        from contextlib import suppress
+            # Fetch game language from API
+            game_lang = player_lang
+            try:
+                result = await api_request("GET", "/admin/list-games")
+                games = result.get("games", []) if result else []
+                for g in games:
+                    if g.get("game_id") == game_id:
+                        game_lang = g.get("language", player_lang)
+                        break
+            except Exception as e:
+                logger.warning(f"Failed to fetch language for game {game_id}: {e}")
 
-        with suppress(Exception):
-            await message.edit_reply_markup(reply_markup=None)
+            # Ask for player name in game's language
+            onboarding_msgs = lang.get_onboarding(game_lang)
+            await message.answer(
+                onboarding_msgs["name_question"],
+                parse_mode="Markdown",
+            )
 
-        # Ask for player name first
-        name_question = "🗣 **Как вас зовут?**\n\nНапишите имя вашего персонажа (или своё настоящее имя):" if BOT_LANGUAGE == "ru" else "🗣 **What is your name?**\n\nEnter your character name (or your real name):"
-        await message.answer(
-            name_question,
-            parse_mode="Markdown",
-        )
-
-        # Store game_id in FSM for later use
-        await state.update_data(
-            game_id=game_id,
-        )
-        await state.set_state(OnboardingState.waiting_for_name)
+            await state.update_data(
+                game_id=game_id,
+                game_language=game_lang,
+            )
+            await state.set_state(OnboardingState.waiting_for_name)
 
     except Exception as e:
         logger.error(f"Failed to process game selection for player {player_id}: {e}")
-        error_msgs = lang.get_errors(BOT_LANGUAGE)
+        error_msgs = lang.get_errors(player_lang)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
@@ -1055,10 +1157,8 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
 
     player_name = message.text.strip() if message.text else ""
     if not player_name or len(player_name) < 1 or len(player_name) > 50:
-        if BOT_LANGUAGE == "ru":
-            await message.answer("Пожалуйста, напишите имя длиной от 1 до 50 символов:")
-        else:
-            await message.answer("Please enter a name between 1 and 50 characters:")
+        onboarding_msgs = lang.get_onboarding(BOT_LANGUAGE)
+        await message.answer(onboarding_msgs["name_length_error"])
         return
 
     logger.info(f"Player {player_id} entered name: {player_name}")
@@ -1066,13 +1166,14 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
     # Store name in FSM data and proceed to onboarding
     data = await state.get_data()
     game_id = data.get("game_id", "default_game")
+    game_language = data.get("game_language", "")
 
     await send_random_loading_image(message)
 
     await state.update_data(player_name=player_name)
 
-    # Proceed to the actual onboarding flow
-    await start_onboarding_flow(message, state, player_id, game_id, player_name)
+    # Proceed to the actual onboarding flow with game language if set
+    await start_onboarding_flow(message, state, player_id, game_id, player_name, language=game_language)
 
 
 async def cmd_start(message: types.Message, command: CommandObject, state: FSMContext):
@@ -1227,12 +1328,24 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
             update_player_state(player_id, game_id=profile.get("game_id", "default_game"))
 
         else:
-            if not game_id:
-                await show_game_selection(message, state)
-                return
+            if game_id:
+                # Deep link to a specific game — fetch its language
+                game_lang = BOT_LANGUAGE
+                try:
+                    result = await api_request("GET", "/admin/list-games")
+                    games = result.get("games", []) if result else []
+                    for g in games:
+                        if g.get("game_id") == game_id:
+                            game_lang = g.get("language", BOT_LANGUAGE)
+                            break
+                except Exception as e:
+                    logger.warning(f"Failed to fetch language for game {game_id}: {e}")
 
-            await send_random_loading_image(message)
-            await start_onboarding_flow(message, state, player_id, game_id)
+                await send_random_loading_image(message)
+                await start_onboarding_flow(message, state, player_id, game_id, language=game_lang)
+            else:
+                # New player — ask for language preference first
+                await show_player_language_selection(message, state)
 
     except Exception as e:
         logger.error(f"Error in /start command for player {player_id}: {e}")
@@ -1260,12 +1373,12 @@ async def cmd_profile(message: types.Message):
         gender_secondary = profile.get("gender_secondary")
 
         if species_secondary:
-            species_display = f"Гибрид: {species_primary} + {species_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {species_primary} + {species_secondary}"
+            species_display = msgs["hybrid_species"].format(primary=species_primary, secondary=species_secondary)
         else:
             species_display = species_primary
 
         if gender_secondary:
-            gender_display = f"Гибрид: {gender_primary} + {gender_secondary}" if BOT_LANGUAGE == "ru" else f"Hybrid: {gender_primary} + {gender_secondary}"
+            gender_display = msgs["hybrid_gender"].format(primary=gender_primary, secondary=gender_secondary)
         else:
             gender_display = gender_primary
 
@@ -1821,6 +1934,7 @@ async def cmd_gm_list_games(message: types.Message):
             player_count = game.get("player_count", 0)
             status = game.get("status") or ("started" if game.get("started") else "waiting")
             status_icon = "🚀" if status == "started" else "⏳"
+            lang_flag = lang.get_language_flag(game.get("language", "ru"))
             lines.append(
                 gm_msgs["games_list_entry"].format(
                     idx=idx,
@@ -1830,6 +1944,7 @@ async def cmd_gm_list_games(message: types.Message):
                     status_icon=status_icon,
                     status=status,
                 )
+                + f" {lang_flag}"
             )
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
@@ -2061,13 +2176,7 @@ async def cmd_gm_status(message: types.Message):
             return
 
         # Build header
-        ship = (
-            (gm_msgs.get("ship_alive", "✅ ") if result.get("ship_alive") else gm_msgs.get("ship_destroyed", "☠ "))
-            if False
-            else ("✅ Цел" if BOT_LANGUAGE == "ru" else "✅ Intact")
-            if result.get("ship_alive")
-            else ("☠ Уничтожен" if BOT_LANGUAGE == "ru" else "☠ Destroyed")
-        )
+        ship = gm_msgs["ship_intact"] if result.get("ship_alive") else gm_msgs["ship_destroyed"]
         status_label = result.get("status", "?")
         header = gm_msgs["status_header"].format(
             game_id=game_id,
@@ -2086,7 +2195,7 @@ async def cmd_gm_status(message: types.Message):
             players_parts = []
             for p in players:
                 icon = "☠" if p.get("is_dead") else ("✅" if p.get("has_chosen") else "⏳")
-                action = p.get("chosen_action", "") or ("Ожидание..." if BOT_LANGUAGE == "ru" else "Waiting...")
+                action = p.get("chosen_action", "") or gm_msgs["waiting_label"]
                 name = p.get("player_name", "") or str(p.get("player_id", "?"))
                 players_parts.append(
                     gm_msgs["status_player_entry"].format(
@@ -2107,7 +2216,7 @@ async def cmd_gm_status(message: types.Message):
         if npcs:
             npcs_parts = []
             for n in npcs:
-                action = n.get("chosen_action_text", "") or ("Нет данных" if BOT_LANGUAGE == "ru" else "No data")
+                action = n.get("chosen_action_text", "") or gm_msgs["no_data_label"]
                 npcs_parts.append(
                     gm_msgs["status_npc_entry"].format(
                         name=n.get("npc_name", "?"),
@@ -2139,6 +2248,57 @@ async def cmd_gm_status(message: types.Message):
     except Exception as e:
         logger.error(f"Failed to get game status for {game_id}: {e}")
         await message.answer(gm_msgs["status_error"].format(error=e))
+
+
+async def cmd_gm_set_language(message: types.Message):
+    """GM command: Set the language for a game.
+
+    Usage: /gm_set_language <game_id> <ru|en>
+    Only executable by the configured Game Master user.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(f"Unauthorized /gm_set_language attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer("❌ Использование: /gm_set_language <game_id> <ru|en>\n\nПример: /gm_set_language abc123 en")
+        return
+
+    game_id = parts[1].strip()
+    lang_code = parts[2].strip().lower()
+
+    if lang_code not in ("ru", "en"):
+        await message.answer("❌ Язык должен быть `ru` или `en`.")
+        return
+
+    await message.answer(
+        f"⏳ Устанавливаю язык `{lang_code}` для игры `{game_id}`...",
+        parse_mode="Markdown",
+    )
+
+    try:
+        result = await api_request(
+            "POST",
+            "/admin/set-language",
+            data={"game_id": game_id, "language": lang_code},
+        )
+        if result and result.get("status") == "success":
+            await message.answer(
+                f"✅ **Язык игры `{game_id}` установлен на `{lang_code}`**\n\n🌐 Теперь все новые игроки будут проходить онбординг на языке: {lang_code}",
+                parse_mode="Markdown",
+            )
+        else:
+            detail = result.get("detail", "Неизвестная ошибка") if result else "Нет ответа от API"
+            await message.answer(f"❌ Ошибка: {detail}")
+    except Exception as e:
+        logger.error(f"Failed to set language for game {game_id}: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
 
 
 async def handle_voice_message(message: types.Message):
@@ -2236,7 +2396,8 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     # Ignore stale button presses from old messages
     if current_question_id is not None and callback_question_id != current_question_id:
         logger.warning(f"Stale keyboard press: callback_question_id={callback_question_id} != current_question_id={current_question_id}, ignoring")
-        await callback.answer("Этот вопрос уже неактивен. Ответьте на текущий вопрос." if BOT_LANGUAGE == "ru" else "This question is no longer active. Answer the current question.", show_alert=False)
+        error_msgs = lang.get_errors(BOT_LANGUAGE)
+        await callback.answer(error_msgs["stale_question"], show_alert=False)
         return
 
     if not session_id:
@@ -2610,6 +2771,7 @@ async def main():
     dp.message.register(cmd_gm_regenerate_turn, Command("gm_regenerate_turn"))
     dp.message.register(cmd_gm_restart_game, Command("gm_restart_game"))
     dp.message.register(cmd_gm_status, Command("gm_status"))
+    dp.message.register(cmd_gm_set_language, Command("gm_set_language"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Onboarding name input handler — before general text handlers
@@ -2625,6 +2787,7 @@ async def main():
 
     # Callback query handlers
     dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
+    dp.callback_query.register(player_language_selection_callback, F.data.startswith("player_lang:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
 

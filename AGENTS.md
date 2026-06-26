@@ -41,6 +41,17 @@
 
 ## Important Rules
 
+- **LLM prompts go in `prompts.py`.** All system prompts, user prompts,
+  onboarding questions, outcome generation, NPC dialogue, and daily
+  briefings must be defined in `game-server-api/prompts.py`. Never embed
+  prompt strings in handlers, routers, or other modules.
+
+- **Use `language.py` constants, never raw strings.** Never compare against
+  `== 'ru'` or `== 'en'` directly — always import and use `LANGUAGE_RU` /
+  `LANGUAGE_EN` from `telegram-bot/language.py` (or `game-server-api/language.py`
+  depending on the service). This keeps locale checks consistent and
+  grep-friendly.
+
 - **Fix causes, not symptoms.** Never add workarounds, post-processing, or
   data-cleaning functions that paper over incorrect output from an upstream
   source (LLM, external API, etc.). Instead, fix the upstream — correct the

@@ -12,7 +12,7 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InputMediaPhoto
 from aiogram.exceptions import TelegramBadRequest
 from aiohttp import web
-from language import get_actions, get_bridge, get_current_day, get_notifications
+from language import get_actions, get_bridge, get_current_day, get_notifications, get_push_outcome
 from retry import call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,8 @@ def _build_briefing_text(
     if crew_dialogues:
         sep = "\n---\n"
         lines = [f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}" for d in crew_dialogues]
-        crew_txt = f"\n\n*{'Поведение экипажа' if language == 'ru' else 'Crew behavior'}*:\n{sep.join(lines)}"
+        outcome_msgs = get_push_outcome(language)
+        crew_txt = f"\n\n*{outcome_msgs['crew_behavior_header']}*:\n{sep.join(lines)}"
 
     acts = "\n\n".join(f"{i + 1} - {_escape_md(a.get('text', a.get('description', '')))}" for i, a in enumerate(choices))
 
@@ -234,7 +235,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="character.png")
                     # Use personal_title as caption, or build fallback
-                    caption_text = personal_title or (("🎯 Ход {day} — {role}" if language == "ru" else "🎯 Turn {day} — {role}").format(day=day, role=player_data.get("role", "")))
+                    outcome_msgs = get_push_outcome(language)
+                    caption_text = personal_title or (outcome_msgs["character_caption"]).format(day=day, role=player_data.get("role", ""))
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
@@ -464,36 +466,29 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     outcome_title = current_msgs.get("outcome_title", "Day {day} - Outcome").format(day=day)
     parts = [outcome_title, "", outcome_text]
 
+    outcome_msgs = get_push_outcome(language)
+
     if ship_status:
-        if language == "ru":
-            status_text = "🚢 Корабль цел" if ship_status == "alive" else "💥 Корабль уничтожен!"
-        else:
-            status_text = "🚢 Ship is intact" if ship_status == "alive" else "💥 Ship destroyed!"
+        status_text = outcome_msgs["ship_alive"] if ship_status == "alive" else outcome_msgs["ship_destroyed"]
         parts.append("")
         parts.append(status_text)
 
     # Ship hull and shield status
     if ship_hull_integrity is not None or ship_shields is not None:
         parts.append("")
-        hull_str = f"🛡 Корпус: {ship_hull_integrity}%" if language == "ru" else f"🛡 Hull: {ship_hull_integrity}%"
-        shield_str = f"🟡 Щиты: {ship_shields}%" if language == "ru" else f"🟡 Shields: {ship_shields}%"
+        hull_str = outcome_msgs["hull"].format(value=ship_hull_integrity)
+        shield_str = outcome_msgs["shields"].format(value=ship_shields)
         parts.append(f"{hull_str}  |  {shield_str}")
 
     # Crew count: "9 из 10 членов экипажа живы" or "10 / 10 crew alive"
     if total_crew_count is not None and alive_crew_count is not None:
         parts.append("")
-        if language == "ru":
-            parts.append(f"👥 {alive_crew_count} из {total_crew_count} {'членов экипажа живы' if alive_crew_count > 1 else 'член экипажа жив'}")
-        else:
-            parts.append(f"👥 {alive_crew_count} / {total_crew_count} crew alive")
+        crew_key = "crew_alive_one" if alive_crew_count == 1 else "crew_alive"
+        parts.append(outcome_msgs[crew_key].format(alive=alive_crew_count, total=total_crew_count))
 
     if death_notices:
-        if language == "ru":
-            parts.append("")
-            parts.append("☠ Потери экипажа:")
-        else:
-            parts.append("")
-            parts.append("☠ Crew losses:")
+        parts.append("")
+        parts.append(outcome_msgs["death_notices_header"])
         for notice in death_notices:
             role = notice.get("role", "")
             name = notice.get("name", "")
@@ -501,47 +496,36 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
     if mission_progress:
         parts.append("")
-        if language == "ru":
-            parts.append("🏆 Прогресс миссии:")
-        else:
-            parts.append("🏆 Mission progress:")
+        parts.append(outcome_msgs["mission_progress_header"])
         for entry in mission_progress:
             stage = entry.get("stage", "?")
             points = entry.get("points", 0)
             direction = "🟢 +" if points > 0 else ("🔴 " if points < 0 else "⚪ ")
-            parts.append(f"  {direction}{points} этап {stage}" if language == "ru" else f"  {direction}{points} stage {stage}")
+            parts.append(outcome_msgs["mission_progress_item"].format(direction=direction, points=points, stage=stage))
 
     if ship_systems_offline:
         parts.append("")
         offline_list = ", ".join(ship_systems_offline)
-        if language == "ru":
-            parts.append(f"🚧 Системы отключены: {offline_list}")
-        else:
-            parts.append(f"🚧 Systems offline: {offline_list}")
+        parts.append(outcome_msgs["systems_offline"].format(list=offline_list))
 
     if injury_notices:
         parts.append("")
-        if language == "ru":
-            parts.append("🤕 Раненые:")
-        else:
-            parts.append("🤕 Injured:")
+        parts.append(outcome_msgs["injured_header"])
         for notice in injury_notices:
             name = notice.get("name", "")
             role = notice.get("role", "")
             severity = notice.get("severity", "")
-            severity_label = {
-                "critical": "🔴 критическое" if language == "ru" else "critical",
-                "moderate": "🟡 среднее" if language == "ru" else "moderate",
-                "minor": "🟢 лёгкое" if language == "ru" else "minor",
-            }.get(severity, severity)
+            severity_map = {
+                "critical": outcome_msgs["severity_critical"],
+                "moderate": outcome_msgs["severity_moderate"],
+                "minor": outcome_msgs["severity_minor"],
+            }
+            severity_label = severity_map.get(severity, severity)
             parts.append(f"• {role} — {name} ({severity_label})")
 
     if personal_outcomes:
         parts.append("")
-        if language == "ru":
-            parts.append("🎬 Последствия хода:")
-        else:
-            parts.append("🎬 Turn consequences:")
+        parts.append(outcome_msgs["personal_outcomes_header"])
         for po in personal_outcomes:
             char_name = po.get("character_name", "")
             char_role = po.get("role", "")
@@ -577,7 +561,8 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             if photo is None:
                 continue
             if not caption:
-                caption = language == "ru" and f"Ход {day}" or f"Turn {day}"
+                outcome_msgs = get_push_outcome(language)
+                caption = outcome_msgs["turn_prefix"].format(day=day)
             media_items.append(InputMediaPhoto(media=photo, caption=caption))
 
         if not media_items:

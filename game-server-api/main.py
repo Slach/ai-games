@@ -47,6 +47,7 @@ from database import (
     get_game,
     get_game_day,
     get_game_image_count,
+    get_game_language,
     get_game_messages,
     get_game_state,
     get_game_title,
@@ -67,6 +68,7 @@ from database import (
     init_db,
     is_game_started,
     mark_player_dead,
+    set_game_language,
     record_kick,
     reset_game_state_to_day1,
     reset_roles,
@@ -95,6 +97,9 @@ from image_generator import (
     create_image_generator,
 )
 from language import (
+    LANGUAGE_EN,
+    LANGUAGE_RU,
+    get_game_strings,
     get_gender_type_name,
     get_hybrid_species_name,
     get_species_type_name,
@@ -214,6 +219,13 @@ class CreateGameRequest(BaseModel):
 
     name: str = "New Game"
     description: str = ""
+    language: str = "ru"
+
+
+class SetLanguageRequest(BaseModel):
+    """Request to set a game's language."""
+
+    game_id: str
     language: str = "ru"
 
 
@@ -718,11 +730,10 @@ async def start_onboarding(request: StartOnboardingRequest):
             logger.info(f"Game title saved to DB: {game_title_data['title']}")
     except Exception as e:
         logger.warning(f"Game title generation failed: {e}")
+        gs = get_game_strings(request.language)
         game_title_data = {
-            "title": "Звёздный Крейсер «Рассвет»: За горизонтом известного" if request.language == "ru" else "Star Cruiser «Dawn»: Beyond the Known Horizon",
-            "welcome_text": "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд."
-            if request.language == "ru"
-            else "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.",
+            "title": gs["game_title_fallback"],
+            "welcome_text": gs["welcome_text_fallback"],
         }
         # Save fallback title to database
         update_game_title(request.game_id, game_title_data["title"])
@@ -1073,6 +1084,7 @@ async def complete_onboarding(session_id: str):
         "game_just_started": game_was_started,
         "player_count": player_count,
         "other_player_ids": other_players,
+        "language": get_game_language(game_id),
     }
 
 
@@ -1718,16 +1730,8 @@ async def auto_select_action(
             action_text = c.get("text", c.get("description", ""))
             break
 
-    if language == "ru":
-        notification = (
-            f"\u23f3 **\u0412\u0440\u0435\u043c\u044f \u0432\u044b\u0448\u043b\u043e!**\n\n"
-            f"\u0412\u044b \u043d\u0435 \u0443\u0441\u043f\u0435\u043b\u0438 \u0441\u0434\u0435\u043b\u0430\u0442\u044c \u0432\u044b\u0431\u043e\u0440, "
-            f"\u043f\u043e\u044d\u0442\u043e\u043c\u0443 Game Master \u043f\u0440\u0438\u043d\u044f\u043b \u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u0437\u0430 \u0432\u0430\u0441:\n\n"
-            f"\u0412\u044b\u0431\u0440\u0430\u043d\u043e \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435: **{action_text}**\n\n"
-            f"_{rationale}_"
-        )
-    else:
-        notification = f"\u23f3 **Time is up!**\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: **{action_text}**\n\n_{rationale}_"
+    gs = get_game_strings(language)
+    notification = gs["auto_select_notification"].format(action_text=action_text, rationale=rationale)
 
     add_game_message(
         player_id=player_id,
@@ -2131,11 +2135,10 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
 
     # Ship status
     ship_status = oc.get("ship_status_change", "")
+    gs = get_game_strings(language)
+    ds = gs["day_summary"]
     if ship_status:
-        if language == "ru":
-            parts.append(f"Состояние корабля: {ship_status}")
-        else:
-            parts.append(f"Ship status: {ship_status}")
+        parts.append(ds["ship_status"].format(status=ship_status))
 
     # Ship hull integrity
     hull = oc.get("ship_hull_integrity")
@@ -2143,36 +2146,24 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
     if hull is not None or shields is not None:
         hull_str = f"{hull}%" if hull is not None else "?"
         shields_str = f"{shields}%" if shields is not None else "?"
-        if language == "ru":
-            parts.append(f"Корпус: {hull_str}, Щиты: {shields_str}")
-        else:
-            parts.append(f"Hull: {hull_str}, Shields: {shields_str}")
+        parts.append(ds["hull_shields"].format(hull=hull_str, shields=shields_str))
 
     # Ship systems offline
     offline = oc.get("ship_systems_offline", [])
     if offline:
         systems_str = ", ".join(offline)
-        if language == "ru":
-            parts.append(f"Системы отключены: {systems_str}")
-        else:
-            parts.append(f"Systems offline: {systems_str}")
+        parts.append(ds["systems_offline"].format(systems=systems_str))
 
     # Crew morale
     morale = oc.get("crew_morale_change", "")
     if morale:
-        if language == "ru":
-            parts.append(f"Мораль экипажа: {morale}")
-        else:
-            parts.append(f"Crew morale: {morale}")
+        parts.append(ds["crew_morale"].format(morale=morale))
 
     # Deaths
     dead = oc.get("dead_crew_members", [])
     if dead:
         dead_names = [f"{d[0]} ({d[1]})" if isinstance(d, list) and len(d) >= 2 else str(d) for d in dead]
-        if language == "ru":
-            parts.append(f"Погибшие: {', '.join(dead_names)}")
-        else:
-            parts.append(f"Deceased: {', '.join(dead_names)}")
+        parts.append(ds["deceased"].format(names=", ".join(dead_names)))
 
     # Injured
     injured = oc.get("crew_injured", [])
@@ -2185,25 +2176,16 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
                 injured_names.append(f"{i_name} ({i_severity})")
             else:
                 injured_names.append(str(i_entry))
-        if language == "ru":
-            parts.append(f"Раненые: {', '.join(injured_names)}")
-        else:
-            parts.append(f"Injured: {', '.join(injured_names)}")
+        parts.append(ds["injured"].format(names=", ".join(injured_names)))
 
     # Ship destroyed
     if oc.get("ship_destroyed"):
-        if language == "ru":
-            parts.append("КОРАБЛЬ УНИЧТОЖЕН")
-        else:
-            parts.append("SHIP DESTROYED")
+        parts.append(ds["ship_destroyed"])
 
     # Next day hook
     hook = oc.get("next_day_hook", "")
     if hook:
-        if language == "ru":
-            parts.append(f"Зацепка для следующего хода: {hook}")
-        else:
-            parts.append(f"Next day hook: {hook}")
+        parts.append(ds["next_day_hook"].format(hook=hook))
 
     return " | ".join(parts) if parts else narrative[:500]
 
@@ -2231,12 +2213,10 @@ def _build_cumulative_story_summary(
         return ""
 
     summaries = []
-    if language == "ru":
-        header = "=== ПРЕДЫДУЩИЕ ХОДЫ ==="
-        day_label = "Ход"
-    else:
-        header = "=== PREVIOUS TURNS ==="
-        day_label = "Turn"
+    gs = get_game_strings(language)
+    cs = gs["cumulative_story"]
+    header = cs["header"]
+    day_label = cs["day_label"]
 
     for d in range(1, current_day):
         day_record = get_game_day(d, game_id=game_id)
@@ -2607,10 +2587,8 @@ async def _analyze_day_outcome(
         # Format: 'Ход X — Имя — Роль — Действие'
         action_images = []
         all_briefings_fresh = get_all_briefings_for_day(day, game_id) or all_briefings
-        if language == "ru":
-            caption_prefix = f"Ход {day}"
-        else:
-            caption_prefix = f"Turn {day}"
+        gs = get_game_strings(language)
+        caption_prefix = gs["turn_prefix_simple"].format(day=day)
 
         for b in all_briefings_fresh:
             action_url = b.get("chosen_action_url")
@@ -2726,6 +2704,7 @@ async def admin_create_game(request: CreateGameRequest):
         "setting": "starship",
         "status": "active",
         "max_players": 10,
+        "language": request.language,
     }
 
     game = create_game(game_data)
@@ -2745,7 +2724,32 @@ async def admin_create_game(request: CreateGameRequest):
         "status": "success",
         "game_id": game_id,
         "name": get_game_title(game_id) or request.name,
+        "language": request.language,
         "message": f"Game {game_id} created successfully",
+    }
+
+
+@app.post("/admin/set-language")
+async def admin_set_language(request: SetLanguageRequest):
+    """Set the language for a game."""
+    game = get_game(request.game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail=f"Game {request.game_id} not found")
+
+    if request.language not in ("ru", "en"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid language '{request.language}'. Supported: ru, en",
+        )
+
+    set_game_language(request.game_id, request.language)
+    logger.info(f"Language for game {request.game_id} set to '{request.language}'")
+
+    return {
+        "status": "success",
+        "game_id": request.game_id,
+        "language": request.language,
+        "message": f"Game language set to {request.language}",
     }
 
 
@@ -2958,7 +2962,8 @@ async def admin_generate_splash_images(game_id: str = "default_game", lang: str 
     """
     logger.info(f"[ADMIN] Generating splash images for game {game_id}")
 
-    game_title = get_game_title(game_id) or ("Звёздный Крейсер «Рассвет»: За горизонтом известного" if lang == "ru" else "Star Cruiser «Dawn»: Beyond the Known Horizon")
+    gs = get_game_strings(lang)
+    game_title = get_game_title(game_id) or gs["game_title_fallback"]
     welcome_text = "Космический корабль в глубинах неизведанного космоса."
 
     try:
@@ -3084,7 +3089,7 @@ def _random_npc_gender(language: str = "ru") -> str:
 
     Returns a display name (e.g. "Мужской" or "Male") rather than a key.
     """
-    lang_key = "ru" if language == "ru" else "en"
+    lang_key = LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN
     gender_key = random.choice(list(_NPC_GENDER_OPTIONS[lang_key].keys()))
     return _NPC_GENDER_OPTIONS[lang_key][gender_key]
 
@@ -3468,8 +3473,8 @@ async def _original_start_game(request: StartGameRequest):
             choices = briefing_data.get("choices", [])
             personal_title = briefing_data.get("personal_title", "")
             if personal_title and day_num:
-                prefix = "Ход " if language == "ru" else "Turn "
-                personal_title = f"{prefix}{day_num} — {personal_title}"
+                gs = get_game_strings(language)
+                personal_title = gs["turn_prefix_simple"].format(day=day_num) + f" — {personal_title}"
 
             if participant["type"] == "npc":
                 # NPCs decide immediately without seeing consequences
@@ -4014,6 +4019,7 @@ async def admin_list_games():
                 "player_count": get_player_count_in_game(game_id),
                 "status": game.get("status", "active"),
                 "started": is_game_started(game_id),
+                "language": get_game_language(game_id),
             }
         )
     return {"games": result}
@@ -4294,8 +4300,8 @@ async def _original_continue_game(
         choices = briefing_data.get("choices", [])
         personal_title = briefing_data.get("personal_title", "")
         if personal_title and day_num:
-            prefix = "Ход " if language == "ru" else "Turn "
-            personal_title = f"{prefix}{day_num} — {personal_title}"
+            gs = get_game_strings(language)
+            personal_title = gs["turn_prefix_simple"].format(day=day_num) + f" — {personal_title}"
 
         if participant["type"] == "npc":
             npc_profile = get_npc_profile(participant["npc_key"]) or participant

@@ -55,6 +55,10 @@ MIGRATIONS: list[tuple[int, str]] = [
         ON player_briefings(day, COALESCE(player_id, -1), COALESCE(npc_key, ''), game_id);
         """.strip(),
     ),
+    (
+        5,
+        "ALTER TABLE games ADD COLUMN language TEXT DEFAULT 'ru';",
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -80,7 +84,8 @@ def init_db():
         created_at TEXT NOT NULL,
         max_players INTEGER DEFAULT 10,
         started INTEGER DEFAULT 0,
-        started_at TEXT DEFAULT NULL
+        started_at TEXT DEFAULT NULL,
+        language TEXT DEFAULT 'ru'
     );
     CREATE TABLE IF NOT EXISTS ship_roles (
         role_key TEXT NOT NULL,
@@ -930,8 +935,8 @@ def create_game(game_data: dict[str, Any]) -> dict[str, Any] | None:
     cursor = conn.cursor()
 
     cursor.execute(
-        """INSERT INTO games (game_id, name, description, setting, status, created_at, max_players)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO games (game_id, name, description, setting, status, created_at, max_players, language)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             game_data["game_id"],
             game_data["name"],
@@ -940,6 +945,7 @@ def create_game(game_data: dict[str, Any]) -> dict[str, Any] | None:
             game_data.get("status", "active"),
             datetime.now().isoformat(),
             game_data.get("max_players", 10),
+            game_data.get("language", "ru"),
         ),
     )
 
@@ -972,6 +978,7 @@ def get_game(game_id: str) -> dict[str, Any] | None:
         "status": row["status"],
         "created_at": row["created_at"],
         "max_players": row["max_players"],
+        "language": row["language"] or "ru",
     }
 
 
@@ -1086,6 +1093,30 @@ def get_game_title(game_id: str) -> str | None:
     conn.close()
 
     return row["name"] if row else None
+
+
+def get_game_language(game_id: str) -> str:
+    """Get the language setting for a game. Returns 'ru' as default."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT language FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row["language"] if row and row["language"] else "ru"
+
+
+def set_game_language(game_id: str, language: str) -> bool:
+    """Set the language for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET language = ? WHERE game_id = ?",
+        (language, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def is_game_started(game_id: str = "default_game") -> bool:

@@ -1140,3 +1140,506 @@ def build_combined_outcome_prompts(
             roster_text=roster_text,
         )
     return system, user
+
+
+# ── Onboarding generation prompts ──────────────────────────────────
+
+
+def build_onboarding_prompts(
+    language: str,
+    questions_count: int,
+    options_count: int,
+    role_keys_str: str,
+    example_role_scores_json: str,
+    underrepresented_hint: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for onboarding question generation."""
+    if language == LANGUAGE_RU:
+        system = "Ты — дизайнер игр. Генерируешь вопросы для онбординга в космической игре."
+        hint = (
+            underrepresented_hint
+            if not underrepresented_hint
+            else f"🎯 ОСОБОЕ УКАЗАНИЕ: В предыдущих сессиях следующие роли получали меньше всего очков: {underrepresented_hint}. Удели им особое внимание при составлении вопросов — создай для них минимум по 2-3 интересных варианта ответов.\n\n"
+        )
+        user = (
+            f"Сгенерируй {questions_count} вопросов для онбординга в игре про космический экипаж звездного корабля. "
+            f"Каждый вопрос — это конкретная ситуация на корабле или во время миссии с выбором из {options_count} вариантов ДЕЙСТВИЙ. "
+            "ВАЖНО: Каждый вариант ответа должен описывать КОНКРЕТНОЕ ДЕЙСТВИЕ, которое игрок совершает в этой ситуации. "
+            "ПРИМЕР правильных вариантов: 'Бежать в машинное отделение и попытаться починить варп-двигатель', "
+            "'Активировать аварийные щиты и вызвать подкрепление'. "
+            "НЕПРАВИЛЬНО: 'Инженер — технический специалист', 'Учёный – смелый, ищущий прорыв'. "
+            "НЕПРАВИЛЬНО: 'A', 'B', 'C' — метки вариантов должны быть ПОЛНЫМИ описаниями действий! "
+            "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
+            "Каждый вариант (label) должен быть развёрнутым предложением минимум из 5-7 слов, описывающим конкретное действие. "
+            "КРИТИЧНО: Все варианты ответа в одном вопросе должны быть РАЗЛИЧНЫМИ и описывать РАЗНЫЕ действия. "
+            "Не допускай одинаковых или очень похожих вариантов — каждый должен представлять уникальный подход. "
+            "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
+            "исследование неизвестного, принятие решений в кризисе. "
+            "Все тексты на русском языке.\n\n"
+            "КРИТИЧНО: Каждый вариант ответа (option) должен содержать поле role_scores — это объект с очками для ролей. "
+            f"Доступные роли (ключи): {role_keys_str}. "
+            "Каждому варианту назначь от 1 до 3 ролей, которым это действие больше всего подходит, с очками от 1 до 3. "
+            "Остальным ролям поставь 0. Очки отражают насколько выбранное действие характерно для данной роли. "
+            "ПРИМЕР role_scores для действия 'Починить варп-двигатель': "
+            f"{example_role_scores_json}. "
+            "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n" + hint + "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
+            "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
+            "НЕ ВСТАВЛЯЙ английский текст в question.text или option.label — только в image_prompt.\n"
+            "Для КАЖДОГО вопроса сгенерируй image_prompt — детальный промпт на АНГЛИЙСКОМ для генерации изображения сцены. "
+            "Промпт должен быть кинематографичным, sci-fi/space opera, 4K. "
+            "Пример ТОЛЬКО для поля image_prompt (не для текста вопроса): "
+            '"A starship bridge with holographic star maps glowing in blue light, crew members at their stations, cinematic lighting, epic sci-fi atmosphere, 4K quality."'
+            " Отделяй русский текст вопроса от английского image_prompt. "
+        )
+    else:
+        system = "You are a game designer. Generate onboarding questions for a space exploration game."
+        hint = (
+            underrepresented_hint
+            if not underrepresented_hint
+            else f"🎯 SPECIAL NOTE: The following roles have received the fewest points in previous sessions: {underrepresented_hint}. Pay special attention to them — create at least 2-3 interesting answer options for each.\n\n"
+        )
+        user = (
+            f"Generate {questions_count} onboarding questions for a starship crew game. "
+            f"Each question is a specific situation aboard a ship or during a mission with {options_count} ACTION choices. "
+            "CRITICAL: Each option must describe a SPECIFIC ACTION the player would take in this situation. "
+            "CORRECT example: 'Run to engineering and try to repair the warp drive', "
+            "'Activate emergency shields and call for backup'. "
+            "INCORRECT: 'Engineer - technical specialist', 'Scientist - bold, seeking breakthrough'. "
+            "INCORRECT: 'A', 'B', 'C' — option labels must be FULL action descriptions, NOT single letters! "
+            "NEVER include role names or personality types in options — only actions. "
+            "Each option label must be a detailed sentence of at least 5-7 words describing a specific action. "
+            "CRITICAL: All answer options for one question must be DIFFERENT and describe DIFFERENT actions. "
+            "Do not allow identical or very similar options — each should represent a unique approach. "
+            "Questions should cover different aspects: danger response, technical work, crew interaction, "
+            "exploration, crisis decision-making. "
+            "All text in English.\n\n"
+            "CRITICAL: Each option must include a role_scores field — an object mapping roles to points. "
+            f"Available roles (keys): {role_keys_str}. "
+            "Assign 1-3 roles that this action best suits, with 1-3 points each. "
+            "Set all other roles to 0. Points reflect how characteristic this action is for that role. "
+            "EXAMPLE role_scores for 'Repair the warp drive': "
+            f"{example_role_scores_json}. "
+            "IMPORTANT: Options in each question should give points to DIFFERENT roles — so each question helps distinguish players.\n\n" + hint + "All question text (text) and option labels — strictly in ENGLISH.\n"
+            "The image_prompt field is a separate JSON field that must also be in ENGLISH (for image generation).\n"
+            "For EACH question generate an image_prompt — a detailed English prompt for the scene image. "
+            "The prompt should be cinematic, sci-fi/space opera, 4K quality. "
+        )
+    return system, user
+
+
+# ── Game title generation prompts ──────────────────────────────────
+
+
+def build_game_title_prompts(language: str) -> tuple[str, str]:
+    """Build system and user prompts for game title generation."""
+    if language == LANGUAGE_RU:
+        system = "Ты — креативный писатель-фантаст. Придумываешь названия и описания для космических приключений."
+        user = (
+            "Придумай название для игры про экипаж звездного корабля и приветственное сообщение. "
+            "Название должно быть в формате: название корабля + подзаголовок миссии. "
+            "Пример стиля: «Звёздный Крейсер Аврора: За горизонтом известного». "
+            "Приветствие должно быть атмосферным — будто игрок заходит на борт корабля. "
+            "ВАЖНО: не используй символы звёздочка (*) или подчёркивание (_) в тексте приветствия — "
+            "они сломают форматирование при отправке игроку. Используй только обычный текст. "
+            "Все тексты на русском языке."
+        )
+    else:
+        system = "You are a creative sci-fi writer. You create titles and descriptions for space adventures."
+        user = (
+            "Create a title for a starship crew game and a welcome message. "
+            "Title format: ship name + mission tagline. "
+            "Example style: 'Star Cruiser Aurora: Beyond the Known Horizon'. "
+            "The welcome should be atmospheric — as if the player is stepping aboard the ship. "
+            "IMPORTANT: do not use asterisk (*) or underscore (_) characters in the welcome text — "
+            "they will break formatting when sent to the player. Use plain text only. "
+            "All text in English."
+        )
+    return system, user
+
+
+# ── Daily story prompts ────────────────────────────────────────────
+
+
+def build_daily_story_prompts(language: str, day: int, previous_summary: str, player_role: str) -> tuple[str, str]:
+    """Build system and user prompts for daily story generation."""
+    if language == LANGUAGE_RU:
+        system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
+        player_role_display = player_role or "Член экипажа"
+        user = (
+            f"День: {day}\n"
+            f"Предыдущий день: {previous_summary or 'Первый день миссии'}\n"
+            f"Роль игрока: {player_role_display}\n\n"
+            "Создай эпизод с:\n"
+            "1. Место действия (космос, станция, планета)\n"
+            "2. Центральный конфликт или тайна\n"
+            "3. 3 точки выбора для игрока с действиями и скрытыми последствиями\n\n"
+            "Всё на русском языке."
+        )
+    else:
+        system = "You are a Game Master for a Star Trek-style space exploration game. Create compelling daily episodes with conflicts and player choices."
+        player_role_display = player_role or "Crew member"
+        user = (
+            f"Day: {day}\n"
+            f"Previous day: {previous_summary or 'First day of mission'}\n"
+            f"Player role: {player_role_display}\n\n"
+            "Create an episode with:\n"
+            "1. A setting (space location, station, planet)\n"
+            "2. A central conflict or mystery\n"
+            "3. 3 decision points for the player with visible actions and hidden consequences\n"
+        )
+    return system, user
+
+
+# ── NPC dialogue prompt builders ───────────────────────────────────
+
+
+def build_npc_dialogue_lang_note(language: str, player_role: str) -> tuple[str, str]:
+    """Build language note and player role display for NPC dialogue."""
+    if language == LANGUAGE_RU:
+        return "Отвечай на русском.", player_role or "Член экипажа"
+    return "Respond in English.", player_role or "Crew member"
+
+
+# ── Content prompt lang note ───────────────────────────────────────
+
+
+def build_content_prompt_note(language: str) -> str:
+    """Get language note for content prompt generation."""
+    if language == LANGUAGE_RU:
+        return "Промпты пиши на английском (для генерации изображений)."
+    return "Write prompts in English for image generation."
+
+
+# ── Player message prompts ─────────────────────────────────────────
+
+
+def build_player_message_system(language: str) -> str:
+    """Build system prompt for player message processing."""
+    if language == LANGUAGE_RU:
+        return "Ты — Game Master космической исследовательской игры в стиле Star Trek. Отвечай в стиле Game Master, направляя叙事. Будь увлекательным и атмосферным."
+    return "You are the Game Master of a Star Trek-style space exploration game. Respond in character as the Game Master, guiding the narrative forward. Keep it engaging and atmospheric."
+
+
+# ── Species description prompts ────────────────────────────────────
+
+
+def build_species_description_prompts(
+    language: str,
+    role: str,
+    species_display: str,
+    species_secondary: str | None,
+    species_hybrid: bool,
+    gender_display: str,
+    gender_secondary: str | None,
+    gender_hybrid: bool,
+) -> tuple[str, str]:
+    """Build system and user prompts for species description generation."""
+    if language == LANGUAGE_RU:
+        species_note = f"Тип расы: {species_display}" + (f" (гибрид с {species_secondary})" if species_hybrid else "") + f"\nТип пола: {gender_display}" + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
+        system = "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. Опиши, как выглядят и ощущают себя существа такого типа. Будь атмосферным и детальным."
+        user = (
+            f"Создай яркое нарративное описание персонажа для космической игры Star Trek.\n\n"
+            f"Роль: {role}\n"
+            f"{species_note}\n\n"
+            f"Опиши:\n"
+            f"1. Как выглядит и ощущает себя это существо (внешность, физиология, текстура, свечение и т.д.)\n"
+            f"2. Как пол/форма размножения проявляется в их культуре и самовосприятии\n"
+            f"3. Единый образ — как расовые и половые черты сливаются в одну личность\n\n"
+            f"Текст на русском языке, 3-5 предложений, атмосферный и кинематографичный."
+        )
+    else:
+        species_note = f"Species type: {species_display}" + (f" (hybrid with {species_secondary})" if species_hybrid else "") + f"\nGender type: {gender_display}" + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
+        system = "You are a creative sci-fi writer crafting descriptions of alien characters. Describe how beings of this type look and feel. Be atmospheric and detailed."
+        user = (
+            f"Create a vivid narrative description of a character for a Star Trek-style space game.\n\n"
+            f"Role: {role}\n"
+            f"{species_note}\n\n"
+            f"Describe:\n"
+            f"1. How this being looks and feels (appearance, physiology, texture, glow, etc.)\n"
+            f"2. How their gender/reproductive form manifests in their culture and self-perception\n"
+            f"3. A unified image — how species and gender traits merge into one personality\n\n"
+            f"Text in English, 3-5 sentences, atmospheric and cinematic."
+        )
+    return system, user
+
+
+# ── NPC decision prompts ───────────────────────────────────────────
+
+
+def build_npc_decision_prompts(
+    language: str,
+    npc_name: str,
+    npc_role: str,
+    traits: str | list[str],
+    choices_text: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for NPC decision making."""
+    traits_str = ", ".join(traits) if isinstance(traits, list) else traits
+    if language == LANGUAGE_RU:
+        system = f"Ты — {npc_name}, {npc_role} на космическом корабле. Твой характер: {traits_str}. Ты видишь ТОЛЬКО описания действий без последствий. Сделай выбор на основе своей личности и роли."
+        user = f"Текущая ситуация на корабле требует твоего решения.\n\nДоступные действия:\n{choices_text}\n\nВыбери одно действие, которое лучше всего соответствует твоему характеру и роли. Ты не знаешь последствий — действуй интуитивно."
+    else:
+        system = f"You are {npc_name}, {npc_role} aboard a starship. Your personality: {traits_str}. You see ONLY action descriptions with no consequences. Make a choice based on your personality and role."
+        user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character and role. You don't know the consequences — act on instinct."
+    return system, user
+
+
+# ── Auto-choice prompts ────────────────────────────────────────────
+
+
+def build_auto_choice_prompts(
+    language: str,
+    display_name: str,
+    role: str,
+    traits: str | list[str],
+    species_line: str,
+    personal_briefing: str,
+    gc_settings: str,
+    choices_text: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for auto-choice when player doesn't respond."""
+    traits_str = ", ".join(traits) if isinstance(traits, list) else str(traits)
+    if language == LANGUAGE_RU:
+        system = f"Ты — Game Master. Игрок {display_name} ({role}) не успел сделать выбор, и ты принимаешь решение за него. Ты действуешь на основе характера персонажа текущей вводной и обстоятельств. Ты не видишь скрытые последствия действий."
+        user = (
+            f"Профиль персонажа:\n"
+            f"Имя: {display_name}\n"
+            f"Роль: {role}{species_line}\n"
+            f"Характер: {traits_str}\n"
+            f"\nПерсональная вводная:\n{personal_briefing}"
+            f"{gc_settings}"
+            f"\n\nДоступные действия (без последствий):\n{choices_text}\n\n"
+            f"Выбери одно действие, которое лучше всего соответствует характеру и роли игрока. "
+            f"Ты не знаешь последствий — действуй на основе личности персонажа."
+        )
+    else:
+        system = (
+            f"You are the Game Master. Player {display_name} ({role}) didn't make "
+            f"a choice in time, and you decide for them. You act based on the character's "
+            f"personality, their personal briefing, and the global circumstances. "
+            f"You do NOT see hidden consequences of actions."
+        )
+        user = (
+            f"Character profile:\n"
+            f"Name: {display_name}\n"
+            f"Role: {role}{species_line}\n"
+            f"Traits: {traits_str}\n"
+            f"\nPersonal briefing:\n{personal_briefing}"
+            f"{gc_settings}"
+            f"\n\nAvailable actions (no consequences shown):\n{choices_text}\n\n"
+            f"Choose the action that best matches the player's character and role. "
+            f"You don't know the consequences — act based on personality."
+        )
+    return system, user
+
+
+# ── Global circumstances prompts ───────────────────────────────────
+
+
+def build_global_circumstances_prompts(
+    language: str,
+    day: int,
+    previous_summary: str,
+    player_descriptions: str,
+    mission_str: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for global circumstances generation."""
+    if language == LANGUAGE_RU:
+        system = (
+            "Ты — Game Master космической игры в стиле Star Trek. "
+            "Создаёшь ОБЩИЕ обстоятельства дня — ситуацию, которая происходит на корабле или вокруг него. "
+            "Эти обстоятельства едины для всех членов экипажа.\n\n"
+            "Используй ПОЛНЫЕ ИМЕНА персонажей из списка экипажа в нарративе. "
+            "У каждого члена экипажа есть уникальное имя — обращайся к ним по имени.\n"
+        )
+        user = (
+            f"День: {day}\n"
+            f"Предыдущие события: {previous_summary or 'Первый день миссии'}\n"
+            f"Экипаж:\n{player_descriptions or '  Экипаж формируется'}\n"
+            f"{mission_str}\n"
+            "Создай общие обстоятельства дня:\n"
+            "1. Место действия — где находится корабль (звездная система, станция, явление космоса)\n"
+            "2. Конфликт — центральная проблема или тайна\n"
+            "3. Нарратив — описание ситуации от лица GM (2-3 абзаца). "
+            "Упоминай членов экипажа по ИМЕНИ, показывая их местоположение и действия.\n"
+            "4. Ключевые события — 3-5 фоновых событий, которые могут заметить все\n"
+            "5. scene_prompt — детальный промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации изображения сцены. "
+            "Кинематографичный, sci-fi/space opera, 4K. Опиши обстановку, экипаж на своих местах, "
+            "освещение и атмосферу.\n"
+            "6. crew_positions — массив позиций каждого члена экипажа: где они находятся и что делают.\n\n"
+            "ВАЖНО: Все обстоятельства дня должны соответствовать контексту миссии.\n"
+            "Не выдумывай новый независимый сюжет — развивай события в рамках миссии.\n"
+            "Всё на русском языке."
+        )
+    else:
+        system = (
+            "You are a Game Master for a Star Trek-style space exploration game. "
+            "Create SHARED circumstances for the day — the situation unfolding on or around the ship. "
+            "These circumstances are common to all crew members.\n\n"
+            "Use the actual CHARACTER NAMES from the crew list in the narrative. "
+            "Each crew member has a unique name — refer to them by name.\n"
+        )
+        user = (
+            f"Day: {day}\n"
+            f"Previous events: {previous_summary or 'First day of mission'}\n"
+            f"Crew:\n{player_descriptions or '  Crew forming'}\n"
+            f"{mission_str}\n"
+            "Create shared circumstances for the day:\n"
+            "1. Setting — where the ship is located\n"
+            "2. Conflict — central problem or mystery\n"
+            "3. Narrative — GM voice description (2-3 paragraphs). "
+            "Refer to crew members by NAME, showing their location and actions.\n"
+            "4. Key events — 3-5 background events everyone can perceive\n"
+            "5. scene_prompt — a detailed English image generation prompt for this day's scene. "
+            "Cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, "
+            "lighting, and atmosphere.\n"
+            "6. crew_positions — array of positions for each crew member: where they are and what they're doing.\n\n"
+            "IMPORTANT: All circumstances must be consistent with the mission context. "
+            "Do not invent an independent plot — develop events within the mission framework.\n"
+        )
+    return system, user
+
+
+# ── Mission generation prompts ─────────────────────────────────────
+
+
+def build_mission_prompts(language: str, crew_desc: str) -> tuple[str, str]:
+    """Build system and user prompts for mission generation."""
+    if language == LANGUAGE_RU:
+        system = "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10."
+        user = (
+            f"Экипаж:\n{crew_desc}\n\n"
+            "Создай миссию с:\n"
+            "1. Название миссии — только кодовое имя и описание (формат: 'Кодовое имя: описание'). "
+            "ВАЖНО: слово 'Миссия' в названии НЕ пиши — оно будет добавлено автоматически в интерфейсе.\n"
+            "2. Описание — что нужно сделать, 2-3 абзаца\n"
+            "3. 2-4 этапа с целями, каждый с success_threshold (1-10)\n"
+            "Этапы должны быть последовательными, но достижимыми нелинейно.\n"
+            "Всё на русском языке."
+        )
+    else:
+        system = "You are a Game Master. Create a mission for a starship crew. The mission is divided into 2-4 stages, each with progress from 1 to 10."
+        user = (
+            f"Crew:\n{crew_desc}\n\n"
+            "Create a mission with:\n"
+            "1. Mission name — code name and description only (format: 'Code Name: description'). "
+            "IMPORTANT: do NOT include the word 'Mission' in the name — it will be added automatically by the UI.\n"
+            "2. Description — what needs to be done, 2-3 paragraphs\n"
+            "3. 2-4 stages with objectives, each with success_threshold (1-10)\n"
+            "Stages should be sequential but achievable non-linearly."
+        )
+    return system, user
+
+
+# ── NPC name prompts ───────────────────────────────────────────────
+
+
+def build_npc_name_system(language: str) -> str:
+    """Build system prompt for NPC name generation."""
+    if language == LANGUAGE_RU:
+        return (
+            "Ты — креативный писатель-фантаст. Придумываешь имена для персонажей "
+            "звёздного корабля в стиле Star Trek.\n\n"
+            "ВАЖНЫЕ ПРАВИЛА:\n"
+            "- Имя должно соответствовать ВИДУ и ПОЛУ персонажа\n"
+            "- Для людей/гуманоидов: человеческие имена (Алексей, Елена, Дмитрий, etc.)\n"
+            "- Для негуманоидов: уникальные инопланетные имена (К'рртх, Зиль-Ван, Гжорг, etc.)\n"
+            "- Для энергетических форм: имена как частоты или явления\n"
+            "- Для кибернетических: имена с техническим оттенком\n"
+            "- Для симбиотических: составные имена\n"
+            "- Имя ДОЛЖНО быть на русском языке!\n"
+            "- НЕ используй транслит английских имён — создай оригинальное имя.\n"
+            "- Учитывай роль персонажа при выборе имени\n"
+            "- Будь КРЕАТИВНЫМ, избегай шаблонов"
+        )
+    return (
+        "You are a creative sci-fi writer. You invent names for starship crew "
+        "characters in Star Trek style.\n\n"
+        "IMPORTANT RULES:\n"
+        "- Name must match the SPECIES and GENDER of the character\n"
+        "- For humans/humanoids: human names (Alex, Elena, Marcus, etc.)\n"
+        "- For non-humanoids: unique alien names (K'rrtkh, Zil-Van, Gjorg, etc.)\n"
+        "- For energy beings: names as frequencies or phenomena\n"
+        "- For cybernetic: names with technical undertones\n"
+        "- For symbiotic: compound names\n"
+        "- Consider the character's role when choosing a name\n"
+        "- Be CREATIVE, avoid templates"
+    )
+
+
+def build_npc_name_user(
+    language: str,
+    role_name: str,
+    role_key: str,
+    species: str,
+    gender: str,
+    avatar_description: str,
+    personality_traits: list[str],
+    avoid_names: set[str],
+) -> str:
+    """Build user prompt for NPC name generation."""
+    if language == LANGUAGE_RU:
+        avoid_text = ""
+        if avoid_names:
+            avoid_text = f"УЖЕ ИСПОЛЬЗУЕТСЯ: {', '.join(sorted(avoid_names))}. НЕ используй эти имена — выбери другое.\n\n"
+        user = (
+            f"Роль: {role_name} ({role_key})\n"
+            f"Вид: {species}\n"
+            f"Пол: {gender}\n"
+            f"Описание внешности: {avatar_description}\n"
+            f"Черты характера: {', '.join(personality_traits)}\n\n" + avoid_text + "Придумай уникальное, креативное имя для этого персонажа. "
+            "Имя должно быть на русском языке и соответствовать описанию.\n"
+            "ПРИМЕРЫ (для русской локализации):\n"
+            "  - Инженер-человек: 'Инженер Дмитрий Волков'\n"
+            "  - Штурман-гуманоид: 'Штурман Зиара Вентрис'\n"
+            "  - Ксенобиолог-кристаллическая форма: 'Ксенобиолог Резонанс Три-Семь'\n"
+            "  - Медик-киборг: 'Медик ЛЕ-02'\n"
+            "ВЕРНИ ТОЛЬКО JSON."
+        )
+    else:
+        avoid_text = ""
+        if avoid_names:
+            avoid_text = f"ALREADY IN USE: {', '.join(sorted(avoid_names))}. DO NOT use these names — choose another.\n\n"
+        user = (
+            f"Role: {role_name} ({role_key})\n"
+            f"Species: {species}\n"
+            f"Gender: {gender}\n"
+            f"Appearance: {avatar_description}\n"
+            f"Traits: {', '.join(personality_traits)}\n\n" + avoid_text + "Create a unique, creative name for this character. "
+            "The name should be in English and match the description.\n"
+            "EXAMPLES (for English localization):\n"
+            "  - Human engineer: 'Chief Engineer Marcus Chen'\n"
+            "  - Humanoid navigator: 'Navigator Zyara Ventures'\n"
+            "  - Crystalline xenobiologist: 'Xenobiologist Resonance Three-Seven'\n"
+            "  - Cyborg medic: 'Medic LE-02'\n"
+            "RETURN ONLY JSON."
+        )
+    return user
+
+
+# ── Personal briefing prompts ──────────────────────────────────────
+
+
+def build_personal_briefing_system(language: str) -> str:
+    """Build system prompt for personal briefing generation."""
+    if language == LANGUAGE_RU:
+        return (
+            "Ты — Game Master космической игры. Создаёшь ПЕРСОНАЛЬНУЮ вводную для игрока, "
+            "основываясь на общих обстоятельствах дня. "
+            "Каждый игрок видит ситуацию со своей уникальной точки зрения.\n\n"
+            "Каждый ход ДОЛЖЕН ДВИГАТЬ ИСТОРИЮ ВПЕРЁД — неожиданные повороты, открытия, "
+            "новые союзники или враги, находки, ухудшение или улучшение ситуации. "
+            "Смелые и правильные решения → миссия продвигается, открываются новые возможности. "
+            "Пассивные или плохие решения → последствия: повреждения, потери, регресс миссии. "
+            "Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО, а не просто 'наказать' игрока."
+        )
+    return (
+        "You are a Game Master. You create PERSONAL briefings for each player "
+        "based on the shared global circumstances. "
+        "Each player sees the situation from their unique perspective.\n\n"
+        "Every turn MUST MOVE THE STORY FORWARD — unexpected twists, discoveries, "
+        "new allies or enemies, findings, situation improvements or deteriorations. "
+        "Bold and correct decisions → mission progresses, new opportunities open. "
+        "Passive or bad decisions → consequences: damage, losses, mission regression. "
+        "The key is INTERESTING and UNPREDICTABLE, not just 'punish' the player."
+    )

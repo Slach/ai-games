@@ -1291,10 +1291,7 @@ def get_all_ship_roles_i18n(language: str = LANGUAGE_RU) -> dict:
     Returns dict keyed by role_key, each value containing
     role_name, role_description, avatar_description, personality_traits.
     """
-    return {
-        role_key: data.get(language, data.get(LANGUAGE_RU, {}))
-        for role_key, data in SHIP_ROLES_I18N.items()
-    }
+    return {role_key: data.get(language, data.get(LANGUAGE_RU, {})) for role_key, data in SHIP_ROLES_I18N.items()}
 
 
 def get_species_type_name(species_type: str, language: str = LANGUAGE_RU) -> str:
@@ -1323,3 +1320,151 @@ def get_species_questions_data(language: str = LANGUAGE_RU) -> list:
 def get_gender_questions_data(language: str = LANGUAGE_RU) -> list:
     """Get gender onboarding questions for a specific language."""
     return GENDER_QUESTIONS_DATA.get(language, GENDER_QUESTIONS_DATA[LANGUAGE_RU])
+
+
+# Game-level strings used across main.py
+GAME_STRINGS = {
+    LANGUAGE_RU: {
+        "game_title_fallback": "Звёздный Крейсер «Рассвет»: За горизонтом известного",
+        "welcome_text_fallback": "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд.",
+        "turn_prefix": "Ход {day} — {title}",
+        "turn_prefix_simple": "Ход {day}",
+        "auto_select_notification": ("⏳ **Время вышло!**\n\nВы не успели сделать выбор, поэтому Game Master принял решение за вас:\n\nВыбрано действие: **{action_text}**\n\n_{rationale}_"),
+        "day_summary": {
+            "ship_status": "Состояние корабля: {status}",
+            "hull_shields": "Корпус: {hull}, Щиты: {shields}",
+            "systems_offline": "Системы отключены: {systems}",
+            "crew_morale": "Мораль экипажа: {morale}",
+            "deceased": "Погибшие: {names}",
+            "injured": "Раненые: {names}",
+            "ship_destroyed": "КОРАБЛЬ УНИЧТОЖЕН",
+            "next_day_hook": "Зацепка для следующего хода: {hook}",
+        },
+        "cumulative_story": {
+            "header": "=== ПРЕДЫДУЩИЕ ХОДЫ ===",
+            "day_label": "Ход",
+        },
+        "gm_fallback": {
+            "fallback_title": "{display_name} — {role_label}",
+            "fallback_briefing": "{display_name}, ты — {role_label}. Ты оцениваешь ситуацию спокойно и профессионально.",
+            "fallback_species": {
+                "human": "Ты — человек. Твоё тело биологическое, уязвимое, но полное жизни.",
+                "humanoid": "Ты — гуманоид с узнаваемой анатомией, но необычной физиологией.",
+                "non_humanoid": "Твоя форма далека от человеческой — панцирь, щупальца или иная необычная биология.",
+                "energy": "Ты — энергетическая форма жизни. Твоё сознание существует как устойчивый резонансный узор.",
+                "cybernetic": "Ты — кибернетическая форма жизни. Части тебя можно чинить, улучшать и переносить.",
+                "symbiotic": 'Ты — симбиотическая форма жизни. Твоё "я" рождается в союзе нескольких существ.',
+            },
+            "hybrid_format_ru": " В тебе также есть черты: {secondary}",
+            "unknown_species_format": "Твой вид — {species_type}.",
+            "gender_note": " Твой пол: {gender_type}.",
+            "role_note": " Твоя роль на корабле — {role}.",
+            "mission_fallback": {
+                "name": "Первый контакт",
+                "description": "Исследовать неизвестный сигнал в секторе 7-Альфа. Установить контакт с цивилизацией.",
+                "stages": [
+                    {"name": "Разведка", "description": "Приблизиться к источнику сигнала"},
+                    {"name": "Контакт", "description": "Установить коммуникацию"},
+                    {"name": "Дипломатия", "description": "Достичь взаимопонимания"},
+                ],
+            },
+            "mission_labels": {
+                "stage_label": "Этап",
+                "mission_header": "КОНТЕКСТ МИССИИ",
+                "mission_sub": "это текущая миссия, её сюжет обязателен для этого дня",
+                "name_label": "Название",
+                "desc_label": "Описание",
+                "stages_header": "Этапы",
+                "importance_text": "ВАЖНО: Все обстоятельства дня должны строго соответствовать этой миссии. Не придумывай новый сеттинг — используй сеттинг из описания миссии.",
+            },
+            "fallback_npc_names": {
+                "captain": "Капитан Алексей Старк",
+                "pilot": "Пилот Виктор Соколов",
+                "chief_engineer": "Инженер Дмитрий Волков",
+                "science_officer": "Научный офицер Елена Романова",
+                "communications_officer": "Офицер связи Анна Белова",
+                "security_chief": "Начальник безопасности Иван Громов",
+                "navigator": "Штурман Мария Крылова",
+                "medical_officer": "Медик София Павлова",
+                "tactical_officer": "Тактик Кирилл Огнев",
+                "quartermaster": "Квартирмейстер Пётр Кузнецов",
+                "xenobiologist": "Ксенобиолог Алиса Рубинова",
+            },
+            "fallback_npc_default": "{role_name} экипажа",
+        },
+    },
+    LANGUAGE_EN: {
+        "game_title_fallback": "Star Cruiser «Dawn»: Beyond the Known Horizon",
+        "welcome_text_fallback": "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.",
+        "turn_prefix": "Turn {day} — {title}",
+        "turn_prefix_simple": "Turn {day}",
+        "auto_select_notification": ("⏳ **Time is up!**\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: **{action_text}**\n\n_{rationale}_"),
+        "day_summary": {
+            "ship_status": "Ship status: {status}",
+            "hull_shields": "Hull: {hull}, Shields: {shields}",
+            "systems_offline": "Systems offline: {systems}",
+            "crew_morale": "Crew morale: {morale}",
+            "deceased": "Deceased: {names}",
+            "injured": "Injured: {names}",
+            "ship_destroyed": "SHIP DESTROYED",
+            "next_day_hook": "Next day hook: {hook}",
+        },
+        "cumulative_story": {
+            "header": "=== PREVIOUS TURNS ===",
+            "day_label": "Turn",
+        },
+        "gm_fallback": {
+            "fallback_title": "{display_name} — {role_label}",
+            "fallback_briefing": "{display_name}, you are the {role_label}. You assess the situation calmly and professionally.",
+            "fallback_species": {
+                "human": "You are human. Your body is biological, vulnerable, but full of life.",
+                "humanoid": "You are a humanoid with recognizable anatomy but unusual physiology.",
+                "non_humanoid": "Your form is far from human — a carapace, tentacles, or other unusual biology.",
+                "energy": "You are an energy being. Your consciousness exists as a stable resonance pattern.",
+                "cybernetic": "You are a cybernetic life form. Parts of you can be repaired, upgraded, and transferred.",
+                "symbiotic": 'You are a symbiotic life form. Your "self" is born from the union of several beings.',
+            },
+            "hybrid_format_en": " You also bear traits of: {secondary}",
+            "unknown_species_format": "Your species is {species_type}.",
+            "gender_note": " Your gender: {gender_type}.",
+            "role_note": " Your role aboard the ship is {role}.",
+            "mission_fallback": {
+                "name": "First Contact",
+                "description": "Investigate an unknown signal in sector 7-Alpha. Establish contact with a civilization.",
+                "stages": [
+                    {"name": "Reconnaissance", "description": "Approach the signal source"},
+                    {"name": "Contact", "description": "Establish communication"},
+                    {"name": "Diplomacy", "description": "Achieve mutual understanding"},
+                ],
+            },
+            "mission_labels": {
+                "stage_label": "Stage",
+                "mission_header": "MISSION CONTEXT",
+                "mission_sub": "this is the current mission, its story is mandatory for this day",
+                "name_label": "Name",
+                "desc_label": "Description",
+                "stages_header": "Stages",
+                "importance_text": "IMPORTANT: All circumstances MUST be strictly consistent with this mission. Do not invent a new setting — use the setting from the mission description.",
+            },
+            "fallback_npc_names": {
+                "captain": "Captain Eva Rodriguez",
+                "pilot": "Pilot Alex 'Ace' Turner",
+                "chief_engineer": "Chief Engineer Marcus Chen",
+                "science_officer": "Dr. Aisha Patel",
+                "communications_officer": "Comm Officer Sarah Williams",
+                "security_chief": "Security Chief Jake Morrison",
+                "navigator": "Navigator Leo Kim",
+                "medical_officer": "Dr. Nina Hart",
+                "tactical_officer": "Tactical Officer Rex Vane",
+                "quartermaster": "Quartermaster Tessa Cole",
+                "xenobiologist": "Dr. Kiran Voss",
+            },
+            "fallback_npc_default": "The {role_name}",
+        },
+    },
+}
+
+
+def get_game_strings(language: str = LANGUAGE_RU) -> dict:
+    """Get game-level localized strings."""
+    return GAME_STRINGS.get(language, GAME_STRINGS[LANGUAGE_RU])
