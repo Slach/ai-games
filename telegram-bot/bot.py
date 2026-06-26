@@ -315,6 +315,21 @@ def get_player_language(player_id: int) -> str:
     return state.get("language", DEFAULT_LANGUAGE)
 
 
+async def get_game_language(game_id: str, fallback: str = DEFAULT_LANGUAGE) -> str:
+    """Get the game's stored language from the server.
+
+    Falls back to the provided fallback (or DEFAULT_LANGUAGE) when the
+    server can't be reached or the game doesn't exist yet.
+    """
+    try:
+        result = await api_request("GET", "/game/started", params={"game_id": game_id})
+        if result and result.get("language"):
+            return result["language"]
+    except Exception as e:
+        logger.warning(f"Failed to get language for game {game_id}: {e}")
+    return fallback
+
+
 async def send_random_loading_image(message: types.Message, caption_key: str = "loading_caption", language: str = DEFAULT_LANGUAGE) -> bool:
     """Fetch and send a random loading image from the API with a caption.
 
@@ -336,18 +351,20 @@ async def send_random_loading_image(message: types.Message, caption_key: str = "
     return False
 
 
-async def send_random_splash_image(message: types.Message, caption: str = "", reply_markup=None) -> bool:
+async def send_random_splash_image(message: types.Message, caption: str = "", reply_markup=None, game_id: str | None = None) -> bool:
     """Fetch and send a random splash image from the API with optional caption.
 
     Args:
         message: Telegram message context
         caption: Caption text (e.g., game description) to include with the image
         reply_markup: Optional keyboard to show with the image
+        game_id: Game ID to scope the splash image (None = default_game)
 
     Returns True if sent, False otherwise.
     """
     try:
-        result = await api_request("GET", "/content/splash-image")
+        params = {"game_id": game_id} if game_id else None
+        result = await api_request("GET", "/content/splash-image", params=params)
         image_url = result.get("image_url") if result else None
         if image_url:
             return await send_image_from_api_url(message, image_url, caption=caption, reply_markup=reply_markup)
@@ -370,9 +387,13 @@ async def send_question_with_image(
     """
     image_url = question.get("image_url")
     options = question.get("options", [])
-    # Separate each option with a blank line for readability
-    options_text = "\n\n".join([f"{i + 1}. {opt['label']}" for i, opt in enumerate(options)])
-    question_text = lang.get_onboarding(language)["question_prefix"].format(id=question["id"], text=question["text"])
+
+    # Use label for display when available (species/gender questions), fall back to value
+    def _option_display(opt: dict, idx: int) -> str:
+        return f"{idx + 1}. {escape_markdown(opt.get('label', opt['value']))}"
+
+    options_text = "\n\n".join([_option_display(opt, i) for i, opt in enumerate(options)])
+    question_text = lang.get_onboarding(language)["question_prefix"].format(id=question["id"], text=escape_markdown(question["text"]))
     if options_text:
         question_text += f"\n\n---\n\n{options_text}"
 
@@ -417,7 +438,7 @@ async def send_question_with_image(
                     if resp.status == 200:
                         photo_data = await resp.read()
                         photo = BufferedInputFile(photo_data, filename=f"opt_{question['id']}_{i}.png")
-                        caption = f"{i + 1}. {opt['label']}"
+                        caption = f"{i + 1}. {escape_markdown(opt.get('label', opt['value']))}"
                         media_group.append(
                             InputMediaPhoto(
                                 media=photo,
@@ -451,18 +472,6 @@ async def send_question_with_image(
         reply_markup=keyboard,
     )
     return question_text
-
-
-async def fetch_onboarding_questions() -> list:
-    """Fetch onboarding questions from API"""
-    try:
-        result = await api_request("GET", "/onboarding/questions")
-        if result is None:
-            return []
-        return result.get("questions", [])
-    except Exception as e:
-        logger.error(f"Failed to fetch onboarding questions: {e}")
-        raise
 
 
 async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
@@ -718,12 +727,14 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
         # Fetch bridge image and mission info once for all players
         mission = None
         bridge = None
-        from contextlib import suppress
-
-        with suppress(Exception):
+        try:
             mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
-        with suppress(Exception):
+        except Exception as e:
+            logger.error(f"Failed to fetch mission: {e}")
+        try:
             bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
+        except Exception as e:
+            logger.error(f"Failed to fetch bridge image: {e}")
 
         # Notify ALL players (new + existing) that the game has started
         # Send to existing players AND the new player who triggered start
@@ -840,16 +851,23 @@ def create_main_menu_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboard
     )
 
 
-def create_action_keyboard(actions: list) -> InlineKeyboardMarkup:
+def create_action_keyboard(actions: list, selected_action_id: str | None = None) -> InlineKeyboardMarkup:
     """Create inline keyboard for game actions
 
     Buttons show numbers [1] [2] [3] etc. instead of full action text.
     Full action text is displayed in the message as a numbered list.
-    Arranged in 2 columns for compact display.
+    Arranged in a single row for maximum compactness.
+
+    If selected_action_id is provided, that button gets a ✅ prefix
+    to visually indicate the player's choice.
     """
     builder = InlineKeyboardBuilder()
     for idx, action in enumerate(actions, start=1):
-        builder.add(InlineKeyboardButton(text=f"[{idx}]", callback_data=f"action:{action['id']}"))
+        if action["id"] == selected_action_id:
+            text = f"✅ [{idx}]"
+        else:
+            text = f"[{idx}]"
+        builder.add(InlineKeyboardButton(text=text, callback_data=f"action:{action['id']}"))
     # All actions in a single row for maximum compactness
     builder.adjust(len(actions))
     return builder.as_markup()
@@ -930,10 +948,10 @@ async def player_language_selection_callback(callback: types.CallbackQuery, stat
     update_player_state(player_id, language=lang_code)
 
     # Remove language keyboard
-    from contextlib import suppress
-
-    with suppress(Exception):
+    try:
         await message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.error(f"Failed to remove language keyboard: {e}")
 
     # Confirm language selection
     onboarding_msgs = lang.get_onboarding(lang_code)
@@ -1040,7 +1058,7 @@ async def start_onboarding_flow(
 
         # Send splash image with game description as caption
         # NOTE: No main menu keyboard during onboarding — buttons show only after completion
-        splash_sent = await send_random_splash_image(message, welcome_text)
+        splash_sent = await send_random_splash_image(message, welcome_text, game_id=game_id)
         if not splash_sent:
             # Fallback: send text-only if no splash image available
             await message.answer(
@@ -1070,10 +1088,12 @@ async def start_onboarding_flow(
             game_id=resolved_game_id,
             current_question_id=question["id"],
             current_options=question["options"],
+            current_question_text=question["text"],
+            current_question_image_url=question.get("image_url"),
         )
 
         logger.info(f"First onboarding question: id={question['id']}, text={question['text']}...")
-        logger.info(f"Question options: {[opt['label'] for opt in question['options']]}")
+        logger.info(f"Question options: {[opt['value'] for opt in question['options']]}")
         if question.get("image_url"):
             logger.info(f"Question has image: {question['image_url']}")
 
@@ -1112,10 +1132,10 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
     player_lang = state_data.get("player_language", DEFAULT_LANGUAGE)
 
     # Remove selection keyboard to avoid duplicate taps
-    from contextlib import suppress
-
-    with suppress(Exception):
+    try:
         await message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.error(f"Failed to remove selection keyboard: {e}")
 
     try:
         if game_id_or_new == "new":
@@ -1237,15 +1257,30 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
     if player_state.get("onboarding_session_id"):
         logger.info(f"Player {player_id} already has active onboarding session: {player_state['onboarding_session_id']}")
         current_options = player_state.get("current_options", [])
-        if current_options:
-            keyboard = create_onboarding_keyboard(current_options, player_state.get("current_question_id", 1))
+        current_question_text = player_state.get("current_question_text")
+        current_question_image_url = player_state.get("current_question_image_url")
+        current_question_id = player_state.get("current_question_id", 1)
+
+        if current_options and current_question_text:
+            # Re-send the current question with image and inline keyboard
+            keyboard = create_onboarding_keyboard(current_options, current_question_id)
+            question = {
+                "id": current_question_id,
+                "text": current_question_text,
+                "options": current_options,
+                "image_url": current_question_image_url,
+            }
+            await send_question_with_image(message, question, keyboard, player_lang)
         else:
-            # No options stored — remove any reply keyboard
-            keyboard = types.ReplyKeyboardRemove()
-        await message.answer(
-            msgs["already_in_onboarding"],
-            reply_markup=keyboard,
-        )
+            # No question data stored — send plain text with keyboard
+            if current_options:
+                keyboard = create_onboarding_keyboard(current_options, current_question_id)
+            else:
+                keyboard = types.ReplyKeyboardRemove()
+            await message.answer(
+                msgs["already_in_onboarding"],
+                reply_markup=keyboard,
+            )
         return
 
     game_id, referrer_id = None, None
@@ -1351,14 +1386,18 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     except Exception as e:
                         logger.error("Failed to fetch game title for invite", exc_info=e)
 
+                    # Use game's language for invite, not player's language
+                    game_lang = await get_game_language(game_id, fallback=player_lang)
+                    invite_msgs = lang.get_onboarding(game_lang)
+
                     invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
-                    share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(_build_share_text(msgs, game_title), safe='')}"
-                    invite_text = msgs.get("invite_title", "") + "\n\n" + msgs.get("invite_message", "").format(invite_url=escape_markdown(invite_url))
+                    share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(_build_share_text(invite_msgs, game_title), safe='')}"
+                    invite_text = invite_msgs["invite_title"] + "\n\n" + invite_msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
                     invite_keyboard = InlineKeyboardMarkup(
                         inline_keyboard=[
                             [
                                 InlineKeyboardButton(
-                                    text=msgs.get("invite_button", "Invite"),
+                                    text=invite_msgs["invite_button"],
                                     url=share_url,
                                 )
                             ]
@@ -1610,18 +1649,22 @@ async def cmd_bridge(message: types.Message):
 
     try:
         # Get mission info
-        from contextlib import suppress
-
         mission = None
-        with suppress(Exception):
+        try:
             mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+        except Exception as e:
+            logger.error(f"Failed to fetch mission: {e}")
 
         # Get bridge image
         bridge = None
-        with suppress(Exception):
+        try:
             bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
+        except Exception as e:
+            logger.error(f"Failed to fetch bridge image: {e}")
 
-        bridge_msgs = lang.get_bridge(get_player_language(player_id))
+        # Use the game's language for bridge captions
+        bridge_lang = await get_game_language("default_game", fallback=get_player_language(player_id))
+        bridge_msgs = lang.get_bridge(bridge_lang)
 
         if bridge and bridge.get("image_url"):
             caption = bridge_msgs["title"]
@@ -1741,7 +1784,6 @@ async def cmd_invite(message: types.Message):
     """Send invite link to current game"""
     assert message.from_user is not None
     player_id = message.from_user.id
-    msgs = lang.get_onboarding(get_player_language(player_id))
 
     try:
         profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
@@ -1759,6 +1801,10 @@ async def cmd_invite(message: types.Message):
                 reply_markup=create_main_menu_keyboard(),
             )
             return
+
+        # Use game's language for invite messages, not player's language
+        game_lang = await get_game_language(game_id, fallback=get_player_language(player_id))
+        msgs = lang.get_onboarding(game_lang)
 
         if BOT_USERNAME and message.bot is not None:
             # Fetch game title for share text
@@ -1865,18 +1911,19 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
         await callback.answer()
         return
 
-    # Remove the confirmation keyboard regardless of the choice
-    from contextlib import suppress
+    # Acknowledge callback immediately to prevent query ID expiration
+    await callback.answer()
 
-    with suppress(Exception):
+    # Remove the confirmation keyboard regardless of the choice
+    try:
         await message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.error(f"Failed to remove confirmation keyboard: {e}")
 
     if not (callback.data or "").endswith(":yes"):
-        await callback.answer()
         await message.answer(reset_msgs["cancelled"])
         return
 
-    await callback.answer()
     await message.answer(reset_msgs["resetting"])
 
     try:
@@ -1897,10 +1944,14 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
         return
 
     # Clear the local briefing-dedup cache so a fresh game can deliver briefings.
-    with suppress(KeyError):
+    try:
         _last_sent_briefing_day.pop(player_id, None)
-    with suppress(Exception):
+    except KeyError:
+        pass
+    try:
         update_player_state(player_id, last_briefing_day_sent=None)
+    except Exception as e:
+        logger.error(f"Failed to clear briefing day for player {player_id}: {e}")
 
     # Wipe FSM + business state, then restart from language selection.
     await state.clear()
@@ -1956,22 +2007,29 @@ async def cmd_gm_start_game(message: types.Message):
     """
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+    player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
         logger.warning(f"Unauthorized /gm_start_game attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["start_game_usage"])
         return
 
     game_id = parts[1].strip()
     if not game_id:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["start_game_usage"])
         return
+
+    # Use the game's language if available, fall back to the player's
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
 
     await message.answer(
         gm_msgs["game_generation_started"].format(game_id=game_id),
@@ -1982,7 +2040,7 @@ async def cmd_gm_start_game(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/start-game",
-            data={"game_id": game_id, "language": DEFAULT_LANGUAGE},
+            data={"game_id": game_id, "language": game_lang},
             timeout_total=60,
         )
         if result and result.get("status") == "accepted":
@@ -2006,9 +2064,10 @@ async def cmd_gm_kick(message: types.Message):
     """
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+    player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
         logger.warning(f"Unauthorized /gm_kick attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
@@ -2016,11 +2075,15 @@ async def cmd_gm_kick(message: types.Message):
     # Parse args: /gm_kick <game_id> <role_key> [reason]
     parts = (message.text or "").split(maxsplit=3)
     if len(parts) < 3:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["kick_usage"])
         return
 
     game_id = parts[1].strip()
     role_key = parts[2].strip()
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
+
     reason = parts[3].strip() if len(parts) > 3 else gm_msgs["default_kick_reason"]
 
     if not game_id or not role_key:
@@ -2114,22 +2177,29 @@ async def cmd_gm_continue_game(message: types.Message):
     """
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+    player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
         logger.warning(f"Unauthorized /gm_continue_game attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["continue_game_usage"])
         return
 
     game_id = parts[1].strip()
     if not game_id:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["continue_game_usage"])
         return
+
+    # Use the game's language if available, fall back to the player's
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
 
     await message.answer(
         gm_msgs["turn_generation_started"].format(game_id=game_id),
@@ -2140,7 +2210,7 @@ async def cmd_gm_continue_game(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/continue-game",
-            params={"game_id": game_id, "language": DEFAULT_LANGUAGE},
+            params={"game_id": game_id, "language": game_lang},
             timeout_total=60,
         )
         if result and result.get("status") == "accepted":
@@ -2165,22 +2235,29 @@ async def cmd_gm_regenerate_turn(message: types.Message):
     """
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+    player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
         logger.warning(f"Unauthorized /gm_regenerate_turn attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["regenerate_turn_usage"])
         return
 
     game_id = parts[1].strip()
     if not game_id:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["regenerate_turn_usage"])
         return
+
+    # Use the game's language if available, fall back to the player's
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
 
     await message.answer(
         gm_msgs["turn_regeneration_started"].format(game_id=game_id),
@@ -2191,7 +2268,7 @@ async def cmd_gm_regenerate_turn(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/regenerate-turn",
-            params={"game_id": game_id, "language": DEFAULT_LANGUAGE},
+            params={"game_id": game_id, "language": game_lang},
             timeout_total=60,
         )
         if result and result.get("status") == "accepted":
@@ -2216,22 +2293,29 @@ async def cmd_gm_restart_game(message: types.Message):
     """
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+    player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
         logger.warning(f"Unauthorized /gm_restart_game attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["restart_game_usage"])
         return
 
     game_id = parts[1].strip()
     if not game_id:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["restart_game_usage"])
         return
+
+    # Use the game's language if available, fall back to the player's
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
 
     await message.answer(
         gm_msgs["restarting_game"].format(game_id=game_id),
@@ -2243,7 +2327,7 @@ async def cmd_gm_restart_game(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/restart-game",
-            params={"game_id": game_id, "language": DEFAULT_LANGUAGE},
+            params={"game_id": game_id, "language": game_lang},
             timeout_total=120,
         )
         if not result or result.get("status") != "success":
@@ -2272,7 +2356,7 @@ async def cmd_gm_restart_game(message: types.Message):
             "/admin/start-game",
             data={
                 "game_id": game_id,
-                "language": DEFAULT_LANGUAGE,
+                "language": game_lang,
                 "was_restarted": True,
             },
             timeout_total=60,
@@ -2310,19 +2394,23 @@ async def cmd_gm_status(message: types.Message):
     """
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+    player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
         logger.warning(f"Unauthorized /gm_status attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
     parts = (message.text or "").split()
     if len(parts) < 2:
+        gm_msgs = lang.get_gm_commands(player_lang)
         await message.answer(gm_msgs["status_usage"])
         return
 
     game_id = parts[1].strip()
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
     await message.answer(gm_msgs["status_loading"].format(game_id=game_id), parse_mode="Markdown")
 
     try:
@@ -2407,7 +2495,7 @@ async def cmd_gm_status(message: types.Message):
 
 
 async def cmd_gm_set_language(message: types.Message):
-    """GM command: Set the language for a game.
+    """GM command: Set the language for a game and regenerate its title.
 
     Usage: /gm_set_language <game_id> <ru|en>
     Only executable by the configured Game Master user.
@@ -2443,12 +2531,15 @@ async def cmd_gm_set_language(message: types.Message):
             "POST",
             "/admin/set-language",
             data={"game_id": game_id, "language": lang_code},
+            timeout_total=120,
         )
         if result and result.get("status") == "success":
-            await message.answer(
-                gm_msgs["set_language_success"].format(game_id=game_id, lang_code=lang_code),
-                parse_mode="Markdown",
-            )
+            new_title = result.get("title", "")
+            new_mission = result.get("mission_name") or ""
+            success_text = gm_msgs["set_language_success"].format(game_id=game_id, lang_code=lang_code, title=new_title)
+            if new_mission:
+                success_text += f"\n🎯 New mission: **{new_mission}**"
+            await message.answer(success_text, parse_mode="Markdown")
         else:
             detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
             await message.answer(gm_msgs["set_language_error"].format(detail=detail))
@@ -2569,8 +2660,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         return
 
     answer_value = current_options[option_idx]["value"]
-    matched_label = current_options[option_idx]["label"]
-    logger.info(f"Matched option: idx={option_idx}, label='{matched_label}'")
+    logger.info(f"Matched option: idx={option_idx}, value='{answer_value}'")
 
     # Set reaction to show processing
     if callback.bot is not None:
@@ -2649,6 +2739,8 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                     player_id,
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
+                    current_question_text=next_question["text"],
+                    current_question_image_url=next_question.get("image_url"),
                 )
                 keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
                 await send_question_with_image(msg, next_question, keyboard, player_lang)
@@ -2692,17 +2784,15 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
     # Match by numeric index from button text (e.g., "[1]" or "1")
     answer_value = None
-    matched_label = None
     match = re.match(r"^\[?(\d+)\]?$", answer_text.strip())
     if match:
         idx = int(match.group(1)) - 1
         if 0 <= idx < len(current_options):
             answer_value = current_options[idx]["value"]
-            matched_label = current_options[idx]["label"]
-            logger.info(f"Numeric match: idx={idx}, label='{matched_label}'")
+            logger.info(f"Numeric match: idx={idx}, value='{answer_value}'")
 
     if not answer_value:
-        logger.warning(f"No matching option found! Player text: '{answer_text}', Available options: {[opt['label'] for opt in current_options]}")
+        logger.warning(f"No matching option found! Player text: '{answer_text}', Available options: {[opt['value'] for opt in current_options]}")
         await message.answer(error_msgs["invalid_format"])
         return
 
@@ -2719,7 +2809,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
 
     try:
-        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, matched_label='{matched_label}', answer_value='{answer_value}'")
+        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
             "POST",
             f"/onboarding/{session_id}/answer",
@@ -2774,11 +2864,11 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             next_question = result.get("next_question")
             if next_question:
                 logger.info(f"Next onboarding question: id={next_question['id']}, text={next_question['text']}...")
-                logger.info(f"Next question options: {[opt['label'] for opt in next_question['options']]}")
+                logger.info(f"Next question options: {[opt['value'] for opt in next_question['options']]}")
                 if next_question.get("image_url"):
                     logger.info(f"Next question has image: {next_question['image_url']}")
                 # Store next question data in state for matching
-                logger.info(f"Storing next question in state: question_id={next_question['id']}, options={[opt['label'] for opt in next_question['options']]}")
+                logger.info(f"Storing next question in state: question_id={next_question['id']}, options={[opt['value'] for opt in next_question['options']]}")
                 await state.update_data(
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
@@ -2787,6 +2877,8 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                     player_id,
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
+                    current_question_text=next_question["text"],
+                    current_question_image_url=next_question.get("image_url"),
                 )
                 keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
                 await send_question_with_image(message, next_question, keyboard, get_player_language(player_id))
@@ -2811,6 +2903,9 @@ async def action_selection(callback: types.CallbackQuery):
 
     action_id = parts[1]
 
+    # Acknowledge callback immediately to prevent query ID expiration
+    await callback.answer()
+
     try:
         # Get current day to validate
         day = await api_request("GET", "/game/current-day")
@@ -2829,17 +2924,31 @@ async def action_selection(callback: types.CallbackQuery):
             },
         )
 
-        msgs = lang.get_actions(player_lang)
+        # Mark the selected action on the inline keyboard with ✅
+        actions_list = day.get("player_actions", [])
+        if actions_list and isinstance(callback.message, types.Message):
+            try:
+                updated_keyboard = create_action_keyboard(actions_list, selected_action_id=action_id)
+                await callback.message.edit_reply_markup(reply_markup=updated_keyboard)
+            except Exception as kb_err:
+                logger.warning(f"Failed to update action keyboard for player {player_id}: {kb_err}")
+
+        # Use the game's language for confirmation messages
+        action_lang = await get_game_language("default_game", fallback=player_lang)
+        msgs = lang.get_actions(action_lang)
         if callback.message:
             await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard())
-        await callback.answer()
 
     except Exception as e:
         logger.error(f"Failed to record action for player {player_id}: {e}")
-        msgs = lang.get_actions(player_lang)
+        action_lang = player_lang
+        try:
+            action_lang = await get_game_language("default_game", fallback=player_lang)
+        except Exception:
+            pass
+        msgs = lang.get_actions(action_lang)
         if callback.message:
             await callback.message.answer(msgs["error"].format(error=str(e)))
-        await callback.answer()
 
 
 async def refresh_game(callback: types.CallbackQuery):
@@ -2854,6 +2963,9 @@ async def refresh_game(callback: types.CallbackQuery):
     if len(parts) != 2:
         await callback.answer(lang.get_errors(player_lang)["invalid_format"])
         return
+
+    # Acknowledge callback immediately to prevent query ID expiration
+    await callback.answer()
 
     try:
         # Refresh current day
@@ -2878,11 +2990,10 @@ async def refresh_game(callback: types.CallbackQuery):
                 reply_markup=create_action_keyboard(day.get("player_actions", [])),
             )
 
-        await callback.answer()
-
     except Exception as e:
         logger.error(f"Failed to refresh game for player {player_id}: {e}")
-        await callback.answer(lang.get_messages(player_lang)["error"].format(error=str(e)))
+        if isinstance(callback.message, types.Message):
+            await callback.message.answer(lang.get_messages(player_lang)["error"].format(error=str(e)))
 
 
 # ============== Polling Loop ==============

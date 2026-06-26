@@ -83,13 +83,13 @@ HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
         "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/team - Ваш экипаж\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/reset - Сбросить участие и начать заново\n/help - Эта справка",
-        "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы\n/gm_set_language <id> <ru|en> - Установить язык игры",
+        "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы\n/gm_set_language <id> <ru|en> - Сменить язык и перегенерировать название игры",
         "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
         "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/team - Your crew\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/reset - Reset participation and start over\n/help - This help",
-        "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games\n/gm_status <id> - Game status: players, NPCs, choices\n/gm_set_language <id> <ru|en> - Set game language",
+        "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games\n/gm_status <id> - Game status: players, NPCs, choices\n/gm_set_language <id> <ru|en> - Change language and regenerate game title",
         "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
 }
@@ -397,8 +397,8 @@ GM_COMMANDS = {
         "list_games_error": "❌ Ошибка получения списка игр: {error}",
         "set_language_usage": "❌ Использование: /gm_set_language <game_id> <ru|en>\n\nПример: /gm_set_language abc123 en",
         "set_language_invalid": "❌ Язык должен быть `ru` или `en`.",
-        "set_language_progress": "⏳ Устанавливаю язык `{lang_code}` для игры `{game_id}`...",
-        "set_language_success": "✅ **Язык игры `{game_id}` установлен на `{lang_code}`**\n\n🌐 Теперь все новые игроки будут проходить онбординг на языке: {lang_code}",
+        "set_language_progress": "⏳ Меняю язык игры `{game_id}` на `{lang_code}`, генерирую название и миссию...",
+        "set_language_success": "✅ **Язык игры `{game_id}` изменён на `{lang_code}`**\n\n🌐 Название игры: **{title}**",
         "set_language_error": "❌ Ошибка: {detail}",
     },
     LANGUAGE_EN: {
@@ -455,8 +455,8 @@ GM_COMMANDS = {
         "restart_cleanup_done": "✅ **Game `{game_id}` reset!**\n\n🗑 Days deleted: {deleted_days}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n\n🚀 Starting new game generation...\n📬 You will be notified when the game is ready.",
         "set_language_usage": "❌ Usage: /gm_set_language <game_id> <ru|en>\n\nExample: /gm_set_language abc123 en",
         "set_language_invalid": "❌ Language must be `ru` or `en`.",
-        "set_language_progress": "⏳ Setting language `{lang_code}` for game `{game_id}`...",
-        "set_language_success": "✅ **Game `{game_id}` language set to `{lang_code}`**\n\n🌐 Now all new players will go through onboarding in: {lang_code}",
+        "set_language_progress": "⏳ Changing game `{game_id}` language to `{lang_code}`, regenerating title and mission...",
+        "set_language_success": "✅ **Game `{game_id}` language changed to `{lang_code}`**\n\n🌐 Game title: **{title}**",
         "set_language_error": "❌ Error: {detail}",
     },
 }

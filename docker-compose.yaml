@@ -19,8 +19,8 @@ services:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
       - ${HOME}/.cache/comfyui:/opt/ComfyUI/models
       - ./comfyui/user/:/opt/ComfyUI/user
-      - ./comfyui/output/:/opt/ComfyUI/output
-      - ./comfyui/input/:/opt/ComfyUI/input
+      - ./comfyui/files/:/opt/ComfyUI/output
+      - ./comfyui/files/:/opt/ComfyUI/input
       - ./comfyui/web_custom_versions/:/opt/ComfyUI/web_custom_versions/
       - ./comfyui/temp/:/opt/ComfyUI/temp
     command:
@@ -145,7 +145,7 @@ services:
         condition: service_healthy
     environment:
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
-      - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
+      - GAME_SCHEDULE=${GAME_SCHEDULE:-8h}
       - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
       - GAME_ID=${GAME_ID:-default_game}
     networks:

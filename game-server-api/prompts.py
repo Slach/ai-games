@@ -109,442 +109,6 @@ def build_dynamic_sg_question_prompts(
     return system, user
 
 
-# Static onboarding questions (fallback when LLM generation fails)
-STATIC_ONBOARDING_QUESTIONS = [
-    OnboardingQuestion(
-        id=1,
-        text="Корабль обнаружил неизвестный сигнал. Ваши действия?",
-        options=[
-            {
-                "value": "repair_systems",
-                "label": "Проверить все системы корабля и подготовить оборудование к возможным перегрузкам",
-                "role_scores": {
-                    "chief_engineer": 3,
-                    "tactical_officer": 1,
-                    "captain": 1,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "analyze_signal",
-                "label": "Начать детальный анализ сигнала и собрать данные о его происхождении",
-                "role_scores": {
-                    "science_officer": 3,
-                    "xenobiologist": 2,
-                    "communications_officer": 1,
-                    "chief_engineer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "hail_signal",
-                "label": "Немедленно установить контакт и начать переговоры с источником сигнала",
-                "role_scores": {
-                    "communications_officer": 3,
-                    "xenobiologist": 1,
-                    "security_chief": 0,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "secure_perimeter",
-                "label": "Активировать боевой режим, поднять щиты и подготовить оружие к бою",
-                "role_scores": {
-                    "security_chief": 3,
-                    "tactical_officer": 3,
-                    "navigator": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "captain": 0,
-                    "medical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "emergency_medical",
-                "label": "Подготовить медицинский отсек к приёму пострадавших и проверить запасы медикаментов",
-                "role_scores": {
-                    "medical_officer": 3,
-                    "captain": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-        ],
-    ),
-    OnboardingQuestion(
-        id=2,
-        text="Во время высадки на планету вы оказались в зоне обвала. Что вы сделаете?",
-        options=[
-            {
-                "value": "fly_out",
-                "label": "Запрыгнуть в шаттл и совершить рискованный манёвр чтобы вырваться из зоны обвала",
-                "role_scores": {
-                    "pilot": 3,
-                    "navigator": 2,
-                    "tactical_officer": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "medical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                },
-            },
-            {
-                "value": "build_shelter",
-                "label": "Использовать обломки пород чтобы построить временное укрытие и усилить конструкцию",
-                "role_scores": {
-                    "chief_engineer": 3,
-                    "captain": 2,
-                    "security_chief": 1,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "triage_injured",
-                "label": "Немедленно оказать первую помощь раненым и распределить ресурсы для выживания",
-                "role_scores": {
-                    "medical_officer": 3,
-                    "captain": 2,
-                    "communications_officer": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "study_cave",
-                "label": "Исследовать пещеру — возможно обвал открыл проход к неизвестным пещерным формациям",
-                "role_scores": {
-                    "xenobiologist": 3,
-                    "science_officer": 2,
-                    "navigator": 1,
-                    "chief_engineer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "coordinate_rescue",
-                "label": "Связаться с кораблём и координировать спасательную операцию с других членов экипажа",
-                "role_scores": {
-                    "communications_officer": 3,
-                    "security_chief": 2,
-                    "tactical_officer": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-        ],
-    ),
-    OnboardingQuestion(
-        id=3,
-        text="На борту вспыхнул конфликт между двумя членами экипажа. Как вы поступите?",
-        options=[
-            {
-                "value": "negotiate",
-                "label": "Поговорить с обоими, выслушать каждую сторону и найти компромисс",
-                "role_scores": {
-                    "communications_officer": 3,
-                    "medical_officer": 1,
-                    "xenobiologist": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "data_driven",
-                "label": "Собрать все данные о ситуации и предложить решение на основе анализа фактов",
-                "role_scores": {
-                    "science_officer": 3,
-                    "captain": 1,
-                    "chief_engineer": 1,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "enforce_order",
-                "label": "Немедленно разнять конфликтующих и установить порядок силой если необходимо",
-                "role_scores": {
-                    "security_chief": 3,
-                    "tactical_officer": 2,
-                    "pilot": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                },
-            },
-            {
-                "value": "check_resources",
-                "label": "Проверить не вызван ли конфликт дефицитом ресурсов и перераспределить запасы",
-                "role_scores": {
-                    "captain": 3,
-                    "chief_engineer": 1,
-                    "medical_officer": 1,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "diagnose_cause",
-                "label": "Проверить нет ли медицинской или психологической причины — возможно кто-то болен",
-                "role_scores": {
-                    "medical_officer": 3,
-                    "xenobiologist": 1,
-                    "science_officer": 1,
-                    "chief_engineer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "pilot": 0,
-                },
-            },
-        ],
-    ),
-    OnboardingQuestion(
-        id=4,
-        text="Вы обнаружили инопланетный артефакт неизвестного происхождения. Ваши действия?",
-        options=[
-            {
-                "value": "dissect_device",
-                "label": "Аккуратно разобрать артефакт чтобы понять его внутреннее устройство",
-                "role_scores": {
-                    "chief_engineer": 3,
-                    "science_officer": 2,
-                    "xenobiologist": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "contain_sample",
-                "label": "Поместить артефакт в карантинную камеру и изучить его биологические свойства",
-                "role_scores": {
-                    "xenobiologist": 3,
-                    "medical_officer": 2,
-                    "science_officer": 1,
-                    "chief_engineer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "secure_artifact",
-                "label": "Оцепить зону и обеспечить безопасность при работе с неизвестным объектом",
-                "role_scores": {
-                    "security_chief": 3,
-                    "tactical_officer": 2,
-                    "captain": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "signal_analysis",
-                "label": "Попытаться расшифровать сигналы артефакта и установить коммуникацию",
-                "role_scores": {
-                    "communications_officer": 3,
-                    "navigator": 1,
-                    "science_officer": 1,
-                    "chief_engineer": 0,
-                    "security_chief": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "plot_course",
-                "label": "Вычислить координаты происхождения артефакта и проложить курс к его источнику",
-                "role_scores": {
-                    "navigator": 3,
-                    "pilot": 2,
-                    "science_officer": 1,
-                    "chief_engineer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                },
-            },
-        ],
-    ),
-    OnboardingQuestion(
-        id=5,
-        text="Корабль получил серьёзные повреждения в бою. Что вы сделаете в первую очередь?",
-        options=[
-            {
-                "value": "emergency_repair",
-                "label": "Возглавить ремонтную команду и лично чинить критические системы",
-                "role_scores": {
-                    "chief_engineer": 3,
-                    "captain": 1,
-                    "security_chief": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "tactical_retreat",
-                "label": "Рассчитать манёвр уклонения и увести корабль из зоны обстрела",
-                "role_scores": {
-                    "pilot": 3,
-                    "navigator": 2,
-                    "tactical_officer": 2,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "security_chief": 0,
-                    "medical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                },
-            },
-            {
-                "value": "return_fire",
-                "label": "Сосредоточить огонь на слабом месте противника и подавить его орудия",
-                "role_scores": {
-                    "tactical_officer": 3,
-                    "security_chief": 2,
-                    "pilot": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "communications_officer": 0,
-                    "navigator": 0,
-                    "medical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                },
-            },
-            {
-                "value": "treat_wounded",
-                "label": "Организовать сортировку раненых и начать массовую медицинскую помощь",
-                "role_scores": {
-                    "medical_officer": 3,
-                    "communications_officer": 1,
-                    "captain": 1,
-                    "chief_engineer": 0,
-                    "science_officer": 0,
-                    "security_chief": 0,
-                    "navigator": 0,
-                    "tactical_officer": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-            {
-                "value": "call_backup",
-                "label": "Отправить экстренный сигнал координатам и запросить подкрепление",
-                "role_scores": {
-                    "communications_officer": 3,
-                    "navigator": 1,
-                    "science_officer": 1,
-                    "chief_engineer": 0,
-                    "security_chief": 0,
-                    "medical_officer": 0,
-                    "tactical_officer": 0,
-                    "captain": 0,
-                    "xenobiologist": 0,
-                    "pilot": 0,
-                },
-            },
-        ],
-    ),
-]
-
-
-# LLM prompts for dynamic content generation (legacy format — used by main.py)
 LLM_PROMPTS = {
     LANGUAGE_RU: {
         "onboarding_questions": """
@@ -1135,13 +699,13 @@ def build_onboarding_prompts(
         user = (
             f"Сгенерируй {questions_count} вопросов для онбординга в игре про космический экипаж звездного корабля. "
             f"Каждый вопрос — это конкретная ситуация на корабле или во время миссии с выбором из {options_count} вариантов ДЕЙСТВИЙ. "
-            "ВАЖНО: Каждый вариант ответа должен описывать КОНКРЕТНОЕ ДЕЙСТВИЕ, которое игрок совершает в этой ситуации. "
+            "ВАЖНО: Каждый вариант ответа (поле value) должен описывать КОНКРЕТНОЕ ДЕЙСТВИЕ, которое игрок совершает в этой ситуации. "
             "ПРИМЕР правильных вариантов: 'Бежать в машинное отделение и попытаться починить варп-двигатель', "
             "'Активировать аварийные щиты и вызвать подкрепление'. "
             "НЕПРАВИЛЬНО: 'Инженер — технический специалист', 'Учёный – смелый, ищущий прорыв'. "
-            "НЕПРАВИЛЬНО: 'A', 'B', 'C' — метки вариантов должны быть ПОЛНЫМИ описаниями действий! "
+            "НЕПРАВИЛЬНО: 'A', 'B', 'C' — варианты должны быть ПОЛНЫМИ описаниями действий! "
             "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
-            "Каждый вариант (label) должен быть развёрнутым предложением минимум из 5-7 слов, описывающим конкретное действие. "
+            "Каждый вариант (value) должен быть развёрнутым предложением минимум из 5-7 слов, описывающим конкретное действие. "
             "КРИТИЧНО: Все варианты ответа в одном вопросе должны быть РАЗЛИЧНЫМИ и описывать РАЗНЫЕ действия. "
             "Не допускай одинаковых или очень похожих вариантов — каждый должен представлять уникальный подход. "
             "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
@@ -1153,9 +717,10 @@ def build_onboarding_prompts(
             "Остальным ролям поставь 0. Очки отражают насколько выбранное действие характерно для данной роли. "
             "ПРИМЕР role_scores для действия 'Починить варп-двигатель': "
             f"{example_role_scores_json}. "
-            "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n" + hint + "Сам текст вопроса (text) и все варианты ответов (label) — строго НА РУССКОМ ЯЗЫКЕ.\n"
+            "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n" + hint + "Текст вопроса (text) и все варианты ответов (value) — строго НА РУССКОМ ЯЗЫКЕ.\n"
             "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
-            "НЕ ВСТАВЛЯЙ английский текст в question.text или option.label — только в image_prompt.\n"
+            "ВАЖНО: image_prompt должен визуализировать ТУ ЖЕ САМУЮ СЦЕНУ, что описана в text — то же место, та же ситуация. "
+            "Например, если text про обнаружение сигнала снаружи корабля, image_prompt должен показывать космос/объект снаружи, а не лабораторию внутри. "
             "Для КАЖДОГО вопроса сгенерируй image_prompt — детальный промпт на АНГЛИЙСКОМ для генерации изображения сцены. "
             "Промпт должен быть кинематографичным, sci-fi/space opera, 4K. "
             "Пример ТОЛЬКО для поля image_prompt (не для текста вопроса): "
@@ -1172,13 +737,13 @@ def build_onboarding_prompts(
         user = (
             f"Generate {questions_count} onboarding questions for a starship crew game. "
             f"Each question is a specific situation aboard a ship or during a mission with {options_count} ACTION choices. "
-            "CRITICAL: Each option must describe a SPECIFIC ACTION the player would take in this situation. "
+            "CRITICAL: Each option (the value field) must describe a SPECIFIC ACTION the player would take in this situation. "
             "CORRECT example: 'Run to engineering and try to repair the warp drive', "
             "'Activate emergency shields and call for backup'. "
             "INCORRECT: 'Engineer - technical specialist', 'Scientist - bold, seeking breakthrough'. "
-            "INCORRECT: 'A', 'B', 'C' — option labels must be FULL action descriptions, NOT single letters! "
+            "INCORRECT: 'A', 'B', 'C' — options must be FULL action descriptions, NOT single letters! "
             "NEVER include role names or personality types in options — only actions. "
-            "Each option label must be a detailed sentence of at least 5-7 words describing a specific action. "
+            "Each option (value) must be a detailed sentence of at least 5-7 words describing a specific action. "
             "CRITICAL: All answer options for one question must be DIFFERENT and describe DIFFERENT actions. "
             "Do not allow identical or very similar options — each should represent a unique approach. "
             "Questions should cover different aspects: danger response, technical work, crew interaction, "
@@ -1190,8 +755,9 @@ def build_onboarding_prompts(
             "Set all other roles to 0. Points reflect how characteristic this action is for that role. "
             "EXAMPLE role_scores for 'Repair the warp drive': "
             f"{example_role_scores_json}. "
-            "IMPORTANT: Options in each question should give points to DIFFERENT roles — so each question helps distinguish players.\n\n" + hint + "All question text (text) and option labels — strictly in ENGLISH.\n"
-            "The image_prompt field is a separate JSON field that must also be in ENGLISH (for image generation).\n"
+            "IMPORTANT: Options in each question should give points to DIFFERENT roles — so each question helps distinguish players.\n\n" + hint + "Question text (text) and all option values — strictly in ENGLISH.\n"
+            "IMPORTANT: image_prompt must visualize the EXACT SAME SCENE as described in text — same location, same situation. "
+            "For example, if text is about detecting a signal outside the ship, image_prompt should show space/the object outside, not a lab interior. "
             "For EACH question generate an image_prompt — a detailed English prompt for the scene image. "
             "The prompt should be cinematic, sci-fi/space opera, 4K quality. "
         )

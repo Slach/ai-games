@@ -59,6 +59,12 @@
   `_clean_*` or `_sanitize_*` shim means you chose to treat the symptom
   instead of the disease.
 
+- **Never use `contextlib.suppress`.** Always use explicit `try`/`except`
+  blocks with `logger.error(...)` when you need to handle exceptions. Using
+  `suppress` silently swallows errors and makes debugging impossible.
+  If an exception is genuinely harmless, log it at `logger.debug` level
+  instead of hiding it completely.
+
 - Avoid over-engineering. Only make changes that are directly requested or clearly necessary. Keep solutions
 simple and focused.
 

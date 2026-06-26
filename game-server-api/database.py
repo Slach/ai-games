@@ -399,6 +399,18 @@ def reset_roles(game_id: str = "default_game"):
     conn.close()
 
 
+def reset_active_npcs(game_id: str = "default_game"):
+    """Deactivate all NPCs for a game so fresh ones are generated on next start."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE npc_profiles SET is_active = 0 WHERE game_id = ? AND is_active = 1",
+        (game_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
 # ============== Onboarding Sessions ==============
 
 

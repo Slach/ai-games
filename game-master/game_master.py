@@ -13,6 +13,7 @@ It does NOT do the actual AI generation - that's handled by game-server-api.
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -27,9 +28,45 @@ logger = logging.getLogger(__name__)
 
 # Get configuration from environment
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
-GAME_SCHEDULE_TIME = os.getenv("GAME_SCHEDULE_TIME", "08:00")  # 24h format
+GAME_SCHEDULE_RAW = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))
 AUTO_ACTION_TIMEOUT_HOURS = int(os.getenv("AUTO_ACTION_TIMEOUT_HOURS", "24"))  # Hours before auto-selection
 GAME_ID = os.getenv("GAME_ID", "default_game")
+
+
+def parse_schedule(schedule: str) -> tuple[str, int | str]:
+    """Parse schedule string into (type, value).
+
+    Supported formats:
+    - HH:MM (e.g., "08:00") — daily at that time
+    - Nh (e.g., "6h") — every N hours
+    - Nm (e.g., "30m") — every N minutes
+    - Ns (e.g., "30s") — every N seconds (testing)
+
+    Returns:
+        ("daily", "HH:MM") or ("interval", seconds)
+    """
+    s = schedule.strip().lower()
+
+    # HH:MM format — daily at specific time
+    if re.match(r"^\d{1,2}:\d{2}$", s):
+        return ("daily", s)
+
+    # Interval format: Nh, Nm, Ns
+    m = re.match(r"^(\d+)([hms])$", s)
+    if m:
+        value = int(m.group(1))
+        unit = m.group(2)
+        if unit == "h":
+            return ("interval", value * 3600)
+        elif unit == "m":
+            return ("interval", value * 60)
+        else:  # seconds
+            return ("interval", value)
+
+    raise ValueError(f"Invalid schedule format: {schedule}")
+
+
+GAME_SCHEDULE = parse_schedule(GAME_SCHEDULE_RAW)
 
 
 class GameMasterScheduler:
@@ -530,32 +567,40 @@ class GameMasterScheduler:
         """Get current game state from API (delegates to check_game_state)"""
         return await self.check_game_state()
 
-    def get_next_run_time(self) -> datetime:
-        """Calculate next run time based on schedule"""
+    def get_next_run_delay(self) -> float:
+        """Calculate delay in seconds until next run."""
+        schedule_type, schedule_value = GAME_SCHEDULE
+
+        if schedule_type == "interval":
+            return float(schedule_value)
+
+        # Daily mode — calculate seconds until next occurrence of HH:MM
         now = datetime.now()
-        schedule_hour, schedule_minute = map(int, GAME_SCHEDULE_TIME.split(":"))
-
+        schedule_hour, schedule_minute = map(int, str(schedule_value).split(":"))
         next_run = now.replace(hour=schedule_hour, minute=schedule_minute, second=0, microsecond=0)
-
         if next_run <= now:
-            next_run = next_run + timedelta(days=1)
+            next_run += timedelta(days=1)
 
-        return next_run
+        return (next_run - now).total_seconds()
 
     async def run_scheduled_loop(self):
-        """Run the daily generation on a schedule with full game loop"""
-        logger.info(f"Starting scheduled loop. Daily generation at {GAME_SCHEDULE_TIME}")
+        """Run the generation on a schedule with full game loop"""
+        schedule_type, schedule_value = GAME_SCHEDULE
+        schedule_desc = f"every {schedule_value}s" if schedule_type == "interval" else f"daily at {schedule_value}"
+        logger.info(f"Starting scheduled loop: {schedule_desc}")
 
         while True:
             try:
-                # Calculate time until next run
-                next_run = self.get_next_run_time()
-                wait_seconds = (next_run - datetime.now()).total_seconds()
+                # Calculate delay until next run
+                delay = self.get_next_run_delay()
 
-                logger.info(f"Next generation scheduled for {next_run.isoformat()} (in {wait_seconds / 3600:.1f} hours)")
+                if schedule_type == "interval":
+                    logger.info(f"Next generation in {delay / 3600:.2f} hours ({delay:.0f}s)")
+                else:
+                    logger.info(f"Next generation in {delay / 3600:.1f} hours ({delay:.0f}s)")
 
-                # Wait until next run time
-                await asyncio.sleep(wait_seconds)
+                # Wait until next run
+                await asyncio.sleep(delay)
 
                 # Generate daily episode with full game loop validation
                 result = await self.generate_daily_episode()
@@ -583,7 +628,9 @@ async def main():
     """Main entry point"""
     logger.info("Starting Game Master Scheduler")
     logger.info(f"GAME_MASTER_API_URL: {GAME_MASTER_API_URL}")
-    logger.info(f"GAME_SCHEDULE_TIME: {GAME_SCHEDULE_TIME}")
+    schedule_type, schedule_val = GAME_SCHEDULE
+    desc = f"daily at {schedule_val}" if schedule_type == "daily" else f"every {schedule_val}s"
+    logger.info(f"GAME_SCHEDULE: {desc}")
 
     scheduler = GameMasterScheduler()
 

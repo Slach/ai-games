@@ -17,6 +17,7 @@ import os
 import random
 import uuid
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
@@ -177,9 +178,7 @@ class ImageGenerator:
         logger.info("=== COMFYUI WORKFLOW ===")
         logger.info(f"Endpoint: {self.comfyui_url}/prompt")
         logger.info(f"Client ID: {self.client_id}")
-        logger.info(
-            f"Workflow JSON:\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
-        )
+        logger.info(f"Workflow JSON:\n{json.dumps(workflow, indent=2, ensure_ascii=False)}")
         logger.info("=== END COMFYUI WORKFLOW ===")
 
         # Retry logic for transient failures (DNS, connection refused, etc.)
@@ -197,48 +196,31 @@ class ImageGenerator:
                 ):
                     if resp.status != 200:
                         error_text = await resp.text()
-                        raise Exception(
-                            f"ComfyUI /prompt error {resp.status}: {error_text}"
-                        )
+                        raise Exception(f"ComfyUI /prompt error {resp.status}: {error_text}")
                     response_text = await resp.text()
                     if not response_text or not response_text.strip():
-                        raise Exception(
-                            f"ComfyUI /prompt returned empty response (status {resp.status})"
-                        )
+                        raise Exception(f"ComfyUI /prompt returned empty response (status {resp.status})")
                     try:
                         result = await resp.json()
                     except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
-                        raise Exception(
-                            f"ComfyUI /prompt returned non-JSON response: {response_text}"
-                        ) from e
+                        raise Exception(f"ComfyUI /prompt returned non-JSON response: {response_text}") from e
                     prompt_id = result.get("prompt_id")
                     if not prompt_id:
-                        raise Exception(
-                            f"ComfyUI /prompt response missing prompt_id: {result}"
-                        )
+                        raise Exception(f"ComfyUI /prompt response missing prompt_id: {result}")
                     logger.info(f"ComfyUI prompt queued: {prompt_id}")
                     return prompt_id
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 last_error = e
                 if attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s, 4s backoff
-                    logger.warning(
-                        f"ComfyUI connection failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {wait_time}s..."
-                    )
+                    logger.warning(f"ComfyUI connection failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(
-                        f"ComfyUI connection failed after {max_retries} attempts: {last_error}"
-                    )
+                    logger.error(f"ComfyUI connection failed after {max_retries} attempts: {last_error}")
 
-        raise Exception(
-            f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}"
-        )
+        raise Exception(f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}")
 
-    async def _wait_for_completion(
-        self, prompt_id: str, timeout: int = 300
-    ) -> dict[str, Any]:
+    async def _wait_for_completion(self, prompt_id: str, timeout: int = 300) -> dict[str, Any]:
         """Wait for ComfyUI to finish processing a prompt via /history endpoint."""
         start = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start) < timeout:
@@ -261,15 +243,10 @@ class ImageGenerator:
                         continue
                     if prompt_id in history:
                         status = history[prompt_id].get("status", {})
-                        if (
-                            status.get("completed", False)
-                            or status.get("status_str") == "success"
-                        ):
+                        if status.get("completed", False) or status.get("status_str") == "success":
                             elapsed = asyncio.get_event_loop().time() - start
                             outputs = history[prompt_id].get("outputs", {})
-                            logger.info(
-                                f"ComfyUI prompt {prompt_id} completed in {elapsed:.1f}s"
-                            )
+                            logger.info(f"ComfyUI prompt {prompt_id} completed in {elapsed:.1f}s")
                             return outputs
                         elif status.get("status_str") == "error":
                             raise Exception(f"ComfyUI execution error: {status}")
@@ -324,9 +301,7 @@ class ImageGenerator:
 
         logger.info("[IMAGE] Generating image via Z-Image Turbo")
         logger.info(f"[IMAGE] Size: {width}x{height}, max_retries={max_retries}")
-        logger.info(
-            f"[IMAGE] Acquiring ComfyUI semaphore ({_image_semaphore._value}/{COMFYUI_IMAGE_CONCURRENCY} slots available)..."
-        )
+        logger.info(f"[IMAGE] Acquiring ComfyUI semaphore ({_image_semaphore._value}/{COMFYUI_IMAGE_CONCURRENCY} slots available)...")
 
         async with _image_semaphore:
             logger.info("[IMAGE] Semaphore acquired, starting generation")
@@ -347,26 +322,18 @@ class ImageGenerator:
                         logger.info(f"[IMAGE] Image generated: {image_url}")
                         return image_url
                     elif attempt < max_retries:
-                        logger.warning(
-                            f"[IMAGE] No image in ComfyUI output (attempt {attempt}/{max_retries}), retrying..."
-                        )
+                        logger.warning(f"[IMAGE] No image in ComfyUI output (attempt {attempt}/{max_retries}), retrying...")
                     else:
-                        logger.warning(
-                            f"[IMAGE] No image in ComfyUI output after {max_retries} attempts, giving up"
-                        )
+                        logger.warning(f"[IMAGE] No image in ComfyUI output after {max_retries} attempts, giving up")
 
                 except Exception as e:
-                    logger.error(
-                        f"[IMAGE] Generation attempt {attempt}/{max_retries} failed: {e}"
-                    )
+                    logger.error(f"[IMAGE] Generation attempt {attempt}/{max_retries} failed: {e}")
                     if attempt < max_retries:
                         wait = 2**attempt  # 2s, 4s, 8s backoff
                         logger.info(f"[IMAGE] Retrying in {wait}s...")
                         await asyncio.sleep(wait)
                     else:
-                        logger.error(
-                            f"[IMAGE] All {max_retries} attempts exhausted, giving up"
-                        )
+                        logger.error(f"[IMAGE] All {max_retries} attempts exhausted, giving up")
 
         return None
 
@@ -422,61 +389,38 @@ class ImageGenerator:
 
         return await self.generate_avatar_image(
             prompt=prompt,
-            filename_prefix=f"char_{character_name.replace(' ', '_')}",
+            filename_prefix=f"default_game/char_{character_name.replace(' ', '_')}",
         )
 
-    async def _upload_image(self, image_url: str, filename: str) -> str | None:
-        """Download an image from a URL and upload it to ComfyUI.
+    @staticmethod
+    def _extract_filename_from_url(url: str) -> str | None:
+        """Extract the filename from a ComfyUI /view URL.
 
-        Returns the uploaded filename (which may differ from the requested one
-        due to ComfyUI dedup), or None on failure.
+        Since input/ and output/ are now the same directory on disk,
+        we can reference avatar files directly by their output filename.
+        Also handles subfolder paths for game-scoped images.
+
+        Args:
+            url: ComfyUI view URL like
+                 http://comfyui:8188/view?filename=avatar_281412419_00001_.png&subfolder=default_game&type=output
+
+        Returns:
+            A path like ``default_game/avatar_281412419_00001_.png`` for LoadImage,
+            or None on failure.
         """
         try:
-            # Download the image
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp,
-            ):
-                if resp.status != 200:
-                    logger.warning(
-                        f"[UPLOAD] Failed to download reference image: HTTP {resp.status}"
-                    )
-                    return None
-                img_data = await resp.read()
-
-            # Upload to ComfyUI via /upload/image using multipart form
-            data = aiohttp.FormData()
-            data.add_field(
-                "image",
-                img_data,
-                filename=filename,
-                content_type="image/png",
-            )
-            data.add_field("type", "input")
-            data.add_field("overwrite", "true")
-
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    f"{self.comfyui_url}/upload/image",
-                    data=data,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp,
-            ):
-                if resp.status == 200:
-                    result = await resp.json()
-                    uploaded_name = result.get("name", filename)
-                    logger.info(f"[UPLOAD] Reference image uploaded: {uploaded_name}")
-                    return uploaded_name
-                else:
-                    error_text = await resp.text()
-                    logger.warning(
-                        f"[UPLOAD] ComfyUI upload failed: HTTP {resp.status}: {error_text}"
-                    )
-                    return None
-        except Exception as e:
-            logger.warning(f"[UPLOAD] Failed to upload reference image: {e}")
-            return None
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            filenames = params.get("filename")
+            subfolders = params.get("subfolder")
+            if filenames and filenames[0]:
+                fn = filenames[0]
+                if subfolders and subfolders[0]:
+                    return f"{subfolders[0]}/{fn}"
+                return fn
+        except Exception:
+            pass
+        return None
 
     def _build_img2img_workflow(
         self,
@@ -617,6 +561,7 @@ class ImageGenerator:
         filename_prefix: str = "action",
         width: int = 1024,
         height: int = 1024,
+        denoise: float = 0.75,
     ) -> str:
         """Generate an action scene image using avatar as visual reference.
 
@@ -633,6 +578,7 @@ class ImageGenerator:
             character_description: Text description of the character (fallback)
             filename_prefix: Output filename prefix
             width, height: Output dimensions
+            denoise: Denoising strength for img2img (0.0=no change, 1.0=completely new)
 
         Returns:
             URL of the generated image, or placeholder on failure
@@ -640,46 +586,31 @@ class ImageGenerator:
         # Try img2img workflow first (if reference image available)
         if reference_image_url:
             try:
-                ref_filename = f"ref_{filename_prefix}.png"
-                uploaded_name = await self._upload_image(
-                    reference_image_url, ref_filename
-                )
-                if uploaded_name:
+                ref_filename = self._extract_filename_from_url(reference_image_url)
+                if ref_filename:
                     workflow = self._build_img2img_workflow(
                         prompt=prompt,
-                        reference_filename=uploaded_name,
+                        reference_filename=ref_filename,
                         width=width,
                         height=height,
-                        denoise=0.75,
+                        denoise=denoise,
                         filename_prefix=filename_prefix,
                     )
 
                     async with _image_semaphore:
                         prompt_id = await self._queue_prompt(workflow)
-                        outputs = await self._wait_for_completion(
-                            prompt_id, timeout=300
-                        )
+                        outputs = await self._wait_for_completion(prompt_id, timeout=300)
                         image_url = self._extract_image_url(outputs)
 
                     if image_url:
-                        logger.info(
-                            f"[ACTION_IMAGE] Generated via img2img: {image_url}"
-                        )
+                        logger.info(f"[ACTION_IMAGE] Generated via img2img: {image_url}")
                         return image_url
                     else:
-                        logger.warning(
-                            "[ACTION_IMAGE] img2img produced no output, "
-                            "falling back to text-to-image"
-                        )
+                        logger.warning("[ACTION_IMAGE] img2img produced no output, falling back to text-to-image")
                 else:
-                    logger.warning(
-                        "[ACTION_IMAGE] Failed to upload reference image, "
-                        "falling back to text-to-image"
-                    )
+                    logger.warning(f"[ACTION_IMAGE] Could not parse filename from reference URL {reference_image_url}, falling back to text-to-image")
             except Exception as e:
-                logger.warning(
-                    f"[ACTION_IMAGE] img2img failed: {e}, falling back to text-to-image"
-                )
+                logger.warning(f"[ACTION_IMAGE] img2img failed: {e}, falling back to text-to-image")
 
         # Fallback: text-to-image with character description in prompt
         fallback_prompt = prompt if prompt else ""
@@ -692,9 +623,7 @@ class ImageGenerator:
         )
 
         if image_url:
-            logger.info(
-                f"[ACTION_IMAGE] Generated (fallback text-to-image): {image_url}"
-            )
+            logger.info(f"[ACTION_IMAGE] Generated (fallback text-to-image): {image_url}")
             return image_url
 
         logger.warning("[ACTION_IMAGE] Generation failed completely, using placeholder")
@@ -746,7 +675,7 @@ class ImageGenerator:
             try:
                 url = await self.generate_image(
                     prompt=prompt,
-                    filename_prefix=f"{filename_prefix}_{game_id}_{i + 1}",
+                    filename_prefix=f"{game_id}/{filename_prefix}_{i + 1}",
                     width=width,
                     height=height,
                     max_retries=2,
@@ -792,24 +721,17 @@ class ImageGenerator:
         """
         logger.info("[BRIDGE] Generating bridge scene image")
         if avatar_urls:
-            logger.info(
-                f"[BRIDGE] {len([u for u in avatar_urls if u])} avatar references available"
-            )
+            logger.info(f"[BRIDGE] {len([u for u in avatar_urls if u])} avatar references available")
 
         # Enhanced prompt with crew positioning details
         enriched_prompt = prompt
         if crew_descriptions:
-            positions = "; ".join(
-                [
-                    f"{d.get('role', '?')}: {d.get('position_description', '')}"
-                    for d in crew_descriptions
-                ]
-            )
+            positions = "; ".join([f"{d.get('role', '?')}: {d.get('position_description', '')}" for d in crew_descriptions])
             enriched_prompt = f"{prompt}. Crew positions: {positions}"
 
         return await self.generate_image(
             prompt=enriched_prompt,
-            filename_prefix=f"{filename_prefix}_{game_id}",
+            filename_prefix=f"{game_id}/{filename_prefix}",
             width=width,
             height=height,
         )
@@ -850,16 +772,14 @@ class ImageGenerator:
             try:
                 url = await self.generate_image(
                     prompt=prompt,
-                    filename_prefix=f"{filename_prefix}_{game_id}_{i + 1}",
+                    filename_prefix=f"{game_id}/{filename_prefix}_{i + 1}",
                     width=width,
                     height=height,
                     max_retries=2,
                 )
                 if url:
                     urls.append(url)
-                    logger.info(
-                        f"[IMAGE] Splash image {i + 1}/{count} generated: {url}..."
-                    )
+                    logger.info(f"[IMAGE] Splash image {i + 1}/{count} generated: {url}...")
                 else:
                     logger.warning(f"[IMAGE] Splash image {i + 1}/{count} failed")
             except Exception as e:

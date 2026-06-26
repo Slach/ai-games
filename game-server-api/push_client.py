@@ -42,6 +42,7 @@ async def push_briefings(
     force_resend: bool = False,
     global_narrative: str = "",
     was_restarted: bool = False,
+    language: str = "ru",
 ) -> bool:
     """Push briefings to telegram-bot with exponential backoff retry.
 
@@ -60,6 +61,7 @@ async def push_briefings(
             Sent as a separate common-intro message before personal briefings.
         was_restarted: If True, telegram-bot will send a "game restarted"
             notification to all alive players before their briefings.
+        language: Game language code used for UI messages (bridge, titles, etc.).
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -70,6 +72,7 @@ async def push_briefings(
         "players": players_briefings,
         "is_first_turn": is_first_turn,
         "was_restarted": was_restarted,
+        "language": language,
     }
     if force_resend:
         payload["force_resend"] = True
@@ -162,6 +165,7 @@ async def push_player_chosen_action(
     chosen_action_url: str,
     game_id: str = "default_game",
     action_text: str = "",
+    language: str = "ru",
 ) -> bool:
     """Push a player's chosen action image to the telegram-bot.
 
@@ -173,6 +177,7 @@ async def push_player_chosen_action(
         "chosen_action_url": chosen_action_url,
         "game_id": game_id,
         "action_text": action_text,
+        "language": language,
     }
     label = f"action player={player_id} day={day}"
     return await _post_with_retry(TELEGRAM_BOT_ACTION_URL, payload, label)
@@ -185,6 +190,7 @@ async def push_gm_notification(
     error: str = "",
     players: int = 0,
     npcs: int = 0,
+    language: str = "ru",
 ) -> bool:
     """Push a notification to the Game Master about turn generation status.
 
@@ -198,6 +204,7 @@ async def push_gm_notification(
         error: Error message (only when status="error")
         players: Number of players (only when status="success")
         npcs: Number of NPCs (only when status="success")
+        language: Game language code for the notification message.
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -209,6 +216,7 @@ async def push_gm_notification(
         "error": error,
         "players": players,
         "npcs": npcs,
+        "language": language,
     }
     label = f"gm-notification game={game_id} day={day} status={status}"
     return await _post_with_retry(TELEGRAM_BOT_GM_NOTIFICATION_URL, payload, label)
@@ -231,6 +239,7 @@ async def push_day_outcome(
     ship_systems_offline: list[str] | None = None,
     total_crew_count: int | None = None,
     alive_crew_count: int | None = None,
+    language: str = "ru",
 ) -> bool:
     """Push the combined day outcome to all alive players.
 
@@ -253,12 +262,14 @@ async def push_day_outcome(
         ship_systems_offline: List of offline/damaged systems
         total_crew_count: Total crew members (NPCs + players) at start of turn
         alive_crew_count: Crew members still alive after this turn
+        language: Game language code for UI messages (titles, status labels, etc.).
     """
     payload: dict = {
         "game_id": game_id,
         "day": day,
         "outcome_text": outcome_text,
         "alive_players": alive_players,
+        "language": language,
     }
     if outcome_image_url:
         payload["outcome_image_url"] = outcome_image_url

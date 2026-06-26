@@ -5,8 +5,9 @@
 node_modules/
 .vscode/
 comfyui/user/
-comfyui/output/
-comfyui/input/
+comfyui/files/*
+!comfyui/files/.gitkeep
+!comfyui/files/**/.gitkeep
 comfyui/web_custom_versions/
 .aider*
 .claude/

@@ -119,6 +119,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     force_resend = payload.get("force_resend", False)
     global_narrative = payload.get("global_narrative", "")
     was_restarted = payload.get("was_restarted", False)
+    language = payload.get("language", language)
 
     if not day or not players:
         return web.json_response({"status": "error", "message": "Missing day or players"}, status=400)
@@ -309,6 +310,9 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
     except Exception as e:
         return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
 
+    # Use game's language from payload when available
+    language = payload.get("language", language)
+
     player_id = payload.get("player_id")
     day = payload.get("day")
     chosen_action_url = payload.get("chosen_action_url")
@@ -381,6 +385,9 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         payload = await request.json()
     except Exception as e:
         return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    # Use game's language from payload when available
+    language = payload.get("language", language)
 
     day = payload.get("day")
 
@@ -651,11 +658,18 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
     error = payload.get("error", "")
     players = payload.get("players", 0)
     npcs = payload.get("npcs", 0)
+    language = payload.get("language", "ru")
 
     if status == "success":
-        msg = f"✅ **Ход {day} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {day}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
+        if language == "ru":
+            msg = f"✅ **Ход {day} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {day}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
+        else:
+            msg = f"✅ **Turn {day} for game `{game_id}` generated!**\n\n🎯 Turn: {day}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
     else:
-        msg = f"❌ **Ошибка генерации хода {day} игры `{game_id}`**\n\n{error}"
+        if language == "ru":
+            msg = f"❌ **Ошибка генерации хода {day} игры `{game_id}`**\n\n{error}"
+        else:
+            msg = f"❌ **Error generating turn {day} for game `{game_id}`**\n\n{error}"
 
     # Send to GM if we have a bot and GM ID
     if bot and GAME_MASTER_ID > 0:

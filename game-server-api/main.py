@@ -8,7 +8,6 @@ import logging
 import os
 import random
 import string
-import contextlib
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -74,6 +73,7 @@ from database import (
     release_role,
     set_game_language,
     record_kick,
+    reset_active_npcs,
     reset_game_state_to_day1,
     reset_roles,
     save_game_image,
@@ -112,7 +112,6 @@ from language import (
     get_species_type_name,
 )
 from prompts import (
-    STATIC_ONBOARDING_QUESTIONS,
     OnboardingQuestion,
 )
 from push_client import push_briefings, push_day_outcome, push_gm_notification, push_player_chosen_action
@@ -262,13 +261,6 @@ def _question_has_sg_tags(question: OnboardingQuestion) -> bool:
     return any(opt.get("species_tags") or opt.get("gender_tags") for opt in question.options)
 
 
-def get_next_question(current_question: int) -> OnboardingQuestion | None:
-    """Get the next onboarding question"""
-    if current_question >= len(STATIC_ONBOARDING_QUESTIONS):
-        return None
-    return STATIC_ONBOARDING_QUESTIONS[current_question]
-
-
 async def generate_dynamic_onboarding_questions(
     language: str = "en",
     game_id: str = "default_game",
@@ -276,7 +268,7 @@ async def generate_dynamic_onboarding_questions(
     """Generate dynamic onboarding questions using LLM with json_schema and enrich with images via ComfyUI."""
     logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
     start_time = datetime.now()
-    questions = STATIC_ONBOARDING_QUESTIONS
+    questions: list[OnboardingQuestion] = []
     try:
         game_master = create_game_master_agent(language=language)
         logger.info("Game Master agent created successfully")
@@ -341,7 +333,7 @@ async def generate_dynamic_onboarding_questions(
                     return None
                 url = await image_generator.generate_image(
                     prompt=prompt,
-                    filename_prefix=f"onboarding_q_{game_id}_{q.id}",
+                    filename_prefix=f"{game_id}/onboarding_q_{q.id}",
                     width=768,
                     height=768,
                 )
@@ -366,8 +358,8 @@ async def generate_dynamic_onboarding_questions(
         return questions
 
     except Exception as e:
-        logger.error(f"Failed to generate dynamic questions, using static: {e}")
-        return STATIC_ONBOARDING_QUESTIONS
+        logger.error(f"Failed to generate dynamic onboarding questions: {e}")
+        raise
 
 
 async def _generate_option_images_for_question(
@@ -443,7 +435,7 @@ async def _generate_option_images_for_question(
         prompt = prompts_dict.get(opt_value, "")
         if not prompt:
             continue
-        filename_prefix = f"species_{game_id}_{session.get('player_id', 'x')}_{question.id}_{opt_value}"
+        filename_prefix = f"{game_id}/species_{session.get('player_id', 'x')}_{question.id}_{opt_value}"
         tasks.append(
             image_generator.generate_image(
                 prompt=prompt,
@@ -749,12 +741,6 @@ async def health_check():
 
 
 # ============== Onboarding endpoints ==============
-
-
-@app.get("/onboarding/questions")
-async def get_onboarding_questions():
-    """Get all static onboarding questions (backward compatibility)"""
-    return {"questions": [q.model_dump() for q in STATIC_ONBOARDING_QUESTIONS]}
 
 
 @app.post("/onboarding/start")
@@ -1160,7 +1146,7 @@ async def complete_onboarding(session_id: str):
         logger.info(f"[AVATAR] Calling ComfyUI at {image_generator.comfyui_url} for avatar generation")
         avatar_url = await image_generator.generate_avatar_image(
             prompt=avatar_prompt,
-            filename_prefix=f"avatar_{game_id}_{player_id}",
+            filename_prefix=f"{game_id}/avatar_{player_id}",
         )
 
         if avatar_url:
@@ -1373,7 +1359,7 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
         logger.info(f"[AVATAR] Calling ComfyUI at {image_generator.comfyui_url} for avatar generation")
         avatar_url = await image_generator.generate_avatar_image(
             prompt=avatar_prompt,
-            filename_prefix=f"avatar_{game_id}_{player_id}",
+            filename_prefix=f"{game_id}/avatar_{player_id}",
         )
 
         if avatar_url:
@@ -1480,7 +1466,8 @@ async def get_game_started_endpoint(game_id: str = "default_game"):
     """Check if game has started (>= 3 players joined)"""
     started = is_game_started(game_id)
     player_count = get_player_count_in_game(game_id)
-    return {"game_id": game_id, "started": started, "player_count": player_count}
+    language = get_game_language(game_id)
+    return {"game_id": game_id, "started": started, "player_count": player_count, "language": language}
 
 
 @app.get("/game/status")
@@ -1723,12 +1710,14 @@ async def submit_player_action(request: PlayerActionRequest):
     # Registered in _pending_action_tasks so _analyze_day_outcome can
     # await completion before pushing the outcome.
     action_key = (request.day, game_id)
+    game_lang = get_game_language(game_id)
     action_task = asyncio.create_task(
         _generate_chosen_action_image(
             player_id=request.player_id,
             game_id=game_id,
             day=request.day,
             action_id=request.action_id,
+            language=game_lang,
         )
     )
     _pending_action_tasks.setdefault(action_key, set()).add(action_task)
@@ -1795,8 +1784,10 @@ async def auto_select_action(
     global_circ = {}
     if game_day:
         gc_str = game_day.get("global_circumstances", "{}")
-        with contextlib.suppress(json.JSONDecodeError, TypeError):
+        try:
             global_circ = json.loads(gc_str) if isinstance(gc_str, str) else gc_str
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to parse global_circumstances: {e}")
 
     # 4. Generate LLM choice
     gm = create_game_master_agent(language=language)
@@ -2013,6 +2004,7 @@ async def _generate_chosen_action_image(
     game_id: str,
     day: int,
     action_id: str,
+    language: str = "ru",
 ):
     """Generate an image showing the player's chosen action.
 
@@ -2095,7 +2087,7 @@ async def _generate_chosen_action_image(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"action_day{day}_{game_id}_p{player_id}",
+            filename_prefix=f"{game_id}/action_day{day}_p{player_id}",
         )
 
         if chosen_action_url:
@@ -2113,6 +2105,7 @@ async def _generate_chosen_action_image(
                     chosen_action_url=chosen_action_url,
                     game_id=game_id,
                     action_text=action_text,
+                    language=language,
                 )
                 logger.info(f"[ACTION_IMAGE] Pushed to player {player_id} day {day}")
             except Exception as push_err:
@@ -2211,7 +2204,7 @@ async def _generate_npc_chosen_action_image(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"action_day{day}_{game_id}_npc_{npc_key}",
+            filename_prefix=f"{game_id}/action_day{day}_{npc_key}",
         )
 
         if chosen_action_url:
@@ -2656,7 +2649,7 @@ async def _analyze_day_outcome(
             image_gen = create_image_generator()
             outcome_image_url = await image_gen.generate_scene_image(
                 prompt=outcome_prompt,
-                filename_prefix=f"outcome_day{day}_{game_id}",
+                filename_prefix=f"{game_id}/outcome_day{day}",
             )
             if outcome_image_url:
                 save_game_image(
@@ -2785,6 +2778,7 @@ async def _analyze_day_outcome(
                 injury_notices=injury_notices,
                 personal_outcomes=personal_outcomes,
                 action_images=action_images,
+                language=language,
                 ship_hull_integrity=ship_hull,
                 ship_shields=ship_shields,
                 ship_systems_offline=ship_systems_offline,
@@ -2849,7 +2843,7 @@ async def admin_create_game(request: CreateGameRequest):
 
 @app.post("/admin/set-language")
 async def admin_set_language(request: SetLanguageRequest):
-    """Set the language for a game."""
+    """Set the language for a game and regenerate its title, mission and bridge image."""
     game = get_game(request.game_id)
     if not game:
         raise HTTPException(status_code=404, detail=f"Game {request.game_id} not found")
@@ -2863,11 +2857,100 @@ async def admin_set_language(request: SetLanguageRequest):
     set_game_language(request.game_id, request.language)
     logger.info(f"Language for game {request.game_id} set to '{request.language}'")
 
+    gm = create_game_master_agent(language=request.language)
+
+    # Regenerate game title in the new language
+    new_title = ""
+    new_welcome = ""
+    try:
+        title_data = gm.generate_game_title()
+        new_title = title_data.get("title", "")
+        new_welcome = title_data.get("welcome_text", "")
+        if new_title:
+            save_game_title_and_welcome(request.game_id, new_title, new_welcome)
+            logger.info(f"Regenerated game title in {request.language}: {new_title}")
+    except Exception as e:
+        logger.warning(f"Failed to regenerate game title for {request.game_id}: {e}")
+
+    # Regenerate mission and bridge image
+    new_mission_name = ""
+    try:
+        # Build participant list from live players + active NPCs
+        all_participants = []
+        for pid in get_live_players(request.game_id):
+            profile = get_player_profile(pid)
+            if profile:
+                avatar_desc = _extract_avatar_prompt(profile.get("avatar_description", "") or "")
+                all_participants.append(
+                    {
+                        "type": "player",
+                        "player_id": pid,
+                        "player_name": profile.get("player_name", "") or "",
+                        "role": profile["role"],
+                        "species": profile.get("species", ""),
+                        "personality_traits": profile.get("personality_traits", []),
+                        "role_description": profile.get("role_description", ""),
+                        "avatar_description": avatar_desc,
+                        "species_description": profile.get("species_description", "") or "",
+                    }
+                )
+        for npc in get_all_active_npcs(request.game_id):
+            avatar_desc = _extract_avatar_prompt(npc.get("avatar_description", "") or "")
+            all_participants.append(
+                {
+                    "type": "npc",
+                    "npc_key": npc["npc_key"],
+                    "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
+                    "role": npc["role"],
+                    "species": npc.get("species", ""),
+                    "personality_traits": npc.get("personality_traits", []),
+                    "role_description": npc.get("role_description", ""),
+                    "avatar_description": avatar_desc,
+                }
+            )
+
+        if all_participants:
+            # Delete old mission and bridge image
+            delete_mission(request.game_id)
+            delete_game_images(request.game_id)
+
+            # Generate new mission
+            mission_data = gm.generate_mission(all_participants)
+            mission_result = create_mission(mission_data, request.game_id)
+            if mission_result:
+                new_mission_name = mission_result.get("name", "")
+                logger.info(f"Regenerated mission in {request.language}: {new_mission_name}")
+
+                # Generate new bridge image
+                try:
+                    bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants)
+                    bridge_prompt = bridge_result.get("bridge_prompt", "")
+                    if bridge_prompt:
+                        image_gen = create_image_generator()
+                        bridge_url = await image_gen.generate_scene_image(
+                            prompt=bridge_prompt,
+                            filename_prefix=f"{request.game_id}/bridge",
+                        )
+                        if bridge_url:
+                            save_game_image(
+                                type="bridge",
+                                image_url=bridge_url,
+                                game_id=request.game_id,
+                                prompt=bridge_prompt,
+                            )
+                            logger.info(f"Regenerated bridge image: {bridge_url}")
+                except Exception as e:
+                    logger.warning(f"Failed to regenerate bridge image: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to regenerate mission for {request.game_id}: {e}")
+
     return {
         "status": "success",
         "game_id": request.game_id,
         "language": request.language,
-        "message": f"Game language set to {request.language}",
+        "title": new_title,
+        "mission_name": new_mission_name or None,
+        "message": f"Game language set to {request.language}, title and mission regenerated",
     }
 
 
@@ -3029,7 +3112,7 @@ async def generate_chosen_action_image(
 
     chosen_action_url = await image_generator.generate_scene_image(
         prompt=prompt,
-        filename_prefix=f"action_day{game_day}_{game_id}_{role.replace(' ', '_')}",
+        filename_prefix=f"{game_id}/action_day{game_day}_{role.replace(' ', '_')}",
     )
 
     # Store chosen_action_url in player's briefing for this day (if briefing exists)
@@ -3226,6 +3309,7 @@ async def _background_start_wrapper(request: StartGameRequest, day_num: int):
                 status="success",
                 players=result.get("player_count", 0),
                 npcs=result.get("npc_count", 0),
+                language=request.language,
             )
     except Exception as e:
         logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}")
@@ -3234,6 +3318,7 @@ async def _background_start_wrapper(request: StartGameRequest, day_num: int):
             day=day_num,
             status="error",
             error=str(e),
+            language=request.language,
         )
 
 
@@ -3244,6 +3329,8 @@ async def admin_start_game(request: StartGameRequest):
     Validates prerequisites, starts background generation,
     returns immediately. GM gets push notification when done.
     """
+    # Use game's stored language if available
+    request.language = get_game_language(request.game_id) or request.language
     logger.info("=== ADMIN START GAME (async) ===")
     logger.info(f"game_id={request.game_id}, language={request.language}")
 
@@ -3314,6 +3401,13 @@ async def _original_start_game(request: StartGameRequest):
     npcs_created = []
     gm = create_game_master_agent(language=language)
 
+    # Collect names to avoid: player names + existing NPC names being reused
+    avoid_names: set[str] = set()
+    for pid in player_ids:
+        p = get_player_profile(pid)
+        if p and p.get("player_name"):
+            avoid_names.add(p["player_name"])
+
     for role_data in available_roles:
         role_key = role_data["role_key"]
         role_name = role_data["role_name"]
@@ -3323,13 +3417,15 @@ async def _original_start_game(request: StartGameRequest):
         existing = get_npc_by_role(role_key, game_id)
         if existing:
             npcs_created.append(existing)
+            if existing.get("npc_name"):
+                avoid_names.add(existing["npc_name"])
             continue
 
         # Randomize species and gender for this NPC
         npc_species = _random_npc_species()
         npc_gender = _random_npc_gender(language)
 
-        # Generate creative name via LLM (with fallback)
+        # Generate creative name via LLM (with fallback), avoid duplicates
         npc_name_attempt = gm.generate_npc_name(
             role_key=role_key,
             role_name=role_name,
@@ -3337,6 +3433,7 @@ async def _original_start_game(request: StartGameRequest):
             gender=npc_gender,
             avatar_description=role_data.get("avatar_description", ""),
             personality_traits=role_data.get("personality_traits", []),
+            avoid_names=avoid_names,
         )
         # If LLM returned a name WITH role prefix (e.g. "Инженер Дмитрий Волков"),
         # strip it — the role is already shown separately in UI
@@ -3346,6 +3443,7 @@ async def _original_start_game(request: StartGameRequest):
                 if npc_name_attempt.startswith(prefix):
                     npc_name_attempt = npc_name_attempt[len(prefix) :]
                     break
+            avoid_names.add(npc_name_attempt)
 
         npc_data = {
             "npc_key": npc_key,
@@ -3430,7 +3528,7 @@ async def _original_start_game(request: StartGameRequest):
                 if role_key and prompt:
                     url = await image_gen.generate_avatar_image(
                         prompt=prompt,
-                        filename_prefix=f"npc_{role_key}_{game_id}",
+                        filename_prefix=f"{game_id}/avatar_{role_key}",
                     )
                     if url:
                         # Update NPC profile with avatar URL
@@ -3463,7 +3561,7 @@ async def _original_start_game(request: StartGameRequest):
             image_gen = create_image_generator()
             bridge_url = await image_gen.generate_scene_image(
                 prompt=bridge_prompt,
-                filename_prefix=f"bridge_{game_id}",
+                filename_prefix=f"{game_id}/bridge",
             )
             if bridge_url:
                 save_game_image(
@@ -3519,7 +3617,7 @@ async def _original_start_game(request: StartGameRequest):
         image_gen = create_image_generator()
         scene_url = await image_gen.generate_scene_image(
             prompt=scene_prompt_clean,
-            filename_prefix=f"scene_day{day_num}_{game_id}",
+            filename_prefix=f"{game_id}/scene_day{day_num}",
         )
         if scene_url:
             save_game_image(
@@ -3760,7 +3858,7 @@ async def _original_start_game(request: StartGameRequest):
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"char_day{day_num}_{game_id}_p{pid}",
+            filename_prefix=f"{game_id}/char_day{day_num}_p{pid}",
         )
         if url:
             save_game_image(
@@ -3869,6 +3967,7 @@ async def _original_start_game(request: StartGameRequest):
                     is_first_turn=True,
                     global_narrative=global_narrative,
                     was_restarted=request.was_restarted,
+                    language=language,
                 )
             )
     except Exception as push_err:
@@ -4066,7 +4165,68 @@ def _replace_player_with_npc(
 
     record_kick(player_id, npc["npc_key"], reason)
     logger.info(f"[REPLACE] Player {player_id} replaced by NPC {npc_name} for role {role_key} in game {game_id}")
-    return {"role_name": role_data["role_name"], "npc_key": npc["npc_key"], "npc_name": npc_name}
+    return {
+        "role_name": role_data["role_name"],
+        "npc_key": npc["npc_key"],
+        "npc_name": npc_name,
+        "player_avatar_url": kicked_profile.get("avatar_url") if kicked_profile else None,
+        "player_avatar_desc": kicked_profile.get("avatar_description", "") if kicked_profile else "",
+    }
+
+
+async def _generate_replacement_npc_avatar(
+    npc_key: str,
+    role_key: str,
+    role_name: str,
+    player_avatar_url: str | None,
+    player_avatar_desc: str,
+    game_id: str,
+) -> None:
+    """Generate an NPC avatar using the replaced player's avatar as reference.
+
+    Uses img2img (denoise=0.4) to adapt the player's avatar into an NPC portrait
+    that preserves the character's appearance. Falls back to text-to-image if
+    the player had no avatar or img2img fails.
+    """
+    prompt = _extract_avatar_prompt(player_avatar_desc)
+    if not prompt:
+        prompt = f"Sci-fi character portrait of {role_name}. Cinematic lighting, detailed uniform, 4K quality, space opera aesthetic."
+
+    try:
+        image_gen = create_image_generator()
+
+        if player_avatar_url:
+            # Try img2img with player's avatar as reference (low denoise to preserve appearance)
+            url = await image_gen.generate_action_image_with_reference(
+                prompt=prompt,
+                reference_image_url=player_avatar_url,
+                character_description=role_name,
+                filename_prefix=f"{game_id}/avatar_{role_key}",
+                width=768,
+                height=1024,
+                denoise=0.4,
+            )
+        else:
+            # Fallback: text-to-image
+            url = await image_gen.generate_avatar_image(
+                prompt=prompt,
+                filename_prefix=f"{game_id}/avatar_{role_key}",
+            )
+
+        if url:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE npc_profiles SET avatar_description = ? WHERE npc_key = ?",
+                (f"avatar_url={url};{prompt}", npc_key),
+            )
+            conn.commit()
+            conn.close()
+            logger.info(f"[NPC_AVATAR] Generated replacement avatar for {npc_key}: {url}")
+        else:
+            logger.warning(f"[NPC_AVATAR] Failed to generate avatar for {npc_key}")
+    except Exception as e:
+        logger.warning(f"[NPC_AVATAR] Avatar generation failed for {npc_key}: {e}")
 
 
 @app.post("/admin/kick-player")
@@ -4097,6 +4257,16 @@ async def admin_kick_player(request: KickPlayerRequest):
         game_id=game_id,
         reason=request.reason,
         language=request.language,
+    )
+
+    # Generate NPC avatar using kicked player's avatar as reference
+    await _generate_replacement_npc_avatar(
+        npc_key=replaced["npc_key"],
+        role_key=role_key,
+        role_name=replaced["role_name"],
+        player_avatar_url=replaced.get("player_avatar_url"),
+        player_avatar_desc=replaced.get("player_avatar_desc", ""),
+        game_id=game_id,
     )
 
     # Notify the kicked player (via game_messages)
@@ -4247,6 +4417,7 @@ async def _background_continue_wrapper(
                 status="success",
                 players=result.get("players", 0),
                 npcs=result.get("npcs", 0),
+                language=language,
             )
     except Exception as e:
         logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}")
@@ -4255,6 +4426,7 @@ async def _background_continue_wrapper(
             day=day_num,
             status="error",
             error=str(e),
+            language=language,
         )
 
 
@@ -4269,6 +4441,8 @@ async def admin_continue_game(
     Starts background generation and returns immediately.
     GM will receive a push notification via Telegram when done.
     """
+    # Use game's stored language if available
+    language = get_game_language(game_id) or language
     logger.info("=== ADMIN CONTINUE GAME ===")
     logger.info(f"game_id={game_id}, language={language}")
 
@@ -4419,7 +4593,7 @@ async def _original_continue_game(
         image_gen = create_image_generator()
         scene_url = await image_gen.generate_scene_image(
             prompt=scene_prompt_clean,
-            filename_prefix=f"scene_day{day_num}_{game_id}",
+            filename_prefix=f"{game_id}/scene_day{day_num}",
         )
         if scene_url:
             save_game_image(
@@ -4622,7 +4796,7 @@ async def _original_continue_game(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"char_day{day_num}_{game_id}_p{pid}",
+            filename_prefix=f"{game_id}/char_day{day_num}_p{pid}",
         )
         if url:
             save_game_image(
@@ -4710,6 +4884,7 @@ async def _original_continue_game(
                     is_first_turn=False,
                     force_resend=force_resend,
                     global_narrative=global_narrative,
+                    language=language,
                 )
             )
     except Exception as push_err:
@@ -4788,6 +4963,8 @@ async def admin_restart_game(
     and game images. Resets game state to day 1, marks game as
     not-started, and keeps player profiles intact.
     """
+    # Use game's stored language if available
+    language = get_game_language(game_id) or language
     logger.info("=== ADMIN RESTART GAME ===")
     logger.info(f"game_id={game_id}, language={language}")
 
@@ -4809,6 +4986,9 @@ async def admin_restart_game(
 
     # Reset ship roles (make all available again)
     reset_roles(game_id)
+
+    # Deactivate all NPCs so fresh ones are generated with unique names
+    reset_active_npcs(game_id)
 
     logger.info("=== ADMIN RESTART GAME COMPLETED ===")
 

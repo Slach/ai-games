@@ -212,7 +212,7 @@ def _build_onboarding_questions_schema() -> dict:
                             "properties": {
                                 "image_prompt": {
                                     "type": "string",
-                                    "description": "A detailed English image generation prompt for this question scene — cinematic, sci-fi/space opera, 4K quality",
+                                    "description": "A detailed English image generation prompt that visualizes the EXACT SAME scenario described in the text field — same location, same situation, same characters/objects. Cinematic, sci-fi/space opera, 4K quality.",
                                 },
                                 "text": {
                                     "type": "string",
@@ -227,11 +227,7 @@ def _build_onboarding_questions_schema() -> dict:
                                         "properties": {
                                             "value": {
                                                 "type": "string",
-                                                "description": "Short value identifier",
-                                            },
-                                            "label": {
-                                                "type": "string",
-                                                "description": "Full display text for this option",
+                                                "description": "Full action description displayed to the player — e.g. 'Run to engineering and repair the warp drive'",
                                             },
                                             "role_scores": {
                                                 "type": "object",
@@ -241,7 +237,7 @@ def _build_onboarding_questions_schema() -> dict:
                                                 "additionalProperties": False,
                                             },
                                         },
-                                        "required": ["value", "label", "role_scores"],
+                                        "required": ["value", "role_scores"],
                                         "additionalProperties": False,
                                     },
                                 },
@@ -1084,18 +1080,18 @@ class GameMasterAgent:
         # Validate and fix duplicate options within each question
         for q in questions:
             options = q.get("options", [])
-            seen_labels = set()
+            seen_values = set()
             unique_options = []
             for opt in options:
-                label = opt.get("label", "")
-                # Skip duplicate labels
-                if label in seen_labels:
+                value = opt.get("value", "")
+                # Skip duplicate values
+                if value in seen_values:
                     continue
-                # Skip overly short labels (single letters, "A", "B", etc.)
-                if len(label.strip()) < 5:
-                    logger.warning(f"Skipping short option label: '{label}' in question: {q.get('text', '')}")
+                # Skip overly short values (single letters, "A", "B", etc.)
+                if len(value.strip()) < 5:
+                    logger.warning(f"Skipping short option value: '{value}' in question: {q.get('text', '')}")
                     continue
-                seen_labels.add(label)
+                seen_values.add(value)
                 unique_options.append(opt)
 
             # If we filtered out too many, keep original options
@@ -1151,10 +1147,10 @@ class GameMasterAgent:
                     logger.warning(f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data")
                     continue
 
-                # Find the selected option by matching label
+                # Find the selected option by matching value
                 selected_option = None
                 for opt in q_data.get("options", []):
-                    if opt.get("label") == selected_label or opt.get("value") == selected_label:
+                    if opt.get("value") == selected_label:
                         selected_option = opt
                         break
 

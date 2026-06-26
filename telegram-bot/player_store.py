@@ -16,11 +16,11 @@ and various handlers need across restarts.
 
 import json
 import logging
-import os
 import sqlite3
-from contextlib import suppress
 from datetime import datetime
 from typing import Any
+
+from database import DB_PATH, init_db
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,6 @@ class DateTimeEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-DB_PATH = os.getenv("PLAYER_STATE_DB", "/app/player_states.db")
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -46,8 +44,14 @@ DEFAULT_STATE: dict[str, Any] = {
     "current_question": 0,
     "current_question_id": None,
     "current_options": None,
+    "current_question_text": None,
+    "current_question_image_url": None,
     "language": "en",
 }
+
+
+# Run database initialization once at module load
+init_db()
 
 
 def _conn(db_path: str = DB_PATH) -> sqlite3.Connection:
@@ -55,49 +59,7 @@ def _conn(db_path: str = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    _ensure_tables(conn)
     return conn
-
-
-def _ensure_tables(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS player_states (
-            player_id           INTEGER  PRIMARY KEY,
-            game_id             TEXT,
-            onboarding_session_id TEXT,
-            current_question    INTEGER  DEFAULT 0,
-            current_question_id INTEGER,
-            current_options     TEXT,
-            last_poll           TEXT,
-            pending_updates     TEXT     DEFAULT '[]',
-            last_briefing_day_sent INTEGER DEFAULT NULL,
-            created_at          TEXT     DEFAULT (datetime('now')),
-            updated_at          TEXT     DEFAULT (datetime('now'))
-        )
-        """
-    )
-    # Add columns if they don't exist (for databases created before these migrations)
-    with suppress(sqlite3.OperationalError):
-        conn.execute("ALTER TABLE player_states ADD COLUMN last_briefing_day_sent INTEGER DEFAULT NULL")
-    with suppress(sqlite3.OperationalError):
-        conn.execute("ALTER TABLE player_states ADD COLUMN language TEXT DEFAULT 'en'")
-
-    # Referral tracking: who invited whom into which game.
-    # One row per (referred_id, referrer_id, game_id) — deduplicated via UNIQUE.
-    # "references" is double-quoted because it is a SQL keyword (REFERENCES).
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS "references" (
-            referred_id  INTEGER  NOT NULL,
-            referrer_id  INTEGER  NOT NULL,
-            game_id      TEXT     NOT NULL,
-            created_at   TEXT     DEFAULT (datetime('now')),
-            PRIMARY KEY (referred_id, referrer_id, game_id)
-        )
-        """
-    )
-    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +85,9 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                 """
                 INSERT INTO player_states
                     (player_id, game_id, onboarding_session_id, current_question,
-                     current_question_id, current_options, last_poll, pending_updates, language)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     current_question_id, current_options, current_question_text,
+                     current_question_image_url, last_poll, pending_updates, language)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     player_id,
@@ -133,6 +96,8 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                     DEFAULT_STATE["current_question"],
                     DEFAULT_STATE["current_question_id"],
                     json.dumps(DEFAULT_STATE["current_options"]) if DEFAULT_STATE["current_options"] else None,
+                    DEFAULT_STATE["current_question_text"],
+                    DEFAULT_STATE["current_question_image_url"],
                     now,
                     "[]",
                     DEFAULT_STATE["language"],
@@ -146,6 +111,8 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                 "current_question": 0,
                 "current_question_id": None,
                 "current_options": None,
+                "current_question_text": None,
+                "current_question_image_url": None,
                 "last_poll": datetime.now(),
                 "pending_updates": [],
                 "language": DEFAULT_STATE["language"],
@@ -169,6 +136,8 @@ def get_player_state(player_id: int) -> dict[str, Any]:
             "current_question": row["current_question"] or 0,
             "current_question_id": row["current_question_id"],
             "current_options": current_options,
+            "current_question_text": row["current_question_text"],
+            "current_question_image_url": row["current_question_image_url"],
             "last_poll": last_poll,
             "pending_updates": pending_list,
             "last_briefing_day_sent": row["last_briefing_day_sent"],
@@ -198,6 +167,8 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
                 "current_question",
                 "current_question_id",
                 "current_options",
+                "current_question_text",
+                "current_question_image_url",
                 "last_poll",
                 "pending_updates",
                 "last_briefing_day_sent",
