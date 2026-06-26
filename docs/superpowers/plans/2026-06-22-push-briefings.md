@@ -616,7 +616,7 @@ async def cmd_gm_start_game(message: types.Message):
     """GM command: Force start a game by ID."""
     assert message.from_user is not None
     player_id = message.from_user.id
-    gm_msgs = lang.get_gm_commands(BOT_LANGUAGE)
+    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
         logger.warning(f"Unauthorized /gm_start_game attempt by user {player_id}")
@@ -641,7 +641,7 @@ async def cmd_gm_start_game(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/start-game",
-            data={"game_id": game_id, "language": BOT_LANGUAGE},
+            data={"game_id": game_id, "language": get_player_language(player_id)},
             timeout_total=600,
         )
         if result and result.get("status") == "success":
@@ -683,7 +683,7 @@ from push_server import start_push_server
 # Start push HTTP server
 push_runner = await start_push_server(
     bot=bot,
-    language=BOT_LANGUAGE,
+    language=DEFAULT_LANGUAGE,
     last_sent_briefing_day=_last_sent_briefing_day,
     mark_sent_fn=_mark_briefing_sent,
     create_keyboard_fn=create_action_keyboard,

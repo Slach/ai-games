@@ -100,6 +100,12 @@ comments for removed code, etc. If you are certain that something is unused, you
   databases in sync with fresh ones. See comment at the `MIGRATIONS`
   definition for the rationale.
 
+- **Language model.** Server-side logging is always in English. Telegram UI
+  messages use the player's stored language preference (`player_store.py`).
+  Game content (narrative, NPC dialogue) uses the language set when the game
+  was created. There is no "bot language" or "game language" env var —
+  language is always determined per-player or per-game.
+
 ## Useful Commands
 
 ### Apply code changes without wiping data (mutations, business logic, etc.)

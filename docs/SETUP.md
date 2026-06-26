@@ -87,13 +87,11 @@ This service triggers generation daily at 08:00 (container time). It calls the g
 # Test single generation
 docker compose run --rm game-master GAME_MASTER_MODE=single python game_master.py
 
-# Run with custom language
-docker compose run --rm game-master GAME_MASTER_MODE=single GAME_LANGUAGE=ru python game_master.py
 ```
 
 **Admin Endpoints (called by scheduler):**
 
-- `POST /admin/generate-day` - Generate new daily episode (with optional language parameter)
+- `POST /admin/generate-day` - Generate new daily episode
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic for a player
 
 ## 6. API Testing
@@ -230,5 +228,3 @@ docker-compose restart telegram-bot
 | `GAME_MASTER_API_URL` | Game Master API endpoint | `http://game-server-api:8000` |
 | `GAME_SCHEDULE_TIME` | Daily generation time (24h format) | `08:00` |
 | `GAME_MASTER_MODE` | Scheduler mode: `scheduled` or `single` | `scheduled` |
-| `GAME_LANGUAGE` | Game language for content generation | `ru` |
-| `BOT_LANGUAGE` | Telegram bot interface language | `ru` |

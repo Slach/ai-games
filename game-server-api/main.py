@@ -1648,6 +1648,8 @@ async def auto_select_action(
     Uses LLM with global circumstances + personal briefing + player profile
     to make an in-character choice. Notifies the player about the auto-selection.
     """
+    # Use game's stored language — the caller may not know it
+    language = get_game_language(game_id) or language
     logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, day {day}")
 
     # 1. Get player's briefing with choices
@@ -2805,6 +2807,9 @@ async def generate_daily_episode(
     """Generate a new daily episode (called by game master scheduler)"""
     state = get_game_state(game_id)
     day_num = state["day"]
+
+    # Use game's stored language — the caller may not know it
+    language = get_game_language(game_id) or language
 
     logger.info("=== GENERATE DAY STARTED ===")
     logger.info(f"Day number: {day_num}")

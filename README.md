@@ -250,7 +250,6 @@ docker compose exec telegram-bot ping game-server-api
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
 | GAME_SCHEDULE_TIME | 08:00 | Daily generation time |
 | GAME_MASTER_MODE | scheduled | single/simulation/scheduled |
-| GAME_LANGUAGE | ru | en or ru |
 
 ## Future Enhancements
 

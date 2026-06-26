@@ -387,7 +387,6 @@ All inter-service dependencies use `condition: service_healthy`.
 | `GAME_MASTER_API_URL` | `http://game-server-api:8000` | telegram-bot, game-master | API URL |
 | `GAME_SCHEDULE_TIME` | `08:00` | game-master | Daily generation time (UTC) |
 | `GAME_MASTER_MODE` | `scheduled` | game-master | Run mode |
-| `GAME_LANGUAGE` | `ru` | game-master | Language (en/ru) |
 | `ONBOARDING_QUESTIONS_COUNT` | `5` | game-server-api | Questions per onboarding |
 | `ONBOARDING_OPTIONS_COUNT` | `5` | game-server-api | Options per question |
 | `AI_FSM_DB` | `./bot_storage.db` | telegram-bot | Bot state database path |

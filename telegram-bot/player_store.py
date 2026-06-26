@@ -46,6 +46,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "current_question": 0,
     "current_question_id": None,
     "current_options": None,
+    "language": "en",
 }
 
 
@@ -76,11 +77,11 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    # Add column if it doesn't exist (for databases created before this migration)
+    # Add columns if they don't exist (for databases created before these migrations)
     with suppress(sqlite3.OperationalError):
-        conn.execute(
-            "ALTER TABLE player_states ADD COLUMN last_briefing_day_sent INTEGER DEFAULT NULL"
-        )
+        conn.execute("ALTER TABLE player_states ADD COLUMN last_briefing_day_sent INTEGER DEFAULT NULL")
+    with suppress(sqlite3.OperationalError):
+        conn.execute("ALTER TABLE player_states ADD COLUMN language TEXT DEFAULT 'en'")
 
     # Referral tracking: who invited whom into which game.
     # One row per (referred_id, referrer_id, game_id) — deduplicated via UNIQUE.
@@ -113,9 +114,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
     """
     conn = _conn()
     try:
-        row = conn.execute(
-            "SELECT * FROM player_states WHERE player_id = ?", (player_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM player_states WHERE player_id = ?", (player_id,)).fetchone()
 
         if row is None:
             # Insert a new default row
@@ -124,8 +123,8 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                 """
                 INSERT INTO player_states
                     (player_id, game_id, onboarding_session_id, current_question,
-                     current_question_id, current_options, last_poll, pending_updates)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     current_question_id, current_options, last_poll, pending_updates, language)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     player_id,
@@ -133,11 +132,10 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                     DEFAULT_STATE["onboarding_session_id"],
                     DEFAULT_STATE["current_question"],
                     DEFAULT_STATE["current_question_id"],
-                    json.dumps(DEFAULT_STATE["current_options"])
-                    if DEFAULT_STATE["current_options"]
-                    else None,
+                    json.dumps(DEFAULT_STATE["current_options"]) if DEFAULT_STATE["current_options"] else None,
                     now,
                     "[]",
+                    DEFAULT_STATE["language"],
                 ),
             )
             conn.commit()
@@ -150,6 +148,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                 "current_options": None,
                 "last_poll": datetime.now(),
                 "pending_updates": [],
+                "language": DEFAULT_STATE["language"],
             }
 
         # Convert DB row to the dict format the rest of bot.py expects
@@ -158,14 +157,10 @@ def get_player_state(player_id: int) -> dict[str, Any]:
 
         # Convert ISO timestamps back to datetime
         last_poll_str = row["last_poll"]
-        last_poll = (
-            datetime.fromisoformat(last_poll_str) if last_poll_str else datetime.now()
-        )
+        last_poll = datetime.fromisoformat(last_poll_str) if last_poll_str else datetime.now()
 
         current_options_raw = row["current_options"]
-        current_options = (
-            json.loads(current_options_raw) if current_options_raw else None
-        )
+        current_options = json.loads(current_options_raw) if current_options_raw else None
 
         return {
             "player_id": row["player_id"],
@@ -177,6 +172,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
             "last_poll": last_poll,
             "pending_updates": pending_list,
             "last_briefing_day_sent": row["last_briefing_day_sent"],
+            "language": row["language"] or "en",
         }
     finally:
         conn.close()
@@ -205,6 +201,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
                 "last_poll",
                 "pending_updates",
                 "last_briefing_day_sent",
+                "language",
             ):
                 logger.warning("Unknown player_state key '%s' — skipping", key)
                 continue

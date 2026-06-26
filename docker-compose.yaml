@@ -145,7 +145,6 @@ services:
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
       - GAME_SCHEDULE_TIME=${GAME_SCHEDULE_TIME:-08:00}
       - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
-      - GAME_LANGUAGE=${GAME_LANGUAGE:-ru}
       - GAME_ID=${GAME_ID:-default_game}
     networks:
       - spark-network
