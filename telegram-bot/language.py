@@ -39,6 +39,7 @@ ONBOARDING = {
         "game_waiting": "⏳ Игра скоро начнётся, ждём остальных игроков.",
         "new_player_joined": "👋 Новый член экипажа присоединился к нам!\n\n**{player_name}** — **{role}**\n\n{role_description}",
         "select_game": "🎮 **Выберите игру, к которой хотите присоединиться, или начните новую:**",
+        "selected_game": "Вы выбрали 🎮 {game_name}",
         "new_game": "🆕 Начать новую игру",
         "invite_title": "🎯 **Пригласите друзей!**",
         "invite_message": "Поделитесь этой ссылкой с друзьями, чтобы они присоединились к вашей игре:\n{invite_url}",
@@ -61,6 +62,7 @@ ONBOARDING = {
         "game_waiting": "⏳ The game will start soon, we're waiting for more players.",
         "new_player_joined": "👋 A new crew member has joined us!\n\n**{player_name}** — **{role}**\n\n{role_description}",
         "select_game": "🎮 **Select a game to join or start a new one:**",
+        "selected_game": "You selected 🎮 {game_name}",
         "new_game": "🆕 Start New Game",
         "invite_title": "🎯 **Invite friends!**",
         "invite_message": "Share this link with friends so they can join your game:\n{invite_url}",
@@ -80,13 +82,13 @@ ONBOARDING = {
 HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
-        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/team - Ваш экипаж\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/help - Эта справка",
+        "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/today - Текущий ход игры\n/team - Ваш экипаж\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/reset - Сбросить участие и начать заново\n/help - Эта справка",
         "gm_commands": "Команды Game Master:\n/gm_start_game <id> - Запустить игру\n/gm_continue_game <id> - Сгенерировать следующий ход\n/gm_regenerate_turn <id> - Перегенерировать текущий ход\n/gm_restart_game <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list_games - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы\n/gm_set_language <id> <ru|en> - Установить язык игры",
         "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
-        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/team - Your crew\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/help - This help",
+        "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/today - Current game turn\n/team - Your crew\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/reset - Reset participation and start over\n/help - This help",
         "gm_commands": "Game Master Commands:\n/gm_start_game <id> - Start a game\n/gm_continue_game <id> - Generate the next turn\n/gm_regenerate_turn <id> - Regenerate the current turn\n/gm_restart_game <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list_games - List all games\n/gm_status <id> - Game status: players, NPCs, choices\n/gm_set_language <id> <ru|en> - Set game language",
         "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
@@ -287,6 +289,7 @@ MENU = {
         "team": "/team",
         "help": "/help",
         "invite": "/invite",
+        "reset": "/reset",
     },
     LANGUAGE_EN: {
         "start": "/start",
@@ -295,6 +298,46 @@ MENU = {
         "team": "/team",
         "help": "/help",
         "invite": "/invite",
+        "reset": "/reset",
+    },
+}
+
+# /reset command — leave current game (replaced by NPC) and start over
+RESET = {
+    LANGUAGE_RU: {
+        "confirm": (
+            "⚠️ **Сброс участия в игре**\n\n"
+            "Это действие необратимо. Вы покинете текущую игру — ваш персонаж будет "
+            "заменён на NPC, а все ответы онбординга будут удалены. Затем вы сможете "
+            "начать заново с выбора языка и вступления в новую игру.\n\n"
+            "Продолжить?"
+        ),
+        "confirm_yes": "✅ Начать заново",
+        "confirm_no": "❌ Отмена",
+        "cancelled": "Сброс отменён, вы продолжаете в текущей игре.",
+        "nothing_to_reset": "У вас нет активного профиля или онбординга — нечего сбрасывать. Используйте /start, чтобы начать.",
+        "resetting": "⏳ Сбросываю ваше участие в игре...",
+        "success": ("✅ **Сброс выполнен!**\n\nВаш персонаж заменён на NPC{npc_part}, профиль и онбординг удалены.\n\nДавайте начнём сначала 🌐"),
+        "success_npc_part": ": {npc_name}",
+        "error": "Не удалось выполнить сброс: {error}",
+    },
+    LANGUAGE_EN: {
+        "confirm": (
+            "⚠️ **Reset game participation**\n\n"
+            "This is irreversible. You will leave your current game — your character "
+            "will be replaced by an NPC, and all your onboarding answers will be "
+            "deleted. You can then start over from language selection and join a new "
+            "game.\n\n"
+            "Continue?"
+        ),
+        "confirm_yes": "✅ Start over",
+        "confirm_no": "❌ Cancel",
+        "cancelled": "Reset cancelled — you remain in your current game.",
+        "nothing_to_reset": "You have no active profile or onboarding to reset. Use /start to begin.",
+        "resetting": "⏳ Resetting your game participation...",
+        "success": ("✅ **Reset complete!**\n\nYour character was replaced by an NPC{npc_part}, your profile and onboarding have been deleted.\n\nLet's start over 🌐"),
+        "success_npc_part": ": {npc_name}",
+        "error": "Reset failed: {error}",
     },
 }
 
@@ -457,6 +500,11 @@ def get_errors(language: str = LANGUAGE_RU):
 def get_menu(language: str = LANGUAGE_RU):
     """Get menu labels for a specific language"""
     return MENU.get(language, MENU[LANGUAGE_RU])
+
+
+def get_reset(language: str = LANGUAGE_RU):
+    """Get /reset command strings for a specific language"""
+    return RESET.get(language, RESET[LANGUAGE_RU])
 
 
 def get_images(language: str = LANGUAGE_RU):

@@ -12,7 +12,14 @@ import re
 from typing import Any, cast
 
 from database import SHIP_ROLE_KEYS
-from language import LANGUAGE_EN, LANGUAGE_RU, get_game_strings
+from language import (
+    LANGUAGE_EN,
+    LANGUAGE_RU,
+    get_dimension_tags,
+    get_game_strings,
+    get_gender_questions_data,
+    get_species_questions_data,
+)
 from openai import OpenAI
 from prompts import (
     COMBINED_OUTCOME_SCHEMA,
@@ -20,6 +27,7 @@ from prompts import (
     build_combined_outcome_prompts,
     build_content_prompt_note,
     build_daily_story_prompts,
+    build_dynamic_sg_question_prompts,
     build_game_title_prompts,
     build_global_circumstances_prompts,
     build_mission_prompts,
@@ -251,6 +259,41 @@ def _build_onboarding_questions_schema() -> dict:
 
 
 ONBOARDING_QUESTIONS_SCHEMA = _build_onboarding_questions_schema()
+
+
+def _build_dynamic_sg_question_schema(dimension: str) -> dict:
+    """Build a strict JSON schema for ONE dynamically generated species/gender question.
+
+    Forces the model to return a label for EVERY canonical tag of the dimension,
+    so the caller can attach tags programmatically without any cleanup.
+    """
+    tags = get_dimension_tags(dimension)
+    label_properties = {tag: {"type": "string"} for tag in tags}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": f"dynamic_{dimension}_question",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "labels": {
+                        "type": "object",
+                        "properties": label_properties,
+                        "required": tags,
+                        "additionalProperties": False,
+                    },
+                },
+                "required": ["text", "labels"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+DYNAMIC_SPECIES_QUESTION_SCHEMA = _build_dynamic_sg_question_schema("species")
+DYNAMIC_GENDER_QUESTION_SCHEMA = _build_dynamic_sg_question_schema("gender")
 
 NPC_DIALOGUE_SCHEMA = {
     "type": "json_schema",
@@ -1150,31 +1193,9 @@ class GameMasterAgent:
 
     def generate_game_title(self) -> dict[str, str]:
         """Generate a creative game title and welcome message."""
-        logger.info("[TITLE] Generating game title")
+        logger.info(f"[TITLE] Generating game title, language: {self.language}")
 
-        system, _ = build_game_title_prompts(self.language)
-        _system = system
-        if False:
-            user = (
-                "Придумай название для игры про экипаж звездного корабля и приветственное сообщение. "
-                "Название должно быть в формате: название корабля + подзаголовок миссии. "
-                "Пример стиля: «Звёздный Крейсер Аврора: За горизонтом известного». "
-                "Приветствие должно быть атмосферным — будто игрок заходит на борт корабля. "
-                "ВАЖНО: не используй символы звёздочка (*) или подчёркивание (_) в тексте приветствия — "
-                "они сломают форматирование при отправке игроку. Используй только обычный текст. "
-                "Все тексты на русском языке."
-            )
-        else:
-            system = "You are a creative sci-fi writer. You create titles and descriptions for space adventures."
-            user = (
-                "Create a title for a starship crew game and a welcome message. "
-                "Title format: ship name + mission tagline. "
-                "Example style: 'Star Cruiser Aurora: Beyond the Known Horizon'. "
-                "The welcome should be atmospheric — as if the player is stepping aboard the ship. "
-                "IMPORTANT: do not use asterisk (*) or underscore (_) characters in the welcome text — "
-                "they will break formatting when sent to the player. Use plain text only. "
-                "All text in English."
-            )
+        system, user = build_game_title_prompts(self.language)
 
         result = self._call_llm(
             system_prompt=system,
@@ -1553,6 +1574,64 @@ spatial presence\n"
         return prompt
 
     # ============== Species and Gender ==============
+
+    def generate_dynamic_species_gender_question(
+        self,
+        dimension: str,
+        sg_step: int,
+        accumulated_tags: dict[str, int],
+    ) -> dict[str, Any]:
+        """Generate ONE species or gender onboarding question via LLM.
+
+        Returns {"text": ..., "labels": {tag: label}} where labels covers every
+        canonical tag of the dimension. Tags themselves are NOT chosen by the LLM
+        — the caller assigns them in canonical order, which keeps the tag-counting
+        species/gender determination logic reliable.
+
+        Falls back to a static question from SPECIES/GENDER_QUESTIONS_DATA on failure.
+        """
+        logger.info(f"[SG_Q] Generating dynamic {dimension} question step {sg_step}, accumulated={accumulated_tags}")
+        system, user = build_dynamic_sg_question_prompts(self.language, dimension, sg_step, accumulated_tags)
+        schema = DYNAMIC_SPECIES_QUESTION_SCHEMA if dimension == "species" else DYNAMIC_GENDER_QUESTION_SCHEMA
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=schema,
+                temperature=0.9,
+                max_tokens=1024,
+            )
+            text = (result.get("text") or "").strip()
+            if text:
+                tags = get_dimension_tags(dimension)
+                raw_labels = result.get("labels") or {}
+                labels = {tag: str(raw_labels.get(tag, tag)).strip() for tag in tags}
+                logger.info(f"[SG_Q] LLM question ok: {text[:60]}...")
+                return {"text": text, "labels": labels}
+            logger.warning("[SG_Q] LLM returned empty text, using fallback")
+        except Exception as e:
+            logger.warning(f"[SG_Q] LLM call failed: {e}, using fallback")
+        return self._fallback_dynamic_sg_question(dimension, sg_step)
+
+    def _fallback_dynamic_sg_question(self, dimension: str, sg_step: int) -> dict[str, Any]:
+        """Pick a static species/gender question as fallback and derive per-tag labels."""
+        if dimension == "species":
+            pool = get_species_questions_data(self.language)
+            idx = sg_step // 2  # species steps 1,3,5 -> 0,1,2
+        else:
+            pool = get_gender_questions_data(self.language)
+            idx = (sg_step // 2) - 1  # gender steps 2,4 -> 0,1
+        idx = max(0, min(idx, len(pool) - 1))
+        text = pool[idx]["text"]
+        tag_field = "species_tags" if dimension == "species" else "gender_tags"
+        labels: dict[str, str] = {}
+        for q in pool:
+            for opt in q["options"]:
+                for tag in opt.get(tag_field, []):
+                    labels.setdefault(tag, opt["label"])
+        tags = get_dimension_tags(dimension)
+        logger.info(f"[SG_Q] fallback {dimension} step {sg_step}: {text[:60]}...")
+        return {"text": text, "labels": {tag: labels.get(tag, tag) for tag in tags}}
 
     @staticmethod
     def _count_tags_from_answers(

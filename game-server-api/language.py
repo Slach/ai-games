@@ -214,6 +214,35 @@ GENDER_TYPE_NAMES = {
     },
 }
 
+# Canonical species/gender tags. These keys are the only valid values for the
+# species_tags / gender_tags fields used to determine a character's species and
+# gender by counting tag occurrences across onboarding answers.
+SPECIES_TAGS = ["human", "humanoid", "non_humanoid", "energy", "cybernetic", "symbiotic"]
+GENDER_TAGS = ["male", "female", "neutral", "fluid", "multiple", "resonance", "synthetic", "symbiotic"]
+
+# Dimension key -> (tag list, tag field name, localized display-name map).
+SPECIES_GENDER_DIMENSIONS = {
+    "species": (SPECIES_TAGS, "species_tags", SPECIES_TYPE_NAMES),
+    "gender": (GENDER_TAGS, "gender_tags", GENDER_TYPE_NAMES),
+}
+
+
+def get_dimension_tags(dimension: str) -> list[str]:
+    """Return the canonical tag list for a dimension ('species' or 'gender')."""
+    return SPECIES_GENDER_DIMENSIONS[dimension][0]
+
+
+def get_dimension_tag_field(dimension: str) -> str:
+    """Return the option field name ('species_tags' or 'gender_tags') for a dimension."""
+    return SPECIES_GENDER_DIMENSIONS[dimension][1]
+
+
+def get_tag_display_name(tag: str, dimension: str, language: str = LANGUAGE_RU) -> str:
+    """Return the localized display name for a tag within a dimension."""
+    names_map = SPECIES_GENDER_DIMENSIONS[dimension][2]
+    return names_map.get(language, names_map[LANGUAGE_RU]).get(tag, tag)
+
+
 # Species onboarding questions (10 questions)
 SPECIES_QUESTIONS_DATA = {
     LANGUAGE_RU: [

@@ -231,12 +231,15 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
         conn.close()
 
 
-def get_all_player_ids() -> list[int]:
-    """Return all known player IDs (for the polling loop)."""
+def get_all_briefing_days() -> dict[int, int]:
+    """Return a dict of {player_id: last_briefing_day_sent} for all players
+    that have a non-NULL value. Single query — avoids N+1 on startup."""
     conn = _conn()
     try:
-        rows = conn.execute("SELECT player_id FROM player_states").fetchall()
-        return [r["player_id"] for r in rows]
+        result: dict[int, int] = {}
+        for row in conn.execute("SELECT player_id, last_briefing_day_sent FROM player_states WHERE last_briefing_day_sent IS NOT NULL"):
+            result[row["player_id"]] = int(row["last_briefing_day_sent"])
+        return result
     finally:
         conn.close()
 

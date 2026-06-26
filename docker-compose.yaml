@@ -83,7 +83,8 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 6s
+      start_interval: 3s
     networks:
       - spark-network
     restart: unless-stopped
@@ -127,7 +128,8 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 6s
+      start_interval: 3s
     volumes:
       - ./telegram-bot/:/app/
 

@@ -3,14 +3,14 @@ LLM prompt constants for Game Master API
 All prompt strings organized by language (ru/en)
 """
 
-import random
 from typing import Any
 
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
-    get_gender_questions_data,
-    get_species_questions_data,
+    get_dimension_tag_field,
+    get_dimension_tags,
+    get_tag_display_name,
 )
 from pydantic import BaseModel
 
@@ -25,117 +25,88 @@ class OnboardingQuestion(BaseModel):
     image_prompt: str | None = None
 
 
-def build_species_gender_questions(language: str = LANGUAGE_RU) -> list:
-    """Build static species and gender questions with tags from language data.
+def build_dynamic_sg_question_prompts(
+    language: str,
+    dimension: str,
+    sg_step: int,
+    accumulated_tags: dict[str, int],
+) -> tuple[str, str]:
+    """Build system + user prompts for generating ONE dynamic species/gender question.
 
-    Legacy: all species first, then all gender. No shuffling.
-    Kept for backward compatibility (STATIC_ONBOARDING_QUESTIONS legacy path).
+    The LLM only authors the question text and one vivid answer label per
+    canonical tag. Tags themselves are assigned by the caller, which keeps the
+    species/gender determination logic (tag counting) reliable.
+
+    Args:
+        language: LANGUAGE_RU / LANGUAGE_EN
+        dimension: "species" or "gender"
+        sg_step: 1-based index within the alternating S/G/S/G/S sequence
+        accumulated_tags: {tag: count} of this dimension picked in prior answers
     """
-    questions = []
-    next_id = 1
-    species_data = get_species_questions_data(language)
-    for i, q_data in enumerate(species_data, start=next_id):
-        options = []
-        for opt in q_data["options"]:
-            option = {
-                "value": opt["value"],
-                "label": opt["label"],
-                "role_scores": {},
-                "species_tags": opt.get("species_tags", []),
-            }
-            options.append(option)
-        questions.append(OnboardingQuestion(id=i, text=q_data["text"], options=options))
-    next_id = len(questions) + 1
-    gender_data = get_gender_questions_data(language)
-    for i, q_data in enumerate(gender_data, start=next_id):
-        options = []
-        for opt in q_data["options"]:
-            option = {
-                "value": opt["value"],
-                "label": opt["label"],
-                "role_scores": {},
-                "gender_tags": opt.get("gender_tags", []),
-            }
-            options.append(option)
-        questions.append(OnboardingQuestion(id=i, text=q_data["text"], options=options))
-    return questions
+    tags = get_dimension_tags(dimension)
+    tag_field = get_dimension_tag_field(dimension)
 
+    tag_lines = "\n".join(f"  - {tag}: {get_tag_display_name(tag, dimension, language)}" for tag in tags)
+    tag_keys_str = ", ".join(tags)
 
-def build_interleaved_species_gender_questions(
-    language: str = LANGUAGE_RU,
-    shuffle_seed: int = 0,
-) -> list:
-    """Build species and gender questions INTERLEAVED (alternating),
-    with OPTIONS shuffled deterministically by shuffle_seed.
+    if accumulated_tags:
+        acc_parts = [f"{tag} ({get_tag_display_name(tag, dimension, language)}): {count}" for tag, count in sorted(accumulated_tags.items(), key=lambda x: x[1], reverse=True)]
+        accumulated_desc = ", ".join(acc_parts)
+    else:
+        accumulated_desc = ""
 
-    Flow:
-    1. Randomly shuffle the species question pool
-    2. Randomly shuffle the gender question pool
-    3. Take one from each pool alternately: species → gender → species → ...
-    4. Within each question, shuffle its options with the same seed
+    if language == LANGUAGE_RU:
+        if dimension == "species":
+            subject = "расы и биологической природы персонажа"
+            ask_focus = "Спроси о чём-то, что выявляет природу тела, происхождение, физиологию или способ существования вида — избегай банальных вопросов про 'дом' или 'смерть'. Будь образным и неожиданным: ритуалы, чувства, восприятие, связь со средой."
+        else:
+            subject = "пола и репродуктивной/идентификационной формы персонажа"
+            ask_focus = "Спроси о чём-то, что выявляет половую роль, обращение, идентичность или способ продолжения рода — избегай банальных вопросов. Будь образным и тактичным, без пошлости."
 
-    This ensures:
-    - Species and gender questions never cluster together
-    - Option order is different every session (seed varies per player)
-    - No player can press [1] repeatedly to get "human + male"
-    """
-    rng = random.Random(shuffle_seed)
+        system = "Ты — креативный нарративный дизайнер sci-fi вселенной в духе Star Trek. Ты сочиняешь живые, нешаблонные вопросы для онбординга, которые помогают игроку определить сущность своего персонажа."
+        acc_clause = f"Предыдущие ответы игрока по этому измерению: {accumulated_desc}. Учти это: новый вопрос должен углублять и уточнять, а не повторяться.\n" if accumulated_desc else ""
+        user = (
+            f"Это вопрос №{sg_step} в серии, определяющей {subject}.\n"
+            f"{acc_clause}"
+            f"Доступные теги этого измерения (поле «{tag_field}») и их смысл:\n{tag_lines}\n\n"
+            f"{ask_focus}\n\n"
+            "Сгенерируй:\n"
+            "1. text — один вопрос-сценарий (1-2 предложения), творческий и atmospheric, на русском.\n"
+            "2. labels — объект, где для КАЖДОГО из перечисленных тегов дан короткий "
+            "яркий вариант ответа (2-7 слов), который выбрал бы игрок, чей персонаж "
+            "соответствует этому тегу. Варианты должны быть чётко различными по смыслу.\n"
+            f"Ключи в labels обязаны быть ровно этими и только ими: {tag_keys_str}.\n"
+            "Не добавляй других полей. Весь текст — строго на русском языке."
+        )
+    else:
+        if dimension == "species":
+            subject = "the character's species and biological nature"
+            ask_focus = (
+                "Ask something that reveals the nature of the body, origin, physiology, "
+                "or mode of existence of the species — avoid clichéd questions about 'home' or 'death'. "
+                "Be imaginative and surprising: rituals, feelings, perception, bond with the environment."
+            )
+        else:
+            subject = "the character's gender and reproductive/identity form"
+            ask_focus = "Ask something that reveals gender role, address, identity, or way of reproduction — avoid clichéd questions. Be imaginative and tasteful, never crude."
 
-    species_data = get_species_questions_data(language)
-    gender_data = get_gender_questions_data(language)
+        system = "You are a creative narrative designer for a Star Trek-style sci-fi universe. You craft vivid, non-generic onboarding questions that help a player define who their character is."
+        acc_clause = f"The player's previous answers for this dimension: {accumulated_desc}. Take it into account: the new question should deepen and refine, not repeat.\n" if accumulated_desc else ""
+        user = (
+            f"This is question #{sg_step} in a series determining {subject}.\n"
+            f"{acc_clause}"
+            f"Available tags for this dimension (the «{tag_field}» field) and their meaning:\n{tag_lines}\n\n"
+            f"{ask_focus}\n\n"
+            "Generate:\n"
+            "1. text — one scenario question (1-2 sentences), creative and atmospheric, in English.\n"
+            "2. labels — an object giving, for EACH listed tag, a short vivid answer option "
+            "(2-7 words) that a player whose character matches that tag would pick. "
+            "Options must be clearly distinct in meaning.\n"
+            f"The keys in labels must be exactly these and only these: {tag_keys_str}.\n"
+            "Do not add any other fields. All text must be strictly in English."
+        )
 
-    # Shuffle question indices for each pool
-    species_indices = list(range(len(species_data)))
-    gender_indices = list(range(len(gender_data)))
-    rng.shuffle(species_indices)
-    rng.shuffle(gender_indices)
-
-    questions = []
-    next_id = 1
-    i, j = 0, 0
-
-    while i < len(species_indices) or j < len(gender_indices):
-        # Take a species question
-        if i < len(species_indices):
-            q_data = species_data[species_indices[i]]
-            options = []
-            for opt in q_data["options"]:
-                option = {
-                    "value": opt["value"],
-                    "label": opt["label"],
-                    "role_scores": {},
-                    "species_tags": opt.get("species_tags", []),
-                }
-                options.append(option)
-            # Shuffle options within this question
-            rng.shuffle(options)
-            questions.append(OnboardingQuestion(id=next_id, text=q_data["text"], options=options))
-            next_id += 1
-            i += 1
-
-        # Take a gender question
-        if j < len(gender_indices):
-            q_data = gender_data[gender_indices[j]]
-            options = []
-            for opt in q_data["options"]:
-                option = {
-                    "value": opt["value"],
-                    "label": opt["label"],
-                    "role_scores": {},
-                    "gender_tags": opt.get("gender_tags", []),
-                }
-                options.append(option)
-            # Shuffle options within this question
-            rng.shuffle(options)
-            questions.append(OnboardingQuestion(id=next_id, text=q_data["text"], options=options))
-            next_id += 1
-            j += 1
-
-    return questions
-
-
-# New export name for cleaner imports
-build_questions_v2 = build_interleaved_species_gender_questions
+    return system, user
 
 
 # Static onboarding questions (fallback when LLM generation fails)
@@ -570,7 +541,7 @@ STATIC_ONBOARDING_QUESTIONS = [
             },
         ],
     ),
-] + build_interleaved_species_gender_questions(LANGUAGE_RU, shuffle_seed=42)
+]
 
 
 # LLM prompts for dynamic content generation (legacy format — used by main.py)

@@ -45,7 +45,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiohttp_socks import ProxyConnector
 from player_store import (
-    get_all_player_ids,
+    delete_player_state,
+    get_all_briefing_days,
     get_player_state,
     record_reference,
     update_player_state,
@@ -123,7 +124,7 @@ class GameSelectionState(StatesGroup):
 
 # Track last briefing day sent per player to avoid duplicate messages on poll.
 # Persisted to player_states.last_briefing_day_sent so it survives bot restarts.
-_last_sent_briefing_day: dict[int, int | None] = {}
+_last_sent_briefing_day: dict[int, int] = {}
 
 
 def _mark_briefing_sent(player_id: int, day_num: int) -> None:
@@ -1149,20 +1150,29 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             if not game_id:
                 raise Exception("No game_id selected")
 
-            # Fetch game language from API
+            # Fetch game language and name from API
             game_lang = player_lang
+            game_name = ""
             try:
                 result = await api_request("GET", "/admin/list-games")
                 games = result.get("games", []) if result else []
                 for g in games:
                     if g.get("game_id") == game_id:
                         game_lang = g.get("language", player_lang)
+                        game_name = g.get("name", "")
                         break
             except Exception as e:
                 logger.warning(f"Failed to fetch language for game {game_id}: {e}")
 
-            # Ask for player name in game's language
+            # Show which game the player is joining
             onboarding_msgs = lang.get_onboarding(game_lang)
+            if game_name:
+                await message.answer(
+                    onboarding_msgs["selected_game"].format(game_name=game_name),
+                    parse_mode="Markdown",
+                )
+
+            # Ask for player name in game's language
             await message.answer(
                 onboarding_msgs["name_question"],
                 parse_mode="Markdown",
@@ -1801,6 +1811,108 @@ async def cmd_invite(message: types.Message):
             "Failed to generate invite link. Please try again later.",
             reply_markup=create_main_menu_keyboard(),
         )
+
+
+async def cmd_reset(message: types.Message, state: FSMContext):
+    """Handle /reset — leave the current game (replaced by NPC) and start over.
+
+    Confirms before performing the irreversible reset: the player's role is taken
+    over by an NPC, their profile and onboarding answers are wiped, then they are
+    sent back to language selection.
+    """
+    assert message.from_user is not None
+    player_id = message.from_user.id
+    reset_msgs = lang.get_reset(get_player_language(player_id))
+
+    # Only offer reset when there is something to wipe (a profile or an in-flight
+    # onboarding session).
+    profile = await check_player_game_status(player_id)
+    has_onboarding = bool(get_player_state(player_id).get("onboarding_session_id"))
+    if not profile and not has_onboarding:
+        await message.answer(reset_msgs["nothing_to_reset"])
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=reset_msgs["confirm_yes"],
+                    callback_data="reset_confirm:yes",
+                ),
+                InlineKeyboardButton(
+                    text=reset_msgs["confirm_no"],
+                    callback_data="reset_confirm:no",
+                ),
+            ],
+        ]
+    )
+    await message.answer(
+        reset_msgs["confirm"],
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Handle the /reset confirmation inline buttons (yes/no)."""
+    assert callback.from_user is not None
+    player_id = callback.from_user.id
+    player_lang = get_player_language(player_id)
+    reset_msgs = lang.get_reset(player_lang)
+
+    message = callback.message
+    if not isinstance(message, types.Message):
+        await callback.answer()
+        return
+
+    # Remove the confirmation keyboard regardless of the choice
+    from contextlib import suppress
+
+    with suppress(Exception):
+        await message.edit_reply_markup(reply_markup=None)
+
+    if not (callback.data or "").endswith(":yes"):
+        await callback.answer()
+        await message.answer(reset_msgs["cancelled"])
+        return
+
+    await callback.answer()
+    await message.answer(reset_msgs["resetting"])
+
+    try:
+        result = await api_request(
+            "POST",
+            "/admin/reset-player",
+            data={"player_id": player_id, "language": player_lang},
+            timeout_total=120,
+        )
+    except Exception as e:
+        logger.error(f"[RESET] API call failed for player {player_id}: {e}")
+        await message.answer(reset_msgs["error"].format(error=e))
+        return
+
+    if not result or result.get("status") != "success":
+        error_detail = (result or {}).get("detail", "unknown error") if result else "no API response"
+        await message.answer(reset_msgs["error"].format(error=error_detail))
+        return
+
+    # Clear the local briefing-dedup cache so a fresh game can deliver briefings.
+    with suppress(KeyError):
+        _last_sent_briefing_day.pop(player_id, None)
+    with suppress(Exception):
+        update_player_state(player_id, last_briefing_day_sent=None)
+
+    # Wipe FSM + business state, then restart from language selection.
+    await state.clear()
+    delete_player_state(player_id)
+
+    npc_name = result.get("npc_name")
+    npc_part = reset_msgs["success_npc_part"].format(npc_name=npc_name) if npc_name else ""
+    await message.answer(
+        reset_msgs["success"].format(npc_part=npc_part),
+        parse_mode="Markdown",
+    )
+    await show_player_language_selection(message, state)
 
 
 async def cmd_help(message: types.Message):
@@ -2811,6 +2923,7 @@ async def main():
     dp.message.register(cmd_bridge, Command("bridge"))
     dp.message.register(cmd_team, Command("team"))
     dp.message.register(cmd_invite, Command("invite"))
+    dp.message.register(cmd_reset, Command("reset"))
     dp.message.register(cmd_gm_start_game, Command("gm_start_game"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list_games, Command("gm_list_games"))
@@ -2837,19 +2950,14 @@ async def main():
     dp.callback_query.register(player_language_selection_callback, F.data.startswith("player_lang:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
+    dp.callback_query.register(reset_confirm_callback, F.data.startswith("reset_confirm:"))
 
     # Load last_briefing_day_sent from DB so dedup survives bot restarts
     global _last_sent_briefing_day
-    loaded = 0
-    for pid in get_all_player_ids():
-        state = get_player_state(pid)
-        day_sent = state.get("last_briefing_day_sent")
-        if day_sent is not None:
-            _last_sent_briefing_day[pid] = int(day_sent)
-            loaded += 1
+    _last_sent_briefing_day = get_all_briefing_days()
     logger.info(
         "Loaded _last_sent_briefing_day for %d player(s) from persistent storage",
-        loaded,
+        len(_last_sent_briefing_day),
     )
 
     logger.info("Starting Telegram Bot")

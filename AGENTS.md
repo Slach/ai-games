@@ -114,7 +114,7 @@ Stops only the target containers (preserving DB volumes and ComfyUI outputs),
 rebuilds them from the current source, and starts fresh containers.
 
 ```bash
-docker compose up -d --force-recreate telegram-bot game-master game-server-api
+docker compose --progress=plain stop telegram-bot game-master game-server-api --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-master game-server-api
 ```
 
 ### Full wipe — destroy all game data, ComfyUI outputs, and rebuild from scratch

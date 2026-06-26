@@ -685,7 +685,7 @@ async def handle_health(request: web.Request) -> web.Response:
 async def start_push_server(
     bot: Bot,
     language: str = "ru",
-    last_sent_briefing_day: dict[int, int | None] | None = None,
+    last_sent_briefing_day: dict[int, int] | None = None,
     mark_sent_fn: Callable[[int, int], None] | None = None,
     create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None) = None,
 ) -> web.AppRunner:

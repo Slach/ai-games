@@ -55,6 +55,7 @@ MIGRATIONS: list[tuple[int, str]] = [
         ON player_briefings(day, COALESCE(player_id, -1), COALESCE(npc_key, ''), game_id);
         """.strip(),
     ),
+    (5, "ALTER TABLE games ADD COLUMN welcome_text TEXT DEFAULT NULL;"),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -345,6 +346,33 @@ def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> b
     return updated
 
 
+def get_role_key_for_player(player_id: int, game_id: str = "default_game") -> str | None:
+    """Return the role_key currently held by player_id in a game, or None."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT role_key FROM ship_roles WHERE taken_by = ? AND game_id = ? LIMIT 1",
+        (player_id, game_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row["role_key"] if row else None
+
+
+def release_role(role_key: str, game_id: str = "default_game") -> bool:
+    """Release a single role (set taken_by = NULL). Returns True if a row changed."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE ship_roles SET taken_by = NULL WHERE role_key = ? AND game_id = ?",
+        (role_key, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
 def get_role_by_key(
     role_key: str,
     language: str = LANGUAGE_RU,
@@ -590,6 +618,17 @@ def get_underrepresented_roles(
     return sorted_roles
 
 
+def delete_onboarding_sessions_for_player(player_id: int) -> int:
+    """Delete all onboarding sessions for a player. Returns the number of rows removed."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM onboarding_sessions WHERE player_id = ?", (player_id,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 # ============== Player Profiles ==============
 
 
@@ -662,6 +701,17 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
         "is_spectator": bool(row["is_spectator"]) if row["is_spectator"] is not None else False,
         "player_name": row["player_name"],
     }
+
+
+def delete_player_profile(player_id: int) -> bool:
+    """Delete a player's profile entirely. Returns True if a row was removed."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM player_profiles WHERE player_id = ?", (player_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 # ============== Game Days ==============
@@ -1089,6 +1139,37 @@ def get_game_title(game_id: str) -> str | None:
     conn.close()
 
     return row["name"] if row else None
+
+
+def save_game_title_and_welcome(game_id: str, title: str, welcome_text: str) -> bool:
+    """Persist the game title (ship name + mission) and its welcome text together.
+
+    Both are generated once when the game is created and shared by every player,
+    so they are stored as a single immutable pair per game.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """UPDATE games SET name = ?, welcome_text = ? WHERE game_id = ?""",
+        (title, welcome_text, game_id),
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_game_welcome_text(game_id: str) -> str | None:
+    """Get the welcome text for a game from the games table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT welcome_text FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return row["welcome_text"] if row else None
 
 
 def get_game_language(game_id: str) -> str:

@@ -33,13 +33,14 @@ from database import (
     delete_game_day,
     delete_game_images,
     delete_mission,
+    delete_onboarding_sessions_for_player,
     delete_player_actions_for_day,
     delete_player_briefings_for_day,
+    delete_player_profile,
     end_game,
     get_all_active_npcs,
     get_all_npcs,
     get_all_briefings_for_day,
-    get_all_roles,
     get_available_games,
     get_available_roles,
     get_db_connection,
@@ -51,6 +52,7 @@ from database import (
     get_game_messages,
     get_game_state,
     get_game_title,
+    get_game_welcome_text,
     get_live_players,
     get_mission,
     get_npc_by_role,
@@ -64,15 +66,18 @@ from database import (
     get_players_who_need_to_choose,
     get_random_game_image,
     get_role_by_key,
+    get_role_key_for_player,
     get_underrepresented_roles,
     init_db,
     is_game_started,
     mark_player_dead,
+    release_role,
     set_game_language,
     record_kick,
     reset_game_state_to_day1,
     reset_roles,
     save_game_image,
+    save_game_title_and_welcome,
     save_player_action,
     save_player_briefing,
     start_game,
@@ -99,6 +104,8 @@ from image_generator import (
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
+    get_dimension_tag_field,
+    get_dimension_tags,
     get_game_strings,
     get_gender_type_name,
     get_hybrid_species_name,
@@ -107,7 +114,6 @@ from language import (
 from prompts import (
     STATIC_ONBOARDING_QUESTIONS,
     OnboardingQuestion,
-    build_interleaved_species_gender_questions,
 )
 from push_client import push_briefings, push_day_outcome, push_gm_notification, push_player_chosen_action
 from pydantic import BaseModel, TypeAdapter
@@ -118,6 +124,19 @@ logging.basicConfig(
     format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class HealthCheckFilter(logging.Filter):
+    """Suppress access logs for /health endpoint only."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
+# Apply filter to uvicorn access logger to suppress /health noise
+uvicorn_access = logging.getLogger("uvicorn.access")
+uvicorn_access.addFilter(HealthCheckFilter())
+
 
 # Track pending action image tasks keyed by (day, game_id) so that
 # _analyze_day_outcome can await them before pushing the outcome.
@@ -227,6 +246,20 @@ class SetLanguageRequest(BaseModel):
 
     game_id: str
     language: str = "ru"
+
+
+# Dynamic species/gender onboarding: up to SPECIES_GENDER_QUESTIONS_TOTAL questions
+# generated one-at-a-time by the LLM as the player answers, in a fixed alternating
+# species/gender sequence (S/G/S/G/S = 3 species + 2 gender). The question text and
+# option labels are LLM-authored; the canonical tags are assigned by us, so the
+# existing tag-counting determination logic stays reliable.
+SPECIES_GENDER_QUESTIONS_TOTAL = 5
+SPECIES_GENDER_DIMENSIONS = ("species", "gender", "species", "gender", "species")
+
+
+def _question_has_sg_tags(question: OnboardingQuestion) -> bool:
+    """True if a question's options carry species_tags or gender_tags."""
+    return any(opt.get("species_tags") or opt.get("gender_tags") for opt in question.options)
 
 
 def get_next_question(current_question: int) -> OnboardingQuestion | None:
@@ -440,6 +473,60 @@ async def _generate_option_images_for_question(
             logger.warning(f"[OPTION_IMAGES] Image failed for option {opt_value}: {url_or_err}")
 
     logger.info(f"[OPTION_IMAGES] {success_count}/{len(tasks)} option images generated")
+    return question
+
+
+async def generate_dynamic_species_gender_question(
+    dimension: str,
+    sg_step: int,
+    session: dict[str, Any],
+    language: str,
+    game_id: str,
+    existing_questions: list[OnboardingQuestion],
+) -> OnboardingQuestion:
+    """Generate ONE dynamic species/gender question and render its option images.
+
+    The LLM authors only the question text + one label per canonical tag; we attach
+    the tags ourselves (one option per canonical tag), then shuffle options
+    deterministically by the session seed and generate a per-option ComfyUI image
+    reflecting the cumulative traits chosen so far.
+    """
+    tag_field = get_dimension_tag_field(dimension)
+    tags = get_dimension_tags(dimension)
+
+    session_answers = {k: v for k, v in session.get("answers", {}).items() if str(k) not in ("-1", "-2", "-3")}
+    session_questions = session.get("questions", [])
+
+    game_master = create_game_master_agent(language=language)
+    accumulated = game_master._count_tags_from_answers(session_answers, tag_field, session_questions)
+    generated = game_master.generate_dynamic_species_gender_question(dimension, sg_step, accumulated)
+
+    prefix = "s" if dimension == "species" else "g"
+    options = [
+        {
+            "value": f"{prefix}{sg_step}_{tag}",
+            "label": generated["labels"].get(tag, tag),
+            "role_scores": {},
+            tag_field: [tag],
+        }
+        for tag in tags
+    ]
+
+    rng = random.Random(session.get("shuffle_seed", 0) + sg_step)
+    rng.shuffle(options)
+
+    question = OnboardingQuestion(id=len(existing_questions) + 1, text=generated["text"], options=options)
+
+    try:
+        question = await _generate_option_images_for_question(
+            question=question,
+            session=session,
+            language=language,
+            game_id=game_id,
+        )
+    except Exception as img_err:
+        logger.warning(f"[SG_Q] Option image generation failed for {dimension} step {sg_step}: {img_err}")
+
     return question
 
 
@@ -703,40 +790,49 @@ async def start_onboarding(request: StartOnboardingRequest):
     # Generate shuffle seed for deterministic question/option shuffling
     shuffle_seed = random.randint(0, 2**31 - 1)
 
-    # If dynamic generation returned only role questions (5), append species/gender
-    # If it fell back to STATIC_ONBOARDING_QUESTIONS (which already has them), skip
-    if len(role_questions) <= 6:
-        species_gender_questions = build_interleaved_species_gender_questions(
-            language=request.language,
-            shuffle_seed=shuffle_seed,
-        )
-        logger.info(f"Adding {len(species_gender_questions)} interleaved species/gender questions (seed={shuffle_seed})")
-        dynamic_questions = role_questions + species_gender_questions
-    else:
-        dynamic_questions = role_questions
+    # Species/gender questions are NOT pre-generated here. They are produced
+    # one-at-a-time by the LLM during /onboarding/{session_id}/answer (fixed
+    # alternating S/G/S/G/S sequence, capped at SPECIES_GENDER_QUESTIONS_TOTAL).
+    dynamic_questions = role_questions
 
     for i, q in enumerate(dynamic_questions, start=1):
         q.id = i
-    logger.info(f"Total onboarding questions: {len(dynamic_questions)}")
+    logger.info(f"Total onboarding questions: {len(dynamic_questions)} role (+ up to {SPECIES_GENDER_QUESTIONS_TOTAL} dynamic species/gender)")
 
+    # Reuse the title + welcome generated once at game creation (they describe the
+    # shared ship and must be identical for every player). Only generate+persist
+    # when missing (e.g. legacy games created before this existed).
+    existing_title = get_game_title(request.game_id)
+    existing_welcome = get_game_welcome_text(request.game_id)
     game_title_data = {}
-    try:
-        gm = create_game_master_agent(language=request.language)
-        game_title_data = gm.generate_game_title()
-
-        # Save game title to database
-        if game_title_data.get("title"):
-            update_game_title(request.game_id, game_title_data["title"])
-            logger.info(f"Game title saved to DB: {game_title_data['title']}")
-    except Exception as e:
-        logger.warning(f"Game title generation failed: {e}")
+    if existing_title:
+        logger.info(f"Reusing existing game title: {existing_title}")
         gs = get_game_strings(request.language)
         game_title_data = {
-            "title": gs["game_title_fallback"],
-            "welcome_text": gs["welcome_text_fallback"],
+            "title": existing_title,
+            "welcome_text": existing_welcome or gs["welcome_text_fallback"],
         }
-        # Save fallback title to database
-        update_game_title(request.game_id, game_title_data["title"])
+    else:
+        try:
+            gm = create_game_master_agent(language=request.language)
+            game_title_data = gm.generate_game_title()
+
+            if game_title_data.get("title"):
+                save_game_title_and_welcome(
+                    request.game_id,
+                    game_title_data["title"],
+                    game_title_data.get("welcome_text", ""),
+                )
+                logger.info(f"Game title saved to DB: {game_title_data['title']}")
+        except Exception as e:
+            logger.warning(f"Game title generation failed: {e}")
+            gs = get_game_strings(request.language)
+            game_title_data = {
+                "title": gs["game_title_fallback"],
+                "welcome_text": gs["welcome_text_fallback"],
+            }
+            # Save fallback title to database
+            update_game_title(request.game_id, game_title_data["title"])
 
     # Generate 3 splash images SYNCHRONOUSLY (blocks until done)
     existing_splash = get_game_image_count("splash", request.game_id)
@@ -825,34 +921,49 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     question_adapter = TypeAdapter(list[OnboardingQuestion])
     dynamic_questions = question_adapter.validate_python(session_questions) if session_questions else []
 
-    completed = current_question >= len(dynamic_questions)
-
-    update_onboarding_session(session_id, current_question, answers, completed, effective_language)
+    # Role questions are the tag-less ones; species/gender questions carry tags.
+    role_count = sum(1 for q in dynamic_questions if not _question_has_sg_tags(q))
+    total_questions = role_count + SPECIES_GENDER_QUESTIONS_TOTAL
+    completed = current_question >= total_questions
 
     next_question = None
+    questions_changed = False
     if not completed:
-        # Get next question from pre-generated list
-        remaining_questions = dynamic_questions[current_question:]
-        next_question = remaining_questions[0] if remaining_questions else None
+        if current_question < len(dynamic_questions):
+            # Question already exists (a role question, or a species/gender question
+            # built in a previous step with its option images already attached).
+            next_question = dynamic_questions[current_question]
+        else:
+            # Dynamic species/gender phase: build the next question on demand via LLM.
+            sg_step = current_question - role_count + 1  # 1-based within the S/G sequence
+            dimension = SPECIES_GENDER_DIMENSIONS[sg_step - 1]
+            session["answers"] = answers
+            session["current_question"] = current_question
+            try:
+                next_question = await generate_dynamic_species_gender_question(
+                    dimension=dimension,
+                    sg_step=sg_step,
+                    session=session,
+                    language=effective_language,
+                    game_id=game_id,
+                    existing_questions=dynamic_questions,
+                )
+            except Exception as gen_err:
+                logger.warning(f"[SG_Q] Dynamic {dimension} question generation failed: {gen_err}")
+                next_question = None
+            if next_question is not None:
+                dynamic_questions.append(next_question)
+                questions_changed = True
 
-        # Generate option images for species/gender questions
-        if next_question:
-            has_species_tags = any(opt.get("species_tags") for opt in next_question.options if opt.get("species_tags"))
-            has_gender_tags = any(opt.get("gender_tags") for opt in next_question.options if opt.get("gender_tags"))
-            if has_species_tags or has_gender_tags:
-                # Update session answers in DB before generating images
-                update_onboarding_session(session_id, current_question, answers, completed, effective_language)
-                try:
-                    session["answers"] = answers
-                    session["current_question"] = current_question
-                    next_question = await _generate_option_images_for_question(
-                        question=next_question,
-                        session=session,
-                        language=effective_language,
-                        game_id=game_id,
-                    )
-                except Exception as img_err:
-                    logger.warning(f"[OPTION_IMAGES] Generation failed for question {next_question.id}: {img_err}")
+    # Persist progress (and the newly generated question, if any).
+    update_onboarding_session(
+        session_id,
+        current_question,
+        answers,
+        completed,
+        effective_language,
+        questions=[q.model_dump() for q in dynamic_questions] if questions_changed else None,
+    )
 
     result = {
         "completed": completed,
@@ -2713,12 +2824,17 @@ async def admin_create_game(request: CreateGameRequest):
     if not game:
         raise HTTPException(status_code=500, detail="Failed to create game")
 
-    # Generate a title for the new game
+    # Generate and persist title + welcome text once, at game creation.
+    # These describe the ship shared by all players and must stay stable across onboardings.
     try:
         gm = create_game_master_agent(language=request.language)
         title_data = gm.generate_game_title()
         if title_data.get("title"):
-            update_game_title(game_id, title_data["title"])
+            save_game_title_and_welcome(
+                game_id,
+                title_data["title"],
+                title_data.get("welcome_text", ""),
+            )
     except Exception as e:
         logger.warning(f"Title generation for new game {game_id} failed: {e}")
 
@@ -3893,6 +4009,66 @@ async def get_live_player_ids_endpoint(game_id: str = "default_game"):
     return {"live_player_ids": live, "count": len(live)}
 
 
+def _replace_player_with_npc(
+    player_id: int,
+    role_key: str,
+    game_id: str,
+    reason: str,
+    language: str = "ru",
+) -> dict[str, Any]:
+    """Replace a player with an NPC that takes over their role.
+
+    Core of the kick/reset flow: builds an NPC preserving the player's name,
+    species, gender and appearance, releases ONLY that role (not every role in
+    the game), creates the NPC profile and records the kick. Does NOT touch the
+    player profile itself — the caller decides whether to NULL its game_id (kick)
+    or delete it outright (reset).
+
+    Returns {"role_name", "npc_key", "npc_name"}. Raises HTTPException on failure.
+    """
+    role_data = get_role_by_key(role_key, language="ru", game_id=game_id)
+    if not role_data:
+        raise HTTPException(status_code=404, detail=f"Role '{role_key}' not found")
+
+    kicked_profile = get_player_profile(player_id)
+    npc_name = ((kicked_profile.get("player_name", "") or "") if kicked_profile else role_data["role_name"]) or role_data["role_name"]
+    npc_traits = kicked_profile.get("personality_traits", []) if kicked_profile else role_data.get("personality_traits", [])
+    npc_species = (kicked_profile.get("species", "") or "") if kicked_profile else ""
+    npc_gender = (kicked_profile.get("gender", "") or "") if kicked_profile else ""
+    if not npc_species:
+        npc_species = _random_npc_species()
+    if not npc_gender:
+        npc_gender = _random_npc_gender(language)
+    npc_avatar_desc = kicked_profile.get("avatar_description", "") if kicked_profile else role_data.get("avatar_description", "")
+    npc_role_description = kicked_profile.get("role_description", "") if kicked_profile else role_data.get("role_description", "")
+
+    # Release ONLY the target role (reset_roles() here nuked every assignment).
+    release_role(role_key, game_id)
+
+    npc = create_npc_profile(
+        {
+            "npc_key": f"npc_{role_key}_{game_id}",
+            "role_key": role_key,
+            "npc_name": npc_name,
+            "role": role_data["role_name"],
+            "role_description": npc_role_description,
+            "personality_traits": npc_traits,
+            "species": npc_species,
+            "gender": npc_gender,
+            "avatar_description": npc_avatar_desc,
+            "game_id": game_id,
+            "is_active": True,
+            "replaces_player_id": player_id,
+        }
+    )
+    if not npc:
+        raise HTTPException(status_code=500, detail="Failed to create NPC replacement")
+
+    record_kick(player_id, npc["npc_key"], reason)
+    logger.info(f"[REPLACE] Player {player_id} replaced by NPC {npc_name} for role {role_key} in game {game_id}")
+    return {"role_name": role_data["role_name"], "npc_key": npc["npc_key"], "npc_name": npc_name}
+
+
 @app.post("/admin/kick-player")
 async def admin_kick_player(request: KickPlayerRequest):
     """Kick a player by role, replace with NPC, and notify the kicked player.
@@ -3906,88 +4082,30 @@ async def admin_kick_player(request: KickPlayerRequest):
     game_id = request.game_id
     role_key = request.role_key
 
-    # 1. Find who currently holds this role
+    # Find who currently holds this role
     role_data = get_role_by_key(role_key, language="ru", game_id=game_id)
     if not role_data:
         raise HTTPException(status_code=404, detail=f"Role '{role_key}' not found")
-
     taken_by = role_data.get("taken_by")
     if not taken_by:
         raise HTTPException(status_code=400, detail=f"Role '{role_key}' is not taken by any player")
-
     kicked_player_id = taken_by
 
-    # 2. Get the kicked player's profile to preserve their name and identity
-    kicked_profile = get_player_profile(kicked_player_id)
-    npc_name = ((kicked_profile.get("player_name", "") or "") if kicked_profile else role_data["role_name"]) or role_data["role_name"]
-    npc_traits = kicked_profile.get("personality_traits", []) if kicked_profile else role_data.get("personality_traits", [])
-    # Randomize species/gender if the kicked player has no profile data
-    _kick_lang = request.language if hasattr(request, "language") else "ru"
-    if kicked_profile:
-        npc_species = kicked_profile.get("species", "") or ""
-        npc_gender = kicked_profile.get("gender", "") or ""
-        if not npc_species:
-            npc_species = _random_npc_species()
-        if not npc_gender:
-            npc_gender = _random_npc_gender(_kick_lang)
-    else:
-        npc_species = _random_npc_species()
-        npc_gender = _random_npc_gender(_kick_lang)
-    npc_avatar_desc = kicked_profile.get("avatar_description", "") if kicked_profile else role_data.get("avatar_description", "")
-    npc_role_description = kicked_profile.get("role_description", "") if kicked_profile else role_data.get("role_description", "")
-
-    # 3. Release the role and create NPC replacement
-    reset_roles(game_id)
-    # Re-take all other real player roles except the kicked one
-    all_players = get_players_in_game(game_id)
-    for pid in all_players:
-        profile = get_player_profile(pid)
-        if profile and pid != kicked_player_id:
-            # Re-assign their role
-            all_roles = get_all_roles(game_id)
-            for r in all_roles:
-                if r.get("taken_by") == pid:
-                    pass  # Should be restored by the re-take
-    # Simpler: just release the kicked player's role
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE ship_roles SET taken_by = NULL WHERE role_key = ? AND game_id = ?",
-        (role_key, game_id),
+    replaced = _replace_player_with_npc(
+        player_id=kicked_player_id,
+        role_key=role_key,
+        game_id=game_id,
+        reason=request.reason,
+        language=request.language,
     )
-    conn.commit()
-    conn.close()
 
-    # Create NPC profile — preserves the player's name, species, gender, and appearance
-    npc_profile_data = {
-        "npc_key": f"npc_{role_key}_{game_id}",
-        "role_key": role_key,
-        "npc_name": npc_name,
-        "role": role_data["role_name"],
-        "role_description": npc_role_description,
-        "personality_traits": npc_traits,
-        "species": npc_species,
-        "gender": npc_gender,
-        "avatar_description": npc_avatar_desc,
-        "game_id": game_id,
-        "is_active": True,
-        "replaces_player_id": kicked_player_id,
-    }
-    npc = create_npc_profile(npc_profile_data)
-    if not npc:
-        raise HTTPException(status_code=500, detail="Failed to create NPC replacement")
-
-    # Record the kick
-    record_kick(kicked_player_id, npc["npc_key"], request.reason)
-
-    # 4. Send notification to the kicked player (via game_messages)
-    kick_notification = f"⛔ **Вы были изгнаны с корабля!**\n\nGame Master принял решение заменить вас NPC.\n**Причина:** {request.reason}\n\nВаш персонаж заменён на {npc_name}.\nСпасибо за игру!"
+    # Notify the kicked player (via game_messages)
+    kick_notification = f"⛔ **Вы были изгнаны с корабля!**\n\nGame Master принял решение заменить вас NPC.\n**Причина:** {request.reason}\n\nВаш персонаж заменён на {replaced['npc_name']}.\nСпасибо за игру!"
     add_game_message(kicked_player_id, kick_notification, "kick_notification")
 
-    # Also clean up player profile for the kicked player
+    # Remove from game but keep the profile data
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Remove from game but keep the profile data
     cursor.execute(
         "UPDATE player_profiles SET game_id = NULL WHERE player_id = ?",
         (kicked_player_id,),
@@ -3996,16 +4114,64 @@ async def admin_kick_player(request: KickPlayerRequest):
     conn.close()
 
     logger.info("=== ADMIN KICK PLAYER COMPLETED ===")
-    logger.info(f"Kicked player {kicked_player_id}, replaced with NPC {npc_name}")
+    logger.info(f"Kicked player {kicked_player_id}, replaced with NPC {replaced['npc_name']}")
 
     return {
         "status": "success",
         "kicked_player_id": kicked_player_id,
         "role_key": role_key,
-        "role_name": role_data["role_name"],
-        "npc_key": npc["npc_key"],
-        "npc_name": npc_name,
+        "role_name": replaced["role_name"],
+        "npc_key": replaced["npc_key"],
+        "npc_name": replaced["npc_name"],
         "reason": request.reason,
+    }
+
+
+class ResetPlayerRequest(BaseModel):
+    """Request to reset a player's game participation (self-service /reset)."""
+
+    player_id: int
+    language: str = "ru"
+
+
+@app.post("/admin/reset-player")
+async def admin_reset_player(request: ResetPlayerRequest):
+    """Reset a player's participation: replace them with an NPC, then wipe their
+    profile and onboarding answers so they can start over from scratch.
+    """
+    logger.info("=== ADMIN RESET PLAYER ===")
+    logger.info(f"player_id={request.player_id}")
+
+    player_id = request.player_id
+    profile = get_player_profile(player_id)
+    game_id = (profile.get("game_id") if profile else None) or "default_game"
+
+    # Replace the player with an NPC if they currently hold a role.
+    npc_replaced = None
+    role_key = get_role_key_for_player(player_id, game_id)
+    if role_key:
+        npc_replaced = _replace_player_with_npc(
+            player_id=player_id,
+            role_key=role_key,
+            game_id=game_id,
+            reason="Player reset",
+            language=request.language,
+        )
+
+    # Wipe the player's data so they can start a fresh onboarding.
+    profile_deleted = delete_player_profile(player_id)
+    sessions_deleted = delete_onboarding_sessions_for_player(player_id)
+
+    logger.info(f"=== ADMIN RESET PLAYER COMPLETED === player_id={player_id}, game_id={game_id}, role_replaced={role_key}, profile_deleted={profile_deleted}, sessions_deleted={sessions_deleted}")
+
+    return {
+        "status": "success",
+        "player_id": player_id,
+        "game_id": game_id,
+        "role_replaced": role_key,
+        "npc_name": npc_replaced["npc_name"] if npc_replaced else None,
+        "profile_deleted": profile_deleted,
+        "sessions_deleted": sessions_deleted,
     }
 
 
