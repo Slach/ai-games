@@ -82,7 +82,11 @@ DEFAULT_LANGUAGE = "en"
 BOT_USERNAME: str | None = None
 
 # Game Master Telegram user ID — only this user can send GM commands
-GAME_MASTER_ID = int(os.getenv("TELEGRAM_BOT_GAME_MASTER_ID", "0"))
+try:
+    GAME_MASTER_ID = int(os.getenv("TELEGRAM_BOT_GAME_MASTER_ID", "0"))
+except (ValueError, TypeError):
+    logger.warning("Invalid TELEGRAM_BOT_GAME_MASTER_ID value, defaulting to 0")
+    GAME_MASTER_ID = 0
 
 # Socks5 proxy configuration
 # Set to empty string to disable proxy (direct connection)
@@ -159,8 +163,13 @@ def parse_proxy_url(proxy_url: str) -> tuple[str, int, str | None, str | None]:
 
     # Extract host and port
     if ":" in proxy_url:
-        host, port = proxy_url.rsplit(":", 1)
-        return (host, int(port), username, password)
+        host, port_str = proxy_url.rsplit(":", 1)
+        try:
+            port = int(port_str)
+        except (ValueError, TypeError):
+            logger.warning("Invalid proxy port %r, using default 9999", port_str)
+            return (host, 9999, username, password)
+        return (host, port, username, password)
 
     return (proxy_url, 9999, username, password)
 
@@ -2217,8 +2226,10 @@ async def cmd_gm_list_games(message: types.Message):
             game_id = game.get("game_id", "unknown")
             title = game.get("title") or game.get("name") or gm_msgs["default_game_title"]
             player_count = game.get("player_count", 0)
-            status = game.get("status") or ("started" if game.get("started") else "waiting")
-            status_icon = "🚀" if status == "started" else "⏳"
+            onboarding_count = game.get("onboarding_count", 0)
+            started = game.get("started", False)
+            status = "started" if started else "waiting"
+            status_icon = "🚀" if started else "⏳"
             lang_flag = lang.get_language_flag(game.get("language", "ru"))
             lines.append(
                 gm_msgs["games_list_entry"].format(
@@ -2226,6 +2237,7 @@ async def cmd_gm_list_games(message: types.Message):
                     game_id=game_id,
                     title=title,
                     player_count=player_count,
+                    onboarding_count=onboarding_count,
                     status_icon=status_icon,
                     status=status,
                 )
@@ -2699,8 +2711,13 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         return
 
     _, question_id_str, option_idx_str = parts
-    option_idx = int(option_idx_str)
-    callback_question_id = int(question_id_str)
+    try:
+        option_idx = int(option_idx_str)
+        callback_question_id = int(question_id_str)
+    except (ValueError, TypeError):
+        logger.warning("Invalid callback data from player %d: %r", player_id, callback.data)
+        await msg.answer(lang.get_errors(player_lang)["invalid_format"])
+        return
     error_msgs = lang.get_errors(player_lang)
 
     # Get current question data from state
@@ -2835,6 +2852,9 @@ async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMCon
     await callback.answer()
     assert callback.data is not None
     assert callback.message is not None
+    if not isinstance(callback.message, types.Message):
+        logger.warning("Callback message is inaccessible for clear_onboarding")
+        return
     msg: types.Message = callback.message
     player_id = callback.from_user.id
 
@@ -2900,9 +2920,13 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
     # Match by numeric index from button text (e.g., "[1]" or "1")
     answer_value = None
-    match = re.match(r"^\[?(\d+)\]?$", answer_text.strip())
+    match = re.match(r"^(\[?)(\d+)(\]?)$", answer_text.strip())
     if match:
-        idx = int(match.group(1)) - 1
+        try:
+            idx = int(match.group(2)) - 1
+        except (ValueError, TypeError):
+            logger.debug("Failed to parse onboarding answer index from %r", answer_text)
+            idx = -1
         if 0 <= idx < len(current_options):
             answer_value = current_options[idx]["value"]
             logger.info(f"Numeric match: idx={idx}, value='{answer_value}'")
@@ -3202,9 +3226,10 @@ async def main():
     )
 
     # Start bot polling (aiogram).
-    # Delete webhook with drop_pending_updates to avoid re-processing
-    # old commands from Telegram's queue after bot restart/DB cleanup.
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Delete webhook without dropping pending updates so messages that
+    # arrived while the bot was restarting (e.g. docker restart, crash)
+    # are still delivered via the polling loop.
+    await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
 
     # Clean up push server

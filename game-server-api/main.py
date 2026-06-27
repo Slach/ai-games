@@ -56,6 +56,7 @@ from database import (
     get_mission,
     get_npc_by_role,
     get_npc_profile,
+    get_onboarding_count_in_game,
     get_onboarding_session,
     get_player_actions,
     get_player_briefing,
@@ -4352,12 +4353,14 @@ async def admin_list_games():
     result = []
     for game in games:
         game_id = game["game_id"]
+        onboarding_count = get_onboarding_count_in_game(game_id)
         result.append(
             {
                 "game_id": game_id,
                 "name": get_game_title(game_id) or game.get("name", ""),
                 "description": game.get("description", ""),
                 "player_count": get_player_count_in_game(game_id),
+                "onboarding_count": onboarding_count,
                 "status": game.get("status", "active"),
                 "started": is_game_started(game_id),
                 "language": get_game_language(game_id),

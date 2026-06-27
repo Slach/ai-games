@@ -2022,6 +2022,31 @@ def delete_mission(game_id: str = "default_game") -> bool:
     return deleted > 0
 
 
+def get_onboarding_count_in_game(game_id: str = "default_game") -> int:
+    """Count players who started onboarding but haven't completed it for a game.
+
+    The game_id is stored in the onboarding_sessions.answers JSON as key "-1".
+    We count distinct player_ids with completed=0 whose answers match the game.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """SELECT COUNT(DISTINCT player_id) as cnt
+               FROM onboarding_sessions
+               WHERE completed = 0
+                 AND json_extract(answers, '$."-1"') = ?""",
+            (game_id,),
+        )
+        row = cursor.fetchone()
+        return row["cnt"] if row else 0
+    except Exception as e:
+        logger.error(f"Failed to count onboarding players for game {game_id}: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
 def delete_game_images(game_id: str = "default_game") -> int:
     """Delete all images associated with a game (splash, bridge, etc.),
     but preserve loading images since they are shared."""
