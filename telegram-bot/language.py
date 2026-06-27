@@ -140,7 +140,7 @@ PROFILE = {
     },
 }
 
-# Current day messages
+# Current turn messages
 CURRENT_TURN = {
     LANGUAGE_RU: {
         "title": "🎯 **Ход {turn}**",
@@ -176,7 +176,7 @@ ACTIONS = {
     LANGUAGE_EN: {
         "recorded": "Your choice has been recorded!\n\nThe Game Master will process your decision and update the plot.\n\nYou can continue communicating with the Game Master or wait for the next turn.",
         "error": "An error occurred while recording the choice: {error}",
-        "action_caption": "🎬 Your action in today's episode",
+        "action_caption": "🎬 Your action in the current episode",
     },
 }
 
@@ -440,7 +440,7 @@ GM_COMMANDS = {
         "regenerate_turn_error": "❌ Error regenerating turn: {error}",
         "restart_game_usage": "❌ Usage: /gm_restart <game_id>\n\nExample: /gm_restart abc123",
         "restarting_game": "🔄 Restarting game `{game_id}`...",
-        "game_restarted": "✅ **Game restarted!**\n\n🎮 Game: `{game_id}`\n🗑 Days deleted: {deleted_turns}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n🗑 Messages deleted: {deleted_messages}\n🗑 Mission deleted: {deleted_mission}\n\n🎯 Turn: {turn_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated",
+        "game_restarted": "✅ **Game restarted!**\n\n🎮 Game: `{game_id}`\n🗑 Turns deleted: {deleted_turns}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n🗑 Messages deleted: {deleted_messages}\n🗑 Mission deleted: {deleted_mission}\n\n🎯 Turn: {turn_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated",
         "restart_game_error": "❌ Error restarting game: {error}",
         "game_started": "✅ **Game `{game_id}` started!**\n\n🎯 Turn: {turn_num}\n👤 Players: {player_count}\n🤖 NPCs created: {npc_count}\n🚀 Mission generated\n🖼 Bridge image ready\n\nCrew assembled, briefings sent!",
         "briefings_sent": "",
@@ -477,7 +477,7 @@ GM_COMMANDS = {
         "continue_game_failed": "❌ Failed to start turn generation: {error}",
         "turn_regeneration_started": "🔄 Turn regeneration started for game `{game_id}`...\n⏳ This may take a few minutes.\n📬 You will be notified when the turn is ready.",
         "regenerate_turn_failed": "❌ Failed to start turn regeneration: {error}",
-        "restart_cleanup_done": "✅ **Game `{game_id}` reset!**\n\n🗑 Days deleted: {deleted_turns}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n\n🚀 Starting new game generation...\n📬 You will be notified when the game is ready.",
+        "restart_cleanup_done": "✅ **Game `{game_id}` reset!**\n\n🗑 Turns deleted: {deleted_turns}\n🗑 Briefings deleted: {deleted_briefings}\n🗑 Actions deleted: {deleted_actions}\n\n🚀 Starting new game generation...\n📬 You will be notified when the game is ready.",
         "set_language_usage": "❌ Usage: /gm_lang <game_id> <ru|en>\n\nExample: /gm_lang abc123 en",
         "set_language_invalid": "❌ Language must be `ru` or `en`.",
         "set_language_progress": "⏳ Changing game `{game_id}` language to `{lang_code}`, regenerating title and mission...",

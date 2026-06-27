@@ -1359,7 +1359,7 @@ GAME_STRINGS = {
         "turn_prefix": "Ход {turn} — {title}",
         "turn_prefix_simple": "Ход {turn}",
         "auto_select_notification": ("⏳ **Время вышло!**\n\nВы не успели сделать выбор, поэтому Game Master принял решение за вас:\n\nВыбрано действие: **{action_text}**\n\n_{rationale}_"),
-        "day_summary": {
+        "turn_summary": {
             "ship_status": "Состояние корабля: {status}",
             "hull_shields": "Корпус: {hull}, Щиты: {shields}",
             "systems_offline": "Системы отключены: {systems}",
@@ -1371,7 +1371,7 @@ GAME_STRINGS = {
         },
         "cumulative_story": {
             "header": "=== ПРЕДЫДУЩИЕ ХОДЫ ===",
-            "day_label": "Ход",
+            "turn_label": "Ход",
         },
         "gm_fallback": {
             "fallback_title": "{display_name} — {role_label}",
@@ -1440,7 +1440,7 @@ GAME_STRINGS = {
         "turn_prefix": "Turn {turn} — {title}",
         "turn_prefix_simple": "Turn {turn}",
         "auto_select_notification": ("⏳ **Time is up!**\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: **{action_text}**\n\n_{rationale}_"),
-        "day_summary": {
+        "turn_summary": {
             "ship_status": "Ship status: {status}",
             "hull_shields": "Hull: {hull}, Shields: {shields}",
             "systems_offline": "Systems offline: {systems}",
@@ -1452,7 +1452,7 @@ GAME_STRINGS = {
         },
         "cumulative_story": {
             "header": "=== PREVIOUS TURNS ===",
-            "day_label": "Turn",
+            "turn_label": "Turn",
         },
         "gm_fallback": {
             "fallback_title": "{display_name} — {role_label}",

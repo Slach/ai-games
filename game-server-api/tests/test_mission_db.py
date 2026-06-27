@@ -69,7 +69,7 @@ class TestMissionPersistence(unittest.TestCase):
         self.assertEqual(got["seeds"]["complication"], "pirates")
 
 
-class TestLastDeathDay(unittest.TestCase):
+class TestLastDeathTurn(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self._tmp.close()

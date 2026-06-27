@@ -2174,7 +2174,7 @@ spatial presence\n"
         global_circumstances: dict[str, Any],
         player_profile: dict[str, Any],
         player_name: str = "",
-        day: int | None = None,
+        turn: int | None = None,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.

@@ -631,7 +631,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             )
 
             sent_player_ids.append(player_id)
-            # Mark this player as having received this day's outcome
+            # Mark this player as having received this turn's outcome
             last_sent_per_player[player_id] = turn
             logger.info(f"[PUSH_OUTCOME] Outcome for turn {turn} sent to player {player_id}")
 

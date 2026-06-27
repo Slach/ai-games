@@ -2267,7 +2267,7 @@ def _build_turn_summary(combined_outcome_str: str, language: str = "ru") -> str:
     # Ship status
     ship_status = oc.get("ship_status_change", "")
     gs = get_game_strings(language)
-    ds = gs["day_summary"]
+    ds = gs["turn_summary"]
     if ship_status:
         parts.append(ds["ship_status"].format(status=ship_status))
 
@@ -2347,7 +2347,7 @@ def _build_cumulative_story_summary(
     gs = get_game_strings(language)
     cs = gs["cumulative_story"]
     header = cs["header"]
-    day_label = cs["day_label"]
+    turn_label = cs["turn_label"]
 
     for d in range(1, current_turn):
         turn_record = get_game_turn(d, game_id=game_id)
@@ -2362,7 +2362,7 @@ def _build_cumulative_story_summary(
             turn_summary = turn_record["story"][:300]
 
         if turn_summary:
-            summaries.append(f"{day_label} {d}: {turn_summary}")
+            summaries.append(f"{turn_label} {d}: {turn_summary}")
 
     if not summaries:
         return ""

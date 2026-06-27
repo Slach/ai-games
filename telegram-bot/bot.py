@@ -1637,16 +1637,16 @@ async def cmd_turn(message: types.Message):
             actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(choices)])
 
             # Fetch NPC dialogues for crew behavior context
-            crew_dialogues_today = []
+            crew_dialogues = []
             try:
-                day_data = await api_request(
+                turn_data = await api_request(
                     "GET",
                     f"/game/turn/{current_turn_num}",
                     params={"game_id": briefing.get("game_id", "default_game")},
                     ignore_codes=(404,),
                 )
-                if day_data:
-                    crew_dialogues_today = day_data.get("crew_dialogues", [])
+                if turn_data:
+                    crew_dialogues = turn_data.get("crew_dialogues", [])
             except Exception:
                 logger.error(
                     "Failed to fetch turn data, continuing without crew dialogues",
@@ -1654,9 +1654,9 @@ async def cmd_turn(message: types.Message):
                 )
 
             crew_behavior_text = ""
-            if crew_dialogues_today:
+            if crew_dialogues:
                 dialogue_lines = []
-                for d in crew_dialogues_today:
+                for d in crew_dialogues:
                     line = f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
                     dialogue_lines.append(line)
                 crew_separator = "\n---\n"
@@ -3211,7 +3211,7 @@ async def action_selection(callback: types.CallbackQuery):
     await callback.answer()
 
     try:
-        # Get current day to validate
+        # Get current turn to validate
         turn_data = await api_request("GET", "/game/current-turn")
         if turn_data is None:
             raise Exception("No current turn data from API")
@@ -3272,7 +3272,7 @@ async def refresh_game(callback: types.CallbackQuery):
     await callback.answer()
 
     try:
-        # Refresh current day
+        # Refresh current turn
         turn_data = await api_request("GET", "/game/current-turn")
         if turn_data is None:
             raise Exception("No current turn data from API")

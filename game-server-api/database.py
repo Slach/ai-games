@@ -778,7 +778,7 @@ def delete_player_profile(player_id: int) -> bool:
     return deleted
 
 
-# ============== Game Days ==============
+# ============== Game Turns ==============
 
 
 def create_game_turn(turn_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
@@ -1989,7 +1989,7 @@ def delete_game_turn(turn: int, game_id: str = "default_game") -> bool:
 
 
 def delete_all_game_turns(game_id: str = "default_game") -> int:
-    """Delete all game days for a specific game. Returns count deleted."""
+    """Delete all game turns for a specific game. Returns count deleted."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM game_turns WHERE game_id = ?", (game_id,))

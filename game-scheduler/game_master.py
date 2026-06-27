@@ -146,10 +146,7 @@ class GameScheduler:
         if self.next_run_at is None:
             self.next_run_at = _compute_next_run(GAME_SCHEDULE)
 
-        logger.info(
-            f"GameScheduler initialized: mode={self.mode}, "
-            f"next_run_at={self.next_run_at.isoformat() if self.next_run_at else 'none'}"
-        )
+        logger.info(f"GameScheduler initialized: mode={self.mode}, next_run_at={self.next_run_at.isoformat() if self.next_run_at else 'none'}")
 
     def _persist(self) -> None:
         """Write current state to database."""
@@ -326,10 +323,7 @@ class GameScheduler:
             ):
                 if resp.status == 200:
                     result = await resp.json()
-                    logger.info(
-                        f"[AUTO_ACTION] LLM selected '{result.get('action_id', '?')}' "
-                        f"for player {player_id}: {result.get('action_text', '')[:60]}..."
-                    )
+                    logger.info(f"[AUTO_ACTION] LLM selected '{result.get('action_id', '?')}' for player {player_id}: {result.get('action_text', '')[:60]}...")
                     return result
                 else:
                     error_text = await resp.text()
