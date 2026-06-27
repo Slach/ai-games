@@ -1,309 +1,301 @@
-# AI-Generated Cooperative Game Project Plan
-
-## Improved Version (Combined from AI-Games + Obsidian AI-MMO)
+# AI-Generated Cooperative Game — Project Plan
 
 ## Project Overview
 
-A cooperative game delivered through a Telegram bot and Telegram Mini App, where an LLM generates a unique story once per day. The system generates comics, videos, 3D scenes, and other content based on the story, while players make choices to progress through the narrative.
+A cooperative game delivered through a Telegram bot, where an LLM generates a unique
+story turn by turn. The system generates comics and visual content based on the story,
+while players make individual choices to progress through the narrative.
 
 ### Vision & Uniqueness
 
-**Persistent AI-generated narrative** — the plot develops every day, maintaining memory of past events
-**Multi-modal content** — not only text, but also generated pictures, videos, 3D scenes, character voices
-**Collaborative gameplay** — decisions are made by a group of players, affecting the overall story
-**Asynchronous format** — ideal for busy people, 5-10 minutes per day
+- **Persistent AI-generated narrative** — the plot develops turn by turn, maintaining
+  memory of past events and player decisions
+- **Multi-modal content** — not only text, but also generated comics (images) via
+  ComfyUI + Pixelle MCP
+- **Cooperative gameplay** — each player receives a personal briefing and makes
+  independent choices that affect the overall story
+- **Asynchronous format** — ideal for busy people, 5–10 minutes per turn
+- **Auto-action for absent players** — the system auto-selects a plausible action for
+  unresponsive players so the game never stalls
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        TELEGRAM LAYER                           │
+│                      TELEGRAM LAYER                              │
 ├─────────────────────────────────────────────────────────────────┤
-│  Telegram Bot (aiogram)                                         │
-│  - Commands: /start, /profile, /today, /help                    │
-│  - Onboarding flow with FSM                                     │
-│  - Message handling (text & voice)                              │
+│  telegram-bot (aiogram)                                         │
+│  - Commands: /start, /profile, /turn, /help                     │
+│  - Onboarding flow with FSM                                      │
+│  - Message handling (text & voice)                               │
+│  - Push server (receives briefings from game-server-api)         │
 └──────────────────────┬──────────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    GAME MASTER API                              │
-                │  (FastAPI + OpenAI Agent)                          │
-│                                                                 │
-│  ┌─────────────────────┐  ┌──────────────────┐                 │
-│  │ Game Master Agent   │  │ Comic Generator  │                 │
-│  │ (game_master.py)    │  │ (comic_generator.py)│               │
-│  └─────────────────────┘  └──────────────────┘                 │
-│                                                                 │
-│  REST API Endpoints:                                            │
-│  - /onboarding/*                                                │
-│  - /players/*                                                   │
-│  - /game/*                                                      │
-│  - /admin/*                                                     │
+│                  GAME SERVER API (FastAPI)                       │
+│                                                                  │
+│  ┌──────────────────────┐  ┌───────────────────────┐           │
+│  │ Game Master Agent    │  │ Image Generator       │           │
+│  │ (game_master.py)     │  │ (image_generator.py)  │           │
+│  │ - Story generation   │  │ - Comic strip gen     │           │
+│  │ - NPC decisions      │  │ - Avatar generation   │           │
+│  │ - Player briefings   │  │ - ComfyUI integration │           │
+│  │ - Outcome analysis   │  │ - Pixelle MCP         │           │
+│  │ - Mission generation │  │                       │           │
+│  │ - Auto-action select │  │                       │           │
+│  └──────────────────────┘  └───────────────────────┘           │
+│                                                                  │
+│  REST API Endpoints:                                             │
+│  - /onboarding/*                                                 │
+│  - /players/*                                                    │
+│  - /game/*                                                       │
+│  - /admin/*                                                      │
 └──────────────────────┬──────────────────────────────────────────┘
                        │
                ┌───────┼───────┐
-               ▼       ▼
-        ┌─────────┐ ┌──────────┐
-        │game-master│ │comfyui   │
-        │scheduler│ │          │
-        │         │ │(GPU gen) │
-        └─────────┘ └──────────┘
-                       │
-               ┌───────┴───────┐
                ▼               ▼
-        ┌────────────┐  ┌────────────┐
-        │ Images     │  │ Video/3D   │
-        │ (nunchaku) │  │ generation │
-        └────────────┘  └────────────┘
+        ┌─────────────┐  ┌──────────┐
+        │ game-master  │  │ comfyui   │
+        │ (scheduler)  │  │ (GPU gen) │
+        │              │  │ + Pixelle │
+        └─────────────┘  └──────────┘
+                               │
+                               ▼
+                        ┌────────────┐
+                        │ Images     │
+                        │ (comics,   │
+                        │  avatars)  │
+                        └────────────┘
 
-Database: SQLite (game_master.db)
-- Player profiles
-- Onboarding sessions
-- Game days
-- Player actions
-- Messages
+Database: SQLite (game_master.db per service)
+- Player profiles with species/gender/role
+- Onboarding sessions with score history
+- Game turns (story, circumstances, outcomes)
+- Player actions (per turn, per player)
+- Player briefings (personal per-turn narrative)
+- NPC profiles and decisions
+- Missions (active and completed)
+- Messages and notifications
+- Kicked/banned player tracking
+```
 
-## Core Components (Current Implementation)
-
-### 1. Game Master Agent (OpenAI) - ✅ IMPLEMENTED
-- Generation of daily plot using LLM
-- NPC dialogue generation with personality templates
-- Content prompt generation for visual assets
-- Located in `game-server-api/game_master.py`
-
-### 2. Onboarding System - ✅ IMPLEMENTED
-- Multi-question onboarding flow via Telegram bot
-- Player profile creation with role and traits
-- FSM state management in `telegram-bot/bot.py`
-
-### 3. Story Generation - ✅ IMPLEMENTED
-- Daily episode generation at scheduled time
-- JSON-formatted story output (setting, conflict, narrative)
-- Decision points with action choices
-- Language support (English/Russian)
-
-### 4. Player Action System - ✅ IMPLEMENTED
-- Action selection via inline keyboard
-- Action recording in database
-- Default action selection if player doesn't choose
-- Consequence tracking
-
-### 5. Message System - ✅ IMPLEMENTED
-- Text message handling with Game Master response
-- Voice message support (stored, no transcription yet)
-- Message history per player
-- Located in `telegram-bot/bot.py`
-
-### 6. Content Generation (ComfyUI) - ⏳ PLANNED
-- **Pictures:** scenes, characters, locations (nunchaku workflow)
-- **Video:** key moments of the story (Lightx2v workflow)
-- **3D:** ship, stations, planets (TRELLIS2 workflow)
-- **Voices:** character voiceovers (ChatterBox workflow)
-- Comic strip generation with multiple panels
-
-### 7. Database - ✅ IMPLEMENTED
-- SQLite database (`game_master.db`)
-- Player profiles and onboarding sessions
-- Game days and player actions
-- Message history
-
-### 8. Telegram Interface - ✅ IMPLEMENTED
-- Bot commands: /start, /profile, /today, /help
-- Onboarding flow with inline keyboards
-- Action selection via callback queries
-- Language support (English/Russian)
-
-### 9. Scheduler - ✅ IMPLEMENTED
-- Daily generation at configured time (default 08:00)
-- Single-run mode for testing
-- Located in `game-master/game_master.py`
-
-## Tech Stack
+## Current Stack
 
 | Layer | Technology |
 |-------|------------|
 | Bot | Python + aiogram |
-| Mini App | TypeScript + React + Three.js |
-| Game Engine | OpenAI SDK |
-| Content Gen | ComfyUI (Docker) |
-| Database | PostgreSQL + pgvector |
-| Queue | Redis |
-| Hosting | VPS with GPU / Cloud GPU |
+| API | Python + FastAPI |
+| LLM | llama.cpp (OpenAI-compatible endpoint) |
+| Content Gen | ComfyUI (Docker, GPU) + Pixelle MCP |
+| Database | SQLite (per-service) |
+| Scheduler | Python + asyncio (standalone service) |
+| Deployment | Docker Compose, external spark-network |
+| LLM Model | Qwen/Qwen3.5-35B-FP8 (configurable) |
 
-## Daily Gameplay Loop (Current Flow)
-
-```
-
-┌─────────────────────────────────────────────────────────────┐
-│  08:00  │  Game Master Scheduler triggers daily episode    │
-├─────────┼───────────────────────────────────────────────────┤
-│  08:00+ │  Episode generated via game-server-api           │
-│         │  - Story with setting, conflict, narrative       │
-│         │  - NPC dialogues with personalities              │
-│         │  - Decision points for player actions            │
-├─────────┼───────────────────────────────────────────────────┤
-│  Anytime│  Players can:                                      │
-│         │  - View current day via /today                   │
-│         │  - Select action from decision points            │
-│         │  - Send text/voice messages to Game Master       │
-│         │  - Check profile with /profile                   │
-├─────────┼───────────────────────────────────────────────────┤
-│  End of │  If no action selected:                          │
-│  Day    │  - AI selects default action based on traits     │
-│         │  - Action recorded and consequences applied      │
-├─────────┼───────────────────────────────────────────────────┤
-│  Next   │  New episode generated based on previous actions │
-│  Day    │  - Story continues from previous day             │
-│         │  - Player choices influence narrative            │
-└─────────┴───────────────────────────────────────────────────┘
+## Turn Gameplay Loop
 
 ```
+┌────────────────────────────────────────────────────────────────┐
+│  Scheduler triggers next turn (configurable interval: 8h,      │
+│  30m, or daily at HH:MM)                                       │
+├────────────────────────────────────────────────────────────────┤
+│  PREVIOUS TURN CLEANUP:                                         │
+│  - Auto-select actions for players who didn't choose            │
+│  - LLM chooses plausible action considering player profile,     │
+│    personal briefing, and available actions                     │
+├────────────────────────────────────────────────────────────────┤
+│  NEXT TURN GENERATION (via /admin/continue-game):               │
+│  1. Analyze previous turn outcomes (all decisions now in)       │
+│  2. Generate global circumstances (setting, conflict, narrative)│
+│  3. Generate per-player personal briefings                      │
+│  4. Generate NPC decisions and dialogues                        │
+│  5. Generate mission seeds for the new turn                     │
+│  6. Push briefings to players via Telegram bot push server      │
+├────────────────────────────────────────────────────────────────┤
+│  DURING THE TURN:                                               │
+│  - Players view /turn to see current story and circumstances   │
+│  - Each player gets a personal briefing with action choices     │
+│  - Players select an action (or the system auto-selects later)  │
+│  - Players can send text/voice messages to Game Master          │
+│  - Check /profile to view character                             │
+├────────────────────────────────────────────────────────────────┤
+│  TURN TRANSITION:                                               │
+│  - Scheduler waits for next interval                            │
+│  - Any player who hasn't chosen gets auto-action                │
+│  - All actions feed into next turn's outcome analysis           │
+│  - Story branches based on cumulative player choices            │
+└────────────────────────────────────────────────────────────────┘
+```
 
-## Implementation Phases
+## Core Components
 
-### Phase 1: Foundation (Months 1-2) - MOSTLY COMPLETE ✅
+### 1. Game Master Agent (LLM) — `game-server-api/game_master.py`
 
-**Implemented:**
-- [x] Game Master Agent with OpenAI SDK integration
-- [x] Basic Telegram bot with aiogram
-- [x] Story generation system (text only)
-- [x] Onboarding flow with player profiles
-- [x] Player action selection system
-- [x] Message handling (text and voice)
-- [x] SQLite database for persistence
-- [x] Daily scheduler for episode generation
+- Turn story generation using LLM (llama.cpp via OpenAI-compatible API)
+- NPC decision generation with personalities
+- Per-player personal briefing generation
+- Outcome analysis (consequences of player actions)
+- Mission generation with seeds
+- Auto-action selection for unresponsive players
+- Game-over detection and ending generation
+- Content prompt generation for visual assets
+- Language support (English/Russian)
+
+### 2. Game Server API — `game-server-api/main.py`
+
+- FastAPI service for game orchestration
+- Onboarding endpoints (questions, profile creation)
+- Player management (join, leave, kick, ban)
+- Game lifecycle (start, continue, end, reset)
+- Turn management (create turn, get story, briefings, actions)
+- Admin endpoints (continue-game, generate-comic, notify-player)
+- Push client for Telegram bot notifications
+- Mission system (create, complete, track)
+
+### 3. Telegram Bot — `telegram-bot/bot.py`
+
+- aiogram-based bot with FSM onboarding
+- Commands: /start, /profile, /turn, /help
+- Admin commands: /start_game, /continue_game, /kick
+- Inline keyboards for action selection and onboarding
+- Text and voice message handling
+- Push server (`push_server.py`) for receiving briefings from API
+- Language support (per-player preference)
+
+### 4. Game Master Scheduler — `game-master/game_master.py`
+
+- Standalone async service that calls game-server-api
+- Configurable schedule: interval (8h, 30m, 30s) or daily at HH:MM
+- Modes: `scheduled` (loop) or `single` (one-shot for testing)
+- Turn lifecycle orchestration:
+  1. Auto-select actions for unresponsive players (previous turn)
+  2. Trigger next turn via `/admin/continue-game`
+- Runtime: `docker compose run --rm game-master` for debugging
+
+### 5. Image Generator — `game-server-api/image_generator.py`
+
+- Comic strip generation for players via ComfyUI
+- Avatar generation for player profiles
+- Pixelle MCP integration for image generation
+- Image storage and retrieval
+
+### 6. Database — `game-server-api/database.py`
+
+- SQLite database (`game_master.db`)
+- Player profiles (species, gender, role, traits, name)
+- Onboarding sessions with score history
+- Game turns (global circumstances, story, outcomes)
+- Player actions per turn
+- Player briefings (personal narrative, available actions)
+- NPC profiles and decisions
+- Missions (active and completed)
+- Game messages and notifications
+- Schema migrations via `MIGRATIONS` list
+
+### 7. Game Rules — `game-server-api/game_rules.py`
+
+- Ship role definitions and constraints
+- Mission normalization and seed selection
+- Species and gender definitions for onboarding
+
+### 8. Prompts — `game-server-api/prompts.py`
+
+- All LLM prompts: onboarding, story, briefings, NPC decisions,
+  outcomes, missions, game-over, auto-action, content generation
+- JSON schema definitions for structured LLM output
+
+## Deployment
+
+### Services (docker-compose.yaml)
+
+| Service | Description | GPU |
+|---------|-------------|-----|
+| `comfyui` | Image generation backend (ComfyUI) | Yes |
+| `game-server-api` | FastAPI game orchestration | No |
+| `telegram-bot` | aiogram bot + push server | No |
+| `game-master` | Turn scheduler | No |
+
+All services run on the external `spark-network`. llama.cpp is also an external
+service on that network.
+
+### Commands
+
+**Apply code changes without wiping data:**
+
+```bash
+docker compose --progress=plain stop telegram-bot game-master game-server-api --timeout=1 \
+  && docker compose --progress=plain up -d --force-recreate telegram-bot game-master game-server-api
+```
+
+**Full wipe and rebuild:**
+
+```bash
+docker compose down \
+  && rm -rfv ./*/*.db \
+  && rm -fv ./comfyui/output/*_.png \
+  && docker compose up -d --build
+```
+
+**Manual turn trigger (for debugging):**
+
+```bash
+docker compose run --rm game-master
+```
+
+**Run tests:**
+
+```bash
+cd game-server-api && ../.venv/bin/python -m unittest discover -s tests
+```
+
+## Implementation Status
+
+### Completed ✅
+
+- [x] Game Master LLM agent (story, briefings, NPCs, outcomes, missions)
+- [x] FastAPI game server with full REST API
+- [x] Telegram bot with FSM onboarding and action selection
+- [x] Turn scheduler with configurable interval
+- [x] Player profiles (species, gender, role, traits)
+- [x] Onboarding flow with dynamic questions
+- [x] Player action system with auto-selection
+- [x] NPC system (decisions, dialogues, role-filling)
+- [x] Mission system
+- [x] Push server for Telegram notifications
 - [x] Language support (English/Russian)
+- [x] Game-over detection and ending generation
+- [x] Comic generation via ComfyUI + Pixelle MCP
+- [x] Avatar generation
+- [x] SQLite persistence with migration system
+- [x] Docker Compose deployment
+- [x] Admin commands (/start_game, /continue_game, /kick)
 
-**Remaining TODOs:**
-- [ ] ComfyUI Docker setup with HuggingFace cache mounting
-- [ ] ComfyUI integration for content generation
-- [ ] Comic strip generation workflow
-- [ ] NPC personality system refinement
-- [ ] Default action selection logic improvement
-- [ ] Error handling and logging improvements
+### Planned ⏳
 
-**Status:** Core gameplay loop is functional.
-Content generation pipeline needs implementation.
-
-### Phase 2: Content Generation (Months 3-4) - PLANNED ⏳
-
-**Planned Features:**
-- [ ] ComfyUI integration for content generation
-- [ ] Scene picture generation (nunchaku workflow)
-- [ ] Character portrait generation
-- [ ] Comic strip generation with multiple panels
-- [ ] Video generation for key story moments (Lightx2v)
-- [ ] 3D scene generation (TRELLIS2)
-- [ ] Automated content creation pipeline
-- [ ] Content caching and delivery system
-
-**Dependencies:** GPU resources, HuggingFace models, ComfyUI workflows
-
-### Phase 3: Character AI & Advanced Features (Months 5-6) - PLANNED ⏳
-
-**Planned Features:**
-- [ ] Telegram Mini App with rich UI
-- [ ] Character relationship mechanics
-- [ ] Enhanced dialogue generation systems
-- [ ] Voice generation for NPCs (ChatterBox)
-- [ ] Performance optimization for content generation
-- [ ] Multiplayer voting system
-
-**Dependencies:** Telegram Mini App framework
-
-### Phase 4: Rich Experience (Months 7+) - FUTURE ⏳
-
-**Planned Features:**
-- [ ] Full video generation pipeline
-- [ ] Advanced 3D scene rendering
-- [ ] Character voiceovers with emotional range
-- [ ] Multiple ships/groups for parallel stories
-- [ ] Cross-group events and interactions
-- [ ] Monetization options (premium content, subscriptions)
+- [ ] Video generation (ComfyUI Lightx2v workflow)
+- [ ] 3D scene generation (ComfyUI TRELLIS2 workflow)
+- [ ] Voice generation for NPCs (ComfyUI ChatterBox)
+- [ ] Multiple parallel game instances
 - [ ] Analytics and player engagement tracking
-
-**Dependencies:** Additional GPU resources, CDN infrastructure
-
-## Deployment Strategy
-
-### Local Development
-- Docker Compose for local ComfyUI instance
-- Local HuggingFace cache mounting
-- Development Telegram bot for testing
-
-### Production
-- Containerized deployment with GPU acceleration
-- CDN for serving generated content
-- Scalable backend for handling multiple game sessions
-- Monitoring and analytics for player engagement
-
-## Required Components
-
-### ComfyUI Plugins
-- **ComfyUI-TRELLIS2** — 3D generation from single images
-- **comfy-cli** — Workflow management
-- **ComfyUI-nunchaku** — Image and video generation
-- **ComfyUI-Lightx2vWrapper** — Fast video generation
-- **ComfyUI_Fill-ChatterBox** — Voice generation
-
-### External Services
-- **HuggingFace** — Model hosting and caching
-- **Telegram Bot API** — Communication platform
-- **Cloud Storage** — Content hosting for generated media
-
-## Success Metrics
-
-### Engagement
-- Daily active users
-- Story completion rates
-- Player retention over time
-- Social sharing of generated content
-
-### Technical Performance
-- Content generation speed
-- System uptime
-- API response times
-- Error rates
-- GPU resource management
-- Data consistency across game sessions
+- [ ] Performance optimization for content generation
+- [ ] Telegram Mini App (TypeScript + React) — not yet implemented, bot-only for now
 
 ## Risks & Mitigations
 
 | Risk | Probability | Mitigation |
 |------|-------------|------------|
 | GPU expensive | High | Model optimization, batching |
-| Generation latency | Medium | Async pipeline, pre-generation |
-| Plot consistency | High | Memory system, world state |
-| Telegram limitations | Medium | Fallback to Mini App |
-| GPU resource management | Medium | Docker Compose optimization |
+| Generation latency | Medium | Async pipeline, concurrent LLM calls |
+| Plot consistency | High | Memory system, world state per turn |
+| Telegram limitations | Medium | Push server, retry logic |
+| GPU resource management | Medium | Docker Compose resource reservations |
 | Content moderation | Low | Automated filters + human review |
-| Scalability | Medium | VPS with GPU scaling |
-| Platform dependency | Low | Multi-platform strategy |
-
-## Timeline & Budget
-
-### Timeline
-- Months 1-2: Foundation (infrastructure + basic story)
-- Months 3-4: Content Generation (ComfyUI integration)
-- Months 5-6: Character AI & Advanced Features
-
-### Budget Considerations
-- GPU resources for content generation
-- Cloud storage for generated content
-- CDN bandwidth
-- Telegram API usage
-- Developer time for implementation
 
 ## Conclusion
 
-This project represents an innovative approach to gaming that leverages generative AI
-to create unique, daily experiences for players. The cooperative nature and daily
-story generation create a sense of community and anticipation that should drive
-engagement and retention. The modular architecture allows for future expansion to
-different settings and gameplay mechanics.
-
-**Target:** Q1-Q2 2026
-**Time Budget:** Parallel with Flight Reminder Bot, 1-2 hours/week
-**Repo:** https://github.com/Slach/ai-games
-**Status:** Idea / Early research
+This project leverages generative AI (llama.cpp + ComfyUI) to create unique,
+persistent cooperative game experiences delivered through Telegram. The
+turn-based architecture with auto-action for absent players ensures the game
+never stalls, while the modular Docker Compose setup allows easy local
+development and deployment.
