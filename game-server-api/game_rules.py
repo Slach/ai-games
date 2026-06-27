@@ -9,6 +9,7 @@ mission archetype/seeds are selected deterministically.
 Pure functions only: no DB, no LLM, no logging. Easy to unit test.
 """
 
+import random
 from typing import Any
 
 # ── Mission objective normalization ────────────────────────────────
@@ -169,3 +170,175 @@ def apply_mission_progress(
     norm["current_stage"] = current_stage
     norm["completed"] = completed
     return norm
+
+
+# ── Mission archetype & seed selection (P2) ────────────────────────
+
+MISSION_ARCHETYPES: dict[str, dict[str, str]] = {
+    "first_contact": {
+        "ru": "Первый контакт — дипломатия с неизвестной цивилизацией. Тон: осторожность, этика, языковой барьер.",
+        "en": "First contact — diplomacy with an unknown civilization. Tone: caution, ethics, language barrier.",
+    },
+    "rescue": {
+        "ru": "Спасательная операция — выжившие или пленники в опасной зоне. Тон: срочность, риск, мораль.",
+        "en": "Rescue operation — survivors or captives in a hazardous zone. Tone: urgency, risk, morals.",
+    },
+    "survey": {
+        "ru": "Научная разведка — сбор данных о планете/объекте. Тон: любопытство, методичность, открытия.",
+        "en": "Scientific survey — gather data on a planet/object. Tone: curiosity, method, discovery.",
+    },
+    "mystery": {
+        "ru": "Расследование тайны — необъяснимые события или преступление. Тон: интрига, улики, неопределённость.",
+        "en": "Mystery investigation — unexplained events or a crime. Tone: intrigue, clues, uncertainty.",
+    },
+    "infiltration": {
+        "ru": "Проникновение — скрытная операция на враждебной территории. Тон: стелс, обман, ставки.",
+        "en": "Infiltration — covert op on hostile ground. Tone: stealth, deception, stakes.",
+    },
+    "defense": {
+        "ru": "Оборона — защита объекта или эвакуация под угрозой. Тон: напряжение, тактика, жертвы.",
+        "en": "Defense — protect an asset or evacuate under threat. Tone: tension, tactics, sacrifice.",
+    },
+    "intrigue": {
+        "ru": "Политическая интрига — фракции, заговор, двойные интересы. Тон: переговоры, предательство, союзы.",
+        "en": "Political intrigue — factions, conspiracy, double interests. Tone: negotiation, betrayal, alliances.",
+    },
+    "trade": {
+        "ru": "Торговая миссия — сделка, обмен, дефицитный ресурс. Тон: выгода, репутация, торг.",
+        "en": "Trade mission — a deal, exchange, scarce resource. Tone: profit, reputation, haggling.",
+    },
+    "anomaly": {
+        "ru": "Изучение аномалии — пространственно-временной или энергетический феномен. Тон: чудо, опасность, парадокс.",
+        "en": "Anomaly study — a spacetime or energy phenomenon. Tone: wonder, danger, paradox.",
+    },
+    "exploration": {
+        "ru": "Исследование неизведанного — новый регион космоса. Тон: открытие, неизвестность, первопроходцы.",
+        "en": "Deep exploration — an uncharted region. Tone: discovery, the unknown, pioneers.",
+    },
+}
+
+SEED_TABLES: dict[str, dict[str, list[str]]] = {
+    "setting": {
+        "ru": [
+            "поверхность негостеприимной планеты",
+            "заброшенная орбитальная станция",
+            "туманность с ионными бурями",
+            "руины исчезнувшей цивилизации",
+            "огромный космический дереликв",
+            "зона у горизонта событий чёрной дыры",
+            "верхние слои газового гиганта",
+            "плотное астероидное поле",
+        ],
+        "en": [
+            "surface of an inhospitable planet",
+            "abandoned orbital station",
+            "nebula swept by ion storms",
+            "ruins of a vanished civilization",
+            "a colossal space derelict",
+            "the edge of a black hole's event horizon",
+            "upper layers of a gas giant",
+            "a dense asteroid field",
+        ],
+    },
+    "complication": {
+        "ru": [
+            "разбушевавшееся природное явление",
+            "взбунтовавшийся бортовой ИИ",
+            "налётчики или пираты",
+            "зараза на борту",
+            "вмешательство враждебной фракции",
+            "временная аномалия",
+            "конкурирующая экспедиция",
+            "внутренний раскол экипажа",
+        ],
+        "en": [
+            "a raging natural phenomenon",
+            "a shipboard AI gone rogue",
+            "raiders or pirates",
+            "an outbreak aboard",
+            "interference from a hostile faction",
+            "a temporal anomaly",
+            "a rival expedition",
+            "an internal crew schism",
+        ],
+    },
+    "twist": {
+        "ru": [
+            "союзник оказывается предателем",
+            "сигнал приходит из будущего",
+            "объект миссии живой и разумен",
+            "истинная цель отличается от заявленной",
+            "награда несёт скрытую цену",
+            "противник действует из благих побуждений",
+            "карта местности была ложной",
+            "экипаж не один на объекте",
+        ],
+        "en": [
+            "an ally is the traitor",
+            "the signal comes from the future",
+            "the mission target is alive and sentient",
+            "the true objective differs from the stated one",
+            "the reward carries a hidden price",
+            "the antagonist acts from noble motives",
+            "the map was a decoy",
+            "the crew is not alone at the site",
+        ],
+    },
+    "reward": {
+        "ru": [
+            "чужая технология",
+            "древний артефакт",
+            "новый союзник",
+            "звёздные карты неизведанного",
+            "ценные научные данные",
+            "редкий ресурс",
+            "рост репутации и влияния",
+            "секрет, меняющий баланс сил",
+        ],
+        "en": [
+            "alien technology",
+            "an ancient artifact",
+            "a new ally",
+            "star charts of the unknown",
+            "valuable scientific data",
+            "a rare resource",
+            "a boost to reputation and influence",
+            "a secret that shifts the balance of power",
+        ],
+    },
+}
+
+FORBIDDEN_OPENINGS: dict[str, list[str]] = {
+    "ru": [
+        "перехвачен сигнал",
+        "неопознанный сигнал",
+        "сигнал бедствия",
+        "SOS",
+        "аномальное излучение",
+        "загадочная передача",
+        "обрывок transmissions",
+    ],
+    "en": [
+        "intercepted signal",
+        "unidentified signal",
+        "distress signal",
+        "SOS",
+        "anomalous emission",
+        "mysterious transmission",
+        "fragment of a transmission",
+    ],
+}
+
+
+def select_mission_seeds(
+    language: str = "en", rng: random.Random | None = None
+) -> dict:
+    """Pick a mission archetype and one entry per seed table (deterministic with rng).
+
+    Returns {"archetype": <key>, "seeds": {table: entry}, "language": language}.
+    """
+    r = rng or random.Random()
+    lang = "ru" if language == "ru" else "en"
+    archetype = r.choice(list(MISSION_ARCHETYPES.keys()))
+    seeds = {table: r.choice(opts[lang]) for table, opts in SEED_TABLES.items()}
+    return {"archetype": archetype, "seeds": seeds, "language": lang}

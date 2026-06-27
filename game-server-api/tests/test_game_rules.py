@@ -163,5 +163,42 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         self.assertFalse(result["completed"])
 
 
+import random as _random  # noqa: E402
+
+from game_rules import (  # noqa: E402
+    FORBIDDEN_OPENINGS,
+    MISSION_ARCHETYPES,
+    SEED_TABLES,
+    select_mission_seeds,
+)
+
+
+class TestMissionSeeds(unittest.TestCase):
+    def test_select_returns_archetype_and_all_seed_tables(self):
+        rng = _random.Random(42)
+        result = select_mission_seeds(language="en", rng=rng)
+        self.assertIn(result["archetype"], MISSION_ARCHETYPES)
+        self.assertEqual(set(result["seeds"].keys()), set(SEED_TABLES.keys()))
+
+    def test_select_is_deterministic_with_seed(self):
+        r1 = select_mission_seeds(language="en", rng=_random.Random(123))
+        r2 = select_mission_seeds(language="en", rng=_random.Random(123))
+        self.assertEqual(r1, r2)
+
+    def test_ru_and_en_tables_have_matching_keys(self):
+        for table, opts in SEED_TABLES.items():
+            self.assertIn("ru", opts)
+            self.assertIn("en", opts)
+            self.assertGreaterEqual(len(opts["ru"]), 4)
+            self.assertEqual(len(opts["ru"]), len(opts["en"]))
+        self.assertIn("ru", FORBIDDEN_OPENINGS)
+        self.assertIn("en", FORBIDDEN_OPENINGS)
+
+    def test_all_archetypes_have_both_languages(self):
+        for key, val in MISSION_ARCHETYPES.items():
+            self.assertIn("ru", val)
+            self.assertIn("en", val)
+
+
 if __name__ == "__main__":
     unittest.main()
