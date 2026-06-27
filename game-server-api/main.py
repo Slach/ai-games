@@ -94,6 +94,7 @@ from database import (
     update_onboarding_session,
     update_player_profile_last_poll,
 )
+from game_rules import apply_mission_progress
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from game_master import create_game_master_agent
@@ -2484,55 +2485,23 @@ async def _analyze_day_outcome(
         update_game_day_outcome(day, json.dumps(outcome, ensure_ascii=False), game_id)
         logger.info(f"[OUTCOME] Combined outcome saved for Day {day}")
 
-        # Update mission progress if provided (new array format: [{stage, points}])
+        # Apply mission progress through the rules layer (P0+P1):
+        # normalizes objectives, accumulates with regression caps + tempo floor,
+        # and computes completion from real thresholds (fixes defect B/C).
         mission_progress = outcome.get("mission_progress", [])
-        if mission_progress and mission:
-            stage_progress = mission.get("stage_progress", {})
-            current_stage = mission.get("current_stage", 0)
-            total_stages = mission.get("total_stages", 1)
-
-            for entry in mission_progress:
-                stage_num = entry.get("stage")
-                points = entry.get("points", 0)
-
-                if stage_num is None:
-                    logger.info(f"[MISSION] Skipping entry without stage: {entry}")
-                    continue
-
-                try:
-                    points_int = int(points)
-                except (ValueError, TypeError):
-                    logger.warning(f"[MISSION] Skipping non-integer points: {points}")
-                    continue
-
-                stage_key = str(stage_num)
-                old_progress = stage_progress.get(stage_key, 0)
-                new_progress = max(0, old_progress + points_int)
-                stage_progress[stage_key] = new_progress
-
-                log_direction = "advance" if points_int > 0 else "setback" if points_int < 0 else "neutral"
-                logger.info(f"[MISSION] Stage {stage_num}: {old_progress} -> {new_progress} ({log_direction}, delta={points_int})")
-
-                # Check if current stage is now completed (only on positive progress)
-                if points_int > 0 and stage_num == current_stage:
-                    for obj in mission.get("objectives", []):
-                        if obj.get("stage") == stage_num:
-                            threshold = obj.get("success_threshold", 5)
-                            if new_progress >= threshold:
-                                current_stage = min(current_stage + 1, total_stages)
-                                logger.info(f"[MISSION] Stage {stage_num} completed!")
-                                break
-
-            completed = current_stage >= total_stages
+        if mission:
+            updated_mission = apply_mission_progress(mission, mission_progress)
             update_mission_stage_progress(
-                stage_progress,
-                current_stage,
-                game_id,
-                completed,
+                updated_mission["stage_progress"],
+                updated_mission["current_stage"],
+                game_id=game_id,
+                completed=updated_mission["completed"],
             )
-
-            if completed:
+            for stage_key, pts in updated_mission["stage_progress"].items():
+                logger.info(f"[MISSION] Stage {stage_key} progress now {pts}")
+            if updated_mission["completed"]:
                 logger.info("[MISSION] MISSION COMPLETE! Notifying players...")
+            mission = updated_mission
 
         # ========== Process ship damage from new structured fields ==========
         ship_hull = outcome.get("ship_hull_integrity", 100)
