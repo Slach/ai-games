@@ -53,6 +53,14 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
+def _safe_int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        logger.warning("Invalid %s, using default %d", name, default)
+        return default
+
+
 # ============== Pydantic Models ==============
 
 
@@ -181,16 +189,34 @@ STORY_SCHEMA = {
 }
 
 # Onboarding configuration from environment
-ONBOARDING_QUESTIONS_COUNT = int(os.getenv("ONBOARDING_QUESTIONS_COUNT", "5"))
-ONBOARDING_OPTIONS_COUNT = int(os.getenv("ONBOARDING_OPTIONS_COUNT", "5"))
+try:
+    ONBOARDING_QUESTIONS_COUNT = int(os.getenv("ONBOARDING_QUESTIONS_COUNT", "5"))
+except (ValueError, TypeError):
+    logger.warning("Invalid ONBOARDING_QUESTIONS_COUNT, using default 5")
+    ONBOARDING_QUESTIONS_COUNT = 5
+
+try:
+    ONBOARDING_OPTIONS_COUNT = int(os.getenv("ONBOARDING_OPTIONS_COUNT", "5"))
+except (ValueError, TypeError):
+    logger.warning("Invalid ONBOARDING_OPTIONS_COUNT, using default 5")
+    ONBOARDING_OPTIONS_COUNT = 5
 
 # Minimum ratio of second-place tag count to first-place for hybrid detection.
 # E.g. 0.25 means if second species/gender tag has >= 25% of first-place votes,
 # the character is considered a hybrid. Range: 0.0 (always hybrid) to 1.0 (only tie).
 # Minimum ratio of second-place tag count to first-place for hybrid detection.
 # Range: 0.0 (always hybrid) to 1.0 (only tie).
-GAME_SPECIES_HYBRID_THRESHOLD = float(os.getenv("GAME_SPECIES_HYBRID_THRESHOLD", "0.25"))
-GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
+try:
+    GAME_SPECIES_HYBRID_THRESHOLD = float(os.getenv("GAME_SPECIES_HYBRID_THRESHOLD", "0.25"))
+except (ValueError, TypeError):
+    logger.warning("Invalid GAME_SPECIES_HYBRID_THRESHOLD, using default 0.25")
+    GAME_SPECIES_HYBRID_THRESHOLD = 0.25
+
+try:
+    GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
+except (ValueError, TypeError):
+    logger.warning("Invalid GAME_GENDER_HYBRID_THRESHOLD, using default 0.25")
+    GAME_GENDER_HYBRID_THRESHOLD = 0.25
 
 
 def _build_onboarding_questions_schema() -> dict:
@@ -614,6 +640,10 @@ MISSION_SCHEMA = {
                     "type": "string",
                     "description": "Mission overview narrative (2-3 paragraphs)",
                 },
+                "short_description": {
+                    "type": "string",
+                    "description": "Condensed 1-2 sentence summary, no more than 500 characters — used for image captions with length limits",
+                },
                 "objectives": {
                     "type": "array",
                     "items": {
@@ -752,11 +782,11 @@ class GameMasterAgent:
         self.llm_base_url = os.getenv("LLM_URL", "http://llama.cpp:8090/v1")
         self.llm_api_key = os.getenv("LLM_API_KEY", "placeholder-key-for-llama-cpp")
         self.llm_model = os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B")
-        self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", "32768"))
-        self.llm_max_avatar_tokens = int(os.getenv("LLM_MAX_AVATAR_TOKENS", "4096"))
-        self.turn_good_actions = int(os.getenv("GAME_TURN_GOOD_ACTIONS", "3"))
-        self.turn_bad_actions = int(os.getenv("GAME_TURN_BAD_ACTIONS", "1"))
-        self.turn_neutral_actions = int(os.getenv("GAME_TURN_NEUTRAL_ACTIONS", "1"))
+        self.llm_max_tokens = _safe_int_env("LLM_MAX_TOKENS", 32768)
+        self.llm_max_avatar_tokens = _safe_int_env("LLM_MAX_AVATAR_TOKENS", 4096)
+        self.turn_good_actions = _safe_int_env("GAME_TURN_GOOD_ACTIONS", 3)
+        self.turn_bad_actions = _safe_int_env("GAME_TURN_BAD_ACTIONS", 1)
+        self.turn_neutral_actions = _safe_int_env("GAME_TURN_NEUTRAL_ACTIONS", 1)
         self.language = language
         self.npcs: dict[str, dict[str, Any]] = {}
 
@@ -1142,7 +1172,11 @@ class GameMasterAgent:
 
             for question_id, selected_label in answers.items():
                 # Answers dict keys are strings after json.loads from DB (SQLite JSON stores all keys as strings)
-                qid = int(question_id) if not isinstance(question_id, int) else question_id
+                try:
+                    qid = int(question_id) if not isinstance(question_id, int) else question_id
+                except (ValueError, TypeError):
+                    logger.warning("[ROLE] Invalid question_id %r, skipping", question_id)
+                    continue
                 q_data = question_map.get(qid)
                 if not q_data:
                     logger.warning(f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data")
@@ -1163,7 +1197,10 @@ class GameMasterAgent:
                 scores = selected_option.get("role_scores", {})
                 for role_key, points in scores.items():
                     if role_key in role_points:
-                        role_points[role_key] += int(points)
+                        try:
+                            role_points[role_key] += int(points)
+                        except (ValueError, TypeError):
+                            logger.warning("[ROLE] Invalid points %r for role %s, skipping", points, role_key)
 
         # Sort available roles by their accumulated points (descending)
         available_keys = {r["role_key"] for r in available_roles}
@@ -1644,7 +1681,10 @@ spatial presence\n"
         tag_counts: dict[str, int] = {}
 
         for question_id, selected_value in answers.items():
-            qid = int(question_id) if not isinstance(question_id, int) else question_id
+            try:
+                qid = int(question_id) if not isinstance(question_id, int) else question_id
+            except (ValueError, TypeError):
+                continue
             q_data = question_map.get(qid)
             if not q_data:
                 continue
@@ -2397,8 +2437,13 @@ spatial presence\n"
             result = {
                 "name": mf["name"],
                 "description": mf["description"],
+                "short_description": mf.get("description", "")[:500],
                 "objectives": [{"stage": i + 1, "name": s["name"], "description": s["description"], "success_threshold": [3, 5, 7][i]} for i, s in enumerate(mf["stages"])],
             }
+
+        # Ensure short_description exists (LLM may omit it)
+        if "short_description" not in result or not result["short_description"]:
+            result["short_description"] = result.get("description", "")[:500]
 
         # normalize: 1-based stages, thresholds 3-5, derive current/total/completed
         result["archetype"] = mission_seeds["archetype"]

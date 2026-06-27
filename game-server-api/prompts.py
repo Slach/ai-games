@@ -1075,7 +1075,9 @@ def build_mission_prompts(
             "1. Название миссии — только кодовое имя и описание (формат: 'Кодовое имя: описание'). "
             "ВАЖНО: слово 'Миссия' в названии НЕ пиши — оно будет добавлено автоматически в интерфейсе.\n"
             "2. Описание — что нужно сделать, 2-3 абзаца\n"
-            "3. 2-4 этапа с целями, каждый с success_threshold в диапазоне 3-5\n"
+            "3. short_description — сжатое описание миссии в 1-2 предложениях, "
+            "не более 500 символов (используется для подписей к картинкам с ограничением длины)\n"
+            "4. 2-4 этапа с целями, каждый с success_threshold в диапазоне 3-5\n"
             "Этапы должны быть последовательными, но достижимыми нелинейно.\n"
             "Всё на русском языке."
         )
@@ -1090,7 +1092,9 @@ def build_mission_prompts(
             "1. Mission name — code name and description only (format: 'Code Name: description'). "
             "IMPORTANT: do NOT include the word 'Mission' in the name — it will be added automatically by the UI.\n"
             "2. Description — what needs to be done, 2-3 paragraphs\n"
-            "3. 2-4 stages with objectives, each with success_threshold in the range 3-5\n"
+            "3. A short_description — condensed 1-2 sentence summary of the mission, "
+            "no more than 500 characters (used for image captions with length limits)\n"
+            "4. 2-4 stages with objectives, each with success_threshold in the range 3-5\n"
             "Stages should be sequential but achievable non-linearly."
         )
     return system, user

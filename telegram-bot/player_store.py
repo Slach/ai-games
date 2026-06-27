@@ -147,55 +147,71 @@ def get_player_state(player_id: int) -> dict[str, Any]:
         conn.close()
 
 
+# SQL-safe column references for update_player_state(). Keys are validated
+# against this dict — any key not present here is rejected, so there is no
+# path for user input to reach a column name.
+_PLAYER_STATE_COLUMNS: dict[str, str] = {
+    "game_id": "game_id = ?",
+    "onboarding_session_id": "onboarding_session_id = ?",
+    "current_question": "current_question = ?",
+    "current_question_id": "current_question_id = ?",
+    "current_options": "current_options = ?",
+    "current_question_text": "current_question_text = ?",
+    "current_question_image_url": "current_question_image_url = ?",
+    "last_poll": "last_poll = ?",
+    "pending_updates": "pending_updates = ?",
+    "last_briefing_day_sent": "last_briefing_day_sent = ?",
+    "language": "language = ?",
+}
+
+
 def update_player_state(player_id: int, **kwargs: Any) -> None:
     """Update player state columns.
 
     Accepts the same keyword arguments that were previously written to the
-    in-memory dict. Datetime values are serialised to ISO strings, lists/dicts
+    in-memory dict.  Datetime values are serialised to ISO strings, lists/dicts
     to JSON strings.
     """
     conn = _conn()
     try:
-        # Build SET clause dynamically
-        set_parts: list[str] = []
-        values: list[Any] = []
+        # Warn about unknown keys
+        unknown = kwargs.keys() - _PLAYER_STATE_COLUMNS.keys()
+        for key in unknown:
+            logger.warning("Unknown player_state key '%s' — skipping", key)
 
-        for key, value in kwargs.items():
-            if key not in (
-                "game_id",
-                "onboarding_session_id",
-                "current_question",
-                "current_question_id",
-                "current_options",
-                "current_question_text",
-                "current_question_image_url",
-                "last_poll",
-                "pending_updates",
-                "last_briefing_day_sent",
-                "language",
-            ):
-                logger.warning("Unknown player_state key '%s' — skipping", key)
-                continue
-
-            # Serialise non-scalar types
-            if key == "last_poll" and isinstance(value, datetime):
-                value = value.isoformat()
-            elif key in ("pending_updates", "current_options") and value is not None:
-                value = json.dumps(value, cls=DateTimeEncoder)
-
-            set_parts.append(f"{key} = ?")
-            values.append(value)
-
-        if not set_parts:
+        provided = {k for k in kwargs if k in _PLAYER_STATE_COLUMNS}
+        if not provided:
             return  # nothing to update
 
-        # Always bump updated_at
-        set_parts.append("updated_at = datetime('now')")
-        values.append(player_id)
+        # Serialise non-scalar types; collect values in column definition order
+        params: list[Any] = []
+        for col in _PLAYER_STATE_COLUMNS:
+            value = kwargs.get(col)
+            if value is not None:
+                if col == "last_poll" and isinstance(value, datetime):
+                    value = value.isoformat()
+                elif col in ("pending_updates", "current_options"):
+                    value = json.dumps(value, cls=DateTimeEncoder)
+            params.append(value)
+
+        params.append(player_id)  # WHERE clause
 
         conn.execute(
-            f"UPDATE player_states SET {', '.join(set_parts)} WHERE player_id = ?",
-            values,
+            """UPDATE player_states SET
+                game_id = COALESCE(?, game_id),
+                onboarding_session_id = COALESCE(?, onboarding_session_id),
+                current_question = COALESCE(?, current_question),
+                current_question_id = COALESCE(?, current_question_id),
+                current_options = COALESCE(?, current_options),
+                current_question_text = COALESCE(?, current_question_text),
+                current_question_image_url = COALESCE(?, current_question_image_url),
+                last_poll = COALESCE(?, last_poll),
+                pending_updates = COALESCE(?, pending_updates),
+                last_briefing_day_sent = COALESCE(?, last_briefing_day_sent),
+                language = COALESCE(?, language),
+                updated_at = datetime('now')
+            WHERE player_id = ?""",
+            params,
         )
         conn.commit()
     finally:

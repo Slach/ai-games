@@ -15,9 +15,30 @@ from game_rules import normalize_mission
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_json_loads(raw: str | None, default: Any) -> Any:
+    """Parse JSON, returning *default* on corrupt/missing data."""
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Corrupt JSON in DB, using default %r", default)
+        return default
+
+
 # Minimum live players to start a game
-GAME_START_MIN_PLAYERS = int(os.getenv("GAME_START_MIN_PLAYERS", "3"))
-GAME_START_MAX_PLAYERS = int(os.getenv("GAME_START_MAX_PLAYERS", "10"))
+try:
+    GAME_START_MIN_PLAYERS = int(os.getenv("GAME_START_MIN_PLAYERS", "3"))
+except (ValueError, TypeError):
+    logger.warning("Invalid GAME_START_MIN_PLAYERS, using default 3")
+    GAME_START_MIN_PLAYERS = 3
+
+try:
+    GAME_START_MAX_PLAYERS = int(os.getenv("GAME_START_MAX_PLAYERS", "10"))
+except (ValueError, TypeError):
+    logger.warning("Invalid GAME_START_MAX_PLAYERS, using default 10")
+    GAME_START_MAX_PLAYERS = 10
 
 # Database path
 DB_PATH = Path(__file__).parent / "game_master.db"
@@ -67,6 +88,10 @@ MIGRATIONS: list[tuple[int, str]] = [
     (
         7,
         "ALTER TABLE game_state ADD COLUMN last_death_day INTEGER DEFAULT 0;",
+    ),
+    (
+        8,
+        "ALTER TABLE game_missions ADD COLUMN short_description TEXT DEFAULT '';",
     ),
 ]
 
@@ -345,9 +370,11 @@ def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> b
     if updated:
         # If a real player takes a role that had an active NPC filling it,
         # deactivate that NPC — the player replaces the NPC outright.
+        # Also record which player replaced this NPC so we can distinguish
+        # "replaced by player" from "killed in story" later.
         cursor.execute(
-            "UPDATE npc_profiles SET is_active = 0 WHERE role_key = ? AND game_id = ? AND is_active = 1",
-            (role_key, game_id),
+            "UPDATE npc_profiles SET is_active = 0, replaces_player_id = ? WHERE role_key = ? AND game_id = ? AND is_active = 1",
+            (player_id, role_key, game_id),
         )
         deactivated = cursor.rowcount
         if deactivated:
@@ -485,10 +512,10 @@ def get_onboarding_session(session_id: str) -> dict[str, Any] | None:
         "session_id": row["session_id"],
         "player_id": row["player_id"],
         "current_question": row["current_question"],
-        "answers": json.loads(row["answers"] or "{}"),
+        "answers": _safe_json_loads(row["answers"], {}),
         "completed": bool(row["completed"]),
         "language": row["language"] or "en",
-        "questions": json.loads(row["questions"] or "[]"),
+        "questions": _safe_json_loads(row["questions"], []),
         "shuffle_seed": row["shuffle_seed"] or 0,
         "created_at": row["created_at"],
     }
@@ -711,7 +738,7 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
         "avatar_description": row["avatar_description"],
         "role": row["role"],
         "role_description": row["role_description"],
-        "personality_traits": json.loads(row["personality_traits"] or "[]"),
+        "personality_traits": _safe_json_loads(row["personality_traits"], []),
         "game_id": row["game_id"],
         "last_poll": row["last_poll"],
         "created_at": row["created_at"],
@@ -788,12 +815,12 @@ def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | No
     return {
         "day": row["day"],
         "story": row["story"],
-        "crew_dialogues": json.loads(row["crew_dialogues"] or "[]"),
-        "player_actions": json.loads(row["player_actions"] or "[]"),
-        "generated_content": json.loads(row["generated_content"] or "{}"),
+        "crew_dialogues": _safe_json_loads(row["crew_dialogues"], []),
+        "player_actions": _safe_json_loads(row["player_actions"], []),
+        "generated_content": _safe_json_loads(row["generated_content"], {}),
         "teaser": row["teaser"],
         "ship_alive": bool(row["ship_alive"]),
-        "crew_status": json.loads(row["crew_status"] or "{}"),
+        "crew_status": _safe_json_loads(row["crew_status"], {}),
         "previous_day_summary": row["previous_day_summary"],
         "created_at": row["created_at"],
         "global_circumstances": row["global_circumstances"] or "",
@@ -865,7 +892,7 @@ def get_player_actions(player_id: int, day: int | None = None) -> list[dict[str,
     result = []
     for row in rows:
         action_dict = dict(row)
-        action_dict["consequence_result"] = json.loads(row["consequence_result"] or "{}")
+        action_dict["consequence_result"] = _safe_json_loads(row["consequence_result"], {})
         result.append(action_dict)
 
     return result
@@ -1427,7 +1454,7 @@ def get_npc_profile(npc_key: str) -> dict[str, Any] | None:
         "npc_name": row["npc_name"],
         "role": row["role"],
         "role_description": row["role_description"],
-        "personality_traits": json.loads(row["personality_traits"] or "[]"),
+        "personality_traits": _safe_json_loads(row["personality_traits"], []),
         "species": row["species"],
         "gender": row["gender"],
         "avatar_description": row["avatar_description"],
@@ -1455,7 +1482,7 @@ def get_all_active_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
             "npc_name": row["npc_name"],
             "role": row["role"],
             "role_description": row["role_description"],
-            "personality_traits": json.loads(row["personality_traits"] or "[]"),
+            "personality_traits": _safe_json_loads(row["personality_traits"], []),
             "species": row["species"],
             "gender": row["gender"],
             "avatar_description": row["avatar_description"],
@@ -1485,13 +1512,13 @@ def get_all_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
             "npc_name": row["npc_name"],
             "role": row["role"],
             "role_description": row["role_description"],
-            "personality_traits": json.loads(row["personality_traits"] or "[]"),
+            "personality_traits": _safe_json_loads(row["personality_traits"], []),
             "species": row["species"],
             "gender": row["gender"],
             "avatar_description": row["avatar_description"],
             "game_id": row["game_id"],
             "is_active": bool(row["is_active"]),
-            "replaces_player_id": row.get("replaces_player_id"),
+            "replaces_player_id": row["replaces_player_id"],
         }
         for row in rows
     ]
@@ -1515,7 +1542,7 @@ def get_npc_by_role(role_key: str, game_id: str = "default_game") -> dict[str, A
         "npc_name": row["npc_name"],
         "role": row["role"],
         "role_description": row["role_description"],
-        "personality_traits": json.loads(row["personality_traits"] or "[]"),
+        "personality_traits": _safe_json_loads(row["personality_traits"], []),
         "species": row["species"],
         "gender": row["gender"],
         "avatar_description": row["avatar_description"],
@@ -1645,10 +1672,10 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
         "npc_key": row["npc_key"],
         "is_npc": bool(row["is_npc"]),
         "briefing": row["briefing"],
-        "choices": json.loads(row["choices"] or "[]"),
+        "choices": _safe_json_loads(row["choices"], []),
         "selected_action_id": row["selected_action_id"],
         "choice_rationale": row["choice_rationale"],
-        "consequence_result": json.loads(row["consequence_result"] or "{}"),
+        "consequence_result": _safe_json_loads(row["consequence_result"], {}),
         "chosen_action_url": row["chosen_action_url"],
         "created_at": row["created_at"],
         "game_id": row["game_id"],
@@ -1731,7 +1758,7 @@ def get_players_who_need_to_choose(day: int, game_id: str = "default_game") -> l
                 "day": row["day"],
                 "player_id": row["player_id"],
                 "briefing": row["briefing"],
-                "choices": json.loads(row["choices"] or "[]"),
+                "choices": _safe_json_loads(row["choices"], []),
                 "game_id": row["game_id"],
             }
         )
@@ -1775,12 +1802,13 @@ def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") 
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO game_missions
-           (game_id, name, description, objectives, stage_progress, current_stage, total_stages, completed, archetype, seeds, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+           (game_id, name, description, short_description, objectives, stage_progress, current_stage, total_stages, completed, archetype, seeds, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
         (
             game_id,
             mission_data["name"],
             mission_data["description"],
+            mission_data.get("short_description", ""),
             json.dumps(mission_data.get("objectives", []), ensure_ascii=False),
             json.dumps(mission_data.get("stage_progress", {}), ensure_ascii=False),
             mission_data.get("current_stage", 1),
@@ -1820,14 +1848,15 @@ def get_mission(mission_id: int | None = None, game_id: str = "default_game") ->
             "game_id": row["game_id"],
             "name": row["name"],
             "description": row["description"],
-            "objectives": json.loads(row["objectives"] or "[]"),
-            "stage_progress": json.loads(row["stage_progress"] or "{}"),
+            "objectives": _safe_json_loads(row["objectives"], []),
+            "stage_progress": _safe_json_loads(row["stage_progress"], {}),
             "current_stage": row["current_stage"],
             "total_stages": row["total_stages"],
             "completed": bool(row["completed"]),
             "created_at": row["created_at"],
             "archetype": row["archetype"] if "archetype" in row.keys() else "",
-            "seeds": json.loads(row["seeds"] or "{}") if "seeds" in row.keys() else {},
+            "seeds": _safe_json_loads(row["seeds"], {}) if "seeds" in row.keys() else {},
+            "short_description": row["short_description"] if "short_description" in row.keys() else "",
         }
     )
 

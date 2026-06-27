@@ -1859,7 +1859,7 @@ async def cmd_team(message: types.Message):
 
 
 async def cmd_invite(message: types.Message):
-    """Send invite link to current game"""
+    """Send invite: photo (bridge/splash) + text with deep link."""
     assert message.from_user is not None
     player_id = message.from_user.id
 
@@ -1880,54 +1880,81 @@ async def cmd_invite(message: types.Message):
             )
             return
 
-        # Use game's language for invite messages, not player's language
         game_lang = await get_game_language(game_id, fallback=get_player_language(player_id))
         msgs = lang.get_onboarding(game_lang)
 
-        if BOT_USERNAME and message.bot is not None:
-            # Fetch game title for share text
-            game_title = ""
-            try:
-                title_data = await api_request("GET", "/game/title", params={"game_id": game_id})
-                if title_data and title_data.get("title"):
-                    game_title = title_data["title"]
-            except Exception as e:
-                logger.error("Failed to fetch game title for invite", exc_info=e)
-
-            invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
-            share_text = _build_share_text(msgs, game_title)
-            share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(share_text, safe='')}"
-            invite_text = msgs["invite_title"] + "\n\n" + msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
-
-            invite_keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=msgs["invite_button"],
-                            url=share_url,
-                        )
-                    ]
-                ]
-            )
-
-            try:
-                await message.answer(
-                    invite_text,
-                    parse_mode="Markdown",
-                    reply_markup=invite_keyboard,
-                )
-                logger.info(f"Sent invite link to player {player_id}: {invite_url}")
-            except Exception as e:
-                logger.warning(f"Failed to send invite to player {player_id}: {e}")
-                await message.answer(
-                    msgs["invite_title"] + "\n\n" + invite_url,
-                    reply_markup=invite_keyboard,
-                )
-        else:
+        if not BOT_USERNAME or message.bot is None:
             await message.answer(
                 "Bot username is not available. Invite links cannot be generated at this moment.",
                 reply_markup=create_main_menu_keyboard(),
             )
+            return
+
+        # Fetch game title
+        game_title = ""
+        try:
+            title_data = await api_request("GET", "/game/title", params={"game_id": game_id})
+            if title_data and title_data.get("title"):
+                game_title = title_data["title"]
+        except Exception as e:
+            logger.error("Failed to fetch game title for invite", exc_info=e)
+
+        # Fetch mission and bridge image
+        mission = None
+        bridge = None
+        try:
+            mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
+        except Exception as e:
+            logger.error(f"Failed to fetch mission for invite: {e}")
+        try:
+            bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
+        except Exception as e:
+            logger.error(f"Failed to fetch bridge image for invite: {e}")
+
+        invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
+
+        if mission and bridge and bridge.get("image_url"):
+            # ── Mission exists: bridge photo with mission caption ──
+            mission_name = mission.get("name", "")
+            # Use short_description from DB if available; fall back to truncating full description
+            short_desc = mission.get("short_description", "") or mission.get("description", "")[:500]
+            clean_title = game_title.strip("«»")
+            caption = msgs.get(
+                "invite_mission_caption",
+                "I invite you to the game «{game_title}»!\n\n🚀 Mission «{mission_name}»\n\n{mission_description}\n\n{invite_url}",
+            ).format(
+                game_title=escape_markdown(clean_title),
+                mission_name=escape_markdown(mission_name),
+                mission_description=escape_markdown(short_desc),
+                invite_url=escape_markdown(invite_url),
+            )
+            sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption)
+            if not sent:
+                await message.answer(caption, parse_mode="Markdown")
+        else:
+            # ── No mission: splash image with game title ──
+            clean_title = game_title.strip("«»")
+            caption = msgs.get(
+                "invite_no_mission_caption",
+                "I invite you to the game «{game_title}»!\n\n{invite_url}",
+            ).format(
+                game_title=escape_markdown(clean_title),
+                invite_url=escape_markdown(invite_url),
+            )
+            splash_sent = await send_random_splash_image(message, caption=caption, game_id=game_id)
+            if not splash_sent:
+                await message.answer(caption, parse_mode="Markdown")
+
+        # ── Second message: forward instruction + deep link ──
+        forward_text = msgs.get(
+            "invite_forward",
+            "👆 Forward the message above to a friend!\n\nOr send them this link:\n{invite_url}",
+        ).format(
+            invite_url=escape_markdown(invite_url),
+        )
+        await message.answer(forward_text, parse_mode="Markdown")
+
+        logger.info(f"Sent invite to player {player_id}")
 
     except Exception as e:
         logger.error(f"Failed to send invite for player {player_id}: {e}")
@@ -3156,14 +3183,18 @@ async def main():
     bot = Bot(token=BOT_TOKEN, session=bot_session)
     dp = Dispatcher(storage=storage)
 
-    # Detect bot username at startup (used for deep-link/share flows)
+    # Detect bot username at startup (used for deep-link/share flows).
+    # Retry on transient proxy timeouts — if this fails permanently the
+    # bot can still handle messages but /invite and deep-links break.
     global BOT_USERNAME
     try:
-        bot_me = await bot.get_me()
+        from retry import call_with_retry
+
+        bot_me = await call_with_retry(lambda: bot.get_me(), max_retries=3)
         BOT_USERNAME = bot_me.username
         logger.info(f"Bot username: {BOT_USERNAME}")
     except Exception as e:
-        logger.warning(f"Failed to fetch bot username: {e}")
+        logger.warning(f"Failed to fetch bot username after retries: {e}")
 
     # Register handlers
     dp.message.register(cmd_start, CommandStart())

@@ -68,6 +68,7 @@ from database import (
     get_role_by_key,
     get_role_key_for_player,
     get_underrepresented_roles,
+    deactivate_npc,
     init_db,
     is_game_started,
     mark_player_dead,
@@ -118,7 +119,7 @@ from prompts import (
     OnboardingQuestion,
 )
 from push_client import push_briefings, push_day_outcome, push_gm_notification, push_player_chosen_action
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 
 # Configure logging
 logging.basicConfig(
@@ -211,9 +212,9 @@ class PollResponse(BaseModel):
     """Response from game polling endpoint"""
 
     new_game_day: dict[str, Any] | None = None
-    pending_actions: list[dict[str, Any]] = []
-    messages_from_gm: list[dict[str, Any]] = []
-    npc_messages: list[dict[str, Any]] = []
+    pending_actions: list[dict[str, Any]] = Field(default_factory=list)
+    messages_from_gm: list[dict[str, Any]] = Field(default_factory=list)
+    npc_messages: list[dict[str, Any]] = Field(default_factory=list)
     avatar_url: str | None = None
 
 
@@ -2560,6 +2561,7 @@ async def _analyze_day_outcome(
             if isinstance(death_entry, list) and len(death_entry) >= 2:
                 entity_name = death_entry[0]
                 entity_role = death_entry[1]
+                found = False
                 # Try to find the player by looking up their entity name
                 for d in all_decisions:
                     if d.get("name") == entity_name or d.get("role") == entity_role:
@@ -2567,7 +2569,17 @@ async def _analyze_day_outcome(
                         if pid:
                             mark_player_dead(pid, game_id)
                             logger.info(f"[DEATH] Player {pid} ({entity_role}) marked as dead")
+                            found = True
                         break
+                # If not a player, try to deactivate the NPC
+                if not found:
+                    for d in all_decisions:
+                        if d.get("name") == entity_name or d.get("role") == entity_role:
+                            npc_key = d.get("npc_key")
+                            if npc_key:
+                                deactivate_npc(npc_key)
+                                logger.info(f"[DEATH] NPC {npc_key} ({entity_role}) deactivated")
+                                break
 
         # Handle ship destruction
         if ship_destroyed:
@@ -4035,11 +4047,13 @@ async def get_team_endpoint(game_id: str = "default_game"):
             }
         )
 
-    # Add NPCs (both alive and dead/inactive)
+    # Add NPCs — include both active and dead (killed in story).
+    # Exclude inactive NPCs whose role is now taken by a real player
+    # (checks ship_roles.taken_by to also handle legacy data).
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM npc_profiles WHERE game_id = ? ORDER BY created_at",
+        "SELECT n.* FROM npc_profiles n LEFT JOIN ship_roles sr ON sr.role_key = n.role_key AND sr.game_id = n.game_id WHERE n.game_id = ? AND (n.is_active = 1 OR sr.taken_by IS NULL) ORDER BY n.created_at",
         (game_id,),
     )
     npc_rows = cursor.fetchall()
@@ -5001,4 +5015,9 @@ async def admin_restart_game(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.getenv("HOST", "127.0.0.1")
+    try:
+        port = int(os.getenv("PORT", "8000"))
+    except (ValueError, TypeError):
+        port = 8000
+    uvicorn.run(app, host=host, port=port)

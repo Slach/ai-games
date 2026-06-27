@@ -26,9 +26,23 @@ TELEGRAM_BOT_GM_NOTIFICATION_URL = os.getenv(
     "TELEGRAM_BOT_GM_NOTIFICATION_URL",
     "http://telegram-bot:9090/push/gm-notification",
 )
-PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
-PUSH_BASE_DELAY = float(os.getenv("PUSH_BASE_DELAY", "1.0"))
-PUSH_REQUEST_TIMEOUT = int(os.getenv("PUSH_REQUEST_TIMEOUT", "120"))
+try:
+    PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
+except (ValueError, TypeError):
+    logger.warning("Invalid PUSH_MAX_RETRIES, using default 7")
+    PUSH_MAX_RETRIES = 7
+
+try:
+    PUSH_BASE_DELAY = float(os.getenv("PUSH_BASE_DELAY", "1.0"))
+except (ValueError, TypeError):
+    logger.warning("Invalid PUSH_BASE_DELAY, using default 1.0")
+    PUSH_BASE_DELAY = 1.0
+
+try:
+    PUSH_REQUEST_TIMEOUT = int(os.getenv("PUSH_REQUEST_TIMEOUT", "120"))
+except (ValueError, TypeError):
+    logger.warning("Invalid PUSH_REQUEST_TIMEOUT, using default 120")
+    PUSH_REQUEST_TIMEOUT = 120
 
 
 async def push_briefings(

@@ -26,8 +26,17 @@ class _HealthCheckFilter(logging.Filter):
 logging.getLogger("aiohttp.access").addFilter(_HealthCheckFilter())
 
 
-PUSH_SERVER_PORT = int(os.getenv("PUSH_SERVER_PORT", "9090"))
-GAME_MASTER_ID = int(os.getenv("TELEGRAM_BOT_GAME_MASTER_ID", "0"))
+try:
+    PUSH_SERVER_PORT = int(os.getenv("PUSH_SERVER_PORT", "9090"))
+except (ValueError, TypeError):
+    logger.warning("Invalid PUSH_SERVER_PORT env var, using default 9090")
+    PUSH_SERVER_PORT = 9090
+
+try:
+    GAME_MASTER_ID = int(os.getenv("TELEGRAM_BOT_GAME_MASTER_ID", "0"))
+except (ValueError, TypeError):
+    logger.warning("Invalid TELEGRAM_BOT_GAME_MASTER_ID env var, using default 0")
+    GAME_MASTER_ID = 0
 
 # Track pending action image deliveries so /push/outcome can wait for
 # action images to be sent to Telegram BEFORE the outcome message.

@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Max concurrent ComfyUI image generation requests
 # Default: 4 parallel generations at a time
-COMFYUI_IMAGE_CONCURRENCY = int(os.getenv("COMFYUI_IMAGE_CONCURRENCY", "4"))
+try:
+    COMFYUI_IMAGE_CONCURRENCY = int(os.getenv("COMFYUI_IMAGE_CONCURRENCY", "4"))
+except (ValueError, TypeError):
+    logger.warning("Invalid COMFYUI_IMAGE_CONCURRENCY, using default 4")
+    COMFYUI_IMAGE_CONCURRENCY = 4
 _image_semaphore = asyncio.Semaphore(COMFYUI_IMAGE_CONCURRENCY)
 logger.info(f"ComfyUI image concurrency set to {COMFYUI_IMAGE_CONCURRENCY}")
 
@@ -631,7 +635,7 @@ class ImageGenerator:
 
     # ============== Batch Image Generation ==============
 
-    LOADING_IMAGE_PROMPTS = [
+    LOADING_IMAGE_PROMPTS = (
         "Starship bridge main computer console glowing with holographic star charts, 'SYSTEM BOOT' text display, blue neon lights, Star Trek style, cinematic shot from captain's chair perspective, 4K",
         "Starship computer core room with towering data pillars, energy conduits pulsing with blue light, holographic displays flickering to life, 'LOADING...' floating text, sci-fi interior",
         "Captain's chair on starship bridge viewed from behind, panoramic viewscreen showing starfield, consoles powering up, amber and blue indicator lights, 'LOADING SYSTEMS' hologram",
@@ -642,7 +646,7 @@ class ImageGenerator:
         "Helm station on starship bridge, holographic flight path projections, warp engine status displays, 'NAVIGATION SYSTEMS ONLINE' readout, amber alert glow",
         "Starship medical bay with biobeds, holographic patient scans, 'MEDICAL SYSTEMS LOADING' display, clean white-blue lighting, futuristic medical equipment",
         "Starship armory or security station with weapon lockers, tactical holographic map, 'SECURITY SYSTEMS ARMED' display, red-blue alert lighting, sci-fi interior",
-    ]
+    )
 
     async def generate_loading_images(
         self,

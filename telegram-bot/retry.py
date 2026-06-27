@@ -59,12 +59,12 @@ async def call_with_retry(
                     delay,
                 )
                 await asyncio.sleep(delay)
-        except Exception:
-            raise  # Non-retryable — re-raise immediately
 
     logger.error(
         "[RETRY] All %d attempts failed: %s",
         max_retries + 1,
         last_exc,
     )
-    raise last_exc  # type: ignore[misc]
+    if last_exc is None:
+        raise RuntimeError("unreachable: no exception was captured")
+    raise last_exc

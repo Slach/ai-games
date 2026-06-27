@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 # Get configuration from environment
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
 GAME_SCHEDULE_RAW = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))
-AUTO_ACTION_TIMEOUT_HOURS = int(os.getenv("AUTO_ACTION_TIMEOUT_HOURS", "24"))  # Hours before auto-selection
+try:
+    AUTO_ACTION_TIMEOUT_HOURS = int(os.getenv("AUTO_ACTION_TIMEOUT_HOURS", "24"))  # Hours before auto-selection
+except (ValueError, TypeError):
+    logger.warning("Invalid AUTO_ACTION_TIMEOUT_HOURS, using default 24")
+    AUTO_ACTION_TIMEOUT_HOURS = 24
 GAME_ID = os.getenv("GAME_ID", "default_game")
 
 
