@@ -52,5 +52,83 @@ class TestNormalizeObjectives(unittest.TestCase):
         self.assertEqual(objectives[0]["stage"], 1)
 
 
+from game_rules import (  # noqa: E402
+    apply_mission_progress,
+    normalize_mission,
+)
+
+
+def _mission(stages, progress=None):
+    """Build a normalized mission with given (name, threshold) stages."""
+    objectives = [
+        {"stage": i + 1, "name": n, "description": "", "success_threshold": t}
+        for i, (n, t) in enumerate(stages)
+    ]
+    return normalize_mission(
+        {"objectives": objectives, "stage_progress": progress or {}}
+    )
+
+
+class TestApplyMissionProgress(unittest.TestCase):
+    def test_progress_accumulates_to_completion(self):
+        m = _mission([("A", 3), ("B", 3)])
+        m = apply_mission_progress(m, [{"stage": 1, "points": 2}])
+        self.assertFalse(m["completed"])
+        self.assertEqual(m["current_stage"], 1)
+        m = apply_mission_progress(m, [{"stage": 1, "points": 2}])  # stage1 = 4 >= 3
+        self.assertEqual(m["stage_progress"]["1"], 4)
+        self.assertFalse(m["completed"])
+        self.assertEqual(m["current_stage"], 2)
+        m = apply_mission_progress(m, [{"stage": 2, "points": 3}])
+        self.assertTrue(m["completed"])
+
+    def test_off_by_one_fixed_current_stage_is_1(self):
+        """Spec defect B: current_stage must not stay at 0."""
+        m = _mission([("A", 3)])
+        self.assertEqual(m["current_stage"], 1)
+
+    def test_no_premature_completion(self):
+        """Spec defect C: completing stage N-1 must NOT mark mission complete."""
+        m = _mission([("A", 3), ("B", 3), ("C", 3)])
+        m = apply_mission_progress(m, [{"stage": 1, "points": 5}])
+        m = apply_mission_progress(m, [{"stage": 2, "points": 5}])
+        # stage 3 not yet reached -> not complete
+        self.assertFalse(m["completed"])
+        self.assertEqual(m["current_stage"], 3)
+
+    def test_regression_capped_to_minus_one(self):
+        m = _mission([("A", 5)])
+        m = apply_mission_progress(m, [{"stage": 1, "points": 4}])
+        self.assertEqual(m["stage_progress"]["1"], 4)
+        m = apply_mission_progress(m, [{"stage": 1, "points": -9}])
+        # cap at -1 -> 4 - 1 = 3 (not 4 - 9 = 0 via floor; regression is bounded)
+        self.assertEqual(m["stage_progress"]["1"], 3)
+
+    def test_completed_stage_does_not_rollback(self):
+        m = _mission([("A", 3), ("B", 3)])
+        m = apply_mission_progress(m, [{"stage": 1, "points": 5}])  # stage1 = 5 >= 3
+        self.assertEqual(m["stage_progress"]["1"], 5)
+        m = apply_mission_progress(m, [{"stage": 1, "points": -1}])
+        # completed stage must not drop below threshold
+        self.assertEqual(m["stage_progress"]["1"], 5)
+
+    def test_tempo_floor_advances_current_stage_by_one(self):
+        """A turn with no positive progress on the current stage still nudges +1."""
+        m = _mission([("A", 5)])
+        m = apply_mission_progress(m, [{"stage": 1, "points": 2}])
+        self.assertEqual(m["stage_progress"]["1"], 2)
+        m = apply_mission_progress(m, [{"stage": 1, "points": 0}])  # no advance proposed
+        self.assertEqual(m["stage_progress"]["1"], 3)
+
+    def test_ignores_unknown_stage_and_bad_points(self):
+        m = _mission([("A", 3)])
+        m = apply_mission_progress(
+            m,
+            [{"stage": 99, "points": 5}, {"stage": 1, "points": "bad"}, {}],
+        )
+        # tempo floor still applies to stage 1 -> 1
+        self.assertEqual(m["stage_progress"]["1"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
