@@ -12,6 +12,7 @@ import re
 from typing import Any, cast
 
 from database import SHIP_ROLE_KEYS
+from game_rules import normalize_mission
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
@@ -2372,8 +2373,9 @@ spatial presence\n"
     def generate_mission(self, all_participants: list[dict[str, Any]]) -> dict[str, Any]:
         """Generate a mission with stages/objectives for the game.
 
-        Each stage has a success_threshold; progress accumulates non-linearly
-        from player/NPC actions across turns.
+        Objectives are normalized (1-based, thresholds 3-5) and the mission
+        carries current_stage=1 / total_stages=len(objectives) so it is
+        completable from the start (spec defect A fix).
         """
         logger.info(f"[MISSION] Generating mission for {len(all_participants)} participants")
 
@@ -2389,17 +2391,20 @@ spatial presence\n"
                 max_tokens=4096,
                 temperature=0.8,
             )
-            logger.info(f"[MISSION] Generated: {result.get('name', '')}")
-            return result
         except Exception as e:
             logger.error(f"[MISSION] Generation failed: {e}")
             gs = get_game_strings(self.language)
             mf = gs["gm_fallback"]["mission_fallback"]
-            return {
+            result = {
                 "name": mf["name"],
                 "description": mf["description"],
                 "objectives": [{"stage": i + 1, "name": s["name"], "description": s["description"], "success_threshold": [3, 5, 7][i]} for i, s in enumerate(mf["stages"])],
             }
+
+        # normalize: 1-based stages, thresholds 3-5, derive current/total/completed
+        result = normalize_mission(result)
+        logger.info(f"[MISSION] Generated: {result.get('name', '')} ({result['total_stages']} stages)")
+        return result
 
     # ============== Bridge Image Prompt Generation ==============
 

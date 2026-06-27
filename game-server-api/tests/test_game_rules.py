@@ -130,5 +130,38 @@ class TestApplyMissionProgress(unittest.TestCase):
         self.assertEqual(m["stage_progress"]["1"], 1)
 
 
+from unittest.mock import patch  # noqa: E402
+
+from game_master import GameMasterAgent  # noqa: E402
+
+
+class TestGenerateMissionNormalization(unittest.TestCase):
+    def _fake_llm_result(self):
+        return {
+            "name": "Echo Protocol",
+            "description": "A test mission.",
+            "objectives": [
+                {"stage": 3, "name": "C", "description": "c", "success_threshold": 1},
+                {"stage": 1, "name": "A", "description": "a", "success_threshold": 99},
+                {"stage": 2, "name": "B", "description": "b", "success_threshold": 4},
+            ],
+        }
+
+    def test_generate_mission_normalizes_objectives_and_stages(self):
+        agent = GameMasterAgent(language="en")
+        with patch.object(
+            GameMasterAgent, "_call_llm", return_value=self._fake_llm_result()
+        ):
+            result = agent.generate_mission([{"role": "Pilot", "type": "player"}])
+        self.assertEqual([o["stage"] for o in result["objectives"]], [1, 2, 3])
+        self.assertEqual([o["name"] for o in result["objectives"]], ["A", "B", "C"])
+        for o in result["objectives"]:
+            self.assertGreaterEqual(o["success_threshold"], MIN_THRESHOLD)
+            self.assertLessEqual(o["success_threshold"], MAX_THRESHOLD)
+        self.assertEqual(result["current_stage"], 1)
+        self.assertEqual(result["total_stages"], 3)
+        self.assertFalse(result["completed"])
+
+
 if __name__ == "__main__":
     unittest.main()
