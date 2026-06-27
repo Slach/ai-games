@@ -136,8 +136,22 @@ After running this, you must generate a new turn via Telegram:
 `/gm_start_game <game_id>` (first turn) then `/gm_continue_game <game_id>`
 for subsequent turns, since all sessions/game state is deleted.
 
-### Dump all service logs for analysis (e.g. attach to an LLM)
+### Run all service logs for analysis (e.g. attach to an LLM)
 
 ```bash
 docker compose logs -t > /tmp/compose.logs
+```
+
+### Run tests
+
+Activate the virtual environment and use `unittest` from `game-server-api/`:
+
+```bash
+cd game-server-api && ../.venv/bin/python -m unittest discover -s tests
+```
+
+Or run specific test modules:
+
+```bash
+cd game-server-api && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
 ```

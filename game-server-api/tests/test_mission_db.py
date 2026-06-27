@@ -3,12 +3,15 @@
 import os
 import sys
 import tempfile
+import logging
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database as db  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 class TestMissionPersistence(unittest.TestCase):
@@ -22,7 +25,7 @@ class TestMissionPersistence(unittest.TestCase):
         try:
             os.unlink(self._tmp.name)
         except (FileNotFoundError, PermissionError):
-            pass
+            logger.error("Failed to remove temp DB: %s", self._tmp.name)
 
     def _raw_mission(self):
         return {
@@ -77,7 +80,7 @@ class TestLastDeathDay(unittest.TestCase):
         try:
             os.unlink(self._tmp.name)
         except (FileNotFoundError, PermissionError):
-            pass
+            logger.error("Failed to remove temp DB: %s", self._tmp.name)
 
     def test_get_returns_zero_default_and_set_persists(self):
         state = db.get_game_state("gd1")

@@ -210,7 +210,7 @@ class TestMissionPromptInjection(unittest.TestCase):
         self.assertIn("сигнал", user)  # forbidden list mentions the banned trope
 
 
-from game_rules import (  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]
+from game_rules import (  # noqa: E402
     DEATH_COOLDOWN_TURNS,
     apply_death_limits,
 )

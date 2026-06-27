@@ -208,6 +208,20 @@ pip install -r requirements.txt
 GAME_MASTER_MODE=single python game_master.py
 ```
 
+### Running Tests
+
+Activate the project virtual environment and run:
+
+```bash
+cd game-server-api && ../.venv/bin/python -m unittest discover -s tests
+```
+
+Or specific modules:
+
+```bash
+cd game-server-api && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
+```
+
 ## API Documentation
 
 Visit `http://localhost:8000/docs` for Swagger UI.
