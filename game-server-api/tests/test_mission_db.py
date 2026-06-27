@@ -60,5 +60,22 @@ class TestMissionPersistence(unittest.TestCase):
         self.assertEqual(got["seeds"]["complication"], "pirates")
 
 
+class TestLastDeathDay(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        db.DB_PATH = Path(self._tmp.name)
+        db.init_db()
+
+    def tearDown(self):
+        os.unlink(self._tmp.name)
+
+    def test_get_returns_zero_default_and_set_persists(self):
+        state = db.get_game_state("gd1")
+        self.assertEqual(state["last_death_day"], 0)
+        db.set_last_death_day("gd1", 7)
+        self.assertEqual(db.get_game_state("gd1")["last_death_day"], 7)
+
+
 if __name__ == "__main__":
     unittest.main()

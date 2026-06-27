@@ -83,9 +83,7 @@ def normalize_mission(mission: dict) -> dict:
     return result
 
 
-def _compute_stage_state(
-    objectives: list[dict], stage_progress: dict[str, int]
-) -> tuple[int, bool]:
+def _compute_stage_state(objectives: list[dict], stage_progress: dict[str, int]) -> tuple[int, bool]:
     """Return (current_stage, completed).
 
     current_stage = number of the first not-yet-completed stage (1-based),
@@ -98,9 +96,7 @@ def _compute_stage_state(
     return len(objectives) + 1, True
 
 
-def apply_mission_progress(
-    mission: dict, progress_entries: list[dict] | None
-) -> dict:
+def apply_mission_progress(mission: dict, progress_entries: list[dict] | None) -> dict:
     """Apply one turn's mission_progress deltas under the rules layer.
 
     Rules (spec P0 + P1):
@@ -330,9 +326,7 @@ FORBIDDEN_OPENINGS: dict[str, list[str]] = {
 }
 
 
-def select_mission_seeds(
-    language: str = "en", rng: random.Random | None = None
-) -> dict:
+def select_mission_seeds(language: str = "en", rng: random.Random | None = None) -> dict:
     """Pick a mission archetype and one entry per seed table (deterministic with rng).
 
     Returns {"archetype": <key>, "seeds": {table: entry}, "language": language}.
@@ -342,3 +336,63 @@ def select_mission_seeds(
     archetype = r.choice(list(MISSION_ARCHETYPES.keys()))
     seeds = {table: r.choice(opts[lang]) for table, opts in SEED_TABLES.items()}
     return {"archetype": archetype, "seeds": seeds, "language": lang}
+
+
+# ── Crew death rate-limiting (P3) ──────────────────────────────────
+
+DEATH_COOLDOWN_TURNS = 4  # minimum turns between crew deaths in a game
+
+
+def _demote_to_critical(entry) -> list:
+    """Turn a rejected [name, role] death into a [name, role, 'critical'] injury."""
+    if isinstance(entry, list):
+        name = entry[0] if len(entry) > 0 else "Unknown"
+        role = entry[1] if len(entry) > 1 else "Unknown"
+    else:
+        name = role = "Unknown"
+    return [name, role, "critical"]
+
+
+def apply_death_limits(
+    outcome: dict,
+    day: int,
+    last_death_day: int,
+    alive_count: int | None = None,
+    min_alive: int = 1,
+    cooldown: int = DEATH_COOLDOWN_TURNS,
+) -> tuple[dict, int]:
+    """Enforce crew-death rate limits on a raw combined outcome (P3).
+
+    - At most one crew death per `cooldown` turns; extra proposed deaths are
+      demoted to 'critical' injuries (appended to crew_injured).
+    - Never accept a death that would drop the living roster below `min_alive`.
+    - Whole-ship destruction (``ship_destroyed``) is NOT throttled.
+
+    Returns (new_outcome, new_last_death_day). Input is not mutated.
+    """
+    result = dict(outcome)
+    proposed = result.get("dead_crew_members", []) or []
+    if result.get("ship_destroyed") or not proposed:
+        return result, last_death_day
+
+    on_cooldown = bool(last_death_day) and (day - last_death_day) < cooldown
+    accepted: list = []
+    demoted: list = []
+
+    for entry in proposed:
+        slot_available = (not on_cooldown) and len(accepted) == 0
+        leaves_enough = alive_count is None or (alive_count - len(accepted)) > min_alive
+        if slot_available and leaves_enough:
+            accepted.append(entry)
+            on_cooldown = True
+        else:
+            demoted.append(_demote_to_critical(entry))
+
+    result["dead_crew_members"] = accepted
+    if demoted:
+        injuries = list(result.get("crew_injured", []) or [])
+        injuries.extend(demoted)
+        result["crew_injured"] = injuries
+
+    new_last_death_day = day if accepted else last_death_day
+    return result, new_last_death_day

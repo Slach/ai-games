@@ -64,6 +64,10 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE game_missions ADD COLUMN seeds TEXT DEFAULT '{}';
         """.strip(),
     ),
+    (
+        7,
+        "ALTER TABLE game_state ADD COLUMN last_death_day INTEGER DEFAULT 0;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -931,6 +935,7 @@ def get_game_state(game_id: str = "default_game") -> dict[str, Any]:
         "status": row["status"],
         "ship_alive": bool(row["ship_alive"]),
         "crew_health": row["crew_health"],
+        "last_death_day": row["last_death_day"] if "last_death_day" in row.keys() else 0,
         "last_updated": row["last_updated"],
     }
 
@@ -965,6 +970,21 @@ def update_game_state(
     conn.close()
 
     return get_game_state(game_id)
+
+
+def set_last_death_day(game_id: str = "default_game", day: int = 0) -> bool:
+    """Record the day of the most recent crew death (death cooldown tracking)."""
+    _ensure_game_state(game_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE game_state SET last_death_day = ? WHERE game_id = ?",
+        (int(day), game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def is_game_active(game_id: str = "default_game") -> bool:
