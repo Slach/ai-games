@@ -1228,7 +1228,8 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
 
 async def handle_onboarding_name(message: types.Message, state: FSMContext):
     """Handle player name input during onboarding."""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
 
     player_name = message.text.strip() if message.text else ""
@@ -1262,7 +1263,8 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
 
 async def cmd_start(message: types.Message, command: CommandObject, state: FSMContext):
     """Handle /start command - Begin onboarding or join existing game"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
 
     player_lang = get_player_language(player_id)
@@ -1521,7 +1523,8 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
 
 async def cmd_profile(message: types.Message):
     """Show player profile with avatar"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -1600,7 +1603,8 @@ async def cmd_profile(message: types.Message):
 
 async def cmd_today(message: types.Message):
     """Show current day's game episode"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -1722,7 +1726,8 @@ async def cmd_today(message: types.Message):
 
 async def cmd_bridge(message: types.Message):
     """Show the current bridge image and mission info."""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
 
     try:
@@ -1759,7 +1764,8 @@ async def cmd_bridge(message: types.Message):
 
 async def cmd_team(message: types.Message):
     """Show the full crew roster with avatars"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     msgs = lang.get_team(get_player_language(player_id))
 
@@ -1860,7 +1866,8 @@ async def cmd_team(message: types.Message):
 
 async def cmd_invite(message: types.Message):
     """Send invite: photo (bridge/splash) + text with deep link."""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
 
     try:
@@ -1971,7 +1978,8 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     over by an NPC, their profile and onboarding answers are wiped, then they are
     sent back to language selection.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     reset_msgs = lang.get_reset(get_player_language(player_id))
 
@@ -2006,7 +2014,9 @@ async def cmd_reset(message: types.Message, state: FSMContext):
 
 async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContext):
     """Handle the /reset confirmation inline buttons (yes/no)."""
-    assert callback.from_user is not None
+    if callback.from_user is None:
+        await callback.answer()
+        return
     player_id = callback.from_user.id
     player_lang = get_player_language(player_id)
     reset_msgs = lang.get_reset(player_lang)
@@ -2073,7 +2083,8 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
 
 async def cmd_help(message: types.Message):
     """Show help information"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
 
     msgs = lang.get_help(get_player_language(player_id))
@@ -2110,7 +2121,8 @@ async def cmd_gm_start_game(message: types.Message):
     Usage: /gm_start_game <game_id>
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2167,7 +2179,8 @@ async def cmd_gm_kick(message: types.Message):
     The kicked player receives a notification about being removed.
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2231,7 +2244,8 @@ async def cmd_gm_list_games(message: types.Message):
     Usage: /gm_list_games
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
@@ -2283,7 +2297,8 @@ async def cmd_gm_continue_game(message: types.Message):
     Usage: /gm_continue_game <game_id>
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2341,7 +2356,8 @@ async def cmd_gm_regenerate_turn(message: types.Message):
     Usage: /gm_regenerate_turn <game_id>
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2399,7 +2415,8 @@ async def cmd_gm_restart_game(message: types.Message):
     Usage: /gm_restart_game <game_id>
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2500,7 +2517,8 @@ async def cmd_gm_status(message: types.Message):
     If the status message exceeds Telegram's character limit (~4000 safe),
     it is split into 3 parts: header, players, NPCs.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2538,6 +2556,7 @@ async def cmd_gm_status(message: types.Message):
             player_count=result.get("player_count", 0),
             alive_count=result.get("alive_count", 0),
             npc_count=result.get("npc_count", 0),
+            npc_alive_count=result.get("npc_alive_count", 0),
         )
 
         # Build players section
@@ -2569,8 +2588,10 @@ async def cmd_gm_status(message: types.Message):
             npcs_parts = []
             for n in npcs:
                 action = n.get("chosen_action_text", "") or gm_msgs["no_data_label"]
+                icon = "☠" if n.get("is_dead") else ("✅" if action != gm_msgs["no_data_label"] else "⏳")
                 npcs_parts.append(
                     gm_msgs["status_npc_entry"].format(
+                        icon=icon,
                         name=n.get("npc_name", "?"),
                         role=n.get("role", "?"),
                         action=action,
@@ -2608,7 +2629,8 @@ async def cmd_gm_set_language(message: types.Message):
     Usage: /gm_set_language <game_id> <ru|en>
     Only executable by the configured Game Master user.
     """
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
@@ -2658,7 +2680,8 @@ async def cmd_gm_set_language(message: types.Message):
 
 async def handle_voice_message(message: types.Message):
     """Handle voice messages"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
 
     msgs = lang.get_messages(get_player_language(player_id))
@@ -2681,7 +2704,8 @@ async def handle_voice_message(message: types.Message):
 
 async def handle_text_message(message: types.Message):
     """Handle regular text messages (chat with Game Master)"""
-    assert message.from_user is not None
+    if message.from_user is None:
+        return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
@@ -2726,8 +2750,12 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     The option_index is used to look up the answer value from current_options in state.
     """
     await callback.answer()
-    assert callback.data is not None
-    assert callback.message is not None
+    if callback.data is None:
+        logger.error("handle_onboarding_inline_answer: callback.data is None")
+        return
+    if callback.message is None:
+        logger.error("handle_onboarding_inline_answer: callback.message is None")
+        return
     msg: types.Message = callback.message  # type: ignore[assignment]
     player_id = callback.from_user.id
     player_lang = get_player_language(player_id)
@@ -2877,8 +2905,12 @@ async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMCon
     after getting a stale_onboarding_session message.
     """
     await callback.answer()
-    assert callback.data is not None
-    assert callback.message is not None
+    if callback.data is None:
+        logger.error("clear_onboarding_callback: callback.data is None")
+        return
+    if callback.message is None:
+        logger.error("clear_onboarding_callback: callback.message is None")
+        return
     if not isinstance(callback.message, types.Message):
         logger.warning("Callback message is inaccessible for clear_onboarding")
         return
@@ -2919,8 +2951,12 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     Buttons show [1], [2], [3] etc. The number is extracted and used
     as an index into current_options to find the matching option value.
     """
-    assert message.from_user is not None
-    assert message.text is not None
+    if message.from_user is None:
+        logger.error("onboarding_answer: message.from_user is None")
+        return
+    if message.text is None:
+        logger.error("onboarding_answer: message.text is None")
+        return
     answer_text = message.text
     player_id = message.from_user.id
     error_msgs = lang.get_errors(get_player_language(player_id))

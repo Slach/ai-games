@@ -9,7 +9,7 @@ from typing import Any
 
 import aiohttp
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InputMediaPhoto
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from aiogram.exceptions import TelegramBadRequest
 from aiohttp import web
 from language import get_actions, get_bridge, get_current_day, get_notifications, get_push_outcome
@@ -700,6 +700,112 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_push_game_over(request: web.Request) -> web.Response:
+    """Handle POST /push/game-over from game-server-api.
+
+    Delivers the game-over finale (victory or defeat) to all alive players.
+    Includes: finale image, finale narrative, and inline keyboard with
+    available games + "New Game" button.
+    """
+    bot: Bot = request.app["bot"]
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    language = payload.get("language", "ru")
+    finale_narrative = payload.get("finale_narrative", "")
+    finale_image_url = payload.get("finale_image_url")
+    outcome_type = payload.get("outcome_type", "defeat")  # "victory" or "defeat"
+    alive_players = payload.get("alive_players", [])
+    available_games = payload.get("available_games", [])
+
+    if not alive_players:
+        return web.json_response({"status": "error", "message": "Missing alive_players"}, status=400)
+
+    from language import get_onboarding
+
+    onboarding_msgs = get_onboarding(language)
+    if outcome_type == "victory":
+        title = onboarding_msgs.get("game_over_victory_title", "GAME OVER")
+    else:
+        title = onboarding_msgs.get("game_over_defeat_title", "GAME OVER")
+
+    keyboard_buttons = []
+    for game in available_games:
+        gid = game.get("game_id", "")
+        if not gid:
+            continue
+        name = game.get("name", gid)
+        player_count = game.get("player_count", 0)
+        lang_flag = "🇷🇺" if game.get("language") == "ru" else "🇬🇧"
+        btn_text = f"{lang_flag} {name} ({player_count})"
+        keyboard_buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=btn_text,
+                    callback_data=f"select_game:{gid}",
+                )
+            ]
+        )
+
+    keyboard_buttons.append(
+        [
+            InlineKeyboardButton(
+                text=onboarding_msgs.get("new_game", "🆕 New Game"),
+                callback_data="select_game:new",
+            )
+        ]
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+    continue_text = onboarding_msgs.get("game_over_continue", "")
+
+    sent_player_ids: list[int] = []
+
+    for player_id in alive_players:
+        try:
+            if finale_image_url:
+                img_data = await _download_image(finale_image_url)
+                if img_data:
+                    photo = BufferedInputFile(img_data, filename="finale.png")
+                    await call_with_retry(
+                        lambda: bot.send_photo(
+                            chat_id=player_id,
+                            photo=photo,
+                            caption=f"*{title}*",
+                            parse_mode="Markdown",
+                        )
+                    )
+
+            full_text = f"*{title}*\n\n{finale_narrative}"
+            await call_with_retry(
+                lambda: bot.send_message(
+                    chat_id=player_id,
+                    text=full_text,
+                    parse_mode="Markdown",
+                )
+            )
+
+            if continue_text:
+                await call_with_retry(
+                    lambda: bot.send_message(
+                        chat_id=player_id,
+                        text=continue_text,
+                        reply_markup=keyboard,
+                    )
+                )
+
+            sent_player_ids.append(player_id)
+            logger.info(f"[PUSH_GAME_OVER] Finale sent to player {player_id}: {outcome_type}")
+
+        except Exception as e:
+            logger.error(f"[PUSH_GAME_OVER] Failed to send finale to player {player_id}: {e}")
+
+    return web.json_response({"status": "ok", "sent": sent_player_ids})
+
+
 async def handle_health(request: web.Request) -> web.Response:
     """Handle GET /health for health checks."""
     return web.json_response({"status": "ok"})
@@ -749,6 +855,7 @@ async def start_push_server(
     app.router.add_post("/push/briefings", handle_push_briefings)
     app.router.add_post("/push/player-action", handle_push_player_chosen_action)
     app.router.add_post("/push/outcome", handle_push_outcome)
+    app.router.add_post("/push/game-over", handle_push_game_over)
     app.router.add_post("/push/gm-notification", handle_gm_notification)
     app.router.add_get("/health", handle_health)
 

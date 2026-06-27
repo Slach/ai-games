@@ -1421,6 +1421,18 @@ GAME_STRINGS = {
             },
             "fallback_npc_default": "{role_name} экипажа",
         },
+        "game_over": {
+            "victory_header": "🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!",
+            "defeat_header": "💀 КОРАБЛЬ УНИЧТОЖЕН — ПОРАЖЕНИЕ",
+            "fallback_victory": {
+                "finale_narrative": "Миссия выполнена. Экипаж возвращается домой, зная, что их смелость и решительность изменили ход истории. Звёзды будут помнить этот день.",
+                "finale_image_prompt": "A victorious starship crew standing on the bridge, celebrating their successful mission, triumphant expressions, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
+            },
+            "fallback_defeat": {
+                "finale_narrative": "Корабль погиб в огне и тишине космоса. Но даже в поражении экипаж проявил мужество, достойное легенд. Их история будет рассказана.",
+                "finale_image_prompt": "A starship breaking apart in space, dramatic explosion, debris floating in zero gravity, tragic and epic, cinematic lighting, Star Trek aesthetic, 4K quality, emotional composition.",
+            },
+        },
     },
     LANGUAGE_EN: {
         "game_title_fallback": "Star Cruiser «Dawn»: Beyond the Known Horizon",
@@ -1489,6 +1501,18 @@ GAME_STRINGS = {
                 "xenobiologist": "Dr. Kiran Voss",
             },
             "fallback_npc_default": "The {role_name}",
+        },
+        "game_over": {
+            "victory_header": "🏆 MISSION COMPLETE — VICTORY!",
+            "defeat_header": "💀 SHIP DESTROYED — DEFEAT",
+            "fallback_victory": {
+                "finale_narrative": "The mission is accomplished. The crew returns home knowing their courage and resolve changed the course of history. The stars will remember this day.",
+                "finale_image_prompt": "A victorious starship crew standing on the bridge, celebrating their successful mission, triumphant expressions, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
+            },
+            "fallback_defeat": {
+                "finale_narrative": "The ship perished in fire and the silence of space. But even in defeat, the crew showed courage worthy of legends. Their story will be told.",
+                "finale_image_prompt": "A starship breaking apart in space, dramatic explosion, debris floating in zero gravity, tragic and epic, cinematic lighting, Star Trek aesthetic, 4K quality, emotional composition.",
+            },
         },
     },
 }

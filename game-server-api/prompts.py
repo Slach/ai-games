@@ -676,6 +676,96 @@ def build_combined_outcome_prompts(
     return system, user
 
 
+# ── Game Over prompts ───────────────────────────────────────────
+
+GAME_OVER_SCHEMA: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "game_over",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "finale_narrative": {
+                    "type": "string",
+                    "description": "A dramatic finale narrative describing the outcome of the game (2-3 paragraphs). Epic, emotional, conclusive.",
+                },
+                "finale_image_prompt": {
+                    "type": "string",
+                    "description": "A detailed English image generation prompt for the finale scene. Cinematic, sci-fi/space opera, 4K quality. Epic composition showing the final moments — victory celebration or ship destruction.",
+                },
+            },
+            "required": ["finale_narrative", "finale_image_prompt"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+_GAME_OVER_SYSTEM_RU = (
+    "Ты — Game Master космической игры. Игра только что завершилась. "
+    "Ты создаёшь эпический, драматичный финальный нарратив, который подводит итог всей истории. "
+    "Это последнее сообщение, которое увидят игроки — оно должно быть запоминающимся, "
+    "эмоциональным и достойным завершением их приключения."
+)
+
+_GAME_OVER_USER_RU = (
+    "Исход игры: {outcome_type}\n\n"
+    "Последние события:\n{outcome_narrative}\n\n"
+    "Статус миссии:\n{mission_summary}\n\n"
+    "Напиши финальный нарратив (2-3 абзаца) и промпт для финальной картинки. "
+    "Нарратив должен подвести итог и дать чувство завершения. "
+    "Картинка — эпическая сцена, отражающая финал.\n\n"
+    "Всё на русском языке."
+)
+
+_GAME_OVER_SYSTEM_EN = (
+    "You are a Game Master. The game has just ended. "
+    "You create an epic, dramatic finale narrative that wraps up the entire story. "
+    "This is the last message the players will see — it must be memorable, "
+    "emotional, and a worthy conclusion to their adventure."
+)
+
+_GAME_OVER_USER_EN = (
+    "Game outcome: {outcome_type}\n\n"
+    "Last events:\n{outcome_narrative}\n\n"
+    "Mission status:\n{mission_summary}\n\n"
+    "Write a finale narrative (2-3 paragraphs) and an image prompt for the finale scene. "
+    "The narrative should wrap up the story and give a sense of closure. "
+    "The image should be an epic scene reflecting the finale.\n\n"
+    "All text in English."
+)
+
+
+def build_game_over_prompts(
+    language: str,
+    *,
+    outcome_type: str,
+    outcome_narrative: str,
+    mission_summary: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for finale/game-over generation.
+
+    Returns:
+        (system_prompt, user_prompt)
+    """
+    if language == LANGUAGE_RU:
+        system = _GAME_OVER_SYSTEM_RU
+        user = _GAME_OVER_USER_RU.format(
+            outcome_type=outcome_type,
+            outcome_narrative=outcome_narrative,
+            mission_summary=mission_summary,
+        )
+    else:
+        system = _GAME_OVER_SYSTEM_EN
+        user = _GAME_OVER_USER_EN.format(
+            outcome_type=outcome_type,
+            outcome_narrative=outcome_narrative,
+            mission_summary=mission_summary,
+        )
+    return system, user
+
+
 # ── Onboarding generation prompts ──────────────────────────────────
 
 

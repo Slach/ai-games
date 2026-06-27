@@ -58,7 +58,10 @@ def parse_schedule(schedule: str) -> tuple[str, int | str]:
     # Interval format: Nh, Nm, Ns
     m = re.match(r"^(\d+)([hms])$", s)
     if m:
-        value = int(m.group(1))
+        try:
+            value = int(m.group(1))
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid schedule format: {schedule}") from None
         unit = m.group(2)
         if unit == "h":
             return ("interval", value * 3600)
@@ -576,7 +579,10 @@ class GameMasterScheduler:
         schedule_type, schedule_value = GAME_SCHEDULE
 
         if schedule_type == "interval":
-            return float(schedule_value)
+            try:
+                return float(schedule_value)
+            except (ValueError, TypeError):
+                return 3600.0  # fallback to 1 hour
 
         # Daily mode — calculate seconds until next occurrence of HH:MM
         now = datetime.now()

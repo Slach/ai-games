@@ -3,6 +3,7 @@ SQLite database storage for Game Master API
 """
 
 import json
+from json import JSONDecodeError
 import logging
 import os
 import sqlite3
@@ -22,7 +23,7 @@ def _safe_json_loads(raw: str | None, default: Any) -> Any:
         return default
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except JSONDecodeError:
         logger.warning("Corrupt JSON in DB, using default %r", default)
         return default
 

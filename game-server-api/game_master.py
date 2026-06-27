@@ -24,11 +24,13 @@ from language import (
 from openai import OpenAI
 from prompts import (
     COMBINED_OUTCOME_SCHEMA,
+    GAME_OVER_SCHEMA,
     build_auto_choice_prompts,
     build_combined_outcome_prompts,
     build_content_prompt_note,
     build_daily_story_prompts,
     build_dynamic_sg_question_prompts,
+    build_game_over_prompts,
     build_game_title_prompts,
     build_global_circumstances_prompts,
     build_mission_prompts,
@@ -984,11 +986,14 @@ class GameMasterAgent:
             logger.info("=== LLM RESPONSE (fallback text) ===")
             logger.info(f"Finish reason: {finish_reason}")
             logger.info("--- RESPONSE CONTENT ---")
-            for line in (content or "").split("\n"):
+            content_str = content if content is not None else ""
+            for line in content_str.split("\n"):
                 logger.info(line)
             logger.info("=== END LLM RESPONSE (fallback) ===")
 
-            if content is None or content.strip() == "":
+            if content is None:
+                raise ValueError(f"LLM returned empty content on fallback call. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
+            if content.strip() == "":
                 raise ValueError(f"LLM returned empty content on fallback call. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
 
             content = content.strip()
@@ -1049,6 +1054,11 @@ class GameMasterAgent:
 
         return content.strip()
 
+    _JSON_BLOCK_PATTERNS = (
+        re.compile(r"\{.*\}", re.DOTALL),
+        re.compile(r"\[.*\]", re.DOTALL),
+    )
+
     @staticmethod
     def _strip_json_block(text: str) -> str:
         """Remove markdown code blocks and extract JSON."""
@@ -1057,8 +1067,8 @@ class GameMasterAgent:
         cleaned = re.sub(r"\s*```", "", cleaned)
 
         # Try to find JSON object or array
-        for pattern in [r"\{.*\}", r"\[.*\]"]:
-            match = re.search(pattern, cleaned, re.DOTALL)
+        for pat in GameMasterAgent._JSON_BLOCK_PATTERNS:
+            match = pat.search(cleaned)
             if match:
                 return match.group()
 
@@ -2392,7 +2402,7 @@ spatial presence\n"
         except Exception as e:
             logger.error(f"[DAY] Combined outcome analysis failed: {e}")
             return {
-                "outcome_narrative": narrative or "The day passed without major incident.",
+                "outcome_narrative": narrative if narrative else "The day passed without major incident.",
                 "ship_status_change": "No significant change.",
                 "crew_morale_change": "Stable.",
                 "next_day_hook": "Tomorrow brings new challenges.",
@@ -2405,6 +2415,50 @@ spatial presence\n"
                 "crew_injured": [],
                 "personal_outcomes": [],
             }
+
+    # ============== Game Over Generation ==============
+
+    def generate_game_over_outcome(
+        self,
+        outcome_type: str,
+        outcome_narrative: str,
+        mission_summary: str,
+    ) -> dict[str, str]:
+        """Generate a dramatic finale narrative and image prompt for game end.
+
+        Args:
+            outcome_type: "victory" or "defeat" — label the LLM uses to frame the finale
+            outcome_narrative: The last turn's outcome narrative for context
+            mission_summary: Summary of mission stages and their completion status
+
+        Returns:
+            Dict with finale_narrative and finale_image_prompt
+        """
+        logger.info(f"[GAME_OVER] Generating {outcome_type} finale, language={self.language}")
+
+        system, user = build_game_over_prompts(
+            language=self.language,
+            outcome_type=outcome_type,
+            outcome_narrative=outcome_narrative,
+            mission_summary=mission_summary,
+        )
+
+        try:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=GAME_OVER_SCHEMA,
+                max_tokens=2048,
+                enable_thinking=True,
+            )
+            logger.info(f"[GAME_OVER] Finale generated: {str(parsed.get('finale_narrative', ''))[:100]}...")
+            return parsed
+        except Exception as e:
+            logger.error(f"[GAME_OVER] Finale generation failed: {e}")
+            gs = get_game_strings(self.language)
+            fallback_key = f"fallback_{outcome_type}"
+            fallback = gs["game_over"].get(fallback_key, gs["game_over"]["fallback_defeat"])
+            return fallback
 
     # ============== Mission Generation ==============
 

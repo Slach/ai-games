@@ -148,7 +148,10 @@ class TestZImageTurboWorkflow(unittest.TestCase):
         """Workflow should serialize to valid JSON."""
         wf = _build_zimage_turbo_workflow(prompt="test")
         json_str = json.dumps(wf)
-        parsed = json.loads(json_str)
+        try:
+            parsed = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            self.fail(f"Workflow JSON is invalid: {e}")
         self.assertEqual(parsed, wf)
 
 

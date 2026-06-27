@@ -26,6 +26,10 @@ TELEGRAM_BOT_GM_NOTIFICATION_URL = os.getenv(
     "TELEGRAM_BOT_GM_NOTIFICATION_URL",
     "http://telegram-bot:9090/push/gm-notification",
 )
+TELEGRAM_BOT_GAME_OVER_URL = os.getenv(
+    "TELEGRAM_BOT_GAME_OVER_URL",
+    "http://telegram-bot:9090/push/game-over",
+)
 try:
     PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
 except (ValueError, TypeError):
@@ -312,3 +316,38 @@ async def push_day_outcome(
 
     label = f"outcome day={day} game={game_id}"
     return await _post_with_retry(TELEGRAM_BOT_OUTCOME_URL, payload, label)
+
+
+async def push_game_over(
+    game_id: str,
+    finale_narrative: str,
+    finale_image_url: str | None,
+    outcome_type: str,
+    alive_players: list[int],
+    available_games: list[dict],
+    language: str = "ru",
+) -> bool:
+    """Push the game-over finale to all alive players.
+
+    Args:
+        game_id: Game identifier that just ended
+        finale_narrative: The LLM-generated finale narrative text
+        finale_image_url: URL to the finale scene image
+        outcome_type: "victory" or "defeat"
+        alive_players: List of player IDs still alive to receive the message
+        available_games: List of other active games for the continuation keyboard
+        language: Game language code
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "finale_narrative": finale_narrative,
+        "outcome_type": outcome_type,
+        "alive_players": alive_players,
+        "available_games": available_games,
+        "language": language,
+    }
+    if finale_image_url:
+        payload["finale_image_url"] = finale_image_url
+
+    label = f"game-over game={game_id} type={outcome_type}"
+    return await _post_with_retry(TELEGRAM_BOT_GAME_OVER_URL, payload, label)

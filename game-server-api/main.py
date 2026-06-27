@@ -118,7 +118,7 @@ from language import (
 from prompts import (
     OnboardingQuestion,
 )
-from push_client import push_briefings, push_day_outcome, push_gm_notification, push_player_chosen_action
+from push_client import push_briefings, push_day_outcome, push_game_over, push_gm_notification, push_player_chosen_action
 from pydantic import BaseModel, Field, TypeAdapter
 
 # Configure logging
@@ -2495,6 +2495,7 @@ async def _analyze_day_outcome(
         # normalizes objectives, accumulates with regression caps + tempo floor,
         # and computes completion from real thresholds (fixes defect B/C).
         mission_progress = outcome.get("mission_progress", [])
+        mission_completed = False
         if mission:
             updated_mission = apply_mission_progress(mission, mission_progress)
             update_mission_stage_progress(
@@ -2506,7 +2507,9 @@ async def _analyze_day_outcome(
             for stage_key, pts in updated_mission["stage_progress"].items():
                 logger.info(f"[MISSION] Stage {stage_key} progress now {pts}")
             if updated_mission["completed"]:
-                logger.info("[MISSION] MISSION COMPLETE! Notifying players...")
+                mission_completed = True
+                end_game("mission_complete", game_id)
+                logger.info("[MISSION] MISSION COMPLETE! Game ended.")
             mission = updated_mission
 
         # Rate-limit crew deaths through the rules layer (P3):
@@ -2585,6 +2588,14 @@ async def _analyze_day_outcome(
         if ship_destroyed:
             end_game("ship_destroyed", game_id)
             logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
+
+        # Handle crew wiped — all crew members dead
+        live_players = get_live_players(game_id)
+        active_npcs = get_all_active_npcs(game_id)
+        crew_wiped = len(live_players) == 0 and len(active_npcs) == 0
+        if crew_wiped and not ship_destroyed:
+            end_game("crew_wiped", game_id)
+            logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
 
         # Also update game state with computed crew_health
         state = get_game_state(game_id)
@@ -2790,6 +2801,90 @@ async def _analyze_day_outcome(
             logger.info(f"[OUTCOME] Outcome delivered for day {day} to {len(alive_players)} players")
         except Exception as push_err:
             logger.error(f"[OUTCOME] Failed to deliver outcome for day {day}: {push_err}")
+
+        # ── Game Over: generate and deliver finale ──────────────────
+        game_ended = mission_completed or ship_destroyed or crew_wiped
+        if game_ended:
+            try:
+                outcome_type = "victory" if mission_completed else "defeat"
+                logger.info(f"[GAME_OVER] Game ended: {outcome_type}, generating finale...")
+
+                # Build mission summary for the LLM prompt
+                mission_summary_parts = []
+                if mission:
+                    for obj in mission.get("objectives", []):
+                        stage = obj.get("stage", "?")
+                        name = obj.get("name", "")
+                        progress = mission.get("stage_progress", {}).get(str(stage), 0)
+                        threshold = obj.get("success_threshold", "?")
+                        done = "✓" if progress >= threshold else "✗"
+                        mission_summary_parts.append(f"{done} Этап {stage}: {name} ({progress}/{threshold})")
+                mission_summary = "\n".join(mission_summary_parts) if mission_summary_parts else "No mission data"
+
+                # Get outcome_type label for LLM
+                gs = get_game_strings(language)
+                go_msgs = gs.get("game_over", {})
+                outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
+
+                gm = create_game_master_agent(language=language)
+                game_over = gm.generate_game_over_outcome(
+                    outcome_type=outcome_label,
+                    outcome_narrative=outcome_text[:2000],
+                    mission_summary=mission_summary,
+                )
+
+                finale_narrative = game_over.get("finale_narrative", "")
+                finale_image_prompt = game_over.get("finale_image_prompt", "")
+
+                # Generate finale image via ComfyUI
+                finale_image_url = None
+                if finale_image_prompt:
+                    try:
+                        image_gen = create_image_generator()
+                        finale_image_url = await image_gen.generate_scene_image(
+                            prompt=finale_image_prompt,
+                            filename_prefix=f"{game_id}/finale_{outcome_type}",
+                        )
+                        if finale_image_url:
+                            save_game_image(
+                                type="finale",
+                                image_url=finale_image_url,
+                                game_id=game_id,
+                                day=day,
+                                prompt=finale_image_prompt,
+                            )
+                            logger.info(f"[GAME_OVER] Finale image generated: {finale_image_url}")
+                    except Exception as img_err:
+                        logger.warning(f"[GAME_OVER] Failed to generate finale image: {img_err}")
+
+                # Build available games list (excluding this finished game)
+                all_games = get_available_games()
+                available_games = []
+                for game in all_games:
+                    if game["game_id"] == game_id:
+                        continue
+                    gid = game["game_id"]
+                    available_games.append(
+                        {
+                            "game_id": gid,
+                            "name": get_game_title(gid) or game.get("name", ""),
+                            "player_count": get_player_count_in_game(gid),
+                            "language": get_game_language(gid),
+                        }
+                    )
+
+                await push_game_over(
+                    game_id=game_id,
+                    finale_narrative=finale_narrative or outcome_text[:1000],
+                    finale_image_url=finale_image_url,
+                    outcome_type=outcome_type,
+                    alive_players=alive_players,
+                    available_games=available_games,
+                    language=language,
+                )
+                logger.info(f"[GAME_OVER] Finale delivered to {len(alive_players)} players: {outcome_type}")
+            except Exception as go_err:
+                logger.error(f"[GAME_OVER] Finale generation/delivery failed: {go_err}")
 
     except Exception as e:
         logger.error(f"[OUTCOME] Analysis failed for Day {day}: {e}")
