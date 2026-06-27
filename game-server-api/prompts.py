@@ -12,6 +12,7 @@ from language import (
     get_dimension_tags,
     get_tag_display_name,
 )
+from game_rules import FORBIDDEN_OPENINGS, MISSION_ARCHETYPES
 from pydantic import BaseModel
 
 
@@ -1040,29 +1041,78 @@ def build_global_circumstances_prompts(
 # ── Mission generation prompts ─────────────────────────────────────
 
 
-def build_mission_prompts(language: str, crew_desc: str) -> tuple[str, str]:
-    """Build system and user prompts for mission generation."""
-    if language == LANGUAGE_RU:
-        system = "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10."
+def build_mission_prompts(
+    language: str,
+    crew_desc: str,
+    archetype: str | None = None,
+    seeds: dict | None = None,
+) -> tuple[str, str]:
+    """Build system and user prompts for mission generation.
+
+    When archetype/seeds are provided they are injected to force variety (P2);
+    a banned-trope list and a balanced threshold range are always included.
+    """
+    lang = LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN
+    forbidden = ", ".join(FORBIDDEN_OPENINGS[lang])
+    arch_hint = ""
+    if archetype and archetype in MISSION_ARCHETYPES:
+        arch_hint = f"{archetype} — {MISSION_ARCHETYPES[archetype][lang]}"
+
+    if seeds:
+        if lang == LANGUAGE_RU:
+            seeds_block = (
+                "\nОБЯЗАТЕЛЬНЫЕ элементы миссии (используй их):\n"
+                f"- Место: {seeds.get('setting', '')}\n"
+                f"- Осложнение: {seeds.get('complication', '')}\n"
+                f"- Возможный поворот: {seeds.get('twist', '')}\n"
+                f"- Награда: {seeds.get('reward', '')}\n\n"
+            )
+        else:
+            seeds_block = (
+                "\nMANDATORY mission elements (use them):\n"
+                f"- Setting: {seeds.get('setting', '')}\n"
+                f"- Complication: {seeds.get('complication', '')}\n"
+                f"- Possible twist: {seeds.get('twist', '')}\n"
+                f"- Reward: {seeds.get('reward', '')}\n\n"
+            )
+    else:
+        seeds_block = ""
+
+    if lang == LANGUAGE_RU:
+        system = (
+            "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. "
+            "Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10."
+            + (f"\nАрхетип миссии: {arch_hint}" if arch_hint else "")
+        )
         user = (
             f"Экипаж:\n{crew_desc}\n\n"
+            f"{seeds_block}"
+            "ЗАПРЕЩЕНО начинать миссию с клише про сигнал бедствия / перехваченный сигнал / "
+            f"неопознанную передачу. Запрещённые завязки: {forbidden}.\n"
             "Создай миссию с:\n"
             "1. Название миссии — только кодовое имя и описание (формат: 'Кодовое имя: описание'). "
             "ВАЖНО: слово 'Миссия' в названии НЕ пиши — оно будет добавлено автоматически в интерфейсе.\n"
             "2. Описание — что нужно сделать, 2-3 абзаца\n"
-            "3. 2-4 этапа с целями, каждый с success_threshold (1-10)\n"
+            "3. 2-4 этапа с целями, каждый с success_threshold в диапазоне 3-5\n"
             "Этапы должны быть последовательными, но достижимыми нелинейно.\n"
             "Всё на русском языке."
         )
     else:
-        system = "You are a Game Master. Create a mission for a starship crew. The mission is divided into 2-4 stages, each with progress from 1 to 10."
+        system = (
+            "You are a Game Master. Create a mission for a starship crew. "
+            "The mission is divided into 2-4 stages, each with progress from 1 to 10."
+            + (f"\nMission archetype: {arch_hint}" if arch_hint else "")
+        )
         user = (
             f"Crew:\n{crew_desc}\n\n"
+            f"{seeds_block}"
+            "DO NOT start the mission with the cliché of a distress signal / intercepted signal / "
+            f"unidentified transmission. Forbidden openings: {forbidden}.\n"
             "Create a mission with:\n"
             "1. Mission name — code name and description only (format: 'Code Name: description'). "
             "IMPORTANT: do NOT include the word 'Mission' in the name — it will be added automatically by the UI.\n"
             "2. Description — what needs to be done, 2-3 paragraphs\n"
-            "3. 2-4 stages with objectives, each with success_threshold (1-10)\n"
+            "3. 2-4 stages with objectives, each with success_threshold in the range 3-5\n"
             "Stages should be sequential but achievable non-linearly."
         )
     return system, user

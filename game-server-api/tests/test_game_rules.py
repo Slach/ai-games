@@ -200,5 +200,24 @@ class TestMissionSeeds(unittest.TestCase):
             self.assertIn("en", val)
 
 
+from prompts import build_mission_prompts  # noqa: E402
+
+
+class TestMissionPromptInjection(unittest.TestCase):
+    def test_prompt_includes_archetype_and_seeds(self):
+        seeds = select_mission_seeds(language="en", rng=_random.Random(7))
+        system, user = build_mission_prompts(
+            "en", "  - Pilot (player)", archetype=seeds["archetype"], seeds=seeds["seeds"]
+        )
+        self.assertIn(seeds["archetype"], system + user)
+        for value in seeds["seeds"].values():
+            self.assertIn(value, system + user)
+
+    def test_prompt_lists_forbidden_openings_and_threshold_range(self):
+        _, user = build_mission_prompts("ru", "  - Пилот (игрок)")
+        self.assertIn("3-5", user)
+        self.assertIn("сигнал", user)  # forbidden list mentions the banned trope
+
+
 if __name__ == "__main__":
     unittest.main()

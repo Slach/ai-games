@@ -12,7 +12,7 @@ import re
 from typing import Any, cast
 
 from database import SHIP_ROLE_KEYS
-from game_rules import normalize_mission
+from game_rules import normalize_mission, select_mission_seeds
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
@@ -2381,7 +2381,10 @@ spatial presence\n"
 
         crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')})" for p in all_participants])
 
-        system, user = build_mission_prompts(self.language, crew_desc)
+        mission_seeds = select_mission_seeds(self.language)
+        system, user = build_mission_prompts(
+            self.language, crew_desc, archetype=mission_seeds["archetype"], seeds=mission_seeds["seeds"]
+        )
 
         try:
             result = self._call_llm(
@@ -2402,6 +2405,8 @@ spatial presence\n"
             }
 
         # normalize: 1-based stages, thresholds 3-5, derive current/total/completed
+        result["archetype"] = mission_seeds["archetype"]
+        result["seeds"] = mission_seeds["seeds"]
         result = normalize_mission(result)
         logger.info(f"[MISSION] Generated: {result.get('name', '')} ({result['total_stages']} stages)")
         return result
