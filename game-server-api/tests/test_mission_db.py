@@ -1,0 +1,55 @@
+"""DB-level tests for mission persistence and read-time normalization."""
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import database as db  # noqa: E402
+
+
+class TestMissionPersistence(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        db.DB_PATH = Path(self._tmp.name)
+        db.init_db()
+
+    def tearDown(self):
+        os.unlink(self._tmp.name)
+
+    def _raw_mission(self):
+        return {
+            "name": "Test",
+            "description": "d",
+            "objectives": [
+                {"stage": 1, "name": "A", "description": "a", "success_threshold": 3},
+                {"stage": 2, "name": "B", "description": "b", "success_threshold": 3},
+            ],
+        }
+
+    def test_create_derives_total_stages_from_objectives(self):
+        result = db.create_mission(self._raw_mission(), "g1")
+        self.assertEqual(result["total_stages"], 2)
+        self.assertEqual(result["current_stage"], 1)
+        self.assertFalse(result["completed"])
+
+    def test_get_mission_normalizes_stale_row(self):
+        # Simulate the legacy bug: write a row with stale current/total,
+        # then confirm get_mission repairs it via normalize_mission.
+        raw = self._raw_mission()
+        raw["current_stage"] = 0
+        raw["total_stages"] = 1
+        raw["stage_progress"] = {"1": 5, "2": 5}
+        db.create_mission(raw, "g2")
+        got = db.get_mission(None, "g2")
+        self.assertEqual(got["total_stages"], 2)
+        self.assertEqual(got["current_stage"], 3)  # both stages >= threshold
+        self.assertTrue(got["completed"])
+
+
+if __name__ == "__main__":
+    unittest.main()

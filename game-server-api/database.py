@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from language import LANGUAGE_EN, LANGUAGE_RU, SHIP_ROLES_I18N, get_ship_role_i18n
+from game_rules import normalize_mission
 
 logger = logging.getLogger(__name__)
 
@@ -1755,8 +1756,8 @@ def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") 
             mission_data["description"],
             json.dumps(mission_data.get("objectives", []), ensure_ascii=False),
             json.dumps(mission_data.get("stage_progress", {}), ensure_ascii=False),
-            mission_data.get("current_stage", 0),
-            mission_data.get("total_stages", 1),
+            mission_data.get("current_stage", 1),
+            mission_data.get("total_stages") or len(mission_data.get("objectives", []) or []) or 1,
             datetime.now().isoformat(),
         ),
     )
@@ -1784,18 +1785,20 @@ def get_mission(mission_id: int | None = None, game_id: str = "default_game") ->
     conn.close()
     if not row:
         return None
-    return {
-        "id": row["id"],
-        "game_id": row["game_id"],
-        "name": row["name"],
-        "description": row["description"],
-        "objectives": json.loads(row["objectives"] or "[]"),
-        "stage_progress": json.loads(row["stage_progress"] or "{}"),
-        "current_stage": row["current_stage"],
-        "total_stages": row["total_stages"],
-        "completed": bool(row["completed"]),
-        "created_at": row["created_at"],
-    }
+    return normalize_mission(
+        {
+            "id": row["id"],
+            "game_id": row["game_id"],
+            "name": row["name"],
+            "description": row["description"],
+            "objectives": json.loads(row["objectives"] or "[]"),
+            "stage_progress": json.loads(row["stage_progress"] or "{}"),
+            "current_stage": row["current_stage"],
+            "total_stages": row["total_stages"],
+            "completed": bool(row["completed"]),
+            "created_at": row["created_at"],
+        }
+    )
 
 
 def update_mission_stage_progress(
