@@ -404,7 +404,11 @@ async def _generate_option_images_for_question(
 
     # Count all tags from already-answered questions
     for qid_str, selected_value in session_answers.items():
-        qid = int(qid_str) if not isinstance(qid_str, int) else qid_str
+        try:
+            qid = int(qid_str) if not isinstance(qid_str, int) else qid_str
+        except (ValueError, TypeError):
+            logger.warning("Invalid question id in answers: %r", qid_str)
+            continue
         if qid < 0:
             continue  # Skip metadata entries (game_id stored as -1)
         # Find the question in session questions
@@ -3636,7 +3640,10 @@ async def _original_start_game(request: StartGameRequest):
     logger.info(f"[DAY] Early game day record created for day {day_num}")
 
     # Step B: Generate per-player briefings and choices IN PARALLEL
-    llm_parallel = int(os.getenv("LLM_PARALLEL", "2"))
+    try:
+        llm_parallel = int(os.getenv("LLM_PARALLEL", "2"))
+    except (ValueError, TypeError):
+        llm_parallel = 2
     sem = asyncio.Semaphore(llm_parallel)
 
     async def _process_participant(

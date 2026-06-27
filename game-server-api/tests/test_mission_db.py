@@ -19,7 +19,10 @@ class TestMissionPersistence(unittest.TestCase):
         db.init_db()
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
+        try:
+            os.unlink(self._tmp.name)
+        except (FileNotFoundError, PermissionError):
+            pass
 
     def _raw_mission(self):
         return {
@@ -33,6 +36,7 @@ class TestMissionPersistence(unittest.TestCase):
 
     def test_create_derives_total_stages_from_objectives(self):
         result = db.create_mission(self._raw_mission(), "g1")
+        assert result is not None
         self.assertEqual(result["total_stages"], 2)
         self.assertEqual(result["current_stage"], 1)
         self.assertFalse(result["completed"])
@@ -46,6 +50,7 @@ class TestMissionPersistence(unittest.TestCase):
         raw["stage_progress"] = {"1": 5, "2": 5}
         db.create_mission(raw, "g2")
         got = db.get_mission(None, "g2")
+        assert got is not None
         self.assertEqual(got["total_stages"], 2)
         self.assertEqual(got["current_stage"], 3)  # both stages >= threshold
         self.assertTrue(got["completed"])
@@ -56,6 +61,7 @@ class TestMissionPersistence(unittest.TestCase):
         raw["seeds"] = {"setting": "orbital station", "complication": "pirates"}
         db.create_mission(raw, "g3")
         got = db.get_mission(None, "g3")
+        assert got is not None
         self.assertEqual(got["archetype"], "first_contact")
         self.assertEqual(got["seeds"]["complication"], "pirates")
 
@@ -68,7 +74,10 @@ class TestLastDeathDay(unittest.TestCase):
         db.init_db()
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
+        try:
+            os.unlink(self._tmp.name)
+        except (FileNotFoundError, PermissionError):
+            pass
 
     def test_get_returns_zero_default_and_set_persists(self):
         state = db.get_game_state("gd1")

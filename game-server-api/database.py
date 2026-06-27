@@ -979,7 +979,7 @@ def set_last_death_day(game_id: str = "default_game", day: int = 0) -> bool:
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE game_state SET last_death_day = ? WHERE game_id = ?",
-        (int(day), game_id),
+        (day, game_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()

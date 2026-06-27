@@ -210,7 +210,7 @@ class TestMissionPromptInjection(unittest.TestCase):
         self.assertIn("сигнал", user)  # forbidden list mentions the banned trope
 
 
-from game_rules import (  # noqa: E402
+from game_rules import (  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]
     DEATH_COOLDOWN_TURNS,
     apply_death_limits,
 )
@@ -226,18 +226,14 @@ class TestDeathLimits(unittest.TestCase):
 
     def test_second_death_on_cooldown_is_demoted_to_critical(self):
         outcome = {"dead_crew_members": [["B", "Medic"]], "crew_injured": []}
-        out, last = apply_death_limits(
-            outcome, day=4, last_death_day=3, alive_count=5
-        )
+        out, last = apply_death_limits(outcome, day=4, last_death_day=3, alive_count=5)
         self.assertEqual(out["dead_crew_members"], [])
         self.assertEqual(out["crew_injured"], [["B", "Medic", "critical"]])
         self.assertEqual(last, 3)  # unchanged, no new death accepted
 
     def test_death_after_cooldown_allowed_again(self):
         outcome = {"dead_crew_members": [["C", "Engineer"]], "crew_injured": []}
-        out, last = apply_death_limits(
-            outcome, day=3 + DEATH_COOLDOWN_TURNS, last_death_day=3, alive_count=4
-        )
+        out, last = apply_death_limits(outcome, day=3 + DEATH_COOLDOWN_TURNS, last_death_day=3, alive_count=4)
         self.assertEqual(out["dead_crew_members"], [["C", "Engineer"]])
         self.assertEqual(last, 3 + DEATH_COOLDOWN_TURNS)
 
@@ -253,9 +249,7 @@ class TestDeathLimits(unittest.TestCase):
 
     def test_never_kill_below_min_alive(self):
         outcome = {"dead_crew_members": [["A", "Pilot"]], "crew_injured": []}
-        out, last = apply_death_limits(
-            outcome, day=2, last_death_day=0, alive_count=1, min_alive=1
-        )
+        out, last = apply_death_limits(outcome, day=2, last_death_day=0, alive_count=1, min_alive=1)
         self.assertEqual(out["dead_crew_members"], [])
         self.assertEqual(last, 0)
         self.assertEqual(out["crew_injured"], [["A", "Pilot", "critical"]])
