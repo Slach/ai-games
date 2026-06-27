@@ -105,12 +105,27 @@ In `main.py`:
 
 ### 2.2 Scheduler callback
 
-New function `_notify_scheduler_turn_complete(game_id, turn)`:
+New function `_notify_scheduler(action, game_id, turn)`:
 
-- Fire-and-forget `POST` to `{GAME_SCHEDULER_URL}/scheduler/reset`
-- Called from `_background_continue_wrapper` after successful turn generation
-- Called from `/admin/start-game` after game starts
+- Fire-and-forget `POST` to `{GAME_SCHEDULER_URL}/scheduler/{action}`
+- Called from `_background_continue_wrapper` after successful turn → `POST /scheduler/reset`
+- Called from `/admin/start-game` after game starts → `POST /scheduler/reset`
+- Called from `/admin/restart-game` after game reset → `POST /scheduler/pause` (game is now at turn 1, not started)
+- `/admin/regenerate-turn` calls `admin_continue_game()` internally → callback happens automatically via `_background_continue_wrapper`
 - On connection error: log warning, do not fail the main operation
+
+**Summary of /gm_\* commands and scheduler effects:**
+
+| Command | API endpoint | Scheduler action |
+|---------|-------------|-------------------|
+| `/gm_start` | `/admin/start-game` | reset timer |
+| `/gm_continue` | `/admin/continue-game` | reset timer (via wrapper callback) |
+| `/gm_turn` | `/admin/regenerate-turn` | reset timer (internally calls continue-game) |
+| `/gm_restart` | `/admin/restart-game` | pause scheduler |
+| `/gm_kick` | `/admin/kick-player` | none |
+| `/gm_lang` | `/admin/set-language` | none |
+| `/gm_list` | `/admin/list-games` | none |
+| `/gm_status` | `/game/status` + `/scheduler/status` | read-only |
 
 New env var: `GAME_SCHEDULER_URL` (default `http://game-scheduler:8001`).
 
