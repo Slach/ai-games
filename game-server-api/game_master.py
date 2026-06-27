@@ -2366,8 +2366,6 @@ spatial presence\n"
                 "personal_outcomes": [],
             }
 
-    # ============== Default Action ==============
-
     # ============== Mission Generation ==============
 
     def generate_mission(self, all_participants: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2382,9 +2380,7 @@ spatial presence\n"
         crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')})" for p in all_participants])
 
         mission_seeds = select_mission_seeds(self.language)
-        system, user = build_mission_prompts(
-            self.language, crew_desc, archetype=mission_seeds["archetype"], seeds=mission_seeds["seeds"]
-        )
+        system, user = build_mission_prompts(self.language, crew_desc, archetype=mission_seeds["archetype"], seeds=mission_seeds["seeds"])
 
         try:
             result = self._call_llm(
