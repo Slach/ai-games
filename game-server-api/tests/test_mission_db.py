@@ -50,6 +50,15 @@ class TestMissionPersistence(unittest.TestCase):
         self.assertEqual(got["current_stage"], 3)  # both stages >= threshold
         self.assertTrue(got["completed"])
 
+    def test_archetype_and_seeds_round_trip(self):
+        raw = self._raw_mission()
+        raw["archetype"] = "first_contact"
+        raw["seeds"] = {"setting": "orbital station", "complication": "pirates"}
+        db.create_mission(raw, "g3")
+        got = db.get_mission(None, "g3")
+        self.assertEqual(got["archetype"], "first_contact")
+        self.assertEqual(got["seeds"]["complication"], "pirates")
+
 
 if __name__ == "__main__":
     unittest.main()

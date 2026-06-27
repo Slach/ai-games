@@ -57,6 +57,13 @@ MIGRATIONS: list[tuple[int, str]] = [
         """.strip(),
     ),
     (5, "ALTER TABLE games ADD COLUMN welcome_text TEXT DEFAULT NULL;"),
+    (
+        6,
+        """
+        ALTER TABLE game_missions ADD COLUMN archetype TEXT DEFAULT '';
+        ALTER TABLE game_missions ADD COLUMN seeds TEXT DEFAULT '{}';
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -1748,8 +1755,8 @@ def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") 
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO game_missions
-           (game_id, name, description, objectives, stage_progress, current_stage, total_stages, completed, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+           (game_id, name, description, objectives, stage_progress, current_stage, total_stages, completed, archetype, seeds, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
         (
             game_id,
             mission_data["name"],
@@ -1758,6 +1765,8 @@ def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") 
             json.dumps(mission_data.get("stage_progress", {}), ensure_ascii=False),
             mission_data.get("current_stage", 1),
             mission_data.get("total_stages") or len(mission_data.get("objectives", []) or []) or 1,
+            mission_data.get("archetype", ""),
+            json.dumps(mission_data.get("seeds", {}), ensure_ascii=False),
             datetime.now().isoformat(),
         ),
     )
@@ -1797,6 +1806,8 @@ def get_mission(mission_id: int | None = None, game_id: str = "default_game") ->
             "total_stages": row["total_stages"],
             "completed": bool(row["completed"]),
             "created_at": row["created_at"],
+            "archetype": row["archetype"] if "archetype" in row.keys() else "",
+            "seeds": json.loads(row["seeds"] or "{}") if "seeds" in row.keys() else {},
         }
     )
 
