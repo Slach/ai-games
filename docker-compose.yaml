@@ -69,6 +69,7 @@ services:
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-8000}
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
+      - GAME_SCHEDULER_URL=${GAME_SCHEDULER_URL:-http://game-scheduler:8001}
       # CORS origin for browser frontend (Telegram Mini App), e.g. https://t.me
       - CORS_ORIGIN=${CORS_ORIGIN:-}
       - GAME_TURN_GOOD_ACTIONS=${GAME_TURN_GOOD_ACTIONS:-3}
@@ -105,6 +106,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_GAME_MASTER_ID=${TELEGRAM_BOT_GAME_MASTER_ID:-}
       - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
+      - GAME_SCHEDULER_URL=${GAME_SCHEDULER_URL:-http://game-scheduler:8001}
       - AI_FSM_DB=/app/bot_storage.db
       - PLAYER_STATE_DB=/app/player_states.db
       - TELEGRAM_SOCKS_PROXY=${TELEGRAM_SOCKS_PROXY:-}
