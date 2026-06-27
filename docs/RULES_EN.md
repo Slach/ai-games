@@ -53,8 +53,6 @@ When enough players have joined (>= GAME_START_MIN_PLAYERS live players):
 
 ## Turn Algorithm
 
-> Internal DB and API use `day` numbering, but game mechanics and user interface
-> use the term **turn**.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
@@ -220,7 +218,7 @@ When enough players have joined (>= GAME_START_MIN_PLAYERS live players):
 
 - SQLite for profiles, sessions, turns, actions, messages, missions
 - Missions stored separately (game_missions, mission_stages)
-- Each turn linked to game_id and day (internal numbering)
+- Each turn linked to game_id 
 
 ## Conclusion
 

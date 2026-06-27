@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -70,6 +71,16 @@ def escape_markdown(text: str) -> str:
     """
     special_chars = r"_*`["
     return re.sub(f"([{re.escape(special_chars)}])", r"\\\1", text)
+
+
+def _format_scheduler_time(iso_string: str) -> str:
+    """Convert ISO datetime string like '2026-06-28T02:38:40.024464'
+    to a human-readable format: '2026-06-28 02:38:40'."""
+    try:
+        return datetime.fromisoformat(iso_string).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        logger.warning(f"Failed to parse scheduler time: {iso_string}", stack_info=True)
+        return iso_string
 
 
 # ============== Configuration ==============
@@ -2301,7 +2312,8 @@ async def cmd_gm_list(message: types.Message):
                         if sched.get("mode") == "paused":
                             lines.append(gm_msgs["scheduler_paused"])
                         elif sched.get("next_run_at"):
-                            lines.append(gm_msgs["next_turn_auto"].format(time=sched["next_run_at"]))
+                            time_str = _format_scheduler_time(sched["next_run_at"])
+                            lines.append(gm_msgs["next_turn_auto"].format(time=time_str))
         except Exception:
             pass
 
@@ -2701,7 +2713,8 @@ async def cmd_gm_status(message: types.Message):
                         if sched.get("mode") == "paused":
                             full_message += "\n\n" + gm_msgs["scheduler_paused"]
                         elif sched.get("next_run_at"):
-                            full_message += "\n\n" + gm_msgs["next_turn_at"].format(time=sched["next_run_at"])
+                            time_str = _format_scheduler_time(sched["next_run_at"])
+                            full_message += "\n\n" + gm_msgs["next_turn_at"].format(time=time_str)
         except Exception:
             pass  # Scheduler unavailable, omit the line
 
