@@ -561,14 +561,14 @@ git commit -m "feat(game-server-api): add push_briefings calls after game endpoi
    - `_get_player_briefing_day()` function
    - `_mark_briefing_sent()` — KEEP it, push_server imports it
 
-2. Update `cmd_gm_start_game`: remove explicit `_send_bridge_and_mission()` and
+2. Update `cmd_gm_start`: remove explicit `_send_bridge_and_mission()` and
    `_send_game_briefings()` calls, remove `_restart_suppressed_players` manipulation,
    remove pending_updates clearing. Just show GM message.
 
-3. Update `cmd_gm_continue_game`: same — remove explicit `_send_game_briefings()`,
+3. Update `cmd_gm_continue`: same — remove explicit `_send_game_briefings()`,
    remove `_restart_suppressed_players` manipulation.
 
-4. Update `cmd_gm_restart_game`: same — remove explicit bridge/briefing sending,
+4. Update `cmd_gm_restart`: same — remove explicit bridge/briefing sending,
    remove `_restart_suppressed_players` manipulation.
 
 5. In `main()`: replace polling loop start with push server start.
@@ -600,7 +600,7 @@ Keep `_mark_briefing_sent` — it's used by `push_server.py`.
 
 - [x] **Step 2: Clean up GM commands in bot.py**
 
-In `cmd_gm_start_game`:
+In `cmd_gm_start`:
 
 - Remove the `try/except` block that fetches players and adds to `_restart_suppressed_players`
 - Remove the `_send_bridge_and_mission()` call
@@ -609,17 +609,17 @@ In `cmd_gm_start_game`:
 - Remove the `_restart_suppressed_players.clear()` calls
 - Keep only: API call, answer with GM message
 
-After cleanup, `cmd_gm_start_game` should look like:
+After cleanup, `cmd_gm_start` should look like:
 
 ```python
-async def cmd_gm_start_game(message: types.Message):
+async def cmd_gm_start(message: types.Message):
     """GM command: Force start a game by ID."""
     assert message.from_user is not None
     player_id = message.from_user.id
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(f"Unauthorized /gm_start_game attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_start attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -663,7 +663,7 @@ async def cmd_gm_start_game(message: types.Message):
         await message.answer(gm_msgs["start_game_error"].format(error=e))
 ```
 
-Same pattern for `cmd_gm_continue_game` and `cmd_gm_restart_game`.
+Same pattern for `cmd_gm_continue` and `cmd_gm_restart`.
 
 - [x] **Step 3: Replace polling loop with push server in main()**
 
@@ -769,7 +769,7 @@ Replace the current ASCII diagram with:
 ```text
 ┌──────────────────────────────────────────────────────────┐
 │  Telegram Bot (aiogram)                                 │
-│  - Команды: /start, /profile, /today, /help            │
+│  - Команды: /start, /profile, /turn, /help            │
 │  - Онбординг с FSM                                     │
 │  - Обработка сообщений                                  │
 │  - ✅ Push-сервер (порт 9090) — получение брифингов    │

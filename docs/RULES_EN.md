@@ -192,7 +192,7 @@ When enough players have joined (>= GAME_START_MIN_PLAYERS live players):
 ```text
 ┌──────────────────────────────────────────────────────────┐
 │  Telegram Bot (aiogram)                                 │
-│  - Commands: /start, /profile, /today, /help            │
+│  - Commands: /start, /profile, /turn, /help            │
 │  - Onboarding with FSM                                 │
 │  - Message handling                                    │
 │  - ✅ Push-server (port 9090) — receiving briefings    │

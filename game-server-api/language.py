@@ -1356,8 +1356,8 @@ GAME_STRINGS = {
     LANGUAGE_RU: {
         "game_title_fallback": "Звёздный Крейсер «Рассвет»: За горизонтом известного",
         "welcome_text_fallback": "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд.",
-        "turn_prefix": "Ход {day} — {title}",
-        "turn_prefix_simple": "Ход {day}",
+        "turn_prefix": "Ход {turn} — {title}",
+        "turn_prefix_simple": "Ход {turn}",
         "auto_select_notification": ("⏳ **Время вышло!**\n\nВы не успели сделать выбор, поэтому Game Master принял решение за вас:\n\nВыбрано действие: **{action_text}**\n\n_{rationale}_"),
         "day_summary": {
             "ship_status": "Состояние корабля: {status}",
@@ -1367,7 +1367,7 @@ GAME_STRINGS = {
             "deceased": "Погибшие: {names}",
             "injured": "Раненые: {names}",
             "ship_destroyed": "КОРАБЛЬ УНИЧТОЖЕН",
-            "next_day_hook": "Зацепка для следующего хода: {hook}",
+            "next_turn_hook": "Зацепка для следующего хода: {hook}",
         },
         "cumulative_story": {
             "header": "=== ПРЕДЫДУЩИЕ ХОДЫ ===",
@@ -1437,8 +1437,8 @@ GAME_STRINGS = {
     LANGUAGE_EN: {
         "game_title_fallback": "Star Cruiser «Dawn»: Beyond the Known Horizon",
         "welcome_text_fallback": "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.",
-        "turn_prefix": "Turn {day} — {title}",
-        "turn_prefix_simple": "Turn {day}",
+        "turn_prefix": "Turn {turn} — {title}",
+        "turn_prefix_simple": "Turn {turn}",
         "auto_select_notification": ("⏳ **Time is up!**\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: **{action_text}**\n\n_{rationale}_"),
         "day_summary": {
             "ship_status": "Ship status: {status}",
@@ -1448,7 +1448,7 @@ GAME_STRINGS = {
             "deceased": "Deceased: {names}",
             "injured": "Injured: {names}",
             "ship_destroyed": "SHIP DESTROYED",
-            "next_day_hook": "Next day hook: {hook}",
+            "next_turn_hook": "Next turn hook: {hook}",
         },
         "cumulative_story": {
             "header": "=== PREVIOUS TURNS ===",
@@ -1481,7 +1481,7 @@ GAME_STRINGS = {
             "mission_labels": {
                 "stage_label": "Stage",
                 "mission_header": "MISSION CONTEXT",
-                "mission_sub": "this is the current mission, its story is mandatory for this day",
+                "mission_sub": "this is the current mission, its story is mandatory for this turn",
                 "name_label": "Name",
                 "desc_label": "Description",
                 "stages_header": "Stages",
@@ -1506,7 +1506,7 @@ GAME_STRINGS = {
             "victory_header": "🏆 MISSION COMPLETE — VICTORY!",
             "defeat_header": "💀 SHIP DESTROYED — DEFEAT",
             "fallback_victory": {
-                "finale_narrative": "The mission is accomplished. The crew returns home knowing their courage and resolve changed the course of history. The stars will remember this day.",
+                "finale_narrative": "The mission is accomplished. The crew returns home knowing their courage and resolve changed the course of history. The stars will remember this turn.",
                 "finale_image_prompt": "A victorious starship crew standing on the bridge, celebrating their successful mission, triumphant expressions, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
             },
             "fallback_defeat": {

@@ -28,7 +28,7 @@ from prompts import (
     build_auto_choice_prompts,
     build_combined_outcome_prompts,
     build_content_prompt_note,
-    build_daily_story_prompts,
+    build_turn_story_prompts,
     build_dynamic_sg_question_prompts,
     build_game_over_prompts,
     build_game_title_prompts,
@@ -67,9 +67,9 @@ def _safe_int_env(name: str, default: int) -> int:
 
 
 class GameStory(BaseModel):
-    """Generated story for a game day"""
+    """Generated story for a game turn"""
 
-    day: int
+    turn: int
     setting: str
     conflict: str
     narrative: str
@@ -162,7 +162,7 @@ STORY_SCHEMA = {
                 },
                 "narrative": {
                     "type": "string",
-                    "description": "The story description for the day",
+                    "description": "The story description for the turn",
                 },
                 "decision_points": {
                     "type": "array",
@@ -581,7 +581,7 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
                 },
                 "narrative": {
                     "type": "string",
-                    "description": "The shared story description for the day from the GM's perspective. Include [avatar: role_key] markers when describing crew members (e.g. '[avatar: captain] stands at the helm, [avatar: chief_engineer] works in engineering')",
+                    "description": "The shared story description for the turn from the GM's perspective. Include [avatar: role_key] markers when describing crew members (e.g. '[avatar: captain] stands at the helm, [avatar: chief_engineer] works in engineering')",
                 },
                 "key_events": {
                     "type": "array",
@@ -590,7 +590,7 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
                 },
                 "scene_prompt": {
                     "type": "string",
-                    "description": "A detailed English image generation prompt for this day's scene. Must be cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, lighting, and atmosphere.",
+                    "description": "A detailed English image generation prompt for this turn's scene. Must be cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, lighting, and atmosphere.",
                 },
                 "crew_positions": {
                     "type": "array",
@@ -813,7 +813,7 @@ class GameMasterAgent:
                     "properties": {
                         "personal_title": {
                             "type": "string",
-                            "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {day} — {role} — {personal_greeting}' (Russian) or 'Turn {day} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
+                            "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {turn} — {role} — {personal_greeting}' (Russian) or 'Turn {turn} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
                         },
                         "briefing": {
                             "type": "string",
@@ -1002,7 +1002,7 @@ class GameMasterAgent:
             try:
                 return json.loads(content)
             except json.JSONDecodeError as parse_err:
-                logger.error(f"Fallback JSON parse failed: {parse_err}\nRaw content:\n{content}\nFinish reason: {finish_reason}")
+                logger.error(f"Fallback JSON parse failed: {parse_err}\nRaw content:\n{content}\nFinish reason: {finish_reason}", exc_info=True)
                 raise
 
     def _call_llm_text(
@@ -1253,11 +1253,11 @@ class GameMasterAgent:
 
     # ============== Daily Story ==============
 
-    def generate_daily_story(self, day: int, previous_summary: str = "", player_role: str = "") -> GameStory:
+    def generate_turn_story(self, turn: int, previous_summary: str = "", player_role: str = "") -> GameStory:
         """Generate daily story using LLM with json_schema."""
-        logger.info(f"[STORY] Starting story generation for Day {day}, language: {self.language}")
+        logger.info(f"[STORY] Starting story generation for Turn {turn}, language: {self.language}")
 
-        system, user = build_daily_story_prompts(self.language, day, previous_summary, player_role)
+        system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role)
 
         parsed = self._call_llm(
             system_prompt=system,
@@ -1267,7 +1267,7 @@ class GameMasterAgent:
         )
 
         story = GameStory(
-            day=day,
+            turn=turn,
             setting=parsed.get("setting", ""),
             conflict=parsed.get("conflict", ""),
             narrative=parsed.get("narrative", ""),
@@ -1284,10 +1284,10 @@ class GameMasterAgent:
         player_role: str,
         crew_members: list[dict[str, Any]] | None = None,
     ) -> list[NPCDialogue]:
-        """Generate NPC dialogues for the day.
+        """Generate NPC dialogues for the turn.
 
         Args:
-            story: The current day's story context
+            story: The current turn's story context
             player_role: Role of the player receiving the dialogues
             crew_members: Optional list of actual crew profiles from the database.
                 Each dict should have 'name' (display name) and 'role'.
@@ -1367,7 +1367,7 @@ class GameMasterAgent:
                 )
             except Exception as e:
                 err_name = target.get("name", target.get("key", "?"))
-                logger.error(f"[NPC] Dialogue generation failed for {err_name}: {e}")
+                logger.error(f"[NPC] Dialogue generation failed for {err_name}: {e}", exc_info=True)
                 raise
 
         logger.info(f"[NPC] Generated {len(dialogues)} NPC dialogues")
@@ -1419,7 +1419,7 @@ class GameMasterAgent:
             )
             return parsed.get("response", "Game Master received your message.")
         except Exception as e:
-            logger.error(f"Message processing failed: {e}")
+            logger.error(f"Message processing failed: {e}", exc_info=True)
             # Fallback to text-only call
             return self._call_llm_text(system, user)
 
@@ -1988,7 +1988,7 @@ spatial presence\n"
             return {"action_id": action_id, "rationale": rationale}
 
         except Exception as e:
-            logger.error(f"[NPC] LLM choice failed for {npc_name}: {e}")
+            logger.error(f"[NPC] LLM choice failed for {npc_name}: {e}", exc_info=True)
             # Fallback: pick first action
             action_id = choices[0].get("id", "") if choices else ""
             return {"action_id": action_id, "rationale": "Fallback: system default"}
@@ -2076,31 +2076,31 @@ spatial presence\n"
             return {"action_id": action_id, "rationale": rationale}
 
         except Exception as e:
-            logger.error(f"[AUTO_CHOICE] LLM failed for {display_name}: {e}")
+            logger.error(f"[AUTO_CHOICE] LLM failed for {display_name}: {e}", exc_info=True)
             action_id = choices[0].get("id", "") if choices else ""
             return {"action_id": action_id, "rationale": "Fallback: LLM error"}
 
-    # ============== Restructured Game Day Generation ==============
+    # ============== Restructured Game Turn Generation ==============
 
     def generate_global_circumstances(
         self,
-        day: int,
+        turn: int,
         previous_summary: str = "",
         player_profiles: list[dict[str, Any]] | None = None,
         mission_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Generate the shared global circumstances for a game day.
+        """Generate the shared global circumstances for a game turn.
 
         This is the first step — creates the setting, conflict, and key events
         that all players and NPCs will experience from their own perspectives.
 
         Args:
-            day: Current game day number
+            turn: current game turn number
             previous_summary: Summary of previous events
             player_profiles: List of player/npc profiles
             mission_context: Optional mission data to ensure story consistency
         """
-        logger.info(f"[DAY] Generating global circumstances for Day {day}")
+        logger.info(f"[TURN] Generating global circumstances for Turn {turn}")
 
         player_descriptions = ""
         if player_profiles:
@@ -2145,7 +2145,7 @@ spatial presence\n"
 
         system, user = build_global_circumstances_prompts(
             self.language,
-            day,
+            turn,
             previous_summary,
             player_descriptions,
             mission_str,
@@ -2158,10 +2158,10 @@ spatial presence\n"
                 response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
                 max_tokens=4096,
             )
-            logger.info(f"[DAY] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'")
+            logger.info(f"[TURN] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'")
             return parsed
         except Exception as e:
-            logger.error(f"[DAY] Global circumstances generation failed: {e}")
+            logger.error(f"[TURN] Global circumstances generation failed: {e}", exc_info=True)
             return {
                 "setting": "Unknown space region",
                 "conflict": "Routine operations",
@@ -2187,7 +2187,7 @@ spatial presence\n"
         player_id = player_profile.get("player_id") or player_profile.get("npc_key", "?")
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
-        logger.info(f"[DAY] Generating briefing for {player_id} ({player_role})")
+        logger.info(f"[TURN] Generating briefing for {player_id} ({player_role})")
 
         # Use player_name if provided, otherwise fall back to role
         display_name = player_name or player_role
@@ -2263,7 +2263,7 @@ spatial presence\n"
                 response_schema=self._get_player_briefing_schema(),
                 max_tokens=4096,
             )
-            logger.info(f"[DAY] Briefing generated for {player_id}")
+            logger.info(f"[TURN] Briefing generated for {player_id}")
 
             # Override action IDs with guaranteed non-empty values —
             # LLM sometimes returns empty/missing IDs which breaks NPC choice logic.
@@ -2279,7 +2279,7 @@ spatial presence\n"
             gm = gs["gm_fallback"]
             fallback_title = gm["fallback_title"].format(display_name=display_name, role_label=role_label)
             fallback_briefing = gm["fallback_briefing"].format(display_name=display_name, role_label=role_label)
-            logger.error(f"[DAY] Briefing generation failed for {player_id}: {e}")
+            logger.error(f"[TURN] Briefing generation failed for {player_id}: {e}", exc_info=True)
             return {
                 "personal_title": fallback_title,
                 "briefing": fallback_briefing,
@@ -2327,9 +2327,9 @@ spatial presence\n"
 
         Returns:
             Dict with outcome_narrative, ship_status_change, crew_morale_change,
-            next_day_hook, mission_progress, dead_crew_members
+            next_turn_hook, mission_progress, dead_crew_members
         """
-        logger.info(f"[DAY] Analyzing combined outcome from {len(all_decisions)} decisions")
+        logger.info(f"[TURN] Analyzing combined outcome from {len(all_decisions)} decisions")
 
         # Weight is indicated in the decision text passed to LLM
         decisions_text = ""
@@ -2397,15 +2397,15 @@ spatial presence\n"
                 max_tokens=4096,
                 enable_thinking=True,  # reasoning budget for consequence generation
             )
-            logger.info(f"[DAY] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
+            logger.info(f"[TURN] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
             return parsed
         except Exception as e:
-            logger.error(f"[DAY] Combined outcome analysis failed: {e}")
+            logger.error(f"[TURN] Combined outcome analysis failed: {e}", exc_info=True)
             return {
-                "outcome_narrative": narrative if narrative else "The day passed without major incident.",
+                "outcome_narrative": narrative if narrative else "The turn passed without major incident.",
                 "ship_status_change": "No significant change.",
                 "crew_morale_change": "Stable.",
-                "next_day_hook": "Tomorrow brings new challenges.",
+                "next_turn_hook": "Tomorrow brings new challenges.",
                 "mission_progress": [],
                 "dead_crew_members": [],
                 "ship_destroyed": False,
@@ -2454,7 +2454,7 @@ spatial presence\n"
             logger.info(f"[GAME_OVER] Finale generated: {str(parsed.get('finale_narrative', ''))[:100]}...")
             return parsed
         except Exception as e:
-            logger.error(f"[GAME_OVER] Finale generation failed: {e}")
+            logger.error(f"[GAME_OVER] Finale generation failed: {e}", exc_info=True)
             gs = get_game_strings(self.language)
             fallback_key = f"fallback_{outcome_type}"
             fallback = gs["game_over"].get(fallback_key, gs["game_over"]["fallback_defeat"])
@@ -2485,7 +2485,7 @@ spatial presence\n"
                 temperature=0.8,
             )
         except Exception as e:
-            logger.error(f"[MISSION] Generation failed: {e}")
+            logger.error(f"[MISSION] Generation failed: {e}", exc_info=True)
             gs = get_game_strings(self.language)
             mf = gs["gm_fallback"]["mission_fallback"]
             result = {
@@ -2550,7 +2550,7 @@ spatial presence\n"
             logger.info(f"[BRIDGE] Prompt generated: {str(result.get('bridge_prompt', ''))[:100]}...")
             return result
         except Exception as e:
-            logger.error(f"[BRIDGE] Generation failed: {e}")
+            logger.error(f"[BRIDGE] Generation failed: {e}", exc_info=True)
             return {
                 "bridge_prompt": ("Star Trek starship bridge interior, full crew at their stations, holographic displays glowing, viewport showing starfield and nebula, cinematic lighting, dramatic composition, 4K quality, space opera aesthetic."),
                 "brief_description": "Мостик корабля в готовности к выполнению миссии.",
@@ -2681,7 +2681,7 @@ spatial presence\n"
             logger.info(f"[NPC_AVATAR] Generated {len(prompts_list)} prompts")
             return prompts_list
         except Exception as e:
-            logger.error(f"[NPC_AVATAR] Generation failed: {e}")
+            logger.error(f"[NPC_AVATAR] Generation failed: {e}", exc_info=True)
             # Fallback: simple role-based prompts
             fallback = []
 

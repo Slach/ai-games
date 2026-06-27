@@ -1,6 +1,6 @@
 # Game Scheduler Refactor — Design Spec
 
-**Date:** 2025-06-27
+**Date:** 2026-06-27
 **Status:** approved
 
 ## Motivation
@@ -93,6 +93,32 @@ game-scheduler:
     - GAME_SCHEDULER_PORT=8001
 ```
 
+### 1.5 Database
+
+New `game-scheduler/database.py` following the same pattern as `game-server-api/database.py`:
+
+- SQLite file: `game-scheduler/scheduler.db`
+- `MIGRATIONS` list for schema evolution
+- `init_db()` creates table + applies pending migrations
+
+**Table `scheduler_state`:**
+```sql
+CREATE TABLE IF NOT EXISTS scheduler_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+    mode TEXT NOT NULL DEFAULT 'scheduled',
+    last_run_at TEXT,
+    next_run_at TEXT,
+    schedule_type TEXT NOT NULL DEFAULT 'interval',
+    schedule_value TEXT NOT NULL DEFAULT '8h',
+    game_id TEXT NOT NULL DEFAULT 'default_game',
+    updated_at TEXT NOT NULL
+);
+```
+
+On startup: `init_db()` loads persisted state. If no row exists, inserts defaults from env vars.
+On every state change (reset/pause/resume): updates the singleton row.
+`GET /scheduler/status` reads from in-memory state (initialized from DB on startup).
+
 ## Section 2: game-server-api changes
 
 ### 2.1 "day" → "turn"
@@ -110,7 +136,7 @@ New function `_notify_scheduler(action, game_id, turn)`:
 - Fire-and-forget `POST` to `{GAME_SCHEDULER_URL}/scheduler/{action}`
 - Called from `_background_continue_wrapper` after successful turn → `POST /scheduler/reset`
 - Called from `/admin/start-game` after game starts → `POST /scheduler/reset`
-- Called from `/admin/restart-game` after game reset → `POST /scheduler/pause` (game is now at turn 1, not started)
+- Called from `/admin/restart-game` after game reset → `POST /scheduler/reset` (game restarted, timer should start fresh)
 - `/admin/regenerate-turn` calls `admin_continue_game()` internally → callback happens automatically via `_background_continue_wrapper`
 - On connection error: log warning, do not fail the main operation
 
@@ -121,10 +147,11 @@ New function `_notify_scheduler(action, game_id, turn)`:
 | `/gm_start` | `/admin/start-game` | reset timer |
 | `/gm_continue` | `/admin/continue-game` | reset timer (via wrapper callback) |
 | `/gm_turn` | `/admin/regenerate-turn` | reset timer (internally calls continue-game) |
-| `/gm_restart` | `/admin/restart-game` | pause scheduler |
+| `/gm_restart` | `/admin/restart-game` | reset timer |
+| `/gm_pause` | — (bot calls scheduler directly) | toggle pause/resume scheduler |
 | `/gm_kick` | `/admin/kick-player` | none |
 | `/gm_lang` | `/admin/set-language` | none |
-| `/gm_list` | `/admin/list-games` | none |
+| `/gm_list` | `/admin/list-games` + `/scheduler/status` | shows next turn time per game |
 | `/gm_status` | `/game/status` + `/scheduler/status` | read-only |
 
 New env var: `GAME_SCHEDULER_URL` (default `http://game-scheduler:8001`).
@@ -133,13 +160,28 @@ New env var: `GAME_SCHEDULER_URL` (default `http://game-scheduler:8001`).
 
 ### 3.1 `/gm_status` enhancement
 
-`cmd_gm_status` makes an additional `GET` to `{GAME_SCHEDULER_URL}/scheduler/status` and appends the next turn time to the status message.
+`cmd_gm_status` makes an additional `GET` to `{GAME_SCHEDULER_URL}/scheduler/status` and appends scheduling info:
 
-New env var: `GAME_SCHEDULER_URL` (default `http://game-scheduler:8001`).
+- If mode="scheduled": shows "Next turn: {next_run_at}"
+- If mode="paused": shows "⚠️ Scheduler paused"
+- If scheduler unreachable: line omitted (no error)
 
-If scheduler is unreachable, the next-turn line is simply omitted (no error shown).
+### 3.2 New `/gm_pause` command
 
-### 3.2 Language strings
+`cmd_gm_pause` toggles the scheduler between paused and running:
+
+- Calls `POST {GAME_SCHEDULER_URL}/scheduler/pause` or `/scheduler/resume`
+- Only executable by the configured Game Master user
+- Usage: `/gm_pause` (no args — toggles current state)
+
+### 3.3 `/gm_list` enhancement
+
+`cmd_gm_list` also fetches `GET /scheduler/status` and appends:
+
+- "Scheduler: next turn at {time}" (or "paused") for the configured game
+- If scheduler unreachable: line omitted
+
+### 3.4 Language strings
 
 Add to `language.py` `gm_commands` dict:
 
@@ -148,6 +190,5 @@ Add to `language.py` `gm_commands` dict:
 
 ## What is NOT included
 
-- UI for `/gm_pause` `/gm_resume` bot commands (can be added later)
 - Tests for game-scheduler HTTP API (testable later when needed)
 - Redis / Celery / message queue (unnecessary complexity at this stage)

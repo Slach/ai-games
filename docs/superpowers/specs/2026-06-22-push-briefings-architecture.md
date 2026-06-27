@@ -205,7 +205,7 @@ Fire-and-forget = `asyncio.create_task(push_briefings(...))` с try/except.
 
 ### 4. Обновить GM команды
 
-`cmd_gm_start_game`, `cmd_gm_continue_game`, `cmd_gm_restart_game`:
+`cmd_gm_start`, `cmd_gm_continue`, `cmd_gm_restart`:
 
 - Убрать явную отправку `_send_game_briefings()` и `_send_bridge_and_mission()`
 - Убрать очистку pending_updates

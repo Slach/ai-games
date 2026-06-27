@@ -1,7 +1,7 @@
 """
 AI Games Package
 
-A cooperative game delivered through a Telegram bot and Telegram Mini App, where an LLM generates a unique story once per day.
+A cooperative game delivered through a Telegram bot and Telegram Mini App, where an LLM generates a unique story once per turn.
 """
 
 __version__ = "0.1.0"

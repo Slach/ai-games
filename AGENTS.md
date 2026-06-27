@@ -65,6 +65,14 @@
   If an exception is genuinely harmless, log it at `logger.debug` level
   instead of hiding it completely.
 
+- **Every `logger.error(...)` must include a stacktrace.** Never log an
+  error without showing where it came from:
+  - Inside `except` blocks: add `exc_info=True` to include the exception traceback.
+  - Outside `except` blocks (logical errors, validation failures): add
+    `stack_info=True` to print the current call stack.
+  - When logging a saved exception after retries: pass `exc_info=<variable>`
+    with the saved exception object.
+
 - Avoid over-engineering. Only make changes that are directly requested or clearly necessary. Keep solutions
 simple and focused.
 
@@ -133,7 +141,7 @@ docker compose down \
 ```
 
 After running this, you must generate a new turn via Telegram:
-`/gm_start_game <game_id>` (first turn) then `/gm_continue_game <game_id>`
+`/gm_start <game_id>` (first turn) then `/gm_continue <game_id>`
 for subsequent turns, since all sessions/game state is deleted.
 
 ### Run all service logs for analysis (e.g. attach to an LLM)

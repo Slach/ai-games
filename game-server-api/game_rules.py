@@ -355,8 +355,8 @@ def _demote_to_critical(entry) -> list:
 
 def apply_death_limits(
     outcome: dict,
-    day: int,
-    last_death_day: int,
+    turn: int,
+    last_death_turn: int,
     alive_count: int | None = None,
     min_alive: int = 1,
     cooldown: int = DEATH_COOLDOWN_TURNS,
@@ -368,14 +368,14 @@ def apply_death_limits(
     - Never accept a death that would drop the living roster below `min_alive`.
     - Whole-ship destruction (``ship_destroyed``) is NOT throttled.
 
-    Returns (new_outcome, new_last_death_day). Input is not mutated.
+    Returns (new_outcome, new_last_death_turn). Input is not mutated.
     """
     result = dict(outcome)
     proposed = result.get("dead_crew_members", []) or []
     if result.get("ship_destroyed") or not proposed:
-        return result, last_death_day
+        return result, last_death_turn
 
-    on_cooldown = bool(last_death_day) and (day - last_death_day) < cooldown
+    on_cooldown = bool(last_death_turn) and (turn - last_death_turn) < cooldown
     accepted: list = []
     demoted: list = []
 
@@ -394,5 +394,5 @@ def apply_death_limits(
         injuries.extend(demoted)
         result["crew_injured"] = injuries
 
-    new_last_death_day = day if accepted else last_death_day
-    return result, new_last_death_day
+    new_last_death_turn = turn if accepted else last_death_turn
+    return result, new_last_death_turn

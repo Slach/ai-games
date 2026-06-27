@@ -1,6 +1,6 @@
 # AI Game Master
 
-AI-powered cooperative game delivered through Telegram bot. Each day, an AI generates a
+AI-powered cooperative game delivered through Telegram bot. Each turn, an AI generates a
 unique story, personalized comics, and NPC interactions based on player choices.
 
 ## Architecture
@@ -27,13 +27,13 @@ graph TD
 | game-server-api | 8000 | FastAPI backend with SQLite persistence |
 | telegram-bot | N/A | Telegram bot interface |
 | comfyui | 8188 | Image/Video generation backend |
-| game-master | N/A | Daily generation scheduler (run manually for debugging) |
+| game-master | N/A | Turn generation scheduler (run manually for debugging) |
 
 ### Game Master API (`game-server-api/`)
 
 FastAPI service that orchestrates the game:
 
-- Daily story generation using OpenAI API
+- Turn story generation using OpenAI API
 - NPC dialogue generation
 - Personalized comic generation via ComfyUI
 - Player action processing
@@ -47,10 +47,10 @@ FastAPI service that orchestrates the game:
 - `POST /onboarding/start` - Start onboarding for a player
 - `POST /onboarding/{session_id}/answer` - Submit onboarding answer
 - `GET /players/{player_id}/profile` - Get player profile
-- `GET /game/current-day` - Get current day's episode
+- `GET /game/current-turn` - Get current turn's episode
 - `POST /game/actions` - Submit player action
 - `POST /game/messages` - Send message to game master
-- `POST /admin/generate-day` - Generate new daily episode
+- `POST /admin/generate-turn` - Generate new turn episode
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic
 
 ### Telegram Bot (`telegram-bot/`)
@@ -59,7 +59,7 @@ Player interface via Telegram:
 
 - `/start` - Begin onboarding or return to game
 - `/profile` - Show player role and traits
-- `/today` - View current day episode
+- `/turn` - View current turn episode
 - `/help` - Show help information
 - Interactive keyboards for action selection
 - Voice message support
@@ -147,10 +147,10 @@ GAME_MASTER_MODE=single docker compose run --rm game-master
    - Personality traits
    - Avatar description
 
-## Daily Game Loop
+## Turn Game Loop
 
 ```text
-08:00  - Game Master generates daily episode
+08:00  - Game Master generates turn episode
 08:30  - Players receive notification with setup
 08:00-20:00 - Players vote on actions
 20:00  - Outcome determination
@@ -208,6 +208,8 @@ pip install -r requirements.txt
 GAME_MASTER_MODE=single python game_master.py
 ```
 
+After running this, you must generate a new turn via Telegram:
+
 ### Running Tests
 
 Activate the project virtual environment and run:
@@ -262,7 +264,7 @@ docker compose exec telegram-bot ping game-server-api
 | LLM_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
 | COMFYUI_URL | <http://comfyui:8188> | Image gen endpoint |
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
-| GAME_SCHEDULE_TIME | 08:00 | Daily generation time |
+| GAME_SCHEDULE_TIME | 08:00 | Turn generation time |
 | GAME_MASTER_MODE | scheduled | single/simulation/scheduled |
 
 ## Future Enhancements

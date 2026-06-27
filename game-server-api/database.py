@@ -88,11 +88,23 @@ MIGRATIONS: list[tuple[int, str]] = [
     ),
     (
         7,
-        "ALTER TABLE game_state ADD COLUMN last_death_day INTEGER DEFAULT 0;",
+        "ALTER TABLE game_state ADD COLUMN last_death_turn INTEGER DEFAULT 0;",
     ),
     (
         8,
         "ALTER TABLE game_missions ADD COLUMN short_description TEXT DEFAULT '';",
+    ),
+    (
+        9,
+        """
+        ALTER TABLE game_days RENAME TO game_turns;
+        ALTER TABLE game_state RENAME COLUMN day TO turn;
+        ALTER TABLE game_turns RENAME COLUMN day TO turn;
+        ALTER TABLE game_turns RENAME COLUMN previous_day_summary TO previous_turn_summary;
+        ALTER TABLE player_actions RENAME COLUMN day TO turn;
+        ALTER TABLE game_images RENAME COLUMN day TO turn;
+        ALTER TABLE player_briefings RENAME COLUMN day TO turn;
+        """.strip(),
     ),
 ]
 
@@ -314,7 +326,7 @@ def _ensure_game_state(game_id: str):
     row = cursor.fetchone()
     if row is None:
         cursor.execute(
-            """INSERT INTO game_state (game_id, day, status, ship_alive, crew_health, last_updated)
+            """INSERT INTO game_state (game_id, turn, status, ship_alive, crew_health, last_updated)
                VALUES (?, 1, 'active', 1, 100, ?)""",
             (game_id, datetime.now().isoformat()),
         )
@@ -769,27 +781,27 @@ def delete_player_profile(player_id: int) -> bool:
 # ============== Game Days ==============
 
 
-def create_game_day(day_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
-    """Create a new game day"""
+def create_game_turn(turn_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
+    """Create a new game turn"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
-        """INSERT OR REPLACE INTO game_days
-           (day, story, crew_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_day_summary, global_circumstances, combined_outcome, created_at, game_id)
+        """INSERT OR REPLACE INTO game_turns
+           (turn, story, crew_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_turn_summary, global_circumstances, combined_outcome, created_at, game_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            day_data["day"],
-            day_data["story"],
-            json.dumps(day_data.get("crew_dialogues", []), ensure_ascii=False),
-            json.dumps(day_data.get("player_actions", []), ensure_ascii=False),
-            json.dumps(day_data.get("generated_content", {}), ensure_ascii=False),
-            day_data.get("teaser"),
-            day_data.get("ship_alive", 1),
-            json.dumps(day_data.get("crew_status", {}), ensure_ascii=False),
-            day_data.get("previous_day_summary"),
-            day_data.get("global_circumstances", ""),
-            day_data.get("combined_outcome", ""),
+            turn_data["turn"],
+            turn_data["story"],
+            json.dumps(turn_data.get("crew_dialogues", []), ensure_ascii=False),
+            json.dumps(turn_data.get("player_actions", []), ensure_ascii=False),
+            json.dumps(turn_data.get("generated_content", {}), ensure_ascii=False),
+            turn_data.get("teaser"),
+            turn_data.get("ship_alive", 1),
+            json.dumps(turn_data.get("crew_status", {}), ensure_ascii=False),
+            turn_data.get("previous_turn_summary"),
+            turn_data.get("global_circumstances", ""),
+            turn_data.get("combined_outcome", ""),
             datetime.now().isoformat(),
             game_id,
         ),
@@ -798,15 +810,15 @@ def create_game_day(day_data: dict[str, Any], game_id: str = "default_game") -> 
     conn.commit()
     conn.close()
 
-    return get_game_day(day_data["day"], game_id)
+    return get_game_turn(turn_data["turn"], game_id)
 
 
-def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | None:
-    """Get a game day by number"""
+def get_game_turn(turn: int, game_id: str = "default_game") -> dict[str, Any] | None:
+    """Get a game turn by number"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM game_days WHERE day = ? AND game_id = ?", (day, game_id))
+    cursor.execute("SELECT * FROM game_turns WHERE turn = ? AND game_id = ?", (turn, game_id))
     row = cursor.fetchone()
     conn.close()
 
@@ -814,7 +826,7 @@ def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | No
         return None
 
     return {
-        "day": row["day"],
+        "turn": row["turn"],
         "story": row["story"],
         "crew_dialogues": _safe_json_loads(row["crew_dialogues"], []),
         "player_actions": _safe_json_loads(row["player_actions"], []),
@@ -822,7 +834,7 @@ def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | No
         "teaser": row["teaser"],
         "ship_alive": bool(row["ship_alive"]),
         "crew_status": _safe_json_loads(row["crew_status"], {}),
-        "previous_day_summary": row["previous_day_summary"],
+        "previous_turn_summary": row["previous_turn_summary"],
         "created_at": row["created_at"],
         "global_circumstances": row["global_circumstances"] or "",
         "combined_outcome": row["combined_outcome"] or "",
@@ -835,7 +847,7 @@ def get_game_day(day: int, game_id: str = "default_game") -> dict[str, Any] | No
 
 def save_player_action(
     player_id: int,
-    day: int,
+    turn: int,
     action_id: str,
     choice: str,
     consequence_result: dict[str, Any] | None = None,
@@ -845,11 +857,11 @@ def save_player_action(
     cursor = conn.cursor()
 
     cursor.execute(
-        """INSERT INTO player_actions (player_id, day, action_id, choice, consequence_result, created_at)
+        """INSERT INTO player_actions (player_id, turn, action_id, choice, consequence_result, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (
             player_id,
-            day,
+            turn,
             action_id,
             choice,
             json.dumps(consequence_result or {}, ensure_ascii=False),
@@ -864,22 +876,22 @@ def save_player_action(
     return {
         "id": action_id_db,
         "player_id": player_id,
-        "day": day,
+        "turn": turn,
         "action_id": action_id,
         "choice": choice,
         "consequence_result": consequence_result or {},
     }
 
 
-def get_player_actions(player_id: int, day: int | None = None) -> list[dict[str, Any]]:
-    """Get player actions, optionally filtered by day"""
+def get_player_actions(player_id: int, turn: int | None = None) -> list[dict[str, Any]]:
+    """Get player actions, optionally filtered by turn"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    if day:
+    if turn:
         cursor.execute(
-            "SELECT * FROM player_actions WHERE player_id = ? AND day = ? ORDER BY created_at",
-            (player_id, day),
+            "SELECT * FROM player_actions WHERE player_id = ? AND turn = ? ORDER BY created_at",
+            (player_id, turn),
         )
     else:
         cursor.execute(
@@ -959,17 +971,17 @@ def get_game_state(game_id: str = "default_game") -> dict[str, Any]:
     conn.close()
 
     return {
-        "day": row["day"],
+        "turn": row["turn"],
         "status": row["status"],
         "ship_alive": bool(row["ship_alive"]),
         "crew_health": row["crew_health"],
-        "last_death_day": row["last_death_day"] if "last_death_day" in row.keys() else 0,
+        "last_death_turn": row["last_death_turn"] if "last_death_turn" in row.keys() else 0,
         "last_updated": row["last_updated"],
     }
 
 
 def update_game_state(
-    day: int,
+    turn: int,
     status: str = "active",
     ship_alive: bool = True,
     crew_health: int = 100,
@@ -982,10 +994,10 @@ def update_game_state(
 
     cursor.execute(
         """UPDATE game_state
-           SET day = ?, status = ?, ship_alive = ?, crew_health = ?, last_updated = ?
+           SET turn = ?, status = ?, ship_alive = ?, crew_health = ?, last_updated = ?
            WHERE game_id = ?""",
         (
-            day,
+            turn,
             status,
             1 if ship_alive else 0,
             crew_health,
@@ -1000,14 +1012,14 @@ def update_game_state(
     return get_game_state(game_id)
 
 
-def set_last_death_day(game_id: str = "default_game", day: int = 0) -> bool:
-    """Record the day of the most recent crew death (death cooldown tracking)."""
+def set_last_death_turn(game_id: str = "default_game", turn: int = 0) -> bool:
+    """Record the turn of the most recent crew death (death cooldown tracking)."""
     _ensure_game_state(game_id)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE game_state SET last_death_day = ? WHERE game_id = ?",
-        (day, game_id),
+        "UPDATE game_state SET last_death_turn = ? WHERE game_id = ?",
+        (turn, game_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()
@@ -1307,7 +1319,7 @@ def save_game_image(
     type: str,
     image_url: str,
     game_id: str = "default_game",
-    day: int | None = None,
+    turn: int | None = None,
     prompt: str = "",
 ) -> int | None:
     """Save a game image URL (loading or splash) to the database.
@@ -1316,7 +1328,7 @@ def save_game_image(
         type: 'splash' or 'loading'
         image_url: ComfyUI URL for the image
         game_id: Game identifier
-        day: Game day (None for loading or splash images)
+        turn: Game turn (None for loading or splash images)
         prompt: Generation prompt used
 
     Returns:
@@ -1326,9 +1338,9 @@ def save_game_image(
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO game_images (type, game_id, day, image_url, prompt, created_at)
+            """INSERT INTO game_images (type, game_id, turn, image_url, prompt, created_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (type, game_id, day, image_url, prompt, datetime.now().isoformat()),
+            (type, game_id, turn, image_url, prompt, datetime.now().isoformat()),
         )
         row_id = cursor.lastrowid
         conn.commit()
@@ -1336,21 +1348,21 @@ def save_game_image(
         logger.info(f"[IMAGE] Saved {type} image #{row_id}: {image_url}...")
         return row_id
     except Exception as e:
-        logger.error(f"[IMAGE] Failed to save {type} image: {e}")
+        logger.error(f"[IMAGE] Failed to save {type} image: {e}", exc_info=True)
         return None
 
 
 def get_random_game_image(
     type: str,
     game_id: str = "default_game",
-    day: int | None = None,
+    turn: int | None = None,
 ) -> str | None:
     """Get a random game image URL by type.
 
     Args:
         type: 'splash' or 'loading'
         game_id: Game identifier
-        day: Game day filter (only for 'splash' type)
+        turn: Game turn filter (only for 'splash' type)
 
     Returns:
         Random image URL, or None if none exist.
@@ -1358,12 +1370,12 @@ def get_random_game_image(
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        if day is not None:
+        if turn is not None:
             cursor.execute(
                 """SELECT image_url FROM game_images
-                   WHERE type = ? AND game_id = ? AND day = ?
+                   WHERE type = ? AND game_id = ? AND turn = ?
                    ORDER BY RANDOM() LIMIT 1""",
-                (type, game_id, day),
+                (type, game_id, turn),
             )
         else:
             cursor.execute(
@@ -1376,23 +1388,23 @@ def get_random_game_image(
         conn.close()
         return row["image_url"] if row else None
     except Exception as e:
-        logger.error(f"[IMAGE] Failed to get random {type} image: {e}")
+        logger.error(f"[IMAGE] Failed to get random {type} image: {e}", exc_info=True)
         return None
 
 
 def get_game_image_count(
     type: str,
     game_id: str = "default_game",
-    day: int | None = None,
+    turn: int | None = None,
 ) -> int:
     """Count images of a given type."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        if day is not None:
+        if turn is not None:
             cursor.execute(
-                "SELECT COUNT(*) as cnt FROM game_images WHERE type = ? AND game_id = ? AND day = ?",
-                (type, game_id, day),
+                "SELECT COUNT(*) as cnt FROM game_images WHERE type = ? AND game_id = ? AND turn = ?",
+                (type, game_id, turn),
             )
         else:
             cursor.execute(
@@ -1403,7 +1415,7 @@ def get_game_image_count(
         conn.close()
         return row["cnt"] if row else 0
     except Exception as e:
-        logger.error(f"[IMAGE] Failed to count {type} images: {e}")
+        logger.error(f"[IMAGE] Failed to count {type} images: {e}", exc_info=True)
         return 0
 
 
@@ -1614,7 +1626,7 @@ def is_player_kicked(player_id: int) -> bool:
     return row["cnt"] > 0 if row else False
 
 
-# ============== Player Briefings (per-player game day content) ==============
+# ============== Player Briefings (per-player game turn content) ==============
 
 
 def save_player_briefing(briefing_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
@@ -1623,11 +1635,11 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str = "default_
     cursor = conn.cursor()
     cursor.execute(
         """INSERT OR REPLACE INTO player_briefings
-           (day, player_id, npc_key, is_npc, briefing, choices,
+           (turn, player_id, npc_key, is_npc, briefing, choices,
             selected_action_id, choice_rationale, consequence_result, chosen_action_url, created_at, game_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            briefing_data["day"],
+            briefing_data["turn"],
             briefing_data.get("player_id"),
             briefing_data.get("npc_key"),
             1 if briefing_data.get("is_npc", False) else 0,
@@ -1649,13 +1661,13 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str = "default_
     return briefing_data
 
 
-def get_player_briefing(day: int, player_id: int, game_id: str = "default_game") -> dict[str, Any] | None:
-    """Get a player's briefing for a specific day."""
+def get_player_briefing(turn: int, player_id: int, game_id: str = "default_game") -> dict[str, Any] | None:
+    """Get a player's briefing for a specific turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM player_briefings WHERE day = ? AND player_id = ? AND game_id = ? AND is_npc = 0",
-        (day, player_id, game_id),
+        "SELECT * FROM player_briefings WHERE turn = ? AND player_id = ? AND game_id = ? AND is_npc = 0",
+        (turn, player_id, game_id),
     )
     row = cursor.fetchone()
     conn.close()
@@ -1668,7 +1680,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
     """Convert a player_briefings row from the database to a dict."""
     return {
         "id": row["id"],
-        "day": row["day"],
+        "turn": row["turn"],
         "player_id": row["player_id"],
         "npc_key": row["npc_key"],
         "is_npc": bool(row["is_npc"]),
@@ -1683,13 +1695,13 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
     }
 
 
-def get_all_briefings_for_day(day: int, game_id: str = "default_game") -> list[dict[str, Any]]:
-    """Get all briefings (player + NPC) for a specific day."""
+def get_all_briefings_for_turn(turn: int, game_id: str = "default_game") -> list[dict[str, Any]]:
+    """Get all briefings (player + NPC) for a specific turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM player_briefings WHERE day = ? AND game_id = ? ORDER BY is_npc, created_at",
-        (day, game_id),
+        "SELECT * FROM player_briefings WHERE turn = ? AND game_id = ? ORDER BY is_npc, created_at",
+        (turn, game_id),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -1739,15 +1751,15 @@ def update_briefing_chosen_action_url(briefing_id: int, chosen_action_url: str |
     return updated
 
 
-def get_players_who_need_to_choose(day: int, game_id: str = "default_game") -> list[dict[str, Any]]:
-    """Get real players who haven't made their choice for the day yet."""
+def get_players_who_need_to_choose(turn: int, game_id: str = "default_game") -> list[dict[str, Any]]:
+    """Get real players who haven't made their choice for the turn yet."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """SELECT * FROM player_briefings
-           WHERE day = ? AND game_id = ? AND is_npc = 0 AND selected_action_id IS NULL
+           WHERE turn = ? AND game_id = ? AND is_npc = 0 AND selected_action_id IS NULL
            ORDER BY created_at""",
-        (day, game_id),
+        (turn, game_id),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -1756,7 +1768,7 @@ def get_players_who_need_to_choose(day: int, game_id: str = "default_game") -> l
         result.append(
             {
                 "id": row["id"],
-                "day": row["day"],
+                "turn": row["turn"],
                 "player_id": row["player_id"],
                 "briefing": row["briefing"],
                 "choices": _safe_json_loads(row["choices"], []),
@@ -1766,13 +1778,13 @@ def get_players_who_need_to_choose(day: int, game_id: str = "default_game") -> l
     return result
 
 
-def update_game_day_outcome(day: int, combined_outcome: str, game_id: str = "default_game") -> bool:
-    """Update the combined outcome for a game day after all choices are analyzed."""
+def update_game_turn_outcome(turn: int, combined_outcome: str, game_id: str = "default_game") -> bool:
+    """Update the combined outcome for a game turn after all choices are analyzed."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE game_days SET combined_outcome = ? WHERE day = ? AND game_id = ?",
-        (combined_outcome, day, game_id),
+        "UPDATE game_turns SET combined_outcome = ? WHERE turn = ? AND game_id = ?",
+        (combined_outcome, turn, game_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()
@@ -1780,13 +1792,13 @@ def update_game_day_outcome(day: int, combined_outcome: str, game_id: str = "def
     return updated
 
 
-def update_game_day_global_circumstances(day: int, circumstances: str, game_id: str = "default_game") -> bool:
-    """Update global circumstances for a game day."""
+def update_game_turn_global_circumstances(turn: int, circumstances: str, game_id: str = "default_game") -> bool:
+    """Update global circumstances for a game turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE game_days SET global_circumstances = ? WHERE day = ? AND game_id = ?",
-        (circumstances, day, game_id),
+        "UPDATE game_turns SET global_circumstances = ? WHERE turn = ? AND game_id = ?",
+        (circumstances, turn, game_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()
@@ -1959,39 +1971,39 @@ def delete_game_state_for_game(game_id: str) -> bool:
     return deleted > 0
 
 
-def reset_game_state_to_day1(game_id: str = "default_game") -> dict[str, Any]:
-    """Reset game state back to day 1."""
+def reset_game_state_to_turn1(game_id: str = "default_game") -> dict[str, Any]:
+    """Reset game state back to turn 1."""
     _ensure_game_state(game_id)
     return update_game_state(1, "active", True, 100, game_id)
 
 
-def delete_game_day(day: int, game_id: str = "default_game") -> bool:
-    """Delete a specific game day."""
+def delete_game_turn(turn: int, game_id: str = "default_game") -> bool:
+    """Delete a specific game turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM game_days WHERE day = ? AND game_id = ?", (day, game_id))
+    cursor.execute("DELETE FROM game_turns WHERE turn = ? AND game_id = ?", (turn, game_id))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
     return deleted > 0
 
 
-def delete_all_game_days(game_id: str = "default_game") -> int:
+def delete_all_game_turns(game_id: str = "default_game") -> int:
     """Delete all game days for a specific game. Returns count deleted."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM game_days WHERE game_id = ?", (game_id,))
+    cursor.execute("DELETE FROM game_turns WHERE game_id = ?", (game_id,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
     return deleted
 
 
-def delete_player_briefings_for_day(day: int, game_id: str = "default_game") -> int:
-    """Delete all briefings (player + NPC) for a specific game day."""
+def delete_player_briefings_for_turn(turn: int, game_id: str = "default_game") -> int:
+    """Delete all briefings (player + NPC) for a specific game turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM player_briefings WHERE day = ? AND game_id = ?", (day, game_id))
+    cursor.execute("DELETE FROM player_briefings WHERE turn = ? AND game_id = ?", (turn, game_id))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -2009,8 +2021,8 @@ def delete_all_player_briefings(game_id: str = "default_game") -> int:
     return deleted
 
 
-def delete_player_actions_for_day(day: int, game_id: str = "default_game") -> int:
-    """Delete player actions for a specific day.
+def delete_player_actions_for_turn(turn: int, game_id: str = "default_game") -> int:
+    """Delete player actions for a specific turn.
 
     This is tricky because player_actions doesn't have a game_id column.
     We find actions by matching player_ids who belong to this game.
@@ -2018,10 +2030,10 @@ def delete_player_actions_for_day(day: int, game_id: str = "default_game") -> in
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """DELETE FROM player_actions WHERE day = ? AND player_id IN (
+        """DELETE FROM player_actions WHERE turn = ? AND player_id IN (
             SELECT player_id FROM player_profiles WHERE game_id = ?
         )""",
-        (day, game_id),
+        (turn, game_id),
     )
     deleted = cursor.rowcount
     conn.commit()
@@ -2105,7 +2117,7 @@ def get_onboarding_count_in_game(game_id: str = "default_game") -> int:
         row = cursor.fetchone()
         return row["cnt"] if row else 0
     except Exception as e:
-        logger.error(f"Failed to count onboarding players for game {game_id}: {e}")
+        logger.error(f"Failed to count onboarding players for game {game_id}: {e}", exc_info=True)
         return 0
     finally:
         conn.close()

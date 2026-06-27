@@ -51,7 +51,7 @@ except (ValueError, TypeError):
 
 async def push_briefings(
     game_id: str,
-    day: int,
+    turn: int,
     players_briefings: list[dict],
     bridge_url: str | None = None,
     mission: dict | None = None,
@@ -66,7 +66,7 @@ async def push_briefings(
 
     Args:
         game_id: Game identifier
-        day: Day/turn number
+        turn: Turn number number
         players_briefings: List of per-player briefing dicts, each containing
             player_id, briefing, choices, etc.
         bridge_url: URL of bridge image (for first turn)
@@ -86,7 +86,7 @@ async def push_briefings(
     """
     payload: dict = {
         "game_id": game_id,
-        "day": day,
+        "turn": turn,
         "players": players_briefings,
         "is_first_turn": is_first_turn,
         "was_restarted": was_restarted,
@@ -122,7 +122,7 @@ async def push_briefings(
                     body = await resp.json()
                     sent_count = len(body.get("sent", []))
                     already = body.get("already_sent", False)
-                    logger.info(f"[PUSH] Delivered day {day} for game {game_id}: {'already_sent' if already else sent_count} players")
+                    logger.info(f"[PUSH] Delivered turn {turn} for game {game_id}: {'already_sent' if already else sent_count} players")
                     return True
                 else:
                     error_text = await resp.text()
@@ -137,7 +137,7 @@ async def push_briefings(
         if attempt < PUSH_MAX_RETRIES - 1:
             await asyncio.sleep(jitter)
 
-    logger.error(f"[PUSH] Failed to deliver day {day} for game {game_id} after {PUSH_MAX_RETRIES} attempts: {last_exception}")
+    logger.error(f"[PUSH] Failed to deliver turn {turn} for game {game_id} after {PUSH_MAX_RETRIES} attempts: {last_exception}", exc_info=last_exception)
     return False
 
 
@@ -173,13 +173,13 @@ async def _post_with_retry(url: str, payload: dict, label: str) -> bool:
         if attempt < PUSH_MAX_RETRIES - 1:
             await asyncio.sleep(jitter)
 
-    logger.error(f"[PUSH] {label} failed after {PUSH_MAX_RETRIES} attempts: {last_exception}")
+    logger.error(f"[PUSH] {label} failed after {PUSH_MAX_RETRIES} attempts: {last_exception}", exc_info=last_exception)
     return False
 
 
 async def push_player_chosen_action(
     player_id: int,
-    day: int,
+    turn: int,
     chosen_action_url: str,
     game_id: str = "default_game",
     action_text: str = "",
@@ -191,19 +191,19 @@ async def push_player_chosen_action(
     """
     payload: dict = {
         "player_id": player_id,
-        "day": day,
+        "turn": turn,
         "chosen_action_url": chosen_action_url,
         "game_id": game_id,
         "action_text": action_text,
         "language": language,
     }
-    label = f"action player={player_id} day={day}"
+    label = f"action player={player_id} turn={turn}"
     return await _post_with_retry(TELEGRAM_BOT_ACTION_URL, payload, label)
 
 
 async def push_gm_notification(
     game_id: str,
-    day: int,
+    turn: int,
     status: str,
     error: str = "",
     players: int = 0,
@@ -217,7 +217,7 @@ async def push_gm_notification(
 
     Args:
         game_id: Game identifier
-        day: Day/turn number that was being generated
+        turn: Turn number number that was being generated
         status: "success" or "error"
         error: Error message (only when status="error")
         players: Number of players (only when status="success")
@@ -229,20 +229,20 @@ async def push_gm_notification(
     """
     payload: dict = {
         "game_id": game_id,
-        "day": day,
+        "turn": turn,
         "status": status,
         "error": error,
         "players": players,
         "npcs": npcs,
         "language": language,
     }
-    label = f"gm-notification game={game_id} day={day} status={status}"
+    label = f"gm-notification game={game_id} turn={turn} status={status}"
     return await _post_with_retry(TELEGRAM_BOT_GM_NOTIFICATION_URL, payload, label)
 
 
-async def push_day_outcome(
+async def push_turn_outcome(
     game_id: str,
-    day: int,
+    turn: int,
     outcome_text: str,
     alive_players: list[int],
     outcome_image_url: str | None = None,
@@ -259,11 +259,11 @@ async def push_day_outcome(
     alive_crew_count: int | None = None,
     language: str = "ru",
 ) -> bool:
-    """Push the combined day outcome to all alive players.
+    """Push the combined turn outcome to all alive players.
 
     Args:
         game_id: Game identifier
-        day: Day number
+        turn: Turn number
         outcome_text: Narrative description of the outcome
         alive_players: List of player IDs still alive
         outcome_image_url: Optional URL to an outcome scene image
@@ -284,7 +284,7 @@ async def push_day_outcome(
     """
     payload: dict = {
         "game_id": game_id,
-        "day": day,
+        "turn": turn,
         "outcome_text": outcome_text,
         "alive_players": alive_players,
         "language": language,
@@ -314,7 +314,7 @@ async def push_day_outcome(
     if alive_crew_count is not None:
         payload["alive_crew_count"] = alive_crew_count
 
-    label = f"outcome day={day} game={game_id}"
+    label = f"outcome turn={turn} game={game_id}"
     return await _post_with_retry(TELEGRAM_BOT_OUTCOME_URL, payload, label)
 
 

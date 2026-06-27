@@ -46,7 +46,7 @@ from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiohttp_socks import ProxyConnector
 from player_store import (
     delete_player_state,
-    get_all_briefing_days,
+    get_all_briefing_turns,
     get_player_state,
     record_reference,
     update_player_state,
@@ -126,15 +126,15 @@ class GameSelectionState(StatesGroup):
 # flow can resume where they left off.
 
 
-# Track last briefing day sent per player to avoid duplicate messages on poll.
-# Persisted to player_states.last_briefing_day_sent so it survives bot restarts.
-_last_sent_briefing_day: dict[int, int] = {}
+# Track last briefing turn sent per player to avoid duplicate messages on poll.
+# Persisted to player_states.last_briefing_turn_sent so it survives bot restarts.
+_last_sent_briefing_turn: dict[int, int] = {}
 
 
-def _mark_briefing_sent(player_id: int, day_num: int) -> None:
+def _mark_briefing_sent(player_id: int, turn_num: int) -> None:
     """Record that a briefing was sent — updates both in-memory cache and DB."""
-    _last_sent_briefing_day[player_id] = day_num
-    update_player_state(player_id, last_briefing_day_sent=day_num)
+    _last_sent_briefing_turn[player_id] = turn_num
+    update_player_state(player_id, last_briefing_turn_sent=turn_num)
 
 
 # ============== Helper Functions ==============
@@ -239,11 +239,11 @@ async def api_request(
                 return None
             if resp.status != 200:
                 error_text = await resp.text()
-                logger.error(f"API error: {resp.status} - {error_text}")
+                logger.error(f"API error: {resp.status} - {error_text}", stack_info=True)
                 raise Exception(f"API error: {resp.status} - {error_text}")
             return await resp.json()
     except aiohttp.ClientError as e:
-        logger.error(f"HTTP error during API request: {e}")
+        logger.error(f"HTTP error during API request: {e}", exc_info=True)
         raise
     finally:
         await session.close()
@@ -512,7 +512,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             timeout_total=300,
         )
         if result is None:
-            logger.error(f"Onboarding completion returned no result for player {player_id}")
+            logger.error(f"Onboarding completion returned no result for player {player_id}", stack_info=True)
             return
         avatar_url = result.get("avatar_url")
         profile = result.get("profile", {})
@@ -635,7 +635,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             logger.warning(f"Failed to broadcast for player {player_id}: {e}")
 
     except Exception as e:
-        logger.error(f"Avatar generation/sending failed for player {player_id}: {e}")
+        logger.error(f"Avatar generation/sending failed for player {player_id}: {e}", exc_info=True)
         try:
             onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
             # Try to get profile info for fallback message
@@ -700,7 +700,7 @@ async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_
             except Exception as e:
                 logger.warning(f"Failed to notify player {other_id}: {e}")
     except Exception as e:
-        logger.error(f"Broadcast new player failed: {e}")
+        logger.error(f"Broadcast new player failed: {e}", exc_info=True)
 
 
 async def _send_avatar_to_player(bot: Bot, chat_id: int, avatar_url: str | None, player_name: str, profile: dict):
@@ -739,11 +739,11 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
         try:
             mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch mission: {e}")
+            logger.error(f"Failed to fetch mission: {e}", exc_info=True)
         try:
             bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch bridge image: {e}")
+            logger.error(f"Failed to fetch bridge image: {e}", exc_info=True)
 
         # Notify ALL players (new + existing) that the game has started
         # Send to existing players AND the new player who triggered start
@@ -796,7 +796,7 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
             except Exception as e:
                 logger.warning(f"Failed to notify player {other_id} about game start: {e}")
     except Exception as e:
-        logger.error(f"Broadcast game started failed: {e}")
+        logger.error(f"Broadcast game started failed: {e}", exc_info=True)
 
 
 def wrap_text(text: str, width: int = 35) -> str:
@@ -860,7 +860,7 @@ def create_main_menu_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboard
     menu = lang.get_menu(language)
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"]), KeyboardButton(text=menu["today"])],
+            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"]), KeyboardButton(text=menu["turn"])],
             [KeyboardButton(text=menu["team"]), KeyboardButton(text=menu["invite"]), KeyboardButton(text=menu["help"])],
         ],
         resize_keyboard=True,
@@ -967,7 +967,7 @@ async def player_language_selection_callback(callback: types.CallbackQuery, stat
     try:
         await message.edit_reply_markup(reply_markup=None)
     except Exception as e:
-        logger.error(f"Failed to remove language keyboard: {e}")
+        logger.error(f"Failed to remove language keyboard: {e}", exc_info=True)
 
     # Confirm language selection
     onboarding_msgs = lang.get_onboarding(lang_code)
@@ -1030,7 +1030,7 @@ async def show_game_selection(message: types.Message, state: FSMContext, languag
         await state.set_state(GameSelectionState.waiting_for_game_selection)
 
     except Exception as e:
-        logger.error(f"Failed to fetch games list: {e}")
+        logger.error(f"Failed to fetch games list: {e}", exc_info=True)
         error_msgs = lang.get_errors(effective_lang)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
@@ -1118,7 +1118,7 @@ async def start_onboarding_flow(
         await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
-        logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}")
+        logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}", exc_info=True)
         error_msgs = lang.get_errors(effective_language)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
@@ -1151,7 +1151,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
     try:
         await message.edit_reply_markup(reply_markup=None)
     except Exception as e:
-        logger.error(f"Failed to remove selection keyboard: {e}")
+        logger.error(f"Failed to remove selection keyboard: {e}", exc_info=True)
 
     try:
         if game_id_or_new == "new":
@@ -1221,7 +1221,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             await state.set_state(OnboardingState.waiting_for_name)
 
     except Exception as e:
-        logger.error(f"Failed to process game selection for player {player_id}: {e}")
+        logger.error(f"Failed to process game selection for player {player_id}: {e}", exc_info=True)
         error_msgs = lang.get_errors(player_lang)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
@@ -1301,7 +1301,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     ignore_codes=(404,),
                 )
             except Exception as e:
-                logger.error(f"Failed to fetch onboarding session {session_id}: {e}")
+                logger.error(f"Failed to fetch onboarding session {session_id}: {e}", exc_info=True)
                 session_data = None
 
             if session_data and session_data.get("completed"):
@@ -1345,7 +1345,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 await state.set_state(OnboardingState.waiting_for_answer)
             else:
                 # Nothing useful came back — guide the player to reset
-                logger.error(f"Stale onboarding session {session_id} for player {player_id}: no question data available")
+                logger.error(f"Stale onboarding session {session_id} for player {player_id}: no question data available", exc_info=True)
                 keyboard = InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
@@ -1516,7 +1516,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 await show_player_language_selection(message, state)
 
     except Exception as e:
-        logger.error(f"Error in /start command for player {player_id}: {e}")
+        logger.error(f"Error in /start command for player {player_id}: {e}", exc_info=True)
         error_msgs = lang.get_errors(player_lang)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
@@ -1596,35 +1596,35 @@ async def cmd_profile(message: types.Message):
         await message.answer(profile_text, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"Failed to get profile for player {player_id}: {e}")
+        logger.error(f"Failed to get profile for player {player_id}: {e}", exc_info=True)
         msgs = lang.get_profile(player_lang)
         await message.answer(msgs["no_profile"])
 
 
-async def cmd_today(message: types.Message):
-    """Show current day's game episode"""
+async def cmd_turn(message: types.Message):
+    """Show current turn's game episode"""
     if message.from_user is None:
         return
     player_id = message.from_user.id
     player_lang = get_player_language(player_id)
 
     try:
-        msgs = lang.get_current_day(player_lang)
+        msgs = lang.get_current_turn(player_lang)
 
         # First try to get personal briefing (new system)
         briefing = None
-        current_day_num = 1
+        current_turn_num = 1
         try:
             state = await api_request("GET", "/game/state")
-            current_day_num = state.get("day", 1) if state else 1
+            current_turn_num = state.get("turn", 1) if state else 1
             briefing = await api_request(
                 "GET",
-                f"/game/briefing/{player_id}/{current_day_num}",
+                f"/game/briefing/{player_id}/{current_turn_num}",
                 ignore_codes=(404,),
             )
         except Exception:
             logger.error(
-                f"Failed to fetch briefing for player {player_id} day {current_day_num}",
+                f"Failed to fetch briefing for player {player_id} turn {current_turn_num}",
                 exc_info=True,
             )
 
@@ -1640,7 +1640,7 @@ async def cmd_today(message: types.Message):
             try:
                 day_data = await api_request(
                     "GET",
-                    f"/game/day/{current_day_num}",
+                    f"/game/turn/{current_turn_num}",
                     params={"game_id": briefing.get("game_id", "default_game")},
                     ignore_codes=(404,),
                 )
@@ -1648,7 +1648,7 @@ async def cmd_today(message: types.Message):
                     crew_dialogues_today = day_data.get("crew_dialogues", [])
             except Exception:
                 logger.error(
-                    "Failed to fetch day data, continuing without crew dialogues",
+                    "Failed to fetch turn data, continuing without crew dialogues",
                     exc_info=True,
                 )
 
@@ -1676,11 +1676,11 @@ async def cmd_today(message: types.Message):
                             await message.answer_photo(
                                 photo=photo,
                             )
-                            logger.info(f"[TODAY] Sent action image for player {player_id}, day {briefing['day']}")
+                            logger.info(f"[TURN] Sent action image for player {player_id}, turn {briefing['turn']}")
                         else:
-                            logger.warning(f"[TODAY] Failed to download action image: {resp.status}")
+                            logger.warning(f"[TURN] Failed to download action image: {resp.status}")
                 except Exception as e:
-                    logger.warning(f"[TODAY] Failed to send action image: {e}")
+                    logger.warning(f"[TURN] Failed to send action image: {e}")
 
             await message.answer(
                 msgs["briefing_header"].format(briefing=briefing["briefing"]) + crew_behavior_text + "\n\n" + msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"],
@@ -1689,38 +1689,38 @@ async def cmd_today(message: types.Message):
             )
         else:
             # Legacy system: show global story
-            day = await api_request("GET", "/game/current-day")
-            if day is None:
+            turn_data = await api_request("GET", "/game/current-turn")
+            if turn_data is None:
                 await message.answer(lang.get_errors(player_lang)["api_error"])
                 return
 
             # Create action keyboard if there are actions to select
             keyboard = None
-            if day.get("player_actions"):
-                keyboard = create_action_keyboard(day["player_actions"])
+            if turn_data.get("player_actions"):
+                keyboard = create_action_keyboard(turn_data["player_actions"])
 
             # Build actions text
-            actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(day.get("player_actions", []))])
+            actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(turn_data.get("player_actions", []))])
 
             # Build crew behavior text from NPC dialogues (integrated, no separate section)
             crew_behavior_text = ""
-            if day.get("crew_dialogues"):
+            if turn_data.get("crew_dialogues"):
                 dialogue_lines = []
-                for d in day["crew_dialogues"]:
+                for d in turn_data["crew_dialogues"]:
                     line = f"*{d['npc']}*: {d['dialogue']}"
                     dialogue_lines.append(line)
                 crew_separator = "\n---\n"
                 crew_behavior_text = f"\n\n{msgs['crew_dialogues']}\n{crew_separator.join(dialogue_lines)}"
 
             await message.answer(
-                msgs["title"].format(day=day["day"]) + f"\n\n{msgs['story'].format(story=day['story'])}" + crew_behavior_text + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
+                msgs["title"].format(turn=turn_data["turn"]) + f"\n\n{msgs['story'].format(story=turn_data['story'])}" + crew_behavior_text + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
                 parse_mode="Markdown",
                 reply_markup=keyboard,
             )
 
     except Exception as e:
-        logger.error(f"Failed to get current day for player {player_id}: {e}")
-        msgs = lang.get_current_day(player_lang)
+        logger.error(f"Failed to get current turn for player {player_id}: {e}", exc_info=True)
+        msgs = lang.get_current_turn(player_lang)
         await message.answer(msgs["error"].format(error=str(e)))
 
 
@@ -1736,14 +1736,14 @@ async def cmd_bridge(message: types.Message):
         try:
             mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch mission: {e}")
+            logger.error(f"Failed to fetch mission: {e}", exc_info=True)
 
         # Get bridge image
         bridge = None
         try:
             bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch bridge image: {e}")
+            logger.error(f"Failed to fetch bridge image: {e}", exc_info=True)
 
         # Use the game's language for bridge captions
         bridge_lang = await get_game_language("default_game", fallback=get_player_language(player_id))
@@ -1758,7 +1758,7 @@ async def cmd_bridge(message: types.Message):
         else:
             await message.answer(bridge_msgs["error"])
     except Exception as e:
-        logger.error(f"Failed to get bridge image for player {player_id}: {e}")
+        logger.error(f"Failed to get bridge image for player {player_id}: {e}", exc_info=True)
         await message.answer(str(e))
 
 
@@ -1860,7 +1860,7 @@ async def cmd_team(message: types.Message):
         )
 
     except Exception as e:
-        logger.error(f"[TEAM] Failed for player {player_id}: {e}")
+        logger.error(f"[TEAM] Failed for player {player_id}: {e}", exc_info=True)
         await message.answer(msgs["api_error"])
 
 
@@ -1912,11 +1912,11 @@ async def cmd_invite(message: types.Message):
         try:
             mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch mission for invite: {e}")
+            logger.error(f"Failed to fetch mission for invite: {e}", exc_info=True)
         try:
             bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch bridge image for invite: {e}")
+            logger.error(f"Failed to fetch bridge image for invite: {e}", exc_info=True)
 
         invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
 
@@ -1964,7 +1964,7 @@ async def cmd_invite(message: types.Message):
         logger.info(f"Sent invite to player {player_id}")
 
     except Exception as e:
-        logger.error(f"Failed to send invite for player {player_id}: {e}")
+        logger.error(f"Failed to send invite for player {player_id}: {e}", exc_info=True)
         await message.answer(
             "Failed to generate invite link. Please try again later.",
             reply_markup=create_main_menu_keyboard(),
@@ -2033,7 +2033,7 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
     try:
         await message.edit_reply_markup(reply_markup=None)
     except Exception as e:
-        logger.error(f"Failed to remove confirmation keyboard: {e}")
+        logger.error(f"Failed to remove confirmation keyboard: {e}", exc_info=True)
 
     if not (callback.data or "").endswith(":yes"):
         await message.answer(reset_msgs["cancelled"])
@@ -2049,7 +2049,7 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
             timeout_total=120,
         )
     except Exception as e:
-        logger.error(f"[RESET] API call failed for player {player_id}: {e}")
+        logger.error(f"[RESET] API call failed for player {player_id}: {e}", exc_info=True)
         await message.answer(reset_msgs["error"].format(error=e))
         return
 
@@ -2060,13 +2060,13 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
 
     # Clear the local briefing-dedup cache so a fresh game can deliver briefings.
     try:
-        _last_sent_briefing_day.pop(player_id, None)
+        _last_sent_briefing_turn.pop(player_id, None)
     except KeyError:
         pass
     try:
-        update_player_state(player_id, last_briefing_day_sent=None)
+        update_player_state(player_id, last_briefing_turn_sent=None)
     except Exception as e:
-        logger.error(f"Failed to clear briefing day for player {player_id}: {e}")
+        logger.error(f"Failed to clear briefing turn for player {player_id}: {e}", exc_info=True)
 
     # Wipe FSM + business state, then restart from language selection.
     await state.clear()
@@ -2116,9 +2116,9 @@ async def cmd_help(message: types.Message):
     )
 
 
-async def cmd_gm_start_game(message: types.Message):
+async def cmd_gm_start(message: types.Message):
     """GM command: Force start a game by ID.
-    Usage: /gm_start_game <game_id>
+    Usage: /gm_start <game_id>
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2128,7 +2128,7 @@ async def cmd_gm_start_game(message: types.Message):
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
         gm_msgs = lang.get_gm_commands(player_lang)
-        logger.warning(f"Unauthorized /gm_start_game attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_start attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -2166,7 +2166,7 @@ async def cmd_gm_start_game(message: types.Message):
             logger.warning(f"Start game {game_id}: unexpected response {result}")
             await message.answer(gm_msgs["start_game_error"].format(error=result))
     except Exception as e:
-        logger.error(f"Failed to start start-game request for {game_id}: {e}")
+        logger.error(f"Failed to start start-game request for {game_id}: {e}", exc_info=True)
         await message.answer(
             gm_msgs["start_game_failed"].format(error=e),
         )
@@ -2234,14 +2234,14 @@ async def cmd_gm_kick(message: types.Message):
             error_detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
             await message.answer(gm_msgs["kick_error"].format(error=error_detail))
     except Exception as e:
-        logger.error(f"Failed to kick player: {e}")
+        logger.error(f"Failed to kick player: {e}", exc_info=True)
         await message.answer(gm_msgs["kick_error"].format(error=e))
 
 
-async def cmd_gm_list_games(message: types.Message):
+async def cmd_gm_list(message: types.Message):
     """GM command: List available games.
 
-    Usage: /gm_list_games
+    Usage: /gm_list
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2250,7 +2250,7 @@ async def cmd_gm_list_games(message: types.Message):
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(f"Unauthorized /gm_list_games attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_list attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -2268,6 +2268,7 @@ async def cmd_gm_list_games(message: types.Message):
             title = game.get("title") or game.get("name") or gm_msgs["default_game_title"]
             player_count = game.get("player_count", 0)
             onboarding_count = game.get("onboarding_count", 0)
+            turn = game.get("current_turn", 0)
             started = game.get("started", False)
             status = "started" if started else "waiting"
             status_icon = "🚀" if started else "⏳"
@@ -2277,6 +2278,7 @@ async def cmd_gm_list_games(message: types.Message):
                     idx=idx,
                     game_id=game_id,
                     title=title,
+                    turn=turn,
                     player_count=player_count,
                     onboarding_count=onboarding_count,
                     status_icon=status_icon,
@@ -2287,14 +2289,14 @@ async def cmd_gm_list_games(message: types.Message):
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Failed to list games: {e}")
+        logger.error(f"Failed to list games: {e}", exc_info=True)
         await message.answer(gm_msgs["list_games_error"].format(error=e))
 
 
-async def cmd_gm_continue_game(message: types.Message):
+async def cmd_gm_continue(message: types.Message):
     """GM command: Generate the next turn for a game.
 
-    Usage: /gm_continue_game <game_id>
+    Usage: /gm_continue <game_id>
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2304,7 +2306,7 @@ async def cmd_gm_continue_game(message: types.Message):
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
         gm_msgs = lang.get_gm_commands(player_lang)
-        logger.warning(f"Unauthorized /gm_continue_game attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_continue attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -2337,23 +2339,23 @@ async def cmd_gm_continue_game(message: types.Message):
             timeout_total=60,
         )
         if result and result.get("status") == "accepted":
-            day_num = result.get("day", 1)
-            logger.info(f"Continue game {game_id} accepted by server for day {day_num}")
+            turn_num = result.get("turn", 1)
+            logger.info(f"Continue game {game_id} accepted by server for turn {turn_num}")
         else:
             logger.warning(f"Continue game {game_id}: unexpected response {result}")
             await message.answer(gm_msgs["continue_game_error"].format(error=result))
     except Exception as e:
-        logger.error(f"Failed to start continue-game request for {game_id}: {e}")
+        logger.error(f"Failed to start continue-game request for {game_id}: {e}", exc_info=True)
         await message.answer(
             gm_msgs["continue_game_failed"].format(error=e),
         )
 
 
-async def cmd_gm_regenerate_turn(message: types.Message):
+async def cmd_gm_turn(message: types.Message):
     """GM command: Regenerate the current turn with state reset.
 
-    Deletes the current day's data and regenerates it fresh.
-    Usage: /gm_regenerate_turn <game_id>
+    Deletes the current turn's data and regenerates it fresh.
+    Usage: /gm_turn <game_id>
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2363,7 +2365,7 @@ async def cmd_gm_regenerate_turn(message: types.Message):
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
         gm_msgs = lang.get_gm_commands(player_lang)
-        logger.warning(f"Unauthorized /gm_regenerate_turn attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_turn attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -2396,23 +2398,23 @@ async def cmd_gm_regenerate_turn(message: types.Message):
             timeout_total=60,
         )
         if result and result.get("status") == "accepted":
-            day_num = result.get("day", 1)
-            logger.info(f"Regenerate turn for game {game_id} accepted by server for day {day_num}")
+            turn_num = result.get("turn", 1)
+            logger.info(f"Regenerate turn for game {game_id} accepted by server for turn {turn_num}")
         else:
             logger.warning(f"Regenerate turn {game_id}: unexpected response {result}")
             await message.answer(gm_msgs["regenerate_turn_error"].format(error=result))
     except Exception as e:
-        logger.error(f"Failed to start regenerate-turn request for {game_id}: {e}")
+        logger.error(f"Failed to start regenerate-turn request for {game_id}: {e}", exc_info=True)
         await message.answer(
             gm_msgs["regenerate_turn_failed"].format(error=e),
         )
 
 
-async def cmd_gm_restart_game(message: types.Message):
+async def cmd_gm_restart(message: types.Message):
     """GM command: Reset game state and restart from turn 1.
 
     Immediately restarts the game, deleting all content.
-    Usage: /gm_restart_game <game_id>
+    Usage: /gm_restart <game_id>
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2422,7 +2424,7 @@ async def cmd_gm_restart_game(message: types.Message):
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
         gm_msgs = lang.get_gm_commands(player_lang)
-        logger.warning(f"Unauthorized /gm_restart_game attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_restart attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -2460,7 +2462,7 @@ async def cmd_gm_restart_game(message: types.Message):
             return
 
         # Reset dedup cache for all players in this game — otherwise push_server
-        # will skip delivery because _last_sent_briefing_day still has the old day 1
+        # will skip delivery because _last_sent_briefing_turn still has the old turn 1
         # from the previous game session (loaded from persistent DB at startup).
         try:
             players_result = await api_request("GET", "/players", params={"game_id": game_id})
@@ -2468,9 +2470,9 @@ async def cmd_gm_restart_game(message: types.Message):
                 for p in players_result:
                     if isinstance(p, dict):
                         pid = p.get("player_id")
-                        if pid is not None and pid in _last_sent_briefing_day:
-                            del _last_sent_briefing_day[pid]
-                            update_player_state(pid, last_briefing_day_sent=None)
+                        if pid is not None and pid in _last_sent_briefing_turn:
+                            del _last_sent_briefing_turn[pid]
+                            update_player_state(pid, last_briefing_turn_sent=None)
                             logger.info(f"[DEDUP] Reset briefing cache for player {pid} (game restart)")
         except Exception as e:
             logger.warning(f"Failed to reset dedup cache for restart: {e}")
@@ -2488,13 +2490,13 @@ async def cmd_gm_restart_game(message: types.Message):
         )
         if start_result and start_result.get("status") == "accepted":
             logger.info(f"Restart game {game_id}: reset complete, background generation started")
-            deleted_days = result.get("deleted_days", 0)
+            deleted_turns = result.get("deleted_turns", 0)
             deleted_briefings = result.get("deleted_briefings", 0)
             deleted_actions = result.get("deleted_actions", 0)
             await message.answer(
                 gm_msgs["restart_cleanup_done"].format(
                     game_id=game_id,
-                    deleted_days=deleted_days,
+                    deleted_turns=deleted_turns,
                     deleted_briefings=deleted_briefings,
                     deleted_actions=deleted_actions,
                 ),
@@ -2503,7 +2505,7 @@ async def cmd_gm_restart_game(message: types.Message):
         else:
             await message.answer(gm_msgs["restart_game_error"].format(error=start_result))
     except Exception as e:
-        logger.error(f"Failed to restart game {game_id}: {e}")
+        logger.error(f"Failed to restart game {game_id}: {e}", exc_info=True)
         await message.answer(gm_msgs["restart_game_error"].format(error=e))
 
 
@@ -2550,7 +2552,7 @@ async def cmd_gm_status(message: types.Message):
         status_label = result.get("status", "?")
         header = gm_msgs["status_header"].format(
             game_id=game_id,
-            day=result.get("current_day", result.get("day", 1)),
+            turn=result.get("current_turn", result.get("turn", 1)),
             status=status_label,
             ship=ship,
             player_count=result.get("player_count", 0),
@@ -2619,14 +2621,14 @@ async def cmd_gm_status(message: types.Message):
             await message.answer(npcs_text, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"Failed to get game status for {game_id}: {e}")
+        logger.error(f"Failed to get game status for {game_id}: {e}", exc_info=True)
         await message.answer(gm_msgs["status_error"].format(error=e))
 
 
-async def cmd_gm_set_language(message: types.Message):
+async def cmd_gm_lang(message: types.Message):
     """GM command: Set the language for a game and regenerate its title.
 
-    Usage: /gm_set_language <game_id> <ru|en>
+    Usage: /gm_lang <game_id> <ru|en>
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2635,7 +2637,7 @@ async def cmd_gm_set_language(message: types.Message):
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
-        logger.warning(f"Unauthorized /gm_set_language attempt by user {player_id}")
+        logger.warning(f"Unauthorized /gm_lang attempt by user {player_id}")
         await message.answer(gm_msgs["unauthorized"])
         return
 
@@ -2674,7 +2676,7 @@ async def cmd_gm_set_language(message: types.Message):
             detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
             await message.answer(gm_msgs["set_language_error"].format(detail=detail))
     except Exception as e:
-        logger.error(f"Failed to set language for game {game_id}: {e}")
+        logger.error(f"Failed to set language for game {game_id}: {e}", exc_info=True)
         await message.answer(gm_msgs["set_language_error"].format(detail=e))
 
 
@@ -2699,7 +2701,7 @@ async def handle_voice_message(message: types.Message):
             },
         )
     except Exception as e:
-        logger.error(f"Failed to send voice message to API: {e}")
+        logger.error(f"Failed to send voice message to API: {e}", exc_info=True)
 
 
 async def handle_text_message(message: types.Message):
@@ -2738,7 +2740,7 @@ async def handle_text_message(message: types.Message):
             await message.answer(msgs["text_received"])
 
     except Exception as e:
-        logger.error(f"Failed to send text message to API: {e}")
+        logger.error(f"Failed to send text message to API: {e}", exc_info=True)
         msgs = lang.get_messages(player_lang)
         await message.answer(msgs["error"].format(error=str(e)))
 
@@ -2751,10 +2753,10 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     """
     await callback.answer()
     if callback.data is None:
-        logger.error("handle_onboarding_inline_answer: callback.data is None")
+        logger.error("handle_onboarding_inline_answer: callback.data is None", stack_info=True)
         return
     if callback.message is None:
-        logger.error("handle_onboarding_inline_answer: callback.message is None")
+        logger.error("handle_onboarding_inline_answer: callback.message is None", stack_info=True)
         return
     msg: types.Message = callback.message  # type: ignore[assignment]
     player_id = callback.from_user.id
@@ -2791,12 +2793,12 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         return
 
     if not session_id:
-        logger.error(f"No session_id in state for player {player_id}")
+        logger.error(f"No session_id in state for player {player_id}", exc_info=True)
         await msg.answer(error_msgs["session_not_found"])
         return
 
     if not current_options or option_idx < 0 or option_idx >= len(current_options):
-        logger.error(f"Invalid option_idx {option_idx} for {len(current_options) if current_options else 0} options")
+        logger.error(f"Invalid option_idx {option_idx} for {len(current_options) if current_options else 0} options", exc_info=True)
         await msg.answer(error_msgs["invalid_format"])
         return
 
@@ -2857,7 +2859,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                 verify_profile = await api_request("GET", f"/players/{player_id}/profile")
                 logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
             except Exception as verify_error:
-                logger.error(f"Profile verification failed for player {player_id}: {verify_error}")
+                logger.error(f"Profile verification failed for player {player_id}: {verify_error}", exc_info=True)
 
             await state.clear()
             update_player_state(
@@ -2872,7 +2874,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
 
             # Avatar generation + onboarding message
             if msg.bot is None:
-                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar")
+                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar", exc_info=True)
             else:
                 asyncio.create_task(_generate_and_send_avatar(player_id, session_id, msg.bot))
         else:
@@ -2894,7 +2896,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                 await send_question_with_image(msg, next_question, keyboard, player_lang)
 
     except Exception as e:
-        logger.error(f"Failed to submit onboarding answer (inline): {e}")
+        logger.error(f"Failed to submit onboarding answer (inline): {e}", exc_info=True)
         await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
@@ -2906,10 +2908,10 @@ async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMCon
     """
     await callback.answer()
     if callback.data is None:
-        logger.error("clear_onboarding_callback: callback.data is None")
+        logger.error("clear_onboarding_callback: callback.data is None", stack_info=True)
         return
     if callback.message is None:
-        logger.error("clear_onboarding_callback: callback.message is None")
+        logger.error("clear_onboarding_callback: callback.message is None", stack_info=True)
         return
     if not isinstance(callback.message, types.Message):
         logger.warning("Callback message is inaccessible for clear_onboarding")
@@ -2952,10 +2954,10 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     as an index into current_options to find the matching option value.
     """
     if message.from_user is None:
-        logger.error("onboarding_answer: message.from_user is None")
+        logger.error("onboarding_answer: message.from_user is None", stack_info=True)
         return
     if message.text is None:
-        logger.error("onboarding_answer: message.text is None")
+        logger.error("onboarding_answer: message.text is None", stack_info=True)
         return
     answer_text = message.text
     player_id = message.from_user.id
@@ -2972,12 +2974,12 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     logger.info(f"State data: session_id={session_id}, question_id={current_question_id}, options_count={len(current_options) if current_options else 0}")
 
     if not session_id:
-        logger.error(f"No session_id in state for player {player_id}")
+        logger.error(f"No session_id in state for player {player_id}", stack_info=True)
         await message.answer(error_msgs["session_not_found"])
         return
 
     if not current_options:
-        logger.error(f"No current_options in state for player {player_id}, state_data={state_data}")
+        logger.error(f"No current_options in state for player {player_id}, state_data={state_data}", stack_info=True)
         await message.answer(error_msgs["invalid_format"])
         return
 
@@ -3044,7 +3046,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 verify_profile = await api_request("GET", f"/players/{player_id}/profile")
                 logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
             except Exception as verify_error:
-                logger.error(f"Profile verification failed for player {player_id}: {verify_error}")
+                logger.error(f"Profile verification failed for player {player_id}: {verify_error}", exc_info=True)
 
             await state.clear()
             update_player_state(
@@ -3059,7 +3061,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 
             # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             if message.bot is None:
-                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar")
+                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar", exc_info=True)
             else:
                 asyncio.create_task(_generate_and_send_avatar(player_id, session_id, message.bot))
 
@@ -3087,7 +3089,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 await send_question_with_image(message, next_question, keyboard, get_player_language(player_id))
 
     except Exception as e:
-        logger.error(f"Failed to submit onboarding answer: {e}")
+        logger.error(f"Failed to submit onboarding answer: {e}", exc_info=True)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
@@ -3111,9 +3113,9 @@ async def action_selection(callback: types.CallbackQuery):
 
     try:
         # Get current day to validate
-        day = await api_request("GET", "/game/current-day")
-        if day is None:
-            raise Exception("No current day data from API")
+        turn_data = await api_request("GET", "/game/current-turn")
+        if turn_data is None:
+            raise Exception("No current turn data from API")
 
         # Submit action
         await api_request(
@@ -3121,14 +3123,14 @@ async def action_selection(callback: types.CallbackQuery):
             "/game/actions",
             data={
                 "player_id": player_id,
-                "day": day["day"],
+                "turn": turn_data["turn"],
                 "action_id": action_id,
                 "choice": "selected",
             },
         )
 
         # Mark the selected action on the inline keyboard with ✅
-        actions_list = day.get("player_actions", [])
+        actions_list = turn_data.get("player_actions", [])
         if actions_list and isinstance(callback.message, types.Message):
             try:
                 updated_keyboard = create_action_keyboard(actions_list, selected_action_id=action_id)
@@ -3143,7 +3145,7 @@ async def action_selection(callback: types.CallbackQuery):
             await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard())
 
     except Exception as e:
-        logger.error(f"Failed to record action for player {player_id}: {e}")
+        logger.error(f"Failed to record action for player {player_id}: {e}", exc_info=True)
         action_lang = player_lang
         try:
             action_lang = await get_game_language("default_game", fallback=player_lang)
@@ -3172,29 +3174,29 @@ async def refresh_game(callback: types.CallbackQuery):
 
     try:
         # Refresh current day
-        day = await api_request("GET", "/game/current-day")
-        if day is None:
-            raise Exception("No current day data from API")
+        turn_data = await api_request("GET", "/game/current-turn")
+        if turn_data is None:
+            raise Exception("No current turn data from API")
 
-        msgs = lang.get_current_day(player_lang)
+        msgs = lang.get_current_turn(player_lang)
 
         # Build actions text
-        actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(day.get("player_actions", []))])
+        actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(turn_data.get("player_actions", []))])
 
         # Build NPC dialogues text
         crew_dialogues_text = ""
-        if day.get("crew_dialogues"):
-            crew_dialogues_text = "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in day["crew_dialogues"]])
+        if turn_data.get("crew_dialogues"):
+            crew_dialogues_text = "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in turn_data["crew_dialogues"]])
 
         if isinstance(callback.message, types.Message):
             await callback.message.edit_text(
-                msgs["title"].format(day=day["day"]) + f"\n\n{msgs['story'].format(story=day['story'])}\n\n{msgs['crew_dialogues']}\n{crew_dialogues_text}" + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
+                msgs["title"].format(turn=turn_data["turn"]) + f"\n\n{msgs['story'].format(story=turn_data['story'])}\n\n{msgs['crew_dialogues']}\n{crew_dialogues_text}" + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
                 parse_mode="Markdown",
-                reply_markup=create_action_keyboard(day.get("player_actions", [])),
+                reply_markup=create_action_keyboard(turn_data.get("player_actions", [])),
             )
 
     except Exception as e:
-        logger.error(f"Failed to refresh game for player {player_id}: {e}")
+        logger.error(f"Failed to refresh game for player {player_id}: {e}", exc_info=True)
         if isinstance(callback.message, types.Message):
             await callback.message.answer(lang.get_messages(player_lang)["error"].format(error=str(e)))
 
@@ -3205,7 +3207,7 @@ async def refresh_game(callback: types.CallbackQuery):
 async def main():
     """Main entry point"""
     if not BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not set")
+        logger.error("TELEGRAM_BOT_TOKEN not set", stack_info=True)
         return
 
     # Configure SQLite storage for FSM state persistence
@@ -3236,20 +3238,20 @@ async def main():
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_start, CommandStart(deep_link=True))
     dp.message.register(cmd_profile, Command("profile"))
-    dp.message.register(cmd_today, Command("today"))
+    dp.message.register(cmd_turn, Command("turn"))
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(cmd_bridge, Command("bridge"))
     dp.message.register(cmd_team, Command("team"))
     dp.message.register(cmd_invite, Command("invite"))
     dp.message.register(cmd_reset, Command("reset"))
-    dp.message.register(cmd_gm_start_game, Command("gm_start_game"))
+    dp.message.register(cmd_gm_start, Command("gm_start"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
-    dp.message.register(cmd_gm_list_games, Command("gm_list_games"))
-    dp.message.register(cmd_gm_continue_game, Command("gm_continue_game"))
-    dp.message.register(cmd_gm_regenerate_turn, Command("gm_regenerate_turn"))
-    dp.message.register(cmd_gm_restart_game, Command("gm_restart_game"))
+    dp.message.register(cmd_gm_list, Command("gm_list"))
+    dp.message.register(cmd_gm_continue, Command("gm_continue"))
+    dp.message.register(cmd_gm_turn, Command("gm_turn"))
+    dp.message.register(cmd_gm_restart, Command("gm_restart"))
     dp.message.register(cmd_gm_status, Command("gm_status"))
-    dp.message.register(cmd_gm_set_language, Command("gm_set_language"))
+    dp.message.register(cmd_gm_lang, Command("gm_lang"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Onboarding name input handler — before general text handlers
@@ -3271,12 +3273,12 @@ async def main():
     dp.callback_query.register(reset_confirm_callback, F.data.startswith("reset_confirm:"))
     dp.callback_query.register(clear_onboarding_callback, F.data.startswith("onb_clear:"))
 
-    # Load last_briefing_day_sent from DB so dedup survives bot restarts
-    global _last_sent_briefing_day
-    _last_sent_briefing_day = get_all_briefing_days()
+    # Load last_briefing_turn_sent from DB so dedup survives bot restarts
+    global _last_sent_briefing_turn
+    _last_sent_briefing_turn = get_all_briefing_turns()
     logger.info(
-        "Loaded _last_sent_briefing_day for %d player(s) from persistent storage",
-        len(_last_sent_briefing_day),
+        "Loaded _last_sent_briefing_turn for %d player(s) from persistent storage",
+        len(_last_sent_briefing_turn),
     )
 
     logger.info("Starting Telegram Bot")
@@ -3287,7 +3289,7 @@ async def main():
     push_runner = await start_push_server(
         bot=bot,
         language=DEFAULT_LANGUAGE,
-        last_sent_briefing_day=_last_sent_briefing_day,
+        last_sent_briefing_turn=_last_sent_briefing_turn,
         mark_sent_fn=_mark_briefing_sent,
         create_keyboard_fn=create_action_keyboard,
     )

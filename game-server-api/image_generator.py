@@ -220,7 +220,7 @@ class ImageGenerator:
                     logger.warning(f"ComfyUI connection failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f"ComfyUI connection failed after {max_retries} attempts: {last_error}")
+                    logger.error(f"ComfyUI connection failed after {max_retries} attempts: {last_error}", exc_info=True)
 
         raise Exception(f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}")
 
@@ -331,13 +331,13 @@ class ImageGenerator:
                         logger.warning(f"[IMAGE] No image in ComfyUI output after {max_retries} attempts, giving up")
 
                 except Exception as e:
-                    logger.error(f"[IMAGE] Generation attempt {attempt}/{max_retries} failed: {e}")
+                    logger.error(f"[IMAGE] Generation attempt {attempt}/{max_retries} failed: {e}", exc_info=True)
                     if attempt < max_retries:
                         wait = 2**attempt  # 2s, 4s, 8s backoff
                         logger.info(f"[IMAGE] Retrying in {wait}s...")
                         await asyncio.sleep(wait)
                     else:
-                        logger.error(f"[IMAGE] All {max_retries} attempts exhausted, giving up")
+                        logger.error(f"[IMAGE] All {max_retries} attempts exhausted, giving up", exc_info=True)
 
         return None
 
@@ -690,7 +690,7 @@ class ImageGenerator:
                 else:
                     logger.warning(f"[IMAGE] Loading image #{i + 1} failed to generate")
             except Exception as e:
-                logger.error(f"[IMAGE] Loading image #{i + 1} error: {e}")
+                logger.error(f"[IMAGE] Loading image #{i + 1} error: {e}", exc_info=True)
 
         logger.info(f"[IMAGE] Generated {len(urls)}/{count} loading images")
         return urls
@@ -787,7 +787,7 @@ class ImageGenerator:
                 else:
                     logger.warning(f"[IMAGE] Splash image {i + 1}/{count} failed")
             except Exception as e:
-                logger.error(f"[IMAGE] Splash image {i + 1}/{count} error: {e}")
+                logger.error(f"[IMAGE] Splash image {i + 1}/{count} error: {e}", exc_info=True)
 
         logger.info(f"[IMAGE] Generated {len(urls)}/{count} splash images")
         return urls

@@ -8,7 +8,6 @@ import logging
 import os
 import random
 import string
-import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -20,32 +19,32 @@ from database import (
     add_game_message,
     clear_game_started,
     create_game,
-    create_game_day,
+    create_game_turn,
     create_mission,
     create_npc_profile,
     create_onboarding_session,
     create_player_profile,
-    delete_all_game_days,
+    delete_all_game_turns,
     delete_all_game_messages,
     delete_all_player_actions,
     delete_all_player_briefings,
-    delete_game_day,
+    delete_game_turn,
     delete_game_images,
     delete_mission,
     delete_onboarding_sessions_for_player,
-    delete_player_actions_for_day,
-    delete_player_briefings_for_day,
+    delete_player_actions_for_turn,
+    delete_player_briefings_for_turn,
     delete_player_profile,
     end_game,
     get_all_active_npcs,
+    get_all_briefings_for_turn,
     get_all_npcs,
-    get_all_briefings_for_day,
     get_available_games,
     get_available_roles,
     get_db_connection,
     get_dead_players,
     get_game,
-    get_game_day,
+    get_game_turn,
     get_game_image_count,
     get_game_language,
     get_game_messages,
@@ -76,19 +75,19 @@ from database import (
     set_game_language,
     record_kick,
     reset_active_npcs,
-    reset_game_state_to_day1,
+    reset_game_state_to_turn1,
     reset_roles,
     save_game_image,
     save_game_title_and_welcome,
     save_player_action,
     save_player_briefing,
-    set_last_death_day,
+    set_last_death_turn,
     start_game,
     take_role,
     update_briefing_choice,
     update_briefing_chosen_action_url,
-    update_game_day_global_circumstances,
-    update_game_day_outcome,
+    update_game_turn_global_circumstances,
+    update_game_turn_outcome,
     update_game_state,
     update_game_title,
     update_mission_stage_progress,
@@ -118,7 +117,7 @@ from language import (
 from prompts import (
     OnboardingQuestion,
 )
-from push_client import push_briefings, push_day_outcome, push_game_over, push_gm_notification, push_player_chosen_action
+from push_client import push_briefings, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action
 from pydantic import BaseModel, Field, TypeAdapter
 
 # Configure logging
@@ -141,8 +140,8 @@ uvicorn_access = logging.getLogger("uvicorn.access")
 uvicorn_access.addFilter(HealthCheckFilter())
 
 
-# Track pending action image tasks keyed by (day, game_id) so that
-# _analyze_day_outcome can await them before pushing the outcome.
+# Track pending action image tasks keyed by (turn, game_id) so that
+# _analyze_turn_outcome can await them before pushing the outcome.
 # This ensures action images arrive BEFORE outcome text, not after.
 _pending_action_tasks: dict[tuple[int, str], set[asyncio.Task]] = {}
 
@@ -203,7 +202,7 @@ class PlayerActionRequest(BaseModel):
     """Request to submit player action"""
 
     player_id: int
-    day: int
+    turn: int
     action_id: str
     choice: str
 
@@ -211,7 +210,7 @@ class PlayerActionRequest(BaseModel):
 class PollResponse(BaseModel):
     """Response from game polling endpoint"""
 
-    new_game_day: dict[str, Any] | None = None
+    new_game_turn: dict[str, Any] | None = None
     pending_actions: list[dict[str, Any]] = Field(default_factory=list)
     messages_from_gm: list[dict[str, Any]] = Field(default_factory=list)
     npc_messages: list[dict[str, Any]] = Field(default_factory=list)
@@ -362,7 +361,7 @@ async def generate_dynamic_onboarding_questions(
         return questions
 
     except Exception as e:
-        logger.error(f"Failed to generate dynamic onboarding questions: {e}")
+        logger.error(f"Failed to generate dynamic onboarding questions: {e}", exc_info=True)
         raise
 
 
@@ -693,7 +692,7 @@ async def _generate_loading_images():
 
         logger.info(f"[LOADING] Background gen: saved {saved}/{remaining} images")
     except Exception as e:
-        logger.error(f"[LOADING] Background generation failed: {e}")
+        logger.error(f"[LOADING] Background generation failed: {e}", exc_info=True)
 
 
 @asynccontextmanager
@@ -720,7 +719,7 @@ app = FastAPI(
 # CORS middleware — allows browser-based clients (Telegram Mini App) to call the API.
 # - GAME_MASTER_API_URL: internal Docker URL (for development / self-reference)
 # - CORS_ORIGIN: external/public URL for browser frontend (Telegram Mini App)
-# Only browsers enforce CORS; backend services (telegram-bot, game-master) don't need it.
+# Only browsers enforce CORS; backend services (telegram-bot, game-scheduler) don't need it.
 cors_origins = [os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")]
 extra_cors = os.getenv("CORS_ORIGIN", "")
 if extra_cors:
@@ -850,7 +849,7 @@ async def start_onboarding(request: StartOnboardingRequest):
                     saved += 1
             logger.info(f"[SPLASH] Saved {saved}/3 splash images")
         except Exception as e:
-            logger.error(f"[SPLASH] Generation failed: {e}")
+            logger.error(f"[SPLASH] Generation failed: {e}", exc_info=True)
     else:
         logger.info(f"[SPLASH] {existing_splash} splash images already in DB, skipping")
 
@@ -1165,8 +1164,7 @@ async def complete_onboarding(session_id: str):
             logger.warning(f"[AVATAR] ComfyUI returned None for player {player_id}")
 
     except Exception as e:
-        logger.error(f"[AVATAR] ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"[AVATAR] ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}", exc_info=True)
         # Continue without avatar URL
 
     # Check player count and start game if >= GAME_START_MIN_PLAYERS
@@ -1377,8 +1375,7 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
             logger.warning(f"[AVATAR] ComfyUI returned None for player {player_id}")
 
     except Exception as e:
-        logger.error(f"[AVATAR] ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"[AVATAR] ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}", exc_info=True)
 
     return avatar_url
 
@@ -1484,7 +1481,7 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
     state = get_game_state(game_id)
     title = get_game_title(game_id) or ""
 
-    current_day_num = max(1, state["day"] - 1)
+    current_turn_num = max(1, state["turn"] - 1)
 
     # Real players
     player_ids = get_players_in_game(game_id)
@@ -1493,8 +1490,8 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
         p = get_player_profile(pid)
         if not p:
             continue
-        # Check if they have a pending choice for the current day
-        briefing = get_player_briefing(current_day_num, pid, game_id=game_id)
+        # Check if they have a pending choice for the current turn
+        briefing = get_player_briefing(current_turn_num, pid, game_id=game_id)
         has_chosen = briefing is not None and briefing.get("selected_action_id") is not None
         chosen_action_text = ""
         if briefing and briefing.get("selected_action_id"):
@@ -1519,7 +1516,7 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
     npcs_list = []
     for npc in get_all_npcs(game_id):
         npc_key = npc["npc_key"]
-        all_briefings = get_all_briefings_for_day(current_day_num, game_id=game_id)
+        all_briefings = get_all_briefings_for_turn(current_turn_num, game_id=game_id)
         chosen_action_text = ""
         for b in all_briefings:
             if b.get("npc_key") == npc_key and b.get("selected_action_id"):
@@ -1543,8 +1540,8 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
     return {
         "game_id": game_id,
         "title": title,
-        "day": state["day"],
-        "current_day": current_day_num,
+        "turn": state["turn"],
+        "current_turn": current_turn_num,
         "status": state["status"],
         "ship_alive": state["ship_alive"],
         "crew_health": state["crew_health"],
@@ -1558,30 +1555,30 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
     }
 
 
-@app.get("/game/day/{day_num}")
-async def get_game_day_endpoint(day_num: int, game_id: str = "default_game"):
-    """Get specific day's episode"""
-    day = get_game_day(day_num, game_id=game_id)
-    if not day:
-        raise HTTPException(status_code=404, detail="Day not found")
-    return day
+@app.get("/game/turn/{turn_num}")
+async def get_game_turn_endpoint(turn_num: int, game_id: str = "default_game"):
+    """Get specific turn's episode"""
+    turn_data = get_game_turn(turn_num, game_id=game_id)
+    if not turn_data:
+        raise HTTPException(status_code=404, detail="Turn not found")
+    return turn_data
 
 
-@app.get("/game/current-day")
-async def get_current_game_day(game_id: str = Query("default_game")):
-    """Get current game day
+@app.get("/game/current-turn")
+async def get_current_game_turn(game_id: str = Query("default_game")):
+    """Get current game turn
 
-    Game state tracks the NEXT day to generate, so the latest
-    completed day is state["day"] - 1. For example:
-    - Before any generation: state["day"] = 1, no days exist
-    - After day 1 generation: state["day"] = 2, game_day[1] exists
+    Game state tracks the NEXT turn to generate, so the latest
+    completed turn is state["turn"] - 1. For example:
+    - Before any generation: state["turn"] = 1, no turns exist
+    - After turn 1 generation: state["turn"] = 2, game_turn[1] exists
     """
     state = get_game_state(game_id)
-    current_day_num = max(1, state["day"] - 1)
-    day = get_game_day(current_day_num, game_id=game_id)
-    if not day:
-        raise HTTPException(status_code=404, detail="No game day generated yet")
-    return day
+    current_turn_num = max(1, state["turn"] - 1)
+    turn_data = get_game_turn(current_turn_num, game_id=game_id)
+    if not turn_data:
+        raise HTTPException(status_code=404, detail="No game turn generated yet")
+    return turn_data
 
 
 @app.get("/game/poll/{player_id}")
@@ -1597,7 +1594,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
     last_poll = since or profile.get("last_poll")
 
     updates = {
-        "new_game_day": None,
+        "new_game_turn": None,
         "pending_actions": [],
         "personal_briefing": None,
         "messages_from_gm": [],
@@ -1606,26 +1603,26 @@ async def poll_game_updates(player_id: int, since: str | None = None):
 
     try:
         # Check for current day with pending actions
-        # Game state tracks NEXT day to generate, so latest completed day is state["day"] - 1
+        # Game state tracks NEXT turn to generate, so latest completed turn is state["turn"] - 1
         state = get_game_state(game_id)
-        current_day_num = max(1, state["day"] - 1)
+        current_turn_num = max(1, state["turn"] - 1)
 
         # First, check player_briefings for per-player content
-        briefing = get_player_briefing(current_day_num, player_id, game_id=game_id)
+        briefing = get_player_briefing(current_turn_num, player_id, game_id=game_id)
 
         if briefing and briefing.get("choices"):
-            # Safety check: only return briefing if game_day record exists
-            # (prevents race condition where briefings are saved before game_day)
-            day_record = get_game_day(current_day_num, game_id=game_id)
-            if day_record is None:
-                logger.debug(f"[POLL] Skipping briefing for player {player_id} day {current_day_num}: game_day not yet created")
+            # Safety check: only return briefing if game_turn record exists
+            # (prevents race condition where briefings are saved before game_turn)
+            turn_record = get_game_turn(current_turn_num, game_id=game_id)
+            if turn_record is None:
+                logger.debug(f"[POLL] Skipping briefing for player {player_id} turn {current_turn_num}: game_turn not yet created")
             elif not briefing.get("selected_action_id"):
                 # Player hasn't chosen yet — return their briefing
-                # Get scene image for this day
-                scene_url = get_random_game_image(type="scene", day=current_day_num, game_id=game_id)
+                # Get scene image for this turn
+                scene_url = get_random_game_image(type="scene", turn=current_turn_num, game_id=game_id)
                 # Also fetch NPC dialogues for crew behavior context
-                day_record = get_game_day(current_day_num, game_id=game_id)
-                crew_dialogues = day_record["crew_dialogues"] if day_record else []
+                turn_record = get_game_turn(current_turn_num, game_id=game_id)
+                crew_dialogues = turn_record["crew_dialogues"] if turn_record else []
                 updates["personal_briefing"] = {
                     "briefing": briefing["briefing"],
                     "choices": briefing["choices"],
@@ -1634,22 +1631,22 @@ async def poll_game_updates(player_id: int, since: str | None = None):
                     "crew_dialogues": crew_dialogues,
                 }
                 updates["pending_actions"] = briefing["choices"]
-                updates["new_game_day"] = {
-                    "day": current_day_num,
+                updates["new_game_turn"] = {
+                    "turn": current_turn_num,
                     "briefing": briefing["briefing"],
                     "crew_dialogues": [],
                 }
         else:
-            # Fall back to legacy game_days player_actions
-            day = get_game_day(current_day_num, game_id=game_id)
-            if day and day.get("player_actions"):
-                player_actions = get_player_actions(player_id, current_day_num)
+            # Fall back to legacy game_turns player_actions
+            turn_data = get_game_turn(current_turn_num, game_id=game_id)
+            if turn_data and turn_data.get("player_actions"):
+                player_actions = get_player_actions(player_id, current_turn_num)
                 if not player_actions:
-                    updates["pending_actions"] = day["player_actions"]
-                    updates["new_game_day"] = {
-                        "day": day["day"],
-                        "story": day.get("global_circumstances") or day["story"],
-                        "crew_dialogues": day["crew_dialogues"],
+                    updates["pending_actions"] = turn_data["player_actions"]
+                    updates["new_game_turn"] = {
+                        "turn": turn_data["turn"],
+                        "story": turn_data.get("global_circumstances") or turn_data["story"],
+                        "crew_dialogues": turn_data["crew_dialogues"],
                     }
 
         # Get recent messages from Game Master
@@ -1662,7 +1659,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
         update_player_profile_last_poll(player_id, datetime.now().isoformat())
 
     except Exception as e:
-        logger.error(f"Poll failed for player {player_id}: {e}")
+        logger.error(f"Poll failed for player {player_id}: {e}", exc_info=True)
 
     return updates
 
@@ -1677,11 +1674,11 @@ async def submit_player_action(request: PlayerActionRequest):
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
 
     # First check if player has a personal briefing (new system)
-    briefing = get_player_briefing(request.day, request.player_id, game_id=game_id)
+    briefing = get_player_briefing(request.turn, request.player_id, game_id=game_id)
 
     if briefing and briefing.get("choices"):
-        # New system: validate against briefing choices — does NOT require game_day
-        # (game_day may not exist yet if briefings were saved before game_day record)
+        # New system: validate against briefing choices — does NOT require game_turn
+        # (game_turn may not exist yet if briefings were saved before game_turn record)
         valid_ids = [c["id"] for c in briefing["choices"]]
         if request.action_id not in valid_ids:
             raise HTTPException(status_code=400, detail=f"Invalid action ID. Valid: {valid_ids}")
@@ -1701,29 +1698,29 @@ async def submit_player_action(request: PlayerActionRequest):
             consequence_result={"consequence": chosen_consequence},
         )
     else:
-        # Legacy system: validate against game_days.player_actions
-        current_day = get_game_day(request.day, game_id=game_id)
-        if not current_day:
-            raise HTTPException(status_code=404, detail="No active game day")
-        valid_actions = [a["id"] for a in current_day.get("player_actions", [])]
+        # Legacy system: validate against game_turns.player_actions
+        current_turn = get_game_turn(request.turn, game_id=game_id)
+        if not current_turn:
+            raise HTTPException(status_code=404, detail="No active game turn")
+        valid_actions = [a["id"] for a in current_turn.get("player_actions", [])]
         if request.action_id not in valid_actions:
             raise HTTPException(status_code=400, detail="Invalid action ID")
 
     # Also save to player_actions table for backward compatibility
-    result = save_player_action(request.player_id, request.day, request.action_id, request.choice)
+    result = save_player_action(request.player_id, request.turn, request.action_id, request.choice)
 
     # ── Generate comic panel for this player's action ────────────────
     # Generates a comic-style image showing the player's character
     # performing the chosen action, using their avatar as reference.
-    # Registered in _pending_action_tasks so _analyze_day_outcome can
+    # Registered in _pending_action_tasks so _analyze_turn_outcome can
     # await completion before pushing the outcome.
-    action_key = (request.day, game_id)
+    action_key = (request.turn, game_id)
     game_lang = get_game_language(game_id)
     action_task = asyncio.create_task(
         _generate_chosen_action_image(
             player_id=request.player_id,
             game_id=game_id,
-            day=request.day,
+            turn=request.turn,
             action_id=request.action_id,
             language=game_lang,
         )
@@ -1733,21 +1730,21 @@ async def submit_player_action(request: PlayerActionRequest):
 
     # Check if all real players have now chosen — if so, trigger combined outcome analysis
     try:
-        remaining = get_players_who_need_to_choose(request.day, game_id=game_id)
+        remaining = get_players_who_need_to_choose(request.turn, game_id=game_id)
         if not remaining:
             # All players chose — analyze combined outcome
-            logger.info(f"All players chose for day {request.day}, analyzing combined outcome")
-            asyncio.create_task(_analyze_day_outcome(request.day, game_id=game_id))
+            logger.info(f"All players chose for turn {request.turn}, analyzing combined outcome")
+            asyncio.create_task(_analyze_turn_outcome(request.turn, game_id=game_id))
     except Exception as e:
         logger.warning(f"Combined outcome check failed: {e}")
 
     return {"status": "accepted", "action": result}
 
 
-@app.post("/game/auto-action/{player_id}/{day}")
+@app.post("/game/auto-action/{player_id}/{turn}")
 async def auto_select_action(
     player_id: int,
-    day: int,
+    turn: int,
     language: str = "en",
     game_id: str = "default_game",
 ):
@@ -1758,14 +1755,14 @@ async def auto_select_action(
     """
     # Use game's stored language — the caller may not know it
     language = get_game_language(game_id) or language
-    logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, day {day}")
+    logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, turn {turn}")
 
     # 1. Get player's briefing with choices
-    briefing = get_player_briefing(day, player_id, game_id=game_id)
+    briefing = get_player_briefing(turn, player_id, game_id=game_id)
     if not briefing:
         raise HTTPException(
             status_code=404,
-            detail=f"No briefing for player {player_id} day {day}",
+            detail=f"No briefing for player {player_id} turn {turn}",
         )
 
     if briefing.get("selected_action_id"):
@@ -1779,7 +1776,7 @@ async def auto_select_action(
     if not choices:
         raise HTTPException(
             status_code=400,
-            detail=f"No choices available for player {player_id} day {day}",
+            detail=f"No choices available for player {player_id} turn {turn}",
         )
 
     # 2. Get player profile
@@ -1788,14 +1785,14 @@ async def auto_select_action(
         raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
 
     # 3. Get global circumstances
-    game_day = get_game_day(day, game_id=game_id)
+    game_turn = get_game_turn(turn, game_id=game_id)
     global_circ = {}
-    if game_day:
-        gc_str = game_day.get("global_circumstances", "{}")
+    if game_turn:
+        gc_str = game_turn.get("global_circumstances", "{}")
         try:
             global_circ = json.loads(gc_str) if isinstance(gc_str, str) else gc_str
         except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Failed to parse global_circumstances: {e}")
+            logger.error(f"Failed to parse global_circumstances: {e}", exc_info=True)
 
     # 4. Generate LLM choice
     gm = create_game_master_agent(language=language)
@@ -1830,7 +1827,7 @@ async def auto_select_action(
 
     save_player_action(
         player_id=player_id,
-        day=day,
+        turn=turn,
         action_id=action_id,
         choice="auto_selected",
     )
@@ -1853,14 +1850,14 @@ async def auto_select_action(
 
     # 7. Check if all players have now chosen
     try:
-        remaining = get_players_who_need_to_choose(day, game_id=game_id)
+        remaining = get_players_who_need_to_choose(turn, game_id=game_id)
         if not remaining:
-            logger.info(f"All players chose for day {day} (after auto-select), analyzing combined outcome")
-            asyncio.create_task(_analyze_day_outcome(day, game_id=game_id))
+            logger.info(f"All players chose for turn {turn} (after auto-select), analyzing combined outcome")
+            asyncio.create_task(_analyze_turn_outcome(turn, game_id=game_id))
     except Exception as e:
         logger.warning(f"Combined outcome check after auto-select failed: {e}")
 
-    logger.info(f"[AUTO_ACTION] Auto-selected '{action_id}' for player {player_id} day {day}: {action_text[:60]}...")
+    logger.info(f"[AUTO_ACTION] Auto-selected '{action_id}' for player {player_id} turn {turn}: {action_text[:60]}...")
 
     return {
         "status": "selected",
@@ -1907,49 +1904,49 @@ async def submit_game_message(request: GameMessageRequest):
 
         return {"status": "processed", "response": response}
     except Exception as e:
-        logger.error(f"Failed to generate game master response: {e}")
+        logger.error(f"Failed to generate game master response: {e}", exc_info=True)
         return {"status": "received", "error": str(e)}
 
 
-@app.get("/game/actions/{player_id}/{day}")
-async def get_player_actions_endpoint(player_id: int, day: int):
-    """Get player actions for a specific day"""
-    actions = get_player_actions(player_id, day)
+@app.get("/game/actions/{player_id}/{turn}")
+async def get_player_actions_endpoint(player_id: int, turn: int):
+    """Get player actions for a specific turn"""
+    actions = get_player_actions(player_id, turn)
     return {"actions": actions}
 
 
-@app.get("/game/briefing/{player_id}/{day}")
-async def get_player_briefing_endpoint(player_id: int, day: int):
-    """Get a player's personal briefing and choices for a specific day"""
+@app.get("/game/briefing/{player_id}/{turn}")
+async def get_player_briefing_endpoint(player_id: int, turn: int):
+    """Get a player's personal briefing and choices for a specific turn"""
     profile = get_player_profile(player_id)
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
-    briefing = get_player_briefing(day, player_id, game_id=game_id)
+    briefing = get_player_briefing(turn, player_id, game_id=game_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found")
     return {
         "briefing": briefing["briefing"],
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
-        "day": briefing["day"],
+        "turn": briefing["turn"],
         "chosen_action_url": briefing.get("chosen_action_url"),
     }
 
 
 @app.get("/game/current-briefing/{player_id}")
 async def get_current_briefing_endpoint(player_id: int):
-    """Get a player's current day briefing"""
+    """Get a player's current turn briefing"""
     profile = get_player_profile(player_id)
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
     state = get_game_state(game_id)
-    day = state["day"]
-    briefing = get_player_briefing(day, player_id, game_id=game_id)
+    turn_num = state["turn"]
+    briefing = get_player_briefing(turn_num, player_id, game_id=game_id)
     if not briefing:
-        raise HTTPException(status_code=404, detail="No briefing found for current day")
+        raise HTTPException(status_code=404, detail="No briefing found for current turn")
     return {
         "briefing": briefing["briefing"],
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
-        "day": briefing["day"],
+        "turn": briefing["turn"],
         "chosen_action_url": briefing.get("chosen_action_url"),
     }
 
@@ -2010,7 +2007,7 @@ async def get_splash_image(game_id: str = "default_game"):
 async def _generate_chosen_action_image(
     player_id: int,
     game_id: str,
-    day: int,
+    turn: int,
     action_id: str,
     language: str = "ru",
 ):
@@ -2027,9 +2024,9 @@ async def _generate_chosen_action_image(
             return
 
         # Get the briefing to find the action text
-        briefing = get_player_briefing(day, player_id, game_id=game_id)
+        briefing = get_player_briefing(turn, player_id, game_id=game_id)
         if not briefing:
-            logger.warning(f"[ACTION_IMAGE] Briefing not found for {player_id} day {day}")
+            logger.warning(f"[ACTION_IMAGE] Briefing not found for {player_id} turn {turn}")
             return
 
         # Find chosen action text
@@ -2041,14 +2038,14 @@ async def _generate_chosen_action_image(
         if not action_text:
             action_text = action_id
 
-        # Get scene context from game_day
-        day_data = get_game_day(day, game_id=game_id)
-        global_circ_str = day_data.get("global_circumstances", "{}") if day_data else "{}"
+        # Get scene context from game_turn
+        turn_data = get_game_turn(turn, game_id=game_id)
+        global_circ_str = turn_data.get("global_circumstances", "{}") if turn_data else "{}"
         try:
             global_circ = json.loads(global_circ_str)
         except (json.JSONDecodeError, TypeError):
             global_circ = {}
-        setting = global_circ.get("setting", "") or day_data.get("story", "") if day_data else ""
+        setting = global_circ.get("setting", "") or turn_data.get("story", "") if turn_data else ""
 
         # Build character appearance description
         role = profile.get("role", "Crew Member")
@@ -2095,39 +2092,39 @@ async def _generate_chosen_action_image(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"{game_id}/action_day{day}_p{player_id}",
+            filename_prefix=f"{game_id}/action_turn{turn}_p{player_id}",
         )
 
         if chosen_action_url:
             # Save chosen action URL to the briefing
             if briefing.get("id"):
                 update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
-                logger.info(f"[ACTION_IMAGE] Saved for player {player_id} day {day}: {chosen_action_url}")
+                logger.info(f"[ACTION_IMAGE] Saved for player {player_id} turn {turn}: {chosen_action_url}")
 
             # Push the action image to the player via telegram-bot
             # (fire-and-forget to avoid blocking the generation loop)
             try:
                 await push_player_chosen_action(
                     player_id=player_id,
-                    day=day,
+                    turn=turn,
                     chosen_action_url=chosen_action_url,
                     game_id=game_id,
                     action_text=action_text,
                     language=language,
                 )
-                logger.info(f"[ACTION_IMAGE] Pushed to player {player_id} day {day}")
+                logger.info(f"[ACTION_IMAGE] Pushed to player {player_id} turn {turn}")
             except Exception as push_err:
                 logger.warning(f"[ACTION_IMAGE] Failed to push to player {player_id}: {push_err}")
         else:
             logger.warning(f"[ACTION_IMAGE] Generation returned None for player {player_id}")
     except Exception as e:
-        logger.error(f"[ACTION_IMAGE] Failed to generate: {e}")
+        logger.error(f"[ACTION_IMAGE] Failed to generate: {e}", exc_info=True)
 
 
 async def _generate_npc_chosen_action_image(
     npc_key: str,
     game_id: str,
-    day: int,
+    turn: int,
     action_id: str,
 ):
     """Generate an image showing the NPC's chosen action.
@@ -2143,14 +2140,14 @@ async def _generate_npc_chosen_action_image(
 
         # Get the briefing to find the action text
         # NPC briefings have player_id = None and npc_key set
-        all_briefings = get_all_briefings_for_day(day, game_id)
+        all_briefings = get_all_briefings_for_turn(turn, game_id)
         briefing = None
         for b in all_briefings:
             if b.get("npc_key") == npc_key:
                 briefing = b
                 break
         if not briefing:
-            logger.warning(f"[NPC_ACTION_IMAGE] Briefing not found for {npc_key} day {day}")
+            logger.warning(f"[NPC_ACTION_IMAGE] Briefing not found for {npc_key} turn {turn}")
             return
 
         # Find chosen action text
@@ -2162,14 +2159,14 @@ async def _generate_npc_chosen_action_image(
         if not action_text:
             action_text = action_id
 
-        # Get scene context from game_day
-        day_data = get_game_day(day, game_id=game_id)
-        global_circ_str = day_data.get("global_circumstances", "{}") if day_data else "{}"
+        # Get scene context from game_turn
+        turn_data = get_game_turn(turn, game_id=game_id)
+        global_circ_str = turn_data.get("global_circumstances", "{}") if turn_data else "{}"
         try:
             global_circ = json.loads(global_circ_str)
         except (json.JSONDecodeError, TypeError):
             global_circ = {}
-        setting = global_circ.get("setting", "") or day_data.get("story", "") if day_data else ""
+        setting = global_circ.get("setting", "") or turn_data.get("story", "") if turn_data else ""
 
         # Build character appearance description from NPC profile
         role = npc_profile.get("role", "Crew Member")
@@ -2212,24 +2209,24 @@ async def _generate_npc_chosen_action_image(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"{game_id}/action_day{day}_{npc_key}",
+            filename_prefix=f"{game_id}/action_turn{turn}_{npc_key}",
         )
 
         if chosen_action_url:
             # Save chosen action URL to the briefing
             if briefing.get("id"):
                 update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
-                logger.info(f"[NPC_ACTION_IMAGE] Saved for NPC {npc_name} day {day}: {chosen_action_url}")
+                logger.info(f"[NPC_ACTION_IMAGE] Saved for NPC {npc_name} turn {turn}: {chosen_action_url}")
         else:
             logger.warning(f"[NPC_ACTION_IMAGE] Generation returned None for {npc_name}")
     except Exception as e:
-        logger.error(f"[NPC_ACTION_IMAGE] Failed to generate: {e}")
+        logger.error(f"[NPC_ACTION_IMAGE] Failed to generate: {e}", exc_info=True)
 
 
-def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
-    """Build a compact text summary from combined_outcome JSON for cross-day context.
+def _build_turn_summary(combined_outcome_str: str, language: str = "ru") -> str:
+    """Build a compact text summary from combined_outcome JSON for cross-turn context.
 
-    The LLM receives this summary as 'previous events' when generating the next day.
+    The LLM receives this summary as 'previous events' when generating the next turn.
     Extracts key fields rather than passing raw JSON to save tokens and improve focus.
     """
     if not combined_outcome_str:
@@ -2297,33 +2294,33 @@ def _build_day_summary(combined_outcome_str: str, language: str = "ru") -> str:
         parts.append(ds["ship_destroyed"])
 
     # Next day hook
-    hook = oc.get("next_day_hook", "")
+    hook = oc.get("next_turn_hook", "")
     if hook:
-        parts.append(ds["next_day_hook"].format(hook=hook))
+        parts.append(ds["next_turn_hook"].format(hook=hook))
 
     return " | ".join(parts) if parts else narrative[:500]
 
 
 def _build_cumulative_story_summary(
-    current_day: int,
+    current_turn: int,
     language: str = "ru",
     game_id: str = "default_game",
 ) -> str:
-    """Build a cumulative story summary from ALL previous days.
+    """Build a cumulative story summary from ALL previous turns.
 
-    Collects combined_outcome from every completed day (1 .. current_day - 1)
+    Collects combined_outcome from every completed turn (1 .. current_turn - 1)
     and concatenates them chronologically. This gives the LLM a complete
     picture of the story so far, not just the last turn.
 
     Args:
-        current_day: The upcoming day number (days before this are summarized)
+        current_turn: The upcoming turn number (turns before this are summarized)
         language: Language for labels ("ru" or "en")
         game_id: Game identifier
 
     Returns:
-        A compact chronological summary string, or empty string if no prior days.
+        A compact chronological summary string, or empty string if no prior turns.
     """
-    if current_day <= 1:
+    if current_turn <= 1:
         return ""
 
     summaries = []
@@ -2332,20 +2329,20 @@ def _build_cumulative_story_summary(
     header = cs["header"]
     day_label = cs["day_label"]
 
-    for d in range(1, current_day):
-        day_record = get_game_day(d, game_id=game_id)
-        if not day_record:
+    for d in range(1, current_turn):
+        turn_record = get_game_turn(d, game_id=game_id)
+        if not turn_record:
             continue
 
-        combined_outcome = day_record.get("combined_outcome", "")
-        day_summary = ""
+        combined_outcome = turn_record.get("combined_outcome", "")
+        turn_summary = ""
         if combined_outcome:
-            day_summary = _build_day_summary(combined_outcome, language=language)
-        elif day_record.get("story"):
-            day_summary = day_record["story"][:300]
+            turn_summary = _build_turn_summary(combined_outcome, language=language)
+        elif turn_record.get("story"):
+            turn_summary = turn_record["story"][:300]
 
-        if day_summary:
-            summaries.append(f"{day_label} {d}: {day_summary}")
+        if turn_summary:
+            summaries.append(f"{day_label} {d}: {turn_summary}")
 
     if not summaries:
         return ""
@@ -2358,28 +2355,28 @@ def _build_cumulative_story_summary(
     return result
 
 
-async def _analyze_day_outcome(
-    day: int,
+async def _analyze_turn_outcome(
+    turn: int,
     language: str = "ru",
     game_id: str = "default_game",
 ):
-    """Analyze all decisions for a day (player + NPC) to produce combined outcome.
+    """Analyze all decisions for a turn (player + NPC) to produce combined outcome.
 
     Called automatically when all players have submitted their choices,
     or can be triggered manually.
     """
-    logger.info(f"[OUTCOME] Analyzing combined outcome for Day {day}")
+    logger.info(f"[OUTCOME] Analyzing combined outcome for Turn {turn}")
 
     try:
-        # Get all briefings for this day
-        all_briefings = get_all_briefings_for_day(day, game_id)
+        # Get all briefings for this turn
+        all_briefings = get_all_briefings_for_turn(turn, game_id)
         if not all_briefings:
-            logger.warning(f"[OUTCOME] No briefings found for Day {day}")
+            logger.warning(f"[OUTCOME] No briefings found for Turn {turn}")
             return
 
         # Get global circumstances
-        game_day = get_game_day(day, game_id)
-        global_circ_str = game_day.get("global_circumstances", "{}") if game_day else "{}"
+        game_turn = get_game_turn(turn, game_id)
+        global_circ_str = game_turn.get("global_circumstances", "{}") if game_turn else "{}"
         try:
             global_circ = json.loads(global_circ_str)
         except (json.JSONDecodeError, TypeError):
@@ -2439,7 +2436,7 @@ async def _analyze_day_outcome(
             )
 
         if not all_decisions:
-            logger.warning(f"[OUTCOME] No decisions made yet for Day {day}")
+            logger.warning(f"[OUTCOME] No decisions made yet for Turn {turn}")
             return
 
         # Also add NPC decisions from the combined outcome
@@ -2447,7 +2444,7 @@ async def _analyze_day_outcome(
 
         # Build cumulative summary from ALL previous turns for full story context
         previous_summary = _build_cumulative_story_summary(
-            current_day=day,
+            current_turn=turn,
             language=language,
             game_id=game_id,
         )
@@ -2488,8 +2485,8 @@ async def _analyze_day_outcome(
         )
 
         # Save the combined outcome
-        update_game_day_outcome(day, json.dumps(outcome, ensure_ascii=False), game_id)
-        logger.info(f"[OUTCOME] Combined outcome saved for Day {day}")
+        update_game_turn_outcome(turn, json.dumps(outcome, ensure_ascii=False), game_id)
+        logger.info(f"[OUTCOME] Combined outcome saved for Turn {turn}")
 
         # Apply mission progress through the rules layer (P0+P1):
         # normalizes objectives, accumulates with regression caps + tempo floor,
@@ -2517,15 +2514,15 @@ async def _analyze_day_outcome(
         # excess proposed deaths are demoted to critical injuries.
         state = get_game_state(game_id)
         alive_count = sum(1 for r in crew_roster if not r.get("is_dead"))
-        outcome, new_last_death_day = apply_death_limits(
+        outcome, new_last_death_turn = apply_death_limits(
             outcome,
-            day=day,
-            last_death_day=int(state.get("last_death_day", 0) or 0),
+            turn=turn,
+            last_death_turn=int(state.get("last_death_turn", 0) or 0),
             alive_count=alive_count,
         )
-        if new_last_death_day != int(state.get("last_death_day", 0) or 0):
-            set_last_death_day(game_id, new_last_death_day)
-            logger.info(f"[DEATH] Cooldown window starts at day {new_last_death_day}")
+        if new_last_death_turn != int(state.get("last_death_turn", 0) or 0):
+            set_last_death_turn(game_id, new_last_death_turn)
+            logger.info(f"[DEATH] Cooldown window starts at turn {new_last_death_turn}")
 
         # ========== Process ship damage from new structured fields ==========
         ship_hull = outcome.get("ship_hull_integrity", 100)
@@ -2537,7 +2534,7 @@ async def _analyze_day_outcome(
         # Shields also contribute to survival chances
         crew_health = max(0, min(100, int(ship_hull * 0.7 + ship_shields * 0.3)))
 
-        logger.info(f"[SHIP] Day {day}: hull={ship_hull}%, shields={ship_shields}%, systems_offline={ship_systems_offline}, destroyed={ship_destroyed}")
+        logger.info(f"[SHIP] Turn {turn}: hull={ship_hull}%, shields={ship_shields}%, systems_offline={ship_systems_offline}, destroyed={ship_destroyed}")
 
         # Handle crew injuries (new structured field)
         crew_injured = outcome.get("crew_injured", [])
@@ -2601,7 +2598,7 @@ async def _analyze_day_outcome(
         state = get_game_state(game_id)
         ship_alive = not ship_destroyed and state.get("ship_alive", True)
         update_game_state(
-            state["day"],
+            state["turn"],
             "active" if ship_alive else "ship_destroyed",
             ship_alive=ship_alive,
             crew_health=crew_health,
@@ -2662,21 +2659,21 @@ async def _analyze_day_outcome(
             image_gen = create_image_generator()
             outcome_image_url = await image_gen.generate_scene_image(
                 prompt=outcome_prompt,
-                filename_prefix=f"{game_id}/outcome_day{day}",
+                filename_prefix=f"{game_id}/outcome_turn{turn}",
             )
             if outcome_image_url:
                 save_game_image(
                     type="outcome",
                     image_url=outcome_image_url,
                     game_id=game_id,
-                    day=day,
+                    turn=turn,
                     prompt=outcome_prompt,
                 )
-                logger.info(f"[OUTCOME] Outcome image generated for day {day}: {outcome_image_url}")
+                logger.info(f"[OUTCOME] Outcome image generated for turn {turn}: {outcome_image_url}")
             else:
-                logger.warning(f"[OUTCOME] Outcome image generation returned None for day {day}")
+                logger.warning(f"[OUTCOME] Outcome image generation returned None for turn {turn}")
         except Exception as img_err:
-            logger.warning(f"[OUTCOME] Failed to generate outcome image for day {day}: {img_err}")
+            logger.warning(f"[OUTCOME] Failed to generate outcome image for turn {turn}: {img_err}")
 
         # Get alive players
         try:
@@ -2692,10 +2689,10 @@ async def _analyze_day_outcome(
         # ── Await pending action image tasks ───────────────────────
         # Ensures action images (showing the consequences of player
         # actions) arrive BEFORE the outcome text, not after.
-        action_key = (day, game_id)
+        action_key = (turn, game_id)
         pending = list(_pending_action_tasks.pop(action_key, set()))
         if pending:
-            logger.info(f"[OUTCOME] Waiting for {len(pending)} action image(s) before pushing outcome for day {day}")
+            logger.info(f"[OUTCOME] Waiting for {len(pending)} action image(s) before pushing outcome for turn {turn}")
             results = await asyncio.gather(*pending, return_exceptions=True)
             for i, r in enumerate(results):
                 if isinstance(r, Exception):
@@ -2705,9 +2702,9 @@ async def _analyze_day_outcome(
         # After awaiting all pending tasks, briefings now have chosen_action_url populated.
         # Format: 'Ход X — Имя — Роль — Действие'
         action_images = []
-        all_briefings_fresh = get_all_briefings_for_day(day, game_id) or all_briefings
+        all_briefings_fresh = get_all_briefings_for_turn(turn, game_id) or all_briefings
         gs = get_game_strings(language)
-        caption_prefix = gs["turn_prefix_simple"].format(day=day)
+        caption_prefix = gs["turn_prefix_simple"].format(turn=turn)
 
         for b in all_briefings_fresh:
             action_url = b.get("chosen_action_url")
@@ -2779,9 +2776,9 @@ async def _analyze_day_outcome(
         # Push outcome synchronously so message order is deterministic
         # (outcome arrives BEFORE new day briefings)
         try:
-            await push_day_outcome(
+            await push_turn_outcome(
                 game_id=game_id,
-                day=day,
+                turn=turn,
                 outcome_text=outcome_text,
                 alive_players=alive_players,
                 outcome_image_url=outcome_image_url,
@@ -2798,9 +2795,9 @@ async def _analyze_day_outcome(
                 total_crew_count=total_crew,
                 alive_crew_count=alive_crew,
             )
-            logger.info(f"[OUTCOME] Outcome delivered for day {day} to {len(alive_players)} players")
+            logger.info(f"[OUTCOME] Outcome delivered for turn {turn} to {len(alive_players)} players")
         except Exception as push_err:
-            logger.error(f"[OUTCOME] Failed to deliver outcome for day {day}: {push_err}")
+            logger.error(f"[OUTCOME] Failed to deliver outcome for turn {turn}: {push_err}", exc_info=True)
 
         # ── Game Over: generate and deliver finale ──────────────────
         game_ended = mission_completed or ship_destroyed or crew_wiped
@@ -2850,7 +2847,7 @@ async def _analyze_day_outcome(
                                 type="finale",
                                 image_url=finale_image_url,
                                 game_id=game_id,
-                                day=day,
+                                turn=turn,
                                 prompt=finale_image_prompt,
                             )
                             logger.info(f"[GAME_OVER] Finale image generated: {finale_image_url}")
@@ -2884,13 +2881,10 @@ async def _analyze_day_outcome(
                 )
                 logger.info(f"[GAME_OVER] Finale delivered to {len(alive_players)} players: {outcome_type}")
             except Exception as go_err:
-                logger.error(f"[GAME_OVER] Finale generation/delivery failed: {go_err}")
+                logger.error(f"[GAME_OVER] Finale generation/delivery failed: {go_err}", exc_info=True)
 
     except Exception as e:
-        logger.error(f"[OUTCOME] Analysis failed for Day {day}: {e}")
-        import traceback
-
-        logger.error(traceback.format_exc())
+        logger.error(f"[OUTCOME] Analysis failed for Turn {turn}: {e}", exc_info=True)
 
 
 # ============== Admin endpoints ==============
@@ -3054,16 +3048,16 @@ async def admin_set_language(request: SetLanguageRequest):
 def _build_player_briefings_for_push(
     all_briefings: list[dict],
     crew_dialogues: list[dict],
-    day_num: int,
+    turn_num: int,
     game_id: str = "default_game",
 ) -> list[dict]:
     """Build per-player briefing dicts for push payload from stored briefings.
 
-    Fetches scene image (if available) from game_images table for this day.
+    Fetches scene image (if available) from game_images table for this turn.
     Also fetches player_name for each real player to include in the payload.
     """
-    # Fetch scene image for this day (if generated and saved)
-    scene_url = get_random_game_image(type="scene", day=day_num, game_id=game_id)
+    # Fetch scene image for this turn (if generated and saved)
+    scene_url = get_random_game_image(type="scene", turn=turn_num, game_id=game_id)
     players_data = []
     for b in all_briefings:
         if b.get("is_npc"):
@@ -3092,7 +3086,7 @@ def _build_player_briefings_for_push(
     return players_data
 
 
-@app.post("/admin/generate-day")
+@app.post("/admin/generate-turn")
 async def generate_daily_episode(
     language: str = "en",
     game_id: str = "default_game",
@@ -3102,13 +3096,13 @@ async def generate_daily_episode(
 ):
     """Generate a new daily episode (called by game master scheduler)"""
     state = get_game_state(game_id)
-    day_num = state["day"]
+    turn_num = state["turn"]
 
     # Use game's stored language — the caller may not know it
     language = get_game_language(game_id) or language
 
     logger.info("=== GENERATE DAY STARTED ===")
-    logger.info(f"Day number: {day_num}")
+    logger.info(f"Turn number: {turn_num}")
     logger.info(f"Language: {language}")
     logger.info(f"Previous actions count: {len(previous_actions) if previous_actions else 0}")
 
@@ -3122,11 +3116,11 @@ async def generate_daily_episode(
     if not summary and previous_actions:
         action_summaries = []
         for action in previous_actions:
-            action_summaries.append(f"Day {action.get('day', 0)}: Player chose '{action.get('choice')}'")
+            action_summaries.append(f"Turn {action.get('turn', 0)}: Player chose '{action.get('choice')}'")
         summary = " | ".join(action_summaries)
 
-    story = game_master.generate_daily_story(
-        day=day_num,
+    story = game_master.generate_turn_story(
+        turn=turn_num,
         previous_summary=summary or state["last_updated"],
         player_role=player_role,
     )
@@ -3138,33 +3132,33 @@ async def generate_daily_episode(
         crew_members=_get_crew_members(game_id),
     )
 
-    new_day = {
-        "day": day_num,
+    new_turn = {
+        "turn": turn_num,
         "story": story.narrative,
         "crew_dialogues": [{"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues],
         "player_actions": story.decision_points,
         "generated_content": {
-            "image": f"/content/day_{day_num}/scene.jpg",
-            "comic": f"/content/day_{day_num}/comic.webp",
+            "image": f"/content/turn_{turn_num}/scene.jpg",
+            "comic": f"/content/turn_{turn_num}/comic.webp",
         },
-        "previous_day_summary": summary,
+        "previous_turn_summary": summary,
     }
 
-    create_game_day(new_day, game_id)
-    update_game_state(day_num + 1, "active", game_id=game_id)
+    create_game_turn(new_turn, game_id)
+    update_game_state(turn_num + 1, "active", game_id=game_id)
 
     logger.info("=== GENERATE DAY COMPLETED ===")
     logger.info(f"Story: {story.narrative}...")
     logger.info(f"NPC dialogues: {len(dialogues)}")
     logger.info(f"Player actions: {len(story.decision_points)}")
 
-    return new_day
+    return new_turn
 
 
 @app.post("/admin/generate-comic/{player_id}")
 async def generate_chosen_action_image(
     player_id: int,
-    day: int | None = None,
+    turn: int | None = None,
     game_id: str = "default_game",
 ):
     """Generate a chosen action image for a player (admin endpoint)."""
@@ -3173,10 +3167,10 @@ async def generate_chosen_action_image(
         raise HTTPException(status_code=404, detail="Player profile not found")
 
     state = get_game_state(game_id)
-    game_day = day if day else state["day"]
-    day_data = get_game_day(game_day, game_id)
-    if not day_data:
-        raise HTTPException(status_code=404, detail="Game day not found")
+    turn_num_val = turn if turn else state["turn"]
+    turn_data = get_game_turn(turn_num_val, game_id)
+    if not turn_data:
+        raise HTTPException(status_code=404, detail="Game turn not found")
 
     image_generator = create_image_generator()
     role = profile["role"]
@@ -3189,8 +3183,8 @@ async def generate_chosen_action_image(
             role=role,
             traits=traits,
             avatar_description=profile.get("avatar_description", ""),
-            action_text=day_data["story"][:200],
-            setting=day_data["story"][:300],
+            action_text=turn_data["story"][:200],
+            setting=turn_data["story"][:300],
             species_desc=profile.get("species_description", ""),
             species_type=profile.get("species", ""),
             species_category=profile.get("species_primary_key") or "",
@@ -3201,7 +3195,7 @@ async def generate_chosen_action_image(
     if not prompt:
         prompt = (
             f"{role} performing a critical action during a space mission. "
-            f"Story: {day_data['story'][:200]}. "
+            f"Story: {turn_data['story'][:200]}. "
             f"Character traits: {', '.join(traits)}. "
             f"Dynamic composition, dramatic lighting, detailed environment. "
             f"Cinematic space opera aesthetic, photorealistic quality, 4K."
@@ -3209,17 +3203,17 @@ async def generate_chosen_action_image(
 
     chosen_action_url = await image_generator.generate_scene_image(
         prompt=prompt,
-        filename_prefix=f"{game_id}/action_day{game_day}_{role.replace(' ', '_')}",
+        filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}",
     )
 
-    # Store chosen_action_url in player's briefing for this day (if briefing exists)
-    briefing = get_player_briefing(game_day, player_id, game_id=game_id)
+    # Store chosen_action_url in player's briefing for this turn (if briefing exists)
+    briefing = get_player_briefing(turn_num_val, player_id, game_id=game_id)
     if briefing:
         update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
 
     return {
         "player_id": player_id,
-        "day": game_day,
+        "turn": turn_num_val,
         "chosen_action_url": chosen_action_url,
         "role": profile["role"],
     }
@@ -3251,7 +3245,7 @@ async def admin_generate_loading_images(count: int = 10, game_id: str = "default
             "total_in_db": get_game_image_count("loading", game_id),
         }
     except Exception as e:
-        logger.error(f"[ADMIN] Loading image generation failed: {e}")
+        logger.error(f"[ADMIN] Loading image generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
@@ -3290,7 +3284,7 @@ async def admin_generate_splash_images(game_id: str = "default_game", lang: str 
             "total_in_db": get_game_image_count("splash", game_id),
         }
     except Exception as e:
-        logger.error(f"[ADMIN] Splash image generation failed: {e}")
+        logger.error(f"[ADMIN] Splash image generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
@@ -3395,24 +3389,24 @@ def _random_npc_gender(language: str = "ru") -> str:
     return _NPC_GENDER_OPTIONS[lang_key][gender_key]
 
 
-async def _background_start_wrapper(request: StartGameRequest, day_num: int):
+async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
     """Run start-game in background, notify GM on completion."""
     try:
         result = await _original_start_game(request)
         if result and result.get("status") == "success":
             await push_gm_notification(
                 game_id=request.game_id,
-                day=day_num,
+                turn=turn_num,
                 status="success",
                 players=result.get("player_count", 0),
                 npcs=result.get("npc_count", 0),
                 language=request.language,
             )
     except Exception as e:
-        logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}")
+        logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}", exc_info=True)
         await push_gm_notification(
             game_id=request.game_id,
-            day=day_num,
+            turn=turn_num,
             status="error",
             error=str(e),
             language=request.language,
@@ -3439,16 +3433,16 @@ async def admin_start_game(request: StartGameRequest):
         raise HTTPException(status_code=400, detail="No players have joined the game yet")
 
     state = get_game_state(game_id)
-    day_num = state["day"]
+    turn_num = state["turn"]
 
     # Start background generation
-    asyncio.create_task(_background_start_wrapper(request, day_num))
+    asyncio.create_task(_background_start_wrapper(request, turn_num))
 
-    logger.info(f"Background game start for {game_id}, current day={day_num}")
+    logger.info(f"Background game start for {game_id}, current turn={turn_num}")
 
     return {
         "status": "accepted",
-        "day": day_num,
+        "turn": turn_num,
         "player_count": len(player_ids),
         "message": f"Game start for {game_id} accepted. You will be notified when ready.",
     }
@@ -3647,7 +3641,7 @@ async def _original_start_game(request: StartGameRequest):
     if mission_result:
         logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages)")
     else:
-        logger.error("[MISSION] Failed to create mission")
+        logger.error("[MISSION] Failed to create mission", stack_info=True)
         mission_result = {}
 
     # 6c. Generate bridge image
@@ -3671,20 +3665,20 @@ async def _original_start_game(request: StartGameRequest):
     except Exception as e:
         logger.warning(f"[BRIDGE] Image generation failed: {e}")
 
-    # 7. Generate the game day with the new restructured flow
+    # 7. Generate the game turn with the new restructured flow
     state = get_game_state(game_id)
-    day_num = state["day"]
+    turn_num = state["turn"]
 
     # Build cumulative summary from ALL previous turns, not just the last one
     previous_summary = _build_cumulative_story_summary(
-        current_day=day_num,
+        current_turn=turn_num,
         language=language,
         game_id=game_id,
     )
 
     # Step A: Generate global circumstances (with mission context for story consistency)
     global_circ = gm.generate_global_circumstances(
-        day=day_num,
+        turn=turn_num,
         previous_summary=previous_summary,
         player_profiles=all_participants,
         mission_context=mission_data,
@@ -3692,8 +3686,8 @@ async def _original_start_game(request: StartGameRequest):
     global_narrative = global_circ.get("narrative", "")
 
     # Save global circumstances
-    update_game_day_global_circumstances(
-        day_num,
+    update_game_turn_global_circumstances(
+        turn_num,
         json.dumps(global_circ, ensure_ascii=False),
         game_id,
     )
@@ -3714,37 +3708,37 @@ async def _original_start_game(request: StartGameRequest):
         image_gen = create_image_generator()
         scene_url = await image_gen.generate_scene_image(
             prompt=scene_prompt_clean,
-            filename_prefix=f"{game_id}/scene_day{day_num}",
+            filename_prefix=f"{game_id}/scene_turn{turn_num}",
         )
         if scene_url:
             save_game_image(
                 type="scene",
                 image_url=scene_url,
                 game_id=game_id,
-                day=day_num,
+                turn=turn_num,
                 prompt=scene_prompt_clean,
             )
-            logger.info(f"[SCENE] Turn scene image saved for day {day_num}: {scene_url}")
+            logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
     except Exception as e:
-        logger.warning(f"[SCENE] Failed to generate turn scene image for day {day_num}: {e}")
+        logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
 
-    # Create game day record EARLY to prevent race condition with polling loop.
-    # Poll needs the game_day record to exist before briefings are visible,
+    # Create game turn record EARLY to prevent race condition with polling loop.
+    # Poll needs the game_turn record to exist before briefings are visible,
     # otherwise the player sees a briefing but cannot submit an action (404).
     # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
-    early_day = {
-        "day": day_num,
+    early_turn = {
+        "turn": turn_num,
         "story": global_narrative,
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
         "crew_dialogues": [],
         "player_actions": [],
         "generated_content": {
-            "image": f"/content/day_{day_num}/scene.jpg",
+            "image": f"/content/turn_{turn_num}/scene.jpg",
         },
-        "previous_day_summary": previous_summary,
+        "previous_turn_summary": previous_summary,
     }
-    create_game_day(early_day, game_id)
-    logger.info(f"[DAY] Early game day record created for day {day_num}")
+    create_game_turn(early_turn, game_id)
+    logger.info(f"[TURN] Early game turn record created for turn {turn_num}")
 
     # Step B: Generate per-player briefings and choices IN PARALLEL
     try:
@@ -3782,18 +3776,18 @@ async def _original_start_game(request: StartGameRequest):
                     global_circ,
                     gm_profile,
                     player_name,
-                    day_num,
+                    turn_num,
                 )
             except Exception as e:
-                logger.error(f"[BRIEFING] Failed to generate briefing for {participant.get('role', '?')}: {e}")
+                logger.error(f"[BRIEFING] Failed to generate briefing for {participant.get('role', '?')}: {e}", exc_info=True)
                 return None
 
             briefing = briefing_data.get("briefing", "")
             choices = briefing_data.get("choices", [])
             personal_title = briefing_data.get("personal_title", "")
-            if personal_title and day_num:
+            if personal_title and turn_num:
                 gs = get_game_strings(language)
-                personal_title = gs["turn_prefix_simple"].format(day=day_num) + f" — {personal_title}"
+                personal_title = gs["turn_prefix_simple"].format(turn=turn_num) + f" — {personal_title}"
 
             if participant["type"] == "npc":
                 # NPCs decide immediately without seeing consequences
@@ -3801,7 +3795,7 @@ async def _original_start_game(request: StartGameRequest):
                 try:
                     npc_decision = await asyncio.to_thread(gm.generate_npc_choice, choices, npc_profile)
                 except Exception as e:
-                    logger.error(f"[NPC] Failed to generate choice for {participant.get('npc_key', '?')}: {e}")
+                    logger.error(f"[NPC] Failed to generate choice for {participant.get('npc_key', '?')}: {e}", exc_info=True)
                     return None
 
                 selected_id = npc_decision.get("action_id", "")
@@ -3816,7 +3810,7 @@ async def _original_start_game(request: StartGameRequest):
 
                 saved = save_player_briefing(
                     {
-                        "day": day_num,
+                        "turn": turn_num,
                         "player_id": None,
                         "npc_key": participant["npc_key"],
                         "is_npc": True,
@@ -3830,12 +3824,12 @@ async def _original_start_game(request: StartGameRequest):
                 )
                 if saved:
                     # ── Generate NPC action image ────────────────────────
-                    npc_action_key = (day_num, game_id)
+                    npc_action_key = (turn_num, game_id)
                     npc_action_task = asyncio.create_task(
                         _generate_npc_chosen_action_image(
                             npc_key=participant["npc_key"],
                             game_id=game_id,
-                            day=day_num,
+                            turn=turn_num,
                             action_id=selected_id,
                         )
                     )
@@ -3854,7 +3848,7 @@ async def _original_start_game(request: StartGameRequest):
                 # Real players — save briefing without choice (they'll choose later)
                 saved = save_player_briefing(
                     {
-                        "day": day_num,
+                        "turn": turn_num,
                         "player_id": participant["player_id"],
                         "npc_key": None,
                         "is_npc": False,
@@ -3958,14 +3952,14 @@ async def _original_start_game(request: StartGameRequest):
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"{game_id}/char_day{day_num}_p{pid}",
+            filename_prefix=f"{game_id}/char_turn{turn_num}_p{pid}",
         )
         if url:
             save_game_image(
                 type="character",
                 image_url=url,
                 game_id=game_id,
-                day=day_num,
+                turn=turn_num,
                 prompt=prompt,
             )
         return url
@@ -3986,7 +3980,7 @@ async def _original_start_game(request: StartGameRequest):
     from game_master import GameStory
 
     dialog_story = GameStory(
-        day=day_num,
+        turn=turn_num,
         setting=global_circ.get("setting", ""),
         conflict=global_circ.get("conflict", ""),
         narrative=global_narrative,
@@ -4003,22 +3997,22 @@ async def _original_start_game(request: StartGameRequest):
         logger.warning(f"NPC dialogue generation failed: {e}")
         crew_dialogues_list = []
 
-    # Step E: Create the game day record
-    new_day = {
-        "day": day_num,
+    # Step E: Create the game turn record
+    new_turn = {
+        "turn": turn_num,
         "story": global_narrative,
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
         "crew_dialogues": crew_dialogues_list,
         "player_actions": all_briefings[0].get("choices", []) if all_briefings else [],
         "generated_content": {
-            "image": f"/content/day_{day_num}/scene.jpg",
+            "image": f"/content/turn_{turn_num}/scene.jpg",
         },
-        "previous_day_summary": previous_summary,
+        "previous_turn_summary": previous_summary,
     }
-    create_game_day(new_day, game_id)
+    create_game_turn(new_turn, game_id)
 
     # Advance game state to next day
-    update_game_state(day_num + 1, "active", game_id=game_id)
+    update_game_state(turn_num + 1, "active", game_id=game_id)
 
     # Build per-player briefing response
     briefings_for_response = []
@@ -4038,7 +4032,7 @@ async def _original_start_game(request: StartGameRequest):
         )
 
     logger.info("=== ADMIN START GAME COMPLETED ===")
-    logger.info(f"Day: {day_num}, Participants: {len(all_participants)}, NPCs: {len(npcs_created)}")
+    logger.info(f"Day: {turn_num}, Participants: {len(all_participants)}, NPCs: {len(npcs_created)}")
 
     # Get bridge image URL if generated
     bridge_url = get_random_game_image(type="bridge", game_id=game_id)
@@ -4054,12 +4048,12 @@ async def _original_start_game(request: StartGameRequest):
 
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
-        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, day_num, game_id=game_id)
+        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id=game_id)
         if player_briefings:
             asyncio.create_task(
                 push_briefings(
                     game_id=game_id,
-                    day=day_num,
+                    turn=turn_num,
                     players_briefings=player_briefings,
                     bridge_url=bridge_url,
                     mission=mission_info,
@@ -4075,7 +4069,7 @@ async def _original_start_game(request: StartGameRequest):
 
     return {
         "status": "success",
-        "day": day_num,
+        "turn": turn_num,
         "player_count": real_player_count,
         "npc_count": len(npcs_created),
         "total_participants": len(all_participants),
@@ -4099,16 +4093,16 @@ async def get_mission_endpoint(game_id: str = "default_game"):
 @app.get("/game/bridge-image")
 async def get_bridge_image_endpoint(
     game_id: str = "default_game",
-    day: int | None = Query(None),
+    turn: int | None = Query(None),
 ):
     """Get the bridge image for a game.
 
     Args:
         game_id: Game identifier
-        day: If set, returns the scene image for that day instead of bridge image.
+        turn: If set, returns the scene image for that turn instead of bridge image.
     """
-    img_type = "scene" if day is not None else "bridge"
-    url = get_random_game_image(type=img_type, game_id=game_id, day=day)
+    img_type = "scene" if turn is not None else "bridge"
+    url = get_random_game_image(type=img_type, game_id=game_id, turn=turn)
     if not url:
         raise HTTPException(status_code=404, detail=f"No {img_type} image found")
     return {"image_url": url, "game_id": game_id, "type": img_type}
@@ -4455,6 +4449,10 @@ async def admin_list_games():
     for game in games:
         game_id = game["game_id"]
         onboarding_count = get_onboarding_count_in_game(game_id)
+        current_turn = 0
+        if is_game_started(game_id):
+            state = get_game_state(game_id)
+            current_turn = state.get("turn", 0)
         result.append(
             {
                 "game_id": game_id,
@@ -4465,30 +4463,33 @@ async def admin_list_games():
                 "status": game.get("status", "active"),
                 "started": is_game_started(game_id),
                 "language": get_game_language(game_id),
+                "current_turn": current_turn,
             }
         )
     return {"games": result}
 
 
-@app.post("/admin/analyze-day")
+@app.post("/admin/analyze-turn")
 async def admin_analyze_day(
-    day: int | None = None,
+    turn: int | None = None,
     language: str = "ru",
     game_id: str = "default_game",
 ):
-    """Manually trigger combined outcome analysis for a specific day.
+    """Manually trigger combined outcome analysis for a specific turn.
 
-    If day is not specified, uses the current day (day - 1 since game state is pre-advanced).
+    If turn is not specified, uses the current turn (turn - 1 since game state is pre-advanced).
     """
-    if day is None:
+    if turn is None:
         state = get_game_state(game_id)
-        day = max(1, state["day"] - 1)  # Game state is pre-advanced, so current completed day is day-1
+        turn_num = max(1, state["turn"] - 1)  # Game state is pre-advanced, so current completed turn is day-1
+    else:
+        turn_num = turn
 
-    logger.info(f"[ADMIN] Manual outcome analysis for Day {day}")
-    await _analyze_day_outcome(day, language=language, game_id=game_id)
+    logger.info(f"[ADMIN] Manual outcome analysis for Turn {turn_num}")
+    await _analyze_turn_outcome(turn_num, language=language, game_id=game_id)
 
-    game_day = get_game_day(day, game_id)
-    outcome_str = game_day.get("combined_outcome", "{}") if game_day else "{}"
+    game_turn = get_game_turn(turn_num, game_id)
+    outcome_str = game_turn.get("combined_outcome", "{}") if game_turn else "{}"
     try:
         outcome = json.loads(outcome_str) if outcome_str else {}
     except (json.JSONDecodeError, TypeError):
@@ -4496,7 +4497,7 @@ async def admin_analyze_day(
 
     return {
         "status": "success",
-        "day": day,
+        "turn": turn_num,
         "combined_outcome": outcome,
     }
 
@@ -4505,7 +4506,7 @@ async def _background_continue_wrapper(
     game_id: str,
     language: str,
     force_resend: bool,
-    day_num: int,
+    turn_num: int,
 ):
     """Run continue-game in background, notify GM on completion."""
     try:
@@ -4517,17 +4518,17 @@ async def _background_continue_wrapper(
         if result and result.get("status") == "success":
             await push_gm_notification(
                 game_id=game_id,
-                day=day_num,
+                turn=turn_num,
                 status="success",
                 players=result.get("players", 0),
                 npcs=result.get("npcs", 0),
                 language=language,
             )
     except Exception as e:
-        logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}")
+        logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}", exc_info=True)
         await push_gm_notification(
             game_id=game_id,
-            day=day_num,
+            turn=turn_num,
             status="error",
             error=str(e),
             language=language,
@@ -4540,7 +4541,7 @@ async def admin_continue_game(
     language: str = "ru",
     force_resend: bool = False,
 ):
-    """Generate the next turn (day) in the game.
+    """Generate the next turn in the game.
 
     Starts background generation and returns immediately.
     GM will receive a push notification via Telegram when done.
@@ -4551,7 +4552,7 @@ async def admin_continue_game(
     logger.info(f"game_id={game_id}, language={language}")
 
     state = get_game_state(game_id)
-    day_num = state["day"]
+    turn_num = state["turn"]
 
     # Check game is active
     if state["status"] != "active" or not state["ship_alive"]:
@@ -4566,16 +4567,16 @@ async def admin_continue_game(
             game_id=game_id,
             language=language,
             force_resend=force_resend,
-            day_num=day_num,
+            turn_num=turn_num,
         )
     )
 
-    logger.info(f"Background turn generation started for day {day_num}")
+    logger.info(f"Background turn generation started for turn {turn_num}")
 
     return {
         "status": "accepted",
-        "day": day_num,
-        "message": f"Turn generation started for day {day_num}. You'll be notified when complete.",
+        "turn": turn_num,
+        "message": f"Turn generation started for turn {turn_num}. You'll be notified when complete.",
     }
 
 
@@ -4589,12 +4590,12 @@ async def _original_continue_game(
     logger.info(f"game_id={game_id}, language={language}")
 
     state = get_game_state(game_id)
-    day_num = state["day"]
+    turn_num = state["turn"]
     logger.info("=== ADMIN CONTINUE GAME ===")
     logger.info(f"game_id={game_id}, language={language}")
 
     state = get_game_state(game_id)
-    day_num = state["day"]
+    turn_num = state["turn"]
 
     # Check game is active
     if state["status"] != "active" or not state["ship_alive"]:
@@ -4652,7 +4653,7 @@ async def _original_continue_game(
 
     # Build cumulative summary from ALL previous turns, not just the last one
     previous_summary = _build_cumulative_story_summary(
-        current_day=day_num,
+        current_turn=turn_num,
         language=language,
         game_id=game_id,
     )
@@ -4664,15 +4665,15 @@ async def _original_continue_game(
 
     # Step A: Generate global circumstances (with mission context for story consistency)
     global_circ = gm.generate_global_circumstances(
-        day=day_num,
+        turn=turn_num,
         previous_summary=previous_summary,
         player_profiles=all_participants,
         mission_context=mission_data,
     )
 
     # Save global circumstances
-    update_game_day_global_circumstances(
-        day_num,
+    update_game_turn_global_circumstances(
+        turn_num,
         json.dumps(global_circ, ensure_ascii=False),
         game_id,
     )
@@ -4697,35 +4698,35 @@ async def _original_continue_game(
         image_gen = create_image_generator()
         scene_url = await image_gen.generate_scene_image(
             prompt=scene_prompt_clean,
-            filename_prefix=f"{game_id}/scene_day{day_num}",
+            filename_prefix=f"{game_id}/scene_turn{turn_num}",
         )
         if scene_url:
             save_game_image(
                 type="scene",
                 image_url=scene_url,
                 game_id=game_id,
-                day=day_num,
+                turn=turn_num,
                 prompt=scene_prompt_clean,
             )
-            logger.info(f"[SCENE] Turn scene image saved for day {day_num}: {scene_url}")
+            logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
     except Exception as e:
-        logger.warning(f"[SCENE] Failed to generate turn scene image for day {day_num}: {e}")
+        logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
 
-    # Create game day record EARLY to prevent race condition with polling loop.
+    # Create game turn record EARLY to prevent race condition with polling loop.
     # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
-    early_day = {
-        "day": day_num,
+    early_turn = {
+        "turn": turn_num,
         "story": global_circ.get("narrative", ""),
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
         "crew_dialogues": [],
         "player_actions": [],
         "generated_content": {
-            "image": f"/content/day_{day_num}/scene.jpg",
+            "image": f"/content/turn_{turn_num}/scene.jpg",
         },
-        "previous_day_summary": previous_summary,
+        "previous_turn_summary": previous_summary,
     }
-    create_game_day(early_day, game_id)
-    logger.info(f"[DAY] Early game day record created for day {day_num}")
+    create_game_turn(early_turn, game_id)
+    logger.info(f"[TURN] Early game turn record created for turn {turn_num}")
 
     # Step B: Generate per-player briefings
     all_briefings = []
@@ -4744,13 +4745,13 @@ async def _original_continue_game(
                 player_name = p.get("player_name", "") or ""
         elif participant["type"] == "npc":
             player_name = participant.get("npc_name", "") or ""
-        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile, player_name, day_num)
+        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile, player_name, turn_num)
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])
         personal_title = briefing_data.get("personal_title", "")
-        if personal_title and day_num:
+        if personal_title and turn_num:
             gs = get_game_strings(language)
-            personal_title = gs["turn_prefix_simple"].format(day=day_num) + f" — {personal_title}"
+            personal_title = gs["turn_prefix_simple"].format(turn=turn_num) + f" — {personal_title}"
 
         if participant["type"] == "npc":
             npc_profile = get_npc_profile(participant["npc_key"]) or participant
@@ -4766,7 +4767,7 @@ async def _original_continue_game(
 
             saved = save_player_briefing(
                 {
-                    "day": day_num,
+                    "turn": turn_num,
                     "player_id": None,
                     "npc_key": participant["npc_key"],
                     "is_npc": True,
@@ -4780,12 +4781,12 @@ async def _original_continue_game(
             )
             if saved:
                 # ── Generate NPC action image ────────────────────────────
-                npc_action_key = (day_num, game_id)
+                npc_action_key = (turn_num, game_id)
                 npc_action_task = asyncio.create_task(
                     _generate_npc_chosen_action_image(
                         npc_key=participant["npc_key"],
                         game_id=game_id,
-                        day=day_num,
+                        turn=turn_num,
                         action_id=selected_id,
                     )
                 )
@@ -4805,7 +4806,7 @@ async def _original_continue_game(
         else:
             saved = save_player_briefing(
                 {
-                    "day": day_num,
+                    "turn": turn_num,
                     "player_id": participant["player_id"],
                     "npc_key": None,
                     "is_npc": False,
@@ -4900,14 +4901,14 @@ async def _original_continue_game(
             prompt=prompt,
             reference_image_url=avatar_url,
             character_description=character_description,
-            filename_prefix=f"{game_id}/char_day{day_num}_p{pid}",
+            filename_prefix=f"{game_id}/char_turn{turn_num}_p{pid}",
         )
         if url:
             save_game_image(
                 type="character",
                 image_url=url,
                 game_id=game_id,
-                day=day_num,
+                turn=turn_num,
                 prompt=prompt,
             )
         return url
@@ -4928,7 +4929,7 @@ async def _original_continue_game(
     from game_master import GameStory
 
     dialog_story = GameStory(
-        day=day_num,
+        turn=turn_num,
         setting=global_circ.get("setting", ""),
         conflict=global_circ.get("conflict", ""),
         narrative=global_circ.get("narrative", ""),
@@ -4945,29 +4946,29 @@ async def _original_continue_game(
         logger.warning(f"NPC dialogue generation failed: {e}")
         crew_dialogues_list = []
 
-    # Step E: Create game day record
-    new_day = {
-        "day": day_num,
+    # Step E: Create game turn record
+    new_turn = {
+        "turn": turn_num,
         "story": global_circ.get("narrative", ""),
         "global_circumstances": json.dumps(global_circ, ensure_ascii=False),
         "crew_dialogues": crew_dialogues_list,
         "player_actions": all_briefings[0].get("choices", []) if all_briefings else [],
         "generated_content": {
-            "image": f"/content/day_{day_num}/scene.jpg",
+            "image": f"/content/turn_{turn_num}/scene.jpg",
         },
-        "previous_day_summary": previous_summary,
+        "previous_turn_summary": previous_summary,
     }
-    create_game_day(new_day, game_id)
+    create_game_turn(new_turn, game_id)
 
     # Advance game state
-    update_game_state(day_num + 1, "active", game_id=game_id)
+    update_game_state(turn_num + 1, "active", game_id=game_id)
 
     # ── Push previous day outcome (if applicable) ──────────────
     # Must run BEFORE pushing new day briefings so player sees:
     #   Итоги хода N-1 → Вводная хода N → Ход N + действия
-    if day_num > 1:
-        await _analyze_day_outcome(
-            day=day_num - 1,
+    if turn_num > 1:
+        await _analyze_turn_outcome(
+            turn=turn_num - 1,
             language=language,
             game_id=game_id,
         )
@@ -4977,12 +4978,12 @@ async def _original_continue_game(
         # Build the global intro narrative from global circumstances
         global_narrative = global_circ.get("narrative", "")
 
-        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, day_num, game_id=game_id)
+        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id=game_id)
         if player_briefings:
             asyncio.create_task(
                 push_briefings(
                     game_id=game_id,
-                    day=day_num,
+                    turn=turn_num,
                     players_briefings=player_briefings,
                     crew_dialogues=crew_dialogues_list,
                     is_first_turn=False,
@@ -4995,11 +4996,11 @@ async def _original_continue_game(
         logger.warning(f"[PUSH] Failed to initiate push: {push_err}")
 
     logger.info("=== ADMIN CONTINUE GAME COMPLETED ===")
-    logger.info(f"Day {day_num} generated with {len(all_participants)} participants")
+    logger.info(f"Turn {turn_num} generated with {len(all_participants)} participants")
 
     return {
         "status": "success",
-        "day": day_num,
+        "turn": turn_num,
         "total_participants": len(all_participants),
         "players": len(player_ids),
         "npcs": len(npcs),
@@ -5014,44 +5015,44 @@ async def admin_regenerate_turn(
 ):
     """Regenerate the current turn with state reset.
 
-    Deletes the current day's data (briefings, actions, day record),
-    rolls back game state by one day, then regenerates the day.
+    Deletes the current turn's data (briefings, actions, turn record),
+    rolls back game state by one turn, then regenerates the turn.
     """
     logger.info("=== ADMIN REGENERATE TURN ===")
     logger.info(f"game_id={game_id}, language={language}")
 
     state = get_game_state(game_id)
-    current_day = state["day"]
-    regenerate_day = max(1, current_day - 1)
+    current_turn = state["turn"]
+    regenerate_turn = max(1, current_turn - 1)
 
-    logger.info(f"Regenerating Day {regenerate_day} (current state day={current_day})")
+    logger.info(f"Regenerating Turn {regenerate_turn} (current state turn={current_turn})")
 
-    # Delete current day's data
-    deleted_briefings = delete_player_briefings_for_day(regenerate_day, game_id)
-    deleted_actions = delete_player_actions_for_day(regenerate_day, game_id)
-    deleted_day = delete_game_day(regenerate_day, game_id)
+    # Delete current turn's data
+    deleted_briefings = delete_player_briefings_for_turn(regenerate_turn, game_id)
+    deleted_actions = delete_player_actions_for_turn(regenerate_turn, game_id)
+    deleted_turn = delete_game_turn(regenerate_turn, game_id)
 
-    logger.info(f"Deleted: {deleted_briefings} briefings, {deleted_actions} player actions, day_record={deleted_day}")
+    logger.info(f"Deleted: {deleted_briefings} briefings, {deleted_actions} player actions, turn_record={deleted_turn}")
 
     # Roll back game state to before the deleted day
-    reset_game_state_to_day1(game_id)
+    reset_game_state_to_turn1(game_id)
     # Restore to the correct day (the day being regenerated)
-    update_game_state(regenerate_day, "active", game_id=game_id)
+    update_game_state(regenerate_turn, "active", game_id=game_id)
 
     # Now regenerate the day using the continue-game logic
     # admin_continue_game now starts background processing and returns immediately
     await admin_continue_game(game_id=game_id, language=language, force_resend=True)
 
-    logger.info(f"Background regeneration started for Day {regenerate_day}")
+    logger.info(f"Background regeneration started for Turn {regenerate_turn}")
 
     return {
         "status": "accepted",
-        "day": regenerate_day,
-        "message": f"Regeneration started for day {regenerate_day}. You will be notified when complete.",
+        "turn": regenerate_turn,
+        "message": f"Regeneration started for turn {regenerate_turn}. You will be notified when complete.",
         "deleted": {
             "briefings": deleted_briefings,
             "actions": deleted_actions,
-            "day_record": bool(deleted_day),
+            "turn_record": bool(deleted_turn),
         },
     }
 
@@ -5064,7 +5065,7 @@ async def admin_restart_game(
     """Reset game state and restart from the first turn.
 
     Deletes all game days, briefings, actions, messages, mission,
-    and game images. Resets game state to day 1, marks game as
+    and game images. Resets game state to turn 1, marks game as
     not-started, and keeps player profiles intact.
     """
     # Use game's stored language if available
@@ -5073,17 +5074,17 @@ async def admin_restart_game(
     logger.info(f"game_id={game_id}, language={language}")
 
     # Delete all game content
-    deleted_days = delete_all_game_days(game_id)
+    deleted_turns = delete_all_game_turns(game_id)
     deleted_briefings = delete_all_player_briefings(game_id)
     deleted_actions = delete_all_player_actions(game_id)
     deleted_messages = delete_all_game_messages(game_id)
     deleted_mission = delete_mission(game_id)
     deleted_images = delete_game_images(game_id)
 
-    logger.info(f"Deleted: {deleted_days} days, {deleted_briefings} briefings, {deleted_actions} actions, {deleted_messages} messages, mission={deleted_mission}, {deleted_images} images")
+    logger.info(f"Deleted: {deleted_turns} days, {deleted_briefings} briefings, {deleted_actions} actions, {deleted_messages} messages, mission={deleted_mission}, {deleted_images} images")
 
-    # Reset game state to day 1
-    reset_game_state_to_day1(game_id)
+    # Reset game state to turn 1
+    reset_game_state_to_turn1(game_id)
 
     # Mark game as not started
     clear_game_started(game_id)
@@ -5099,13 +5100,13 @@ async def admin_restart_game(
     return {
         "status": "success",
         "game_id": game_id,
-        "deleted_days": deleted_days,
+        "deleted_turns": deleted_turns,
         "deleted_briefings": deleted_briefings,
         "deleted_actions": deleted_actions,
         "deleted_messages": deleted_messages,
         "deleted_mission": deleted_mission,
         "deleted_images": deleted_images,
-        "message": f"Game {game_id} has been reset to day 1. All content cleared.",
+        "message": f"Game {game_id} has been reset to turn 1. All content cleared.",
     }
 
 

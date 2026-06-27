@@ -64,6 +64,7 @@ async def call_with_retry(
         "[RETRY] All %d attempts failed: %s",
         max_retries + 1,
         last_exc,
+        exc_info=last_exc,
     )
     if last_exc is None:
         raise RuntimeError("unreachable: no exception was captured")

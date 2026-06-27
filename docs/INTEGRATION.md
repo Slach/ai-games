@@ -35,7 +35,7 @@ graph TD
 | Source | Target | Protocol | Port | Purpose |
 |--------|--------|----------|------|---------|
 | `telegram-bot` | `game-server-api` | HTTP (REST) | 8000 | Game state, onboarding, actions |
-| `game-master` | `game-server-api` | HTTP (REST) | 8000 | Trigger daily generation |
+| `game-master` | `game-server-api` | HTTP (REST) | 8000 | Trigger turn generation |
 | `game-server-api` | `llama.cpp` | HTTP (OpenAI API) | 8090 | LLM calls for stories, dialogues, prompts |
 | `game-server-api` | `comfyui` | HTTP (ComfyUI API) | 8188 | Image generation, workflow execution |
 | `telegram-bot` | `Telegram API` | HTTPS (Bot API) | 443 | Send/receive messages |
@@ -76,7 +76,7 @@ All LLM calls use `response_format` with JSON schema (Structured Outputs). Each 
 
 | Schema | Usage | Description |
 |--------|-------|-------------|
-| `STORY_SCHEMA` | `generate_daily_story()` | Day narrative + decision points |
+| `STORY_SCHEMA` | `generate_turn_story()` | Turn narrative + decision points |
 | `NPC_DIALOGUE_SCHEMA` | `generate_npc_dialogues()` | NPC reactions |
 | `CONTENT_PROMPTS_SCHEMA` | `generate_content_prompts()` | Image/video/comic prompts |
 | `ONBOARDING_QUESTIONS_SCHEMA` | `generate_onboarding_questions()` | Dynamic onboarding quiz |
@@ -86,9 +86,9 @@ All LLM calls use `response_format` with JSON schema (Structured Outputs). Each 
 | `SPECIES_GENDER_DESC_SCHEMA` | Species/gender description | Narrative character identity |
 | `GAME_TITLE_SCHEMA` | Game title generation | Ship name + welcome text |
 | `NPC_CHOICE_SCHEMA` | NPC choice selection | NPC action selection logic |
-| `GLOBAL_CIRCUMSTANCES_SCHEMA` | Global game state | Shared day circumstances |
+| `GLOBAL_CIRCUMSTANCES_SCHEMA` | Global game state | Shared turn circumstances |
 | `PLAYER_BRIEFING_CHOICES_SCHEMA` | Personal briefings | Per-player narrative + choices |
-| `COMBINED_OUTCOME_SCHEMA` | Day outcome | Result of all player choices |
+| `COMBINED_OUTCOME_SCHEMA` | Turn outcome | Result of all player choices |
 
 ### Fallback Mechanism
 
@@ -191,7 +191,7 @@ When image generation fails, the system falls back to placeholder images:
 
 - Splash: `DEFAULT_SPLASH_FALLBACK_URL` (configured in env)
 - Loading: `DEFAULT_LOADING_FALLBACK_URL` (configured in env)
-- Comics: `/content/comics/day_{n}_placeholder.webp`
+- Comics: `/content/comics/turn_{n}_placeholder.webp`
 
 ---
 
@@ -207,7 +207,7 @@ FastAPI service on port 8000. All other services communicate through this API.
 |----------|--------|-------------|
 | Onboarding | `POST /onboarding/*` | Player registration flow |
 | Players | `GET /players/*` | Player profile and management |
-| Game State | `GET /game/*` | Game state and day episodes |
+| Game State | `GET /game/*` | Game state and turn episodes |
 | Actions | `POST /game/actions` | Player action submission |
 | Messages | `POST /game/messages` | Text/voice messages to GM |
 | Admin | `POST /admin/*` | Episode and comic generation |
@@ -249,7 +249,7 @@ TELEGRAM_SOCKS_PROXY  = os.getenv("TELEGRAM_SOCKS_PROXY")  # Optional
 |---------|-------------|
 | `/start` | Begin onboarding or return to game |
 | `/profile` | Show player role and traits |
-| `/today` | View current day's episode |
+| `/turn` | View current turn's episode |
 | `/help` | Show help information |
 
 ### Bot Features
@@ -267,7 +267,7 @@ The bot makes HTTP requests to the Game Master API:
 - `POST /onboarding/{session_id}/answer` — Submit question answers
 - `POST /onboarding/{session_id}/complete` — Finalize onboarding
 - `GET /players/{player_id}/profile` — Get player info
-- `GET /game/current-day` — Get today's episode
+- `GET /game/current-turn` — Get current turn's episode
 - `GET /game/poll/{player_id}` — Check for updates
 - `POST /game/actions` — Submit player choices
 - `POST /game/messages` — Send messages to GM
@@ -278,7 +278,7 @@ The bot makes HTTP requests to the Game Master API:
 
 **Files:** `game-master/game_master.py`
 
-A scheduled task runner that triggers daily episode generation.
+A scheduled task runner that triggers turn episode generation.
 
 ### Configuration
 
@@ -298,9 +298,9 @@ GAME_MASTER_MODE    = os.getenv("GAME_MASTER_MODE", "scheduled")  # single | sim
 
 ### API Calls
 
-- `POST /admin/generate-day` — Trigger new episode generation
+- `POST /admin/generate-turn` — Trigger new turn generation
 - `GET /game/state` — Check current game state
-- `GET /game/current-day` — Verify generated content
+- `GET /game/current-turn` — Verify generated content
 
 ---
 
@@ -314,10 +314,10 @@ SQLite database for all persistent state.
 
 | Table | Purpose |
 |-------|---------|
-| `game_state` | Current game day, status, timestamps |
+| `game_state` | Current game turn, status, timestamps |
 | `player_profiles` | Player role, traits, avatar |
-| `game_days` | Daily episodes (story, NPC dialogues) |
-| `player_actions` | Player choices per day |
+| `game_turns` | Turn episodes (story, NPC dialogues) |
+| `player_actions` | Player choices per turn |
 | `onboarding_sessions` | In-progress onboarding state |
 | `game_messages` | Player message history |
 | `onboarding_questions` | Generated question cache |

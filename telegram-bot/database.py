@@ -34,6 +34,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (2, "ALTER TABLE player_states ADD COLUMN language TEXT DEFAULT 'en';"),
     (3, "ALTER TABLE player_states ADD COLUMN current_question_text TEXT DEFAULT NULL;"),
     (4, "ALTER TABLE player_states ADD COLUMN current_question_image_url TEXT DEFAULT NULL;"),
+    (5, "ALTER TABLE player_states RENAME COLUMN last_briefing_day_sent TO last_briefing_turn_sent;"),
 ]
 
 
@@ -77,7 +78,7 @@ def init_db(db_path: str = DB_PATH) -> None:
         current_question_image_url TEXT    DEFAULT NULL,
         last_poll                TEXT,
         pending_updates          TEXT     DEFAULT '[]',
-        last_briefing_day_sent   INTEGER  DEFAULT NULL,
+        last_briefing_turn_sent   INTEGER  DEFAULT NULL,
         language                 TEXT     DEFAULT 'en',
         created_at               TEXT     DEFAULT (datetime('now')),
         updated_at               TEXT     DEFAULT (datetime('now'))

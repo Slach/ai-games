@@ -302,7 +302,7 @@ PROMPTS = {
         "daily_story": {
             "system": ("Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."),
             "user": (
-                "День: {day}\n"
+                "Ход: {turn}\n"
                 "Предыдущий день: {previous_summary}\n"
                 "Роль игрока: {player_role}\n\n"
                 "Создай эпизод с:\n"
@@ -352,8 +352,8 @@ PROMPTS = {
         "daily_story": {
             "system": ("You are a Game Master for a Star Trek-style space exploration game. Create compelling daily episodes with conflicts and player choices."),
             "user": (
-                "Day: {day}\n"
-                "Previous day: {previous_summary}\n"
+                "Turn: {turn}\n"
+                "Previous turn: {previous_summary}\n"
                 "Player role: {player_role}\n\n"
                 "Create an episode with:\n"
                 "1. A setting (space location, station, planet)\n"
@@ -415,9 +415,9 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                     "type": "string",
                     "description": "How crew morale shifted",
                 },
-                "next_day_hook": {
+                "next_turn_hook": {
                     "type": "string",
-                    "description": "A teaser or hook for the next day's story",
+                    "description": "A teaser or hook for the next turn's story",
                 },
                 "mission_progress": {
                     "type": "array",
@@ -504,7 +504,7 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                 "outcome_narrative",
                 "ship_status_change",
                 "crew_morale_change",
-                "next_day_hook",
+                "next_turn_hook",
                 "mission_progress",
                 "dead_crew_members",
                 "ship_destroyed",
@@ -556,7 +556,7 @@ _COMBINED_OUTCOME_USER_RU = (
     "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца). Живой и осмысленный текст.\n"
     "2. ship_status_change — как изменилось состояние корабля (текст)\n"
     "3. crew_morale_change — как изменился моральный дух экипажа (текст)\n"
-    "4. next_day_hook — зацепка для следующего хода, которая создаёт ожидание\n"
+    "4. next_turn_hook — зацепка для следующего хода, которая создаёт ожидание\n"
     "5. mission_progress — МАССИВ объектов [{{'stage': N, 'points': +/-M}}]. "
     "Положительные = прогресс, отрицательные = регресс/откат (используй умеренные значения).\n"
     "6. dead_crew_members — список [[name, role]] погибших ИЗ СПИСКА ЭКИПАЖА. "
@@ -614,7 +614,7 @@ _COMBINED_OUTCOME_USER_EN = (
     "1. outcome_narrative — what happened (2-3 paragraphs). Vivid and meaningful.\n"
     "2. ship_status_change — narrative of ship condition change\n"
     "3. crew_morale_change — how morale shifted\n"
-    "4. next_day_hook — teaser for the next turn that creates anticipation\n"
+    "4. next_turn_hook — teaser for the next turn that creates anticipation\n"
     "5. mission_progress — ARRAY of [{{'stage': N, 'points': +/-M}}]. "
     "Positive = progress, Negative = regression/setback (use moderate values).\n"
     "6. dead_crew_members — list of [name, role] from the CREW ROSTER. "
@@ -886,13 +886,13 @@ def build_game_title_prompts(language: str) -> tuple[str, str]:
 # ── Daily story prompts ────────────────────────────────────────────
 
 
-def build_daily_story_prompts(language: str, day: int, previous_summary: str, player_role: str) -> tuple[str, str]:
+def build_turn_story_prompts(language: str, turn: int, previous_summary: str, player_role: str) -> tuple[str, str]:
     """Build system and user prompts for daily story generation."""
     if language == LANGUAGE_RU:
         system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
         player_role_display = player_role or "Член экипажа"
         user = (
-            f"День: {day}\n"
+            f"Ход: {turn}\n"
             f"Предыдущий день: {previous_summary or 'Первый день миссии'}\n"
             f"Роль игрока: {player_role_display}\n\n"
             "Создай эпизод с:\n"
@@ -905,8 +905,8 @@ def build_daily_story_prompts(language: str, day: int, previous_summary: str, pl
         system = "You are a Game Master for a Star Trek-style space exploration game. Create compelling daily episodes with conflicts and player choices."
         player_role_display = player_role or "Crew member"
         user = (
-            f"Day: {day}\n"
-            f"Previous day: {previous_summary or 'First day of mission'}\n"
+            f"Turn: {turn}\n"
+            f"Previous turn: {previous_summary or 'First turn of mission'}\n"
             f"Player role: {player_role_display}\n\n"
             "Create an episode with:\n"
             "1. A setting (space location, station, planet)\n"
@@ -1064,7 +1064,7 @@ def build_auto_choice_prompts(
 
 def build_global_circumstances_prompts(
     language: str,
-    day: int,
+    turn: int,
     previous_summary: str,
     player_descriptions: str,
     mission_str: str,
@@ -1079,7 +1079,7 @@ def build_global_circumstances_prompts(
             "У каждого члена экипажа есть уникальное имя — обращайся к ним по имени.\n"
         )
         user = (
-            f"День: {day}\n"
+            f"Ход: {turn}\n"
             f"Предыдущие события: {previous_summary or 'Первый день миссии'}\n"
             f"Экипаж:\n{player_descriptions or '  Экипаж формируется'}\n"
             f"{mission_str}\n"
@@ -1100,23 +1100,23 @@ def build_global_circumstances_prompts(
     else:
         system = (
             "You are a Game Master for a Star Trek-style space exploration game. "
-            "Create SHARED circumstances for the day — the situation unfolding on or around the ship. "
+            "Create SHARED circumstances for the turn — the situation unfolding on or around the ship. "
             "These circumstances are common to all crew members.\n\n"
             "Use the actual CHARACTER NAMES from the crew list in the narrative. "
             "Each crew member has a unique name — refer to them by name.\n"
         )
         user = (
-            f"Day: {day}\n"
-            f"Previous events: {previous_summary or 'First day of mission'}\n"
+            f"Turn: {turn}\n"
+            f"Previous events: {previous_summary or 'First turn of mission'}\n"
             f"Crew:\n{player_descriptions or '  Crew forming'}\n"
             f"{mission_str}\n"
-            "Create shared circumstances for the day:\n"
+            "Create shared circumstances for the turn:\n"
             "1. Setting — where the ship is located\n"
             "2. Conflict — central problem or mystery\n"
             "3. Narrative — GM voice description (2-3 paragraphs). "
             "Refer to crew members by NAME, showing their location and actions.\n"
             "4. Key events — 3-5 background events everyone can perceive\n"
-            "5. scene_prompt — a detailed English image generation prompt for this day's scene. "
+            "5. scene_prompt — a detailed English image generation prompt for this turn's scene. "
             "Cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, "
             "lighting, and atmosphere.\n"
             "6. crew_positions — array of positions for each crew member: where they are and what they're doing.\n\n"

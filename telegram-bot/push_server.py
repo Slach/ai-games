@@ -12,7 +12,7 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from aiogram.exceptions import TelegramBadRequest
 from aiohttp import web
-from language import get_actions, get_bridge, get_current_day, get_notifications, get_push_outcome
+from language import get_actions, get_bridge, get_current_turn, get_notifications, get_push_outcome
 from retry import call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ except (ValueError, TypeError):
 
 # Track pending action image deliveries so /push/outcome can wait for
 # action images to be sent to Telegram BEFORE the outcome message.
-# Key: (player_id, day) -> asyncio.Event()
+# Key: (player_id, turn) -> asyncio.Event()
 _pending_action_events: dict[tuple[int, int], asyncio.Event] = {}
 
 
@@ -50,7 +50,7 @@ def _escape_md(text: str) -> str:
 
 
 def _build_briefing_text(
-    day_num: int,
+    turn_num: int,
     briefing: str,
     choices: list[dict[str, Any]],
     crew_dialogues: list[dict[str, str]],
@@ -60,9 +60,9 @@ def _build_briefing_text(
     """Build the full briefing message text for a player.
 
     Uses personal_title (LLM-generated greeting with name+role) as the header
-    when available, falling back to the standard "Day {day}" title.
+    when available, falling back to the standard "Turn {turn}" title.
     """
-    current = get_current_day(language)
+    current = get_current_turn(language)
     crew_txt = ""
     if crew_dialogues:
         sep = "\n---\n"
@@ -77,7 +77,7 @@ def _build_briefing_text(
     if personal_title:
         title_line = f"🎯 *{personal_title}*"
     else:
-        title_line = current.get("title", "Day {day}").format(day=day_num)
+        title_line = current.get("title", "Turn {turn}").format(turn=turn_num)
 
     return title_line + "\n\n" + current.get("briefing_header", "{briefing}").format(briefing=briefing) + crew_txt + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
 
@@ -110,7 +110,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     """Handle POST /push/briefings from game-server-api."""
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
-    last_sent: dict[int, int | None] = request.app["last_sent_briefing_day"]
+    last_sent: dict[int, int | None] = request.app["last_sent_briefing_turn"]
     mark_sent_fn: Callable[[int, int], None] = request.app["mark_sent_fn"]
     create_keyboard_fn: Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] = request.app["create_keyboard_fn"]
 
@@ -119,7 +119,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
 
-    day = payload.get("day")
+    turn = payload.get("turn")
     players = payload.get("players", [])
     bridge_url = payload.get("bridge_image_url")
     mission = payload.get("mission")
@@ -130,8 +130,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     was_restarted = payload.get("was_restarted", False)
     language = payload.get("language", language)
 
-    if not day or not players:
-        return web.json_response({"status": "error", "message": "Missing day or players"}, status=400)
+    if not turn or not players:
+        return web.json_response({"status": "error", "message": "Missing turn or players"}, status=400)
 
     sent_player_ids: list[int] = []
     already_sent = False
@@ -141,8 +141,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
         if not player_id:
             continue
 
-        # Dedup: skip if already sent for this day (unless force_resend)
-        if not force_resend and last_sent.get(player_id) == day:
+        # Dedup: skip if already sent for this turn (unless force_resend)
+        if not force_resend and last_sent.get(player_id) == turn:
             already_sent = True
             continue
 
@@ -206,8 +206,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                 img_data = await _download_image(scene_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="scene.png")
-                    current_msgs = get_current_day(language)
-                    intro_title = current_msgs.get("global_intro_title", "Turn {day}").format(day=day)
+                    current_msgs = get_current_turn(language)
+                    intro_title = current_msgs.get("global_intro_title", "Turn {turn}").format(turn=turn)
                     # If global_narrative is long enough to need a separate
                     # text message (step 3), only put the title in the caption
                     # to avoid showing the same "Ход N — Общая вводная" twice.
@@ -226,8 +226,8 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
 
             # 3. Send global narrative as separate text (if too long for caption)
             if global_narrative and len(global_narrative) > 900:
-                current_msgs = get_current_day(language)
-                intro_title = current_msgs.get("global_intro_title", "Turn {day}").format(day=day)
+                current_msgs = get_current_turn(language)
+                intro_title = current_msgs.get("global_intro_title", "Turn {turn}").format(turn=turn)
                 await call_with_retry(
                     lambda: bot.send_message(
                         chat_id=player_id,
@@ -246,7 +246,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     photo = BufferedInputFile(img_data, filename="character.png")
                     # Use personal_title as caption, or build fallback
                     outcome_msgs = get_push_outcome(language)
-                    caption_text = personal_title or (outcome_msgs["character_caption"]).format(day=day, role=player_data.get("role", ""))
+                    caption_text = personal_title or (outcome_msgs["character_caption"]).format(turn=turn, role=player_data.get("role", ""))
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
@@ -269,7 +269,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
             choices = player_data.get("choices", [])
             if briefing and choices:
                 text = _build_briefing_text(
-                    day,
+                    turn,
                     briefing,
                     choices,
                     crew_dialogues,
@@ -287,9 +287,9 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                 )
 
             # Mark as sent
-            mark_sent_fn(player_id, day)
+            mark_sent_fn(player_id, turn)
             sent_player_ids.append(player_id)
-            logger.info(f"[PUSH] Sent day {day} briefing to player {player_id}")
+            logger.info(f"[PUSH] Sent turn {turn} briefing to player {player_id}")
 
         except Exception:
             pass  # Logged with full detail inside _call_with_retry
@@ -309,7 +309,7 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
 
     Delivers a chosen action image to the player who performed the action.
     This is called after fire-and-forget action image generation completes.
-    Payload: {"player_id": int, "day": int, "chosen_action_url": str, "game_id": str}
+    Payload: {"player_id": int, "turn": int, "chosen_action_url": str, "game_id": str}
     """
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
@@ -323,25 +323,25 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
     language = payload.get("language", language)
 
     player_id = payload.get("player_id")
-    day = payload.get("day")
+    turn = payload.get("turn")
     chosen_action_url = payload.get("chosen_action_url")
 
-    if not player_id or not day or not chosen_action_url:
+    if not player_id or not turn or not chosen_action_url:
         return web.json_response(
             {
                 "status": "error",
-                "message": "Missing player_id, day or chosen_action_url",
+                "message": "Missing player_id, turn or chosen_action_url",
             },
             status=400,
         )
 
     # Signal that this action image is being processed — outcome handler will wait.
     # Use existing event if outcome handler already created a placeholder (race).
-    event_key = (player_id, day)
+    event_key = (player_id, turn)
     _pending_action_events.setdefault(event_key, asyncio.Event())
 
     try:
-        logger.info(f"[PUSH_ACTION] Sending action image to player {player_id} for day {day}")
+        logger.info(f"[PUSH_ACTION] Sending action image to player {player_id} for turn {turn}")
 
         # Download and send the action image
         img_data = await _download_image(chosen_action_url)
@@ -379,16 +379,16 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
 async def handle_push_outcome(request: web.Request) -> web.Response:
     """Handle POST /push/outcome from game-server-api.
 
-    Delivers the combined day outcome (narrative + status + image) to all alive players.
-    This is called after _analyze_day_outcome completes.
+    Delivers the combined turn outcome (narrative + status + image) to all alive players.
+    This is called after _analyze_turn_outcome completes.
 
-    Dedup: tracks (player_id, day) pairs so that retries or duplicate calls
+    Dedup: tracks (player_id, turn) pairs so that retries or duplicate calls
     do not send the same outcome twice to the same player.
     New players (not yet tracked) still receive the outcome on retry.
     """
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
-    last_sent_per_player: dict[int, int] = request.app.setdefault("last_sent_outcome_day", {})
+    last_sent_per_player: dict[int, int] = request.app.setdefault("last_sent_outcome_turn", {})
 
     try:
         payload = await request.json()
@@ -398,7 +398,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     # Use game's language from payload when available
     language = payload.get("language", language)
 
-    day = payload.get("day")
+    turn = payload.get("turn")
 
     outcome_text = payload.get("outcome_text", "")
     alive_players = payload.get("alive_players", [])
@@ -415,9 +415,9 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     alive_crew_count = payload.get("alive_crew_count")
     action_images = payload.get("action_images", [])
 
-    if not day or not alive_players:
+    if not turn or not alive_players:
         return web.json_response(
-            {"status": "error", "message": "Missing day or alive_players"},
+            {"status": "error", "message": "Missing turn or alive_players"},
             status=400,
         )
 
@@ -427,7 +427,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     # concurrently with the action image request.
     wait_events = []
     for pid in alive_players:
-        event_key = (pid, day)
+        event_key = (pid, turn)
         ev = _pending_action_events.get(event_key)
         if ev is not None:
             wait_events.append(ev)
@@ -440,7 +440,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             wait_events.append(ev)
 
     if wait_events:
-        logger.info(f"[PUSH_OUTCOME] Waiting for {len(wait_events)} action image delivery(es) before sending outcome for day {day}")
+        logger.info(f"[PUSH_OUTCOME] Waiting for {len(wait_events)} action image delivery(es) before sending outcome for turn {turn}")
         ACTION_WAIT_TIMEOUT = 30.0  # Max seconds to wait for action image delivery
         results = await asyncio.gather(
             *[asyncio.wait_for(ev.wait(), timeout=ACTION_WAIT_TIMEOUT) for ev in wait_events],
@@ -451,9 +451,9 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             if isinstance(r, asyncio.TimeoutError):
                 timed_out += 1
         if timed_out:
-            logger.warning(f"[PUSH_OUTCOME] {timed_out}/{len(wait_events)} action image delivery(es) timed out, proceeding with outcome for day {day}")
+            logger.warning(f"[PUSH_OUTCOME] {timed_out}/{len(wait_events)} action image delivery(es) timed out, proceeding with outcome for turn {turn}")
         else:
-            logger.info(f"[PUSH_OUTCOME] All action images delivered, sending outcome for day {day}")
+            logger.info(f"[PUSH_OUTCOME] All action images delivered, sending outcome for turn {turn}")
 
     # ── Pre-download action images for the album ─────────────────
     # Download all action images once, so we don't re-download for each player.
@@ -478,8 +478,8 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         logger.info(f"[PUSH_OUTCOME] Pre-downloaded {sum(1 for v in _prefetched_action_photos.values() if v)}/{len(action_images)} action images")
 
     # Build outcome message text
-    current_msgs = get_current_day(language)
-    outcome_title = current_msgs.get("outcome_title", "Day {day} - Outcome").format(day=day)
+    current_msgs = get_current_turn(language)
+    outcome_title = current_msgs.get("outcome_title", "Turn {turn} - Outcome").format(turn=turn)
     parts = [outcome_title, "", outcome_text]
 
     outcome_msgs = get_push_outcome(language)
@@ -578,7 +578,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
                 continue
             if not caption:
                 outcome_msgs = get_push_outcome(language)
-                caption = outcome_msgs["turn_prefix"].format(day=day)
+                caption = outcome_msgs["turn_prefix"].format(turn=turn)
             media_items.append(InputMediaPhoto(media=photo, caption=caption))
 
         if not media_items:
@@ -602,8 +602,8 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
                 logger.warning(f"[PUSH_OUTCOME] Actions album error for player {target_player_id}: {album_err}")
 
     for player_id in alive_players:
-        # Per-player dedup: skip if this player already got outcome for this day
-        if last_sent_per_player.get(player_id) == day:
+        # Per-player dedup: skip if this player already got outcome for this turn
+        if last_sent_per_player.get(player_id) == turn:
             continue
 
         try:
@@ -632,13 +632,13 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
             sent_player_ids.append(player_id)
             # Mark this player as having received this day's outcome
-            last_sent_per_player[player_id] = day
-            logger.info(f"[PUSH_OUTCOME] Outcome for day {day} sent to player {player_id}")
+            last_sent_per_player[player_id] = turn
+            logger.info(f"[PUSH_OUTCOME] Outcome for turn {turn} sent to player {player_id}")
 
         except Exception as e:
             # _call_with_retry already logged network errors with detail;
             # this catches truly unexpected errors from surrounding code
-            logger.error(f"[PUSH_OUTCOME] Failed to send outcome to player {player_id}: {e}")
+            logger.error(f"[PUSH_OUTCOME] Failed to send outcome to player {player_id}: {e}", exc_info=True)
 
     return web.json_response(
         {
@@ -662,23 +662,24 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
 
     game_id = payload.get("game_id", "")
-    day = payload.get("day", 0)
+    turn = payload.get("turn", 0)
     status = payload.get("status", "")  # "success" or "error"
     error = payload.get("error", "")
     players = payload.get("players", 0)
     npcs = payload.get("npcs", 0)
     language = payload.get("language", "ru")
 
+    safe_error = _escape_md(error)
     if status == "success":
         if language == "ru":
-            msg = f"✅ **Ход {day} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {day}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
+            msg = f"✅ **Ход {turn} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {turn}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
         else:
-            msg = f"✅ **Turn {day} for game `{game_id}` generated!**\n\n🎯 Turn: {day}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
+            msg = f"✅ **Turn {turn} for game `{game_id}` generated!**\n\n🎯 Turn: {turn}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
     else:
         if language == "ru":
-            msg = f"❌ **Ошибка генерации хода {day} игры `{game_id}`**\n\n{error}"
+            msg = f"❌ **Ошибка генерации хода {turn} игры `{game_id}`**\n\n{safe_error}"
         else:
-            msg = f"❌ **Error generating turn {day} for game `{game_id}`**\n\n{error}"
+            msg = f"❌ **Error generating turn {turn} for game `{game_id}`**\n\n{safe_error}"
 
     # Send to GM if we have a bot and GM ID
     if bot and GAME_MASTER_ID > 0:
@@ -690,9 +691,9 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
                     parse_mode="Markdown",
                 )
             )
-            logger.info(f"[PUSH_GM] Notification sent to GM for game {game_id} day {day}: {status}")
+            logger.info(f"[PUSH_GM] Notification sent to GM for game {game_id} turn {turn}: {status}")
         except Exception as e:
-            logger.error(f"[PUSH_GM] Failed to send GM notification: {e}")
+            logger.error(f"[PUSH_GM] Failed to send GM notification: {e}", exc_info=True)
             return web.json_response({"status": "error", "message": str(e)}, status=500)
     else:
         logger.warning(f"[PUSH_GM] Cannot send GM notification: bot={bool(bot)}, GAME_MASTER_ID={GAME_MASTER_ID}")
@@ -801,7 +802,7 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
             logger.info(f"[PUSH_GAME_OVER] Finale sent to player {player_id}: {outcome_type}")
 
         except Exception as e:
-            logger.error(f"[PUSH_GAME_OVER] Failed to send finale to player {player_id}: {e}")
+            logger.error(f"[PUSH_GAME_OVER] Failed to send finale to player {player_id}: {e}", exc_info=True)
 
     return web.json_response({"status": "ok", "sent": sent_player_ids})
 
@@ -814,7 +815,7 @@ async def handle_health(request: web.Request) -> web.Response:
 async def start_push_server(
     bot: Bot,
     language: str = "ru",
-    last_sent_briefing_day: dict[int, int] | None = None,
+    last_sent_briefing_turn: dict[int, int] | None = None,
     mark_sent_fn: Callable[[int, int], None] | None = None,
     create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None) = None,
 ) -> web.AppRunner:
@@ -823,18 +824,18 @@ async def start_push_server(
     Args:
         bot: aiogram Bot instance
         language: Bot language code
-        last_sent_briefing_day: Shared dict for dedup (from bot.py)
+        last_sent_briefing_turn: Shared dict for dedup (from bot.py)
         mark_sent_fn: Function to mark briefing as sent (from bot.py)
         create_keyboard_fn: Function to create action keyboard (from bot.py)
 
     Returns:
         web.AppRunner for graceful shutdown
     """
-    if last_sent_briefing_day is None:
-        last_sent_briefing_day = {}
+    if last_sent_briefing_turn is None:
+        last_sent_briefing_turn = {}
     if mark_sent_fn is None:
 
-        def _noop_mark_sent(pid: int, day: int) -> None:
+        def _noop_mark_sent(pid: int, turn: int) -> None:
             pass
 
         mark_sent_fn = _noop_mark_sent
@@ -848,7 +849,7 @@ async def start_push_server(
     app = web.Application()
     app["bot"] = bot
     app["language"] = language
-    app["last_sent_briefing_day"] = last_sent_briefing_day
+    app["last_sent_briefing_turn"] = last_sent_briefing_turn
     app["mark_sent_fn"] = mark_sent_fn
     app["create_keyboard_fn"] = create_keyboard_fn
 

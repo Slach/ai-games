@@ -135,26 +135,31 @@ services:
     volumes:
       - ./telegram-bot/:/app/
 
-  # Game Master Scheduler - triggers daily generation via game-server-api
-  # Can be run manually for debugging: duxocker compose run --rm game-master
-  game-master:
-    image: game-master:spark-full
+  # Game Scheduler - triggers turn generation via game-server-api
+  # Can be run manually for debugging: docker compose run --rm game-scheduler
+  game-scheduler:
+    image: game-scheduler:spark-full
     build:
       dockerfile: Dockerfile.spark
-      context: game-master/
+      context: game-scheduler/
+    ports:
+      - "${GAME_SCHEDULER_PORT:-8001}:8001"
     depends_on:
       game-server-api:
         condition: service_healthy
     environment:
-      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
+      - GAME_SERVER_API_URL=${GAME_SERVER_API_URL:-http://game-server-api:8000}
       - GAME_SCHEDULE=${GAME_SCHEDULE:-8h}
-      - GAME_MASTER_MODE=${GAME_MASTER_MODE:-scheduled}
+      - GAME_SCHEDULER_MODE=${GAME_SCHEDULER_MODE:-scheduled}
+      - GAME_SCHEDULER_PORT=8001
       - GAME_ID=${GAME_ID:-default_game}
+      - AUTO_ACTION_TIMEOUT_HOURS=${AUTO_ACTION_TIMEOUT_HOURS:-24}
+      - PYTHONDONTWRITEBYTECODE=1
     networks:
       - spark-network
     restart: unless-stopped
     volumes:
-      - ./game-master/:/app/
+      - ./game-scheduler/:/app/
 
 networks:
   spark-network:

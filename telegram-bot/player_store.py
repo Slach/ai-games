@@ -140,7 +140,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
             "current_question_image_url": row["current_question_image_url"],
             "last_poll": last_poll,
             "pending_updates": pending_list,
-            "last_briefing_day_sent": row["last_briefing_day_sent"],
+            "last_briefing_turn_sent": row["last_briefing_turn_sent"],
             "language": row["language"] or "en",
         }
     finally:
@@ -160,7 +160,7 @@ _PLAYER_STATE_COLUMNS: dict[str, str] = {
     "current_question_image_url": "current_question_image_url = ?",
     "last_poll": "last_poll = ?",
     "pending_updates": "pending_updates = ?",
-    "last_briefing_day_sent": "last_briefing_day_sent = ?",
+    "last_briefing_turn_sent": "last_briefing_turn_sent = ?",
     "language": "language = ?",
 }
 
@@ -207,7 +207,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
                 current_question_image_url = COALESCE(?, current_question_image_url),
                 last_poll = COALESCE(?, last_poll),
                 pending_updates = COALESCE(?, pending_updates),
-                last_briefing_day_sent = COALESCE(?, last_briefing_day_sent),
+                last_briefing_turn_sent = COALESCE(?, last_briefing_turn_sent),
                 language = COALESCE(?, language),
                 updated_at = datetime('now')
             WHERE player_id = ?""",
@@ -218,14 +218,14 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
         conn.close()
 
 
-def get_all_briefing_days() -> dict[int, int]:
-    """Return a dict of {player_id: last_briefing_day_sent} for all players
+def get_all_briefing_turns() -> dict[int, int]:
+    """Return a dict of {player_id: last_briefing_turn_sent} for all players
     that have a non-NULL value. Single query — avoids N+1 on startup."""
     conn = _conn()
     try:
         result: dict[int, int] = {}
-        for row in conn.execute("SELECT player_id, last_briefing_day_sent FROM player_states WHERE last_briefing_day_sent IS NOT NULL"):
-            result[row["player_id"]] = int(row["last_briefing_day_sent"])
+        for row in conn.execute("SELECT player_id, last_briefing_turn_sent FROM player_states WHERE last_briefing_turn_sent IS NOT NULL"):
+            result[row["player_id"]] = int(row["last_briefing_turn_sent"])
         return result
     finally:
         conn.close()

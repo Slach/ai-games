@@ -25,7 +25,7 @@ class TestMissionPersistence(unittest.TestCase):
         try:
             os.unlink(self._tmp.name)
         except (FileNotFoundError, PermissionError):
-            logger.error("Failed to remove temp DB: %s", self._tmp.name)
+            logger.error("Failed to remove temp DB: %s", self._tmp.name, exc_info=True)
 
     def _raw_mission(self):
         return {
@@ -80,13 +80,13 @@ class TestLastDeathDay(unittest.TestCase):
         try:
             os.unlink(self._tmp.name)
         except (FileNotFoundError, PermissionError):
-            logger.error("Failed to remove temp DB: %s", self._tmp.name)
+            logger.error("Failed to remove temp DB: %s", self._tmp.name, exc_info=True)
 
     def test_get_returns_zero_default_and_set_persists(self):
         state = db.get_game_state("gd1")
-        self.assertEqual(state["last_death_day"], 0)
-        db.set_last_death_day("gd1", 7)
-        self.assertEqual(db.get_game_state("gd1")["last_death_day"], 7)
+        self.assertEqual(state["last_death_turn"], 0)
+        db.set_last_death_turn("gd1", 7)
+        self.assertEqual(db.get_game_state("gd1")["last_death_turn"], 7)
 
 
 if __name__ == "__main__":

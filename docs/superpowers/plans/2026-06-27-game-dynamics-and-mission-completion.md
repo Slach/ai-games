@@ -1820,7 +1820,7 @@ After all tasks land:
   Expected: `total_stages` equals the number of objectives (≥2), `current_stage` reflects real progress, `completed` may be True if thresholds already met by `{1:6,2:6,...}`.
 - [ ] **Deploy & regenerate:** apply code without wiping data:
   `docker compose --progress=plain stop telegram-bot game-master game-server-api --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-master game-server-api`
-  Then trigger a new mission via Telegram `/gm_start_game <game_id>` (full-wipe) OR continue an existing game `/gm_continue_game <game_id>` to observe the rules layer in action.
+  Then trigger a new mission via Telegram `/gm_start <game_id>` (full-wipe) OR continue an existing game `/gm_continue <game_id>` to observe the rules layer in action.
 
 ## Out of scope (deferred — spec P4)
 
