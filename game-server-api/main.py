@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
+import aiohttp
 import uvicorn
 from database import (
     GAME_START_MIN_PLAYERS,
@@ -707,6 +708,25 @@ async def lifespan(app: FastAPI):
 
     yield
     logger.info("Game Master API shutting down")
+
+
+GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
+
+
+async def _notify_scheduler(action: str) -> None:
+    """Fire-and-forget notification to game-scheduler after a turn event."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{GAME_SCHEDULER_URL}/scheduler/{action}",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Scheduler notification '{action}' returned {resp.status}")
+                else:
+                    logger.info(f"Scheduler notified: {action}")
+    except Exception as e:
+        logger.warning(f"Failed to notify scheduler ({action}): {e}")
 
 
 app = FastAPI(
@@ -1583,7 +1603,7 @@ async def get_current_game_turn(game_id: str = Query("default_game")):
 
 @app.get("/game/poll/{player_id}")
 async def poll_game_updates(player_id: int, since: str | None = None):
-    """Poll for new game updates (days, actions, messages) since last poll"""
+    """Poll for new game updates (turns, actions, messages) since last poll"""
     profile = get_player_profile(player_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found")
@@ -1602,7 +1622,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
     }
 
     try:
-        # Check for current day with pending actions
+        # Check for current turn with pending actions
         # Game state tracks NEXT turn to generate, so latest completed turn is state["turn"] - 1
         state = get_game_state(game_id)
         current_turn_num = max(1, state["turn"] - 1)
@@ -2293,7 +2313,7 @@ def _build_turn_summary(combined_outcome_str: str, language: str = "ru") -> str:
     if oc.get("ship_destroyed"):
         parts.append(ds["ship_destroyed"])
 
-    # Next day hook
+    # Next turn hook
     hook = oc.get("next_turn_hook", "")
     if hook:
         parts.append(ds["next_turn_hook"].format(hook=hook))
@@ -2440,7 +2460,7 @@ async def _analyze_turn_outcome(
             return
 
         # Also add NPC decisions from the combined outcome
-        # NPC decisions were already analyzed during day generation
+        # NPC decisions were already analyzed during turn generation
 
         # Build cumulative summary from ALL previous turns for full story context
         previous_summary = _build_cumulative_story_summary(
@@ -2774,7 +2794,7 @@ async def _analyze_turn_outcome(
         personal_outcomes = outcome.get("personal_outcomes", [])
 
         # Push outcome synchronously so message order is deterministic
-        # (outcome arrives BEFORE new day briefings)
+        # (outcome arrives BEFORE new turn briefings)
         try:
             await push_turn_outcome(
                 game_id=game_id,
@@ -3087,21 +3107,21 @@ def _build_player_briefings_for_push(
 
 
 @app.post("/admin/generate-turn")
-async def generate_daily_episode(
+async def generate_turn_episode(
     language: str = "en",
     game_id: str = "default_game",
     previous_actions: list[dict[str, Any]] | None = None,
     previous_summary: str | None = None,
     team_assembly_status: dict[str, Any] | None = None,
 ):
-    """Generate a new daily episode (called by game master scheduler)"""
+    """Generate a new turn episode (called by game scheduler)"""
     state = get_game_state(game_id)
     turn_num = state["turn"]
 
     # Use game's stored language — the caller may not know it
     language = get_game_language(game_id) or language
 
-    logger.info("=== GENERATE DAY STARTED ===")
+    logger.info("=== GENERATE TURN STARTED ===")
     logger.info(f"Turn number: {turn_num}")
     logger.info(f"Language: {language}")
     logger.info(f"Previous actions count: {len(previous_actions) if previous_actions else 0}")
@@ -3111,7 +3131,7 @@ async def generate_daily_episode(
     player_role = "Crew Member" if language != "ru" else "Член экипажа"
     logger.info(f"Player role: {player_role}")
 
-    # Generate previous day summary from actions for story consistency
+    # Generate previous turn summary from actions for story consistency
     summary = previous_summary or ""
     if not summary and previous_actions:
         action_summaries = []
@@ -3147,7 +3167,7 @@ async def generate_daily_episode(
     create_game_turn(new_turn, game_id)
     update_game_state(turn_num + 1, "active", game_id=game_id)
 
-    logger.info("=== GENERATE DAY COMPLETED ===")
+    logger.info("=== GENERATE TURN COMPLETED ===")
     logger.info(f"Story: {story.narrative}...")
     logger.info(f"NPC dialogues: {len(dialogues)}")
     logger.info(f"Player actions: {len(story.decision_points)}")
@@ -3394,6 +3414,7 @@ async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
     try:
         result = await _original_start_game(request)
         if result and result.get("status") == "success":
+            await _notify_scheduler("reset")
             await push_gm_notification(
                 game_id=request.game_id,
                 turn=turn_num,
@@ -4011,7 +4032,7 @@ async def _original_start_game(request: StartGameRequest):
     }
     create_game_turn(new_turn, game_id)
 
-    # Advance game state to next day
+    # Advance game state to next turn
     update_game_state(turn_num + 1, "active", game_id=game_id)
 
     # Build per-player briefing response
@@ -4032,7 +4053,7 @@ async def _original_start_game(request: StartGameRequest):
         )
 
     logger.info("=== ADMIN START GAME COMPLETED ===")
-    logger.info(f"Day: {turn_num}, Participants: {len(all_participants)}, NPCs: {len(npcs_created)}")
+    logger.info(f"Turn: {turn_num}, Participants: {len(all_participants)}, NPCs: {len(npcs_created)}")
 
     # Get bridge image URL if generated
     bridge_url = get_random_game_image(type="bridge", game_id=game_id)
@@ -4470,7 +4491,7 @@ async def admin_list_games():
 
 
 @app.post("/admin/analyze-turn")
-async def admin_analyze_day(
+async def admin_analyze_turn(
     turn: int | None = None,
     language: str = "ru",
     game_id: str = "default_game",
@@ -4481,7 +4502,7 @@ async def admin_analyze_day(
     """
     if turn is None:
         state = get_game_state(game_id)
-        turn_num = max(1, state["turn"] - 1)  # Game state is pre-advanced, so current completed turn is day-1
+        turn_num = max(1, state["turn"] - 1)  # Game state is pre-advanced, so current completed turn is turn-1
     else:
         turn_num = turn
 
@@ -4516,6 +4537,7 @@ async def _background_continue_wrapper(
             force_resend=force_resend,
         )
         if result and result.get("status") == "success":
+            await _notify_scheduler("reset")
             await push_gm_notification(
                 game_id=game_id,
                 turn=turn_num,
@@ -4963,8 +4985,8 @@ async def _original_continue_game(
     # Advance game state
     update_game_state(turn_num + 1, "active", game_id=game_id)
 
-    # ── Push previous day outcome (if applicable) ──────────────
-    # Must run BEFORE pushing new day briefings so player sees:
+    # ── Push previous turn outcome (if applicable) ──────────────
+    # Must run BEFORE pushing new turn briefings so player sees:
     #   Итоги хода N-1 → Вводная хода N → Ход N + действия
     if turn_num > 1:
         await _analyze_turn_outcome(
@@ -5034,12 +5056,12 @@ async def admin_regenerate_turn(
 
     logger.info(f"Deleted: {deleted_briefings} briefings, {deleted_actions} player actions, turn_record={deleted_turn}")
 
-    # Roll back game state to before the deleted day
+    # Roll back game state to before the deleted turn
     reset_game_state_to_turn1(game_id)
-    # Restore to the correct day (the day being regenerated)
+    # Restore to the correct turn (the turn being regenerated)
     update_game_state(regenerate_turn, "active", game_id=game_id)
 
-    # Now regenerate the day using the continue-game logic
+    # Now regenerate the turn using the continue-game logic
     # admin_continue_game now starts background processing and returns immediately
     await admin_continue_game(game_id=game_id, language=language, force_resend=True)
 
@@ -5064,7 +5086,7 @@ async def admin_restart_game(
 ):
     """Reset game state and restart from the first turn.
 
-    Deletes all game days, briefings, actions, messages, mission,
+    Deletes all game turns, briefings, actions, messages, mission,
     and game images. Resets game state to turn 1, marks game as
     not-started, and keeps player profiles intact.
     """
@@ -5081,7 +5103,7 @@ async def admin_restart_game(
     deleted_mission = delete_mission(game_id)
     deleted_images = delete_game_images(game_id)
 
-    logger.info(f"Deleted: {deleted_turns} days, {deleted_briefings} briefings, {deleted_actions} actions, {deleted_messages} messages, mission={deleted_mission}, {deleted_images} images")
+    logger.info(f"Deleted: {deleted_turns} turns, {deleted_briefings} briefings, {deleted_actions} actions, {deleted_messages} messages, mission={deleted_mission}, {deleted_images} images")
 
     # Reset game state to turn 1
     reset_game_state_to_turn1(game_id)
@@ -5096,6 +5118,8 @@ async def admin_restart_game(
     reset_active_npcs(game_id)
 
     logger.info("=== ADMIN RESTART GAME COMPLETED ===")
+
+    asyncio.create_task(_notify_scheduler("reset"))
 
     return {
         "status": "success",
