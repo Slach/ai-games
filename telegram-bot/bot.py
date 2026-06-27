@@ -76,6 +76,7 @@ def escape_markdown(text: str) -> str:
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
+GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
 
 DEFAULT_LANGUAGE = "en"
 
@@ -2287,10 +2288,92 @@ async def cmd_gm_list(message: types.Message):
                 + f" {lang_flag}"
             )
 
+        # Append scheduler status
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{GAME_SCHEDULER_URL}/scheduler/status",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        sched = await resp.json()
+                        lines.append("")
+                        if sched.get("mode") == "paused":
+                            lines.append(gm_msgs["scheduler_paused"])
+                        elif sched.get("next_run_at"):
+                            lines.append(gm_msgs["next_turn_auto"].format(time=sched["next_run_at"]))
+        except Exception:
+            pass
+
         await message.answer("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Failed to list games: {e}", exc_info=True)
         await message.answer(gm_msgs["list_games_error"].format(error=e))
+
+
+async def cmd_gm_pause(message: types.Message):
+    """GM command: Toggle scheduler pause/resume.
+
+    Usage: /gm_pause
+    Only executable by the configured Game Master user.
+    """
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+    player_lang = get_player_language(player_id)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
+        logger.warning(f"Unauthorized /gm_pause attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    gm_msgs = lang.get_gm_commands(player_lang)
+
+    try:
+        # First, check current state
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{GAME_SCHEDULER_URL}/scheduler/status",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    await message.answer(gm_msgs["scheduler_unavailable"])
+                    return
+                sched = await resp.json()
+
+            # Toggle: if paused -> resume, else -> pause
+            if sched.get("mode") == "paused":
+                async with session.post(
+                    f"{GAME_SCHEDULER_URL}/scheduler/resume",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        await message.answer(
+                            gm_msgs["pause_toggled"].format(state="resumed"),
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        await message.answer(
+                            gm_msgs["pause_error"].format(error=f"HTTP {resp.status}"),
+                        )
+            else:
+                async with session.post(
+                    f"{GAME_SCHEDULER_URL}/scheduler/pause",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        await message.answer(
+                            gm_msgs["pause_toggled"].format(state="paused"),
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        await message.answer(
+                            gm_msgs["pause_error"].format(error=f"HTTP {resp.status}"),
+                        )
+    except Exception as e:
+        logger.error(f"Failed to toggle scheduler: {e}", exc_info=True)
+        await message.answer(gm_msgs["pause_error"].format(error=e))
 
 
 async def cmd_gm_continue(message: types.Message):
@@ -2605,6 +2688,22 @@ async def cmd_gm_status(message: types.Message):
 
         # Combine full message
         full_message = header + "\n" + players_text + "\n\n" + npcs_text
+
+        # Fetch scheduler status
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{GAME_SCHEDULER_URL}/scheduler/status",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        sched = await resp.json()
+                        if sched.get("mode") == "paused":
+                            full_message += "\n\n" + gm_msgs["scheduler_paused"]
+                        elif sched.get("next_run_at"):
+                            full_message += "\n\n" + gm_msgs["next_turn_at"].format(time=sched["next_run_at"])
+        except Exception:
+            pass  # Scheduler unavailable, omit the line
 
         # Telegram's limit is 4096 chars; use 3950 as safe threshold
         MAX_STATUS_LEN = 3950
@@ -3247,6 +3346,7 @@ async def main():
     dp.message.register(cmd_gm_start, Command("gm_start"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list, Command("gm_list"))
+    dp.message.register(cmd_gm_pause, Command("gm_pause"))
     dp.message.register(cmd_gm_continue, Command("gm_continue"))
     dp.message.register(cmd_gm_turn, Command("gm_turn"))
     dp.message.register(cmd_gm_restart, Command("gm_restart"))

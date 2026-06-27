@@ -101,13 +101,13 @@ HELP = {
     LANGUAGE_RU: {
         "title": None,  # Game title fetched dynamically from API
         "regular_commands": "Команды:\n/start - Начать или продолжить игру\n/profile - Показать ваш профиль\n/turn - Текущий ход игры\n/team - Ваш экипаж\n/bridge - Картинка рубки и миссия\n/invite - Пригласить друга\n/reset - Сбросить участие и начать заново\n/help - Эта справка",
-        "gm_commands": "Команды Game Master:\n/gm_start <id> - Запустить игру\n/gm_continue <id> - Сгенерировать следующий ход\n/gm_turn <id> - Перегенерировать текущий ход\n/gm_restart <id> - Перезапустить игру с 1 хода\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы\n/gm_lang <id> <ru|en> - Сменить язык и перегенерировать название игры",
+        "gm_commands": "Команды Game Master:\n/gm_start <id> - Запустить игру\n/gm_continue <id> - Сгенерировать следующий ход\n/gm_turn <id> - Перегенерировать текущий ход\n/gm_restart <id> - Перезапустить игру с 1 хода\n/gm_pause - Пауза/возобновление планировщика\n/gm_kick <id> <роль> [причина] - Изгнать игрока\n/gm_list - Список всех игр\n/gm_status <id> - Статус игры: игроки, NPC, выборы\n/gm_lang <id> <ru|en> - Сменить язык и перегенерировать название игры",
         "how_to_play": "Как играть:\n1. Каждый ход генерируется новый сюжет\n2. Вы выбираете действия из предложенных вариантов\n3. Ваши решения влияют на развитие истории\n4. Вы можете общаться с Game Master в любое время\n\nНапишите сообщение для общения с Game Master.",
     },
     LANGUAGE_EN: {
         "title": None,  # Game title fetched dynamically from API
         "regular_commands": "Commands:\n/start - Start or continue the game\n/profile - Show your profile\n/turn - Current game turn\n/team - Your crew\n/bridge - Bridge image and mission\n/invite - Invite a friend\n/reset - Reset participation and start over\n/help - This help",
-        "gm_commands": "Game Master Commands:\n/gm_start <id> - Start a game\n/gm_continue <id> - Generate the next turn\n/gm_turn <id> - Regenerate the current turn\n/gm_restart <id> - Restart the game from turn 1\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list - List all games\n/gm_status <id> - Game status: players, NPCs, choices\n/gm_lang <id> <ru|en> - Change language and regenerate game title",
+        "gm_commands": "Game Master Commands:\n/gm_start <id> - Start a game\n/gm_continue <id> - Generate the next turn\n/gm_turn <id> - Regenerate the current turn\n/gm_restart <id> - Restart the game from turn 1\n/gm_pause - Pause/resume the scheduler\n/gm_kick <id> <role> [reason] - Kick a player\n/gm_list - List all games\n/gm_status <id> - Game status: players, NPCs, choices\n/gm_lang <id> <ru|en> - Change language and regenerate game title",
         "how_to_play": "How to play:\n1. A new story is generated every turn\n2. You choose actions from the suggested options\n3. Your decisions affect the story development\n4. You can communicate with the Game Master at any time\n\nWrite a message to communicate with the Game Master.",
     },
 }
@@ -418,6 +418,13 @@ GM_COMMANDS = {
         "set_language_progress": "⏳ Меняю язык игры `{game_id}` на `{lang_code}`, генерирую название и миссию...",
         "set_language_success": "✅ **Язык игры `{game_id}` изменён на `{lang_code}`**\n\n🌐 Название игры: **{title}**",
         "set_language_error": "❌ Ошибка: {detail}",
+        "next_turn_at": "Следующий ход: {time}",
+        "next_turn_auto": "Следующий авто-ход: {time}",
+        "scheduler_paused": "⚠️ Планировщик на паузе",
+        "scheduler_unavailable": "Планировщик недоступен",
+        "pause_usage": "❌ Использование: /gm_pause\nПереключает планировщик (пауза/возобновление).",
+        "pause_toggled": "Планировщик: {state}",
+        "pause_error": "❌ Ошибка переключения планировщика: {error}",
     },
     LANGUAGE_EN: {
         "unauthorized": "⛔ You don't have permission to use this command.",
@@ -476,6 +483,13 @@ GM_COMMANDS = {
         "set_language_progress": "⏳ Changing game `{game_id}` language to `{lang_code}`, regenerating title and mission...",
         "set_language_success": "✅ **Game `{game_id}` language changed to `{lang_code}`**\n\n🌐 Game title: **{title}**",
         "set_language_error": "❌ Error: {detail}",
+        "next_turn_at": "Next turn: {time}",
+        "next_turn_auto": "Next auto-turn: {time}",
+        "scheduler_paused": "⚠️ Scheduler paused",
+        "scheduler_unavailable": "Scheduler unavailable",
+        "pause_usage": "❌ Usage: /gm_pause\nToggles the scheduler (pause/resume).",
+        "pause_toggled": "Scheduler: {state}",
+        "pause_error": "❌ Failed to toggle scheduler: {error}",
     },
 }
 
