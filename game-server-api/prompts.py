@@ -1196,7 +1196,9 @@ def build_personal_briefing_system(language: str) -> str:
             "новые союзники или враги, находки, ухудшение или улучшение ситуации. "
             "Смелые и правильные решения → миссия продвигается, открываются новые возможности. "
             "Пассивные или плохие решения → последствия: повреждения, потери, регресс миссии. "
-            "Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО, а не просто 'наказать' игрока."
+            "Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО, а не просто 'наказать' игрока. "
+            "Среди вариантов действий ВСЕГДА должен быть хотя бы один безопасный/оборонительный "
+            "выбор (прикрыть, защищаться, эвакуироваться, переждать), предсказуемо снижающий урон."
         )
     return (
         "You are a Game Master. You create PERSONAL briefings for each player "
@@ -1206,5 +1208,7 @@ def build_personal_briefing_system(language: str) -> str:
         "new allies or enemies, findings, situation improvements or deteriorations. "
         "Bold and correct decisions → mission progresses, new opportunities open. "
         "Passive or bad decisions → consequences: damage, losses, mission regression. "
-        "The key is INTERESTING and UNPREDICTABLE, not just 'punish' the player."
+        "The key is INTERESTING and UNPREDICTABLE, not just 'punish' the player. "
+        "Among the action choices there MUST ALWAYS be at least one safe/defensive option "
+        "(cover, defend, evacuate, wait it out) that predictably reduces incoming damage."
     )

@@ -81,6 +81,7 @@ from database import (
     save_game_title_and_welcome,
     save_player_action,
     save_player_briefing,
+    set_last_death_day,
     start_game,
     take_role,
     update_briefing_choice,
@@ -94,7 +95,7 @@ from database import (
     update_onboarding_session,
     update_player_profile_last_poll,
 )
-from game_rules import apply_mission_progress
+from game_rules import apply_mission_progress, apply_death_limits
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from game_master import create_game_master_agent
@@ -2502,6 +2503,21 @@ async def _analyze_day_outcome(
             if updated_mission["completed"]:
                 logger.info("[MISSION] MISSION COMPLETE! Notifying players...")
             mission = updated_mission
+
+        # Rate-limit crew deaths through the rules layer (P3):
+        # at most one death per DEATH_COOLDOWN_TURNS, never below min_alive;
+        # excess proposed deaths are demoted to critical injuries.
+        state = get_game_state(game_id)
+        alive_count = sum(1 for r in crew_roster if not r.get("is_dead"))
+        outcome, new_last_death_day = apply_death_limits(
+            outcome,
+            day=day,
+            last_death_day=int(state.get("last_death_day", 0) or 0),
+            alive_count=alive_count,
+        )
+        if new_last_death_day != int(state.get("last_death_day", 0) or 0):
+            set_last_death_day(game_id, new_last_death_day)
+            logger.info(f"[DEATH] Cooldown window starts at day {new_last_death_day}")
 
         # ========== Process ship damage from new structured fields ==========
         ship_hull = outcome.get("ship_hull_integrity", 100)
