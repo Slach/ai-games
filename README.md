@@ -9,7 +9,7 @@ unique story, personalized comics, and NPC interactions based on player choices.
 graph TD
     A[Telegram API] --> B[telegram-bot]
     B --> C[game-server-api]
-    D[game-master] --> C
+    D[game-scheduler] --> C
     C --> E[comfyui]
     C --> G[llama.cpp<br/>external]
 
@@ -27,7 +27,7 @@ graph TD
 | game-server-api | 8000 | FastAPI backend with SQLite persistence |
 | telegram-bot | N/A | Telegram bot interface |
 | comfyui | 8188 | Image/Video generation backend |
-| game-master | N/A | Turn generation scheduler (run manually for debugging) |
+| game-scheduler | N/A | Turn generation scheduler (run manually for debugging) |
 
 ### Game Master API (`game-server-api/`)
 
@@ -67,7 +67,7 @@ Player interface via Telegram:
 
 **Ports:** None (outbound Telegram API only)
 
-### Game Master Scheduler (`game-master/`)
+### Game Master Scheduler (`game-scheduler/`)
 
 Scheduled task runner that triggers daily episode generation. Can be run manually for debugging.
 
@@ -75,7 +75,7 @@ Scheduled task runner that triggers daily episode generation. Can be run manuall
 
 ```bash
 # Run single generation cycle for testing
-GAME_MASTER_MODE=single docker compose run --rm game-master
+GAME_MASTER_MODE=single docker compose run --rm game-scheduler
 ```
 
 **Ports:** None
@@ -129,7 +129,7 @@ docker compose logs -f telegram-bot
 1. Run single generation cycle (for testing):
 
 ```bash
-GAME_MASTER_MODE=single docker compose run --rm game-master
+GAME_MASTER_MODE=single docker compose run --rm game-scheduler
 ```
 
 ## Onboarding Flow
@@ -203,7 +203,7 @@ export TELEGRAM_BOT_TOKEN=your_token
 python bot.py
 
 # Game Master (for debugging)
-cd game-master
+cd game-scheduler
 pip install -r requirements.txt
 GAME_MASTER_MODE=single python game_master.py
 ```

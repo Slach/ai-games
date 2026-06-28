@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rename game-master → game-scheduler, convert it to an HTTP API service with scheduler state persistence, synchronize /gm_* commands with scheduling timer, fix "day"→"turn" terminology everywhere.
+**Goal:** Rename game-scheduler → game-scheduler, convert it to an HTTP API service with scheduler state persistence, synchronize /gm_* commands with scheduling timer, fix "day"→"turn" terminology everywhere.
 
 **Architecture:** game-scheduler becomes an aiohttp API server (port 8001) with the scheduling loop as a background task. game-server-api calls game-scheduler's `/scheduler/reset` after each turn. Telegram bot calls `/scheduler/status` for `/gm_status` and `/gm_list`, and `/scheduler/pause|resume` for `/gm_pause`.
 
@@ -22,11 +22,11 @@
 
 ---
 
-### Task 1: Rename game-master → game-scheduler directory and Docker service
+### Task 1: Rename game-scheduler → game-scheduler directory and Docker service
 
 **Files:**
 
-- Rename: `game-master/` → `game-scheduler/` (git mv)
+- Rename: `game-scheduler/` → `game-scheduler/` (git mv)
 - Modify: `docker-compose.yaml`
 
 **Interfaces:**
@@ -37,12 +37,12 @@
 
 ```bash
 cd /home/slach/src/github.com/Slach/ai-games
-git mv game-master/ game-scheduler/
+git mv game-scheduler/ game-scheduler/
 ```
 
 - [ ] **Step 2: Update docker-compose.yaml — service name and image**
 
-Replace `game-master` service block. Current lines ~139-157, replace with:
+Replace `game-scheduler` service block. Current lines ~139-157, replace with:
 
 ```yaml
   # Can be run manually for debugging: docker compose run --rm game-scheduler
@@ -79,7 +79,7 @@ ls game-scheduler/
 - [ ] **Step 4: Quick grep for stale references**
 
 ```bash
-grep -rn 'game-master' docker-compose.yaml telegram-bot/ game-server-api/ --include='*.py' --include='*.yaml' --include='*.yml' | grep -v game_master.py | grep -v game_master.db | grep -v GAME_MASTER_ID | grep -v GAME_MASTER_API_URL
+grep -rn 'game-scheduler' docker-compose.yaml telegram-bot/ game-server-api/ --include='*.py' --include='*.yaml' --include='*.yml' | grep -v game_master.py | grep -v game_master.db | grep -v GAME_MASTER_ID | grep -v GAME_MASTER_API_URL
 # Should have zero results (only the allowed exceptions remain)
 ```
 
@@ -87,7 +87,7 @@ grep -rn 'game-master' docker-compose.yaml telegram-bot/ game-server-api/ --incl
 
 ```bash
 git add -A
-git commit -m "refactor: rename game-master -> game-scheduler directory and Docker service"
+git commit -m "refactor: rename game-scheduler -> game-scheduler directory and Docker service"
 ```
 
 ---
@@ -1259,10 +1259,10 @@ grep -n 'day\|Day' game-scheduler/game_master.py game-server-api/main.py 2>/dev/
 # Expect: zero results (or only "daily" in parse_schedule and _compute_next_run)
 ```
 
-- [ ] **Step 4: Grep for stale "game-master" references in config files**
+- [ ] **Step 4: Grep for stale "game-scheduler" references in config files**
 
 ```bash
-grep -rn 'game-master' docker-compose.yaml .env* 2>/dev/null
+grep -rn 'game-scheduler' docker-compose.yaml .env* 2>/dev/null
 # Expect: zero results
 ```
 

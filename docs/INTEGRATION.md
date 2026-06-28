@@ -10,7 +10,7 @@ This document describes all integration points in the AI Game Master system. The
 graph TD
     subgraph "Docker (spark-network)"
         TG[telegram-bot] --> GS[game-server-api:8000]
-        GM[game-master] --> GS
+        GM[game-scheduler] --> GS
         GS --> CF[comfyui:8188]
     end
 
@@ -35,7 +35,7 @@ graph TD
 | Source | Target | Protocol | Port | Purpose |
 |--------|--------|----------|------|---------|
 | `telegram-bot` | `game-server-api` | HTTP (REST) | 8000 | Game state, onboarding, actions |
-| `game-master` | `game-server-api` | HTTP (REST) | 8000 | Trigger turn generation |
+| `game-scheduler` | `game-server-api` | HTTP (REST) | 8000 | Trigger turn generation |
 | `game-server-api` | `llama.cpp` | HTTP (OpenAI API) | 8090 | LLM calls for stories, dialogues, prompts |
 | `game-server-api` | `comfyui` | HTTP (ComfyUI API) | 8188 | Image generation, workflow execution |
 | `telegram-bot` | `Telegram API` | HTTPS (Bot API) | 443 | Send/receive messages |
@@ -276,7 +276,7 @@ The bot makes HTTP requests to the Game Master API:
 
 ## 5. Game Master Scheduler
 
-**Files:** `game-master/game_master.py`
+**Files:** `game-scheduler/game_master.py`
 
 A scheduled task runner that triggers turn episode generation.
 
@@ -352,7 +352,7 @@ All services use Docker DNS for service discovery:
 
 ```
 llama.cpp (external) → game-server-api → telegram-bot
-                                       → game-master
+                                       → game-scheduler
                       comfyui → game-server-api
 ```
 
@@ -384,9 +384,9 @@ All inter-service dependencies use `condition: service_healthy`.
 | `LLM_MAX_TOKENS` | `32768` | game-server-api | Max tokens per LLM call |
 | `COMFYUI_URL` | `http://comfyui:8188` | game-server-api | Image generation endpoint |
 | `TELEGRAM_BOT_TOKEN` | _(required)_ | telegram-bot | Telegram bot token from @BotFather |
-| `GAME_MASTER_API_URL` | `http://game-server-api:8000` | telegram-bot, game-master | API URL |
-| `GAME_SCHEDULE_TIME` | `08:00` | game-master | Daily generation time (UTC) |
-| `GAME_MASTER_MODE` | `scheduled` | game-master | Run mode |
+| `GAME_MASTER_API_URL` | `http://game-server-api:8000` | telegram-bot, game-scheduler | API URL |
+| `GAME_SCHEDULE_TIME` | `08:00` | game-scheduler | Daily generation time (UTC) |
+| `GAME_MASTER_MODE` | `scheduled` | game-scheduler | Run mode |
 | `ONBOARDING_QUESTIONS_COUNT` | `5` | game-server-api | Questions per onboarding |
 | `ONBOARDING_OPTIONS_COUNT` | `5` | game-server-api | Options per question |
 | `AI_FSM_DB` | `./bot_storage.db` | telegram-bot | Bot state database path |

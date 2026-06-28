@@ -56,7 +56,7 @@ while players make individual choices to progress through the narrative.
                ┌───────┼───────┐
                ▼               ▼
         ┌─────────────┐  ┌──────────┐
-        │ game-master  │  │ comfyui   │
+        │ game-scheduler  │  │ comfyui   │
         │ (scheduler)  │  │ (GPU gen) │
         │              │  │ + Pixelle │
         └─────────────┘  └──────────┘
@@ -163,7 +163,7 @@ Database: SQLite (game_master.db per service)
 - Push server (`push_server.py`) for receiving briefings from API
 - Language support (per-player preference)
 
-### 4. Game Master Scheduler — `game-master/game_master.py`
+### 4. Game Master Scheduler — `game-scheduler/game_master.py`
 
 - Standalone async service that calls game-server-api
 - Configurable schedule: interval (8h, 30m, 30s) or daily at HH:MM
@@ -171,7 +171,7 @@ Database: SQLite (game_master.db per service)
 - Turn lifecycle orchestration:
   1. Auto-select actions for unresponsive players (previous turn)
   2. Trigger next turn via `/admin/continue-game`
-- Runtime: `docker compose run --rm game-master` for debugging
+- Runtime: `docker compose run --rm game-scheduler` for debugging
 
 ### 5. Image Generator — `game-server-api/image_generator.py`
 
@@ -214,7 +214,7 @@ Database: SQLite (game_master.db per service)
 | `comfyui` | Image generation backend (ComfyUI) | Yes |
 | `game-server-api` | FastAPI game orchestration | No |
 | `telegram-bot` | aiogram bot + push server | No |
-| `game-master` | Turn scheduler | No |
+| `game-scheduler` | Turn scheduler | No |
 
 All services run on the external `spark-network`. llama.cpp is also an external
 service on that network.
@@ -224,8 +224,8 @@ service on that network.
 **Apply code changes without wiping data:**
 
 ```bash
-docker compose --progress=plain stop telegram-bot game-master game-server-api --timeout=1 \
-  && docker compose --progress=plain up -d --force-recreate telegram-bot game-master game-server-api
+docker compose --progress=plain stop telegram-bot game-scheduler game-server-api --timeout=1 \
+  && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server-api
 ```
 
 **Full wipe and rebuild:**
@@ -240,7 +240,7 @@ docker compose down \
 **Manual turn trigger (for debugging):**
 
 ```bash
-docker compose run --rm game-master
+docker compose run --rm game-scheduler
 ```
 
 **Run tests:**

@@ -101,8 +101,8 @@ comments for removed code, etc. If you are certain that something is unused, you
 - **Use health checks** - Always use `condition: service_healthy` for
   service dependencies when possible.
 
-- **game-master for debugging** - The `game-master` scheduler can be run
-  manually with `docker compose run --rm game-master` for local debugging
+- **game-scheduler for debugging** - The `game-scheduler` scheduler can be run
+  manually with `docker compose run --rm game-scheduler` for local debugging
   without Telegram bot.
 
 - **Renaming files** - Always use `git mv <old> <new>` instead of `mv` +
@@ -128,7 +128,7 @@ Stops only the target containers (preserving DB volumes and ComfyUI outputs),
 rebuilds them from the current source, and starts fresh containers.
 
 ```bash
-docker compose --progress=plain stop telegram-bot game-master game-server-api --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-master game-server-api
+docker compose --progress=plain stop telegram-bot game-scheduler game-server-api --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server-api
 ```
 
 ### Full wipe — destroy all game data, ComfyUI outputs, and rebuild from scratch

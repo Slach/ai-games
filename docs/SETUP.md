@@ -74,7 +74,7 @@ export TELEGRAM_BOT_TOKEN=your_token
 python bot.py
 ```
 
-### Game Master Scheduler (game-master)
+### Game Master Scheduler (game-scheduler)
 
 This service triggers generation on schedule. It calls the game-server-api endpoints to generate content.
 
@@ -85,7 +85,7 @@ This service triggers generation on schedule. It calls the game-server-api endpo
 
 ```bash
 # Test single generation
-docker compose run --rm game-master GAME_MASTER_MODE=single python game_master.py
+docker compose run --rm game-scheduler GAME_MASTER_MODE=single python game_master.py
 
 ```
 
@@ -203,7 +203,7 @@ docker-compose restart telegram-bot
     ┌────┴────┐
     ▼         ▼
 ┌─────────┐ ┌──────────┐
-│comfyui  │ │game-master│
+│comfyui  │ │game-scheduler│
 │         │ │ scheduler │
 │(GPU gen)│ │           │
 └────┬────┘ └──────────┘
@@ -213,7 +213,7 @@ docker-compose restart telegram-bot
 
 - **telegram-bot**: Player interface via Telegram commands and inline keyboards
 - **game-server-api**: FastAPI REST API with OpenAI-based Game Master agent, handles story generation, player profiles, actions, and messages
-- **game-master**: Scheduler service that triggers daily episode generation (runs at configured time or manually)
+- **game-scheduler**: Scheduler service that triggers daily episode generation (runs at configured time or manually)
 - **comfyui**: GPU-accelerated content generation backend with HuggingFace models
 
 ## 10. Environment Variables

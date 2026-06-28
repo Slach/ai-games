@@ -165,7 +165,8 @@ class GameScheduler:
         """Reset next_run_at to now + interval (or next HH:MM for daily schedule)."""
         self.next_run_at = _compute_next_run(GAME_SCHEDULE)
         self._persist()
-        logger.info(f"Timer reset: next run at {self.next_run_at.isoformat()}")
+        delay_s = (self.next_run_at - datetime.now()).total_seconds()
+        logger.info(f"Timer reset: next run at {self.next_run_at.strftime('%Y-%m-%d %H:%M:%S')} (in {delay_s / 3600:.1f}h)")
         return self.next_run_at
 
     def pause(self) -> None:
@@ -181,7 +182,8 @@ class GameScheduler:
         self.next_run_at = _compute_next_run(GAME_SCHEDULE)
         self._pause_event.set()
         self._persist()
-        logger.info(f"Scheduler resumed, next run at {self.next_run_at.isoformat()}")
+        delay_s = (self.next_run_at - datetime.now()).total_seconds()
+        logger.info(f"Scheduler resumed, next run at {self.next_run_at.strftime('%Y-%m-%d %H:%M:%S')} (in {delay_s / 3600:.1f}h)")
         return self.next_run_at
 
     def get_status(self) -> dict[str, Any]:
@@ -452,37 +454,31 @@ class GameScheduler:
 
 async def handle_status(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
-    return web.json_response(scheduler.get_status())
+    status = scheduler.get_status()
+    logger.info(f"GET /scheduler/status — mode={status['mode']}, next_run={status.get('next_run_at', 'none')}, schedule={status['schedule_type']}:{status['schedule_value']}")
+    return web.json_response(status)
 
 
 async def handle_reset(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
+    logger.info("POST /scheduler/reset — resetting timer")
     next_run = scheduler.reset_timer()
     return web.json_response({"status": "ok", "next_run_at": next_run.isoformat()})
 
 
 async def handle_pause(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
+    next_run = scheduler.next_run_at
+    logger.info("POST /scheduler/pause — pausing scheduler" + (f", was scheduled at {next_run.strftime('%Y-%m-%d %H:%M:%S')}" if next_run else ""))
     scheduler.pause()
     return web.json_response({"status": "ok", "mode": "paused"})
 
 
 async def handle_resume(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
+    logger.info("POST /scheduler/resume — resuming scheduler")
     next_run = scheduler.resume()
     return web.json_response({"status": "ok", "mode": "scheduled", "next_run_at": next_run.isoformat()})
-
-
-async def handle_trigger(request: web.Request) -> web.Response:
-    scheduler: GameScheduler = request.app["scheduler"]
-    try:
-        result = await scheduler.generate_scheduled_turn()
-        # Reset timer after manual trigger
-        scheduler.reset_timer()
-        return web.json_response(result)
-    except Exception as e:
-        logger.error(f"Trigger failed: {e}", exc_info=True)
-        return web.json_response({"status": "error", "error": str(e)}, status=500)
 
 
 def create_app() -> web.Application:
@@ -496,7 +492,6 @@ def create_app() -> web.Application:
     app.router.add_post("/scheduler/reset", handle_reset)
     app.router.add_post("/scheduler/pause", handle_pause)
     app.router.add_post("/scheduler/resume", handle_resume)
-    app.router.add_post("/scheduler/trigger", handle_trigger)
 
     # Start scheduling loop as background task
     async def start_scheduler(app: web.Application) -> None:

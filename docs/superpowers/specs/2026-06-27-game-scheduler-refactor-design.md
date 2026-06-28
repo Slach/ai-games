@@ -5,15 +5,15 @@
 
 ## Motivation
 
-1. **Terminology drift:** `game-master/game_master.py` uses "day" everywhere (~22 occurrences) while the rest of the codebase has moved to "turn".
+1. **Terminology drift:** `game-scheduler/game_master.py` uses "day" everywhere (~22 occurrences) while the rest of the codebase has moved to "turn".
 2. **No synchronization:** When GM manually runs `/gm_continue`, the scheduler's timer doesn't know — it keeps its own schedule independently, potentially generating turns too soon after a manual trigger.
-3. **Rename:** `game-master` (the scheduling service) → `game-scheduler` to distinguish it from the `GameMasterAgent` (the LLM-based AI agent in `game-server-api`).
+3. **Rename:** `game-scheduler` (the scheduling service) → `game-scheduler` to distinguish it from the `GameMasterAgent` (the LLM-based AI agent in `game-server-api`).
 
 ## Scope
 
-- `game-master/` directory → renamed to `game-scheduler/`
-- `game-master` Docker service → `game-scheduler`
-- `game-master/game_master.py` → refactored to HTTP API service with scheduling loop as background task
+- `game-scheduler/` directory → renamed to `game-scheduler/`
+- `game-scheduler` Docker service → `game-scheduler`
+- `game-scheduler/game_master.py` → refactored to HTTP API service with scheduling loop as background task
 - `game-server-api/main.py` → residual "day" → "turn" terminology, callback to scheduler
 - `telegram-bot/bot.py` → `/gm_status` shows next turn time from scheduler API
 - Docker Compose changes
@@ -44,9 +44,9 @@ game-scheduler (port 8001)
 
 ### 1.1 Rename
 
-- `git mv game-master/ game-scheduler/`
-- Docker service: `game-master` → `game-scheduler`
-- Docker image: `game-master:spark-full` → `game-scheduler:spark-full`
+- `git mv game-scheduler/ game-scheduler/`
+- Docker service: `game-scheduler` → `game-scheduler`
+- Docker image: `game-scheduler:spark-full` → `game-scheduler:spark-full`
 - Env var: `GAME_MASTER_MODE` → `GAME_SCHEDULER_MODE`
 - Internal class/file: `GameMasterScheduler` → `GameScheduler`
 - All internal variable names and comments "day" → "turn"
@@ -102,6 +102,7 @@ New `game-scheduler/database.py` following the same pattern as `game-server-api/
 - `init_db()` creates table + applies pending migrations
 
 **Table `scheduler_state`:**
+
 ```sql
 CREATE TABLE IF NOT EXISTS scheduler_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
