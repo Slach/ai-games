@@ -59,11 +59,12 @@
   `_clean_*` or `_sanitize_*` shim means you chose to treat the symptom
   instead of the disease.
 
-- **Never use `contextlib.suppress`.** Always use explicit `try`/`except`
-  blocks with `logger.error(...)` when you need to handle exceptions. Using
-  `suppress` silently swallows errors and makes debugging impossible.
-  If an exception is genuinely harmless, log it at `logger.debug` level
-  instead of hiding it completely.
+- **Never swallow exceptions silently.** This includes:
+  - `contextlib.suppress(...)` — silently swallows errors and makes debugging impossible.
+  - `except Exception: pass` / `except KeyError: pass` — same effect, same problem.
+  Always use explicit `try`/`except` blocks with at minimum `logger.warning(..., exc_info=True)`.
+  If an exception is genuinely harmless (e.g. `.pop()` on a key that may not exist),
+  either check with `.get()` first or add a comment explaining why the log is omitted.
 
 - **Every `logger.error(...)` must include a stacktrace.** Never log an
   error without showing where it came from:
@@ -113,6 +114,12 @@ comments for removed code, etc. If you are certain that something is unused, you
   statements — only add them via a new migration entry. This keeps existing
   databases in sync with fresh ones. See comment at the `MIGRATIONS`
   definition for the rationale.
+
+- **Format datetime with `strftime`, never string concatenation.**
+  When displaying a datetime with a timezone label, use `dt.strftime("%Y-%m-%d %H:%M %Z")` —
+  `%Z` produces `UTC`, `MSK`, etc. directly from the `tzinfo` object.
+  Never do `strftime(...) + " UTC"` or any other manual timezone string concatenation —
+  it hardcodes a timezone that may be wrong and defeats the purpose of being timezone-aware.
 
 - **Language model.** Server-side logging is always in English. Telegram UI
   messages use the player's stored language preference (`player_store.py`).

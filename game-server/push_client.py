@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import random
+from typing import Any
 
 import aiohttp
 
@@ -29,6 +30,10 @@ TELEGRAM_BOT_GM_NOTIFICATION_URL = os.getenv(
 TELEGRAM_BOT_GAME_OVER_URL = os.getenv(
     "TELEGRAM_BOT_GAME_OVER_URL",
     "http://telegram-bot:9090/push/game-over",
+)
+TELEGRAM_BOT_ONBOARDING_READY_URL = os.getenv(
+    "TELEGRAM_BOT_ONBOARDING_READY_URL",
+    "http://telegram-bot:9090/push/onboarding-ready",
 )
 try:
     PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
@@ -351,3 +356,46 @@ async def push_game_over(
 
     label = f"game-over game={game_id} type={outcome_type}"
     return await _post_with_retry(TELEGRAM_BOT_GAME_OVER_URL, payload, label)
+
+
+async def push_onboarding_ready(
+    player_id: int,
+    game_id: str,
+    session_id: str,
+    question: dict | None = None,
+    game_title: str = "",
+    welcome_message: str = "",
+    language: str = "ru",
+) -> bool:
+    """Push that onboarding images are ready to the telegram-bot with retry.
+
+    Called from background task after images are generated. The bot uses this
+    to send/update the first question with images to the player.
+
+    Args:
+        player_id: Player's Telegram ID
+        game_id: Game identifier
+        session_id: Onboarding session UUID
+        question: First onboarding question (with image_url now populated)
+        game_title: Game title text
+        welcome_message: Welcome text
+        language: Game language code
+
+    Returns:
+        True if delivered successfully, False after all retries exhausted.
+    """
+    payload: dict[str, Any] = {
+        "player_id": player_id,
+        "game_id": game_id,
+        "session_id": session_id,
+        "language": language,
+    }
+    if question:
+        payload["question"] = question
+    if game_title:
+        payload["game_title"] = game_title
+    if welcome_message:
+        payload["welcome_message"] = welcome_message
+
+    label = f"onboarding-ready player={player_id} session={session_id}"
+    return await _post_with_retry(TELEGRAM_BOT_ONBOARDING_READY_URL, payload, label)

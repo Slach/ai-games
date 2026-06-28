@@ -423,7 +423,7 @@ class ImageGenerator:
                     return f"{subfolders[0]}/{fn}"
                 return fn
         except Exception:
-            pass
+            logger.warning("Failed to extract filename from ComfyUI output", exc_info=True)
         return None
 
     def _build_img2img_workflow(

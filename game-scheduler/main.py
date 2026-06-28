@@ -1,21 +1,29 @@
 """
 Game Scheduler — HTTP API service that triggers game-server on a schedule.
 
-Runs a scheduling loop as a background task and exposes an HTTP API
-for timer control (reset, pause, resume) and status queries.
+Manages multiple game schedules independently. Each game has its own
+schedule (interval or daily time). Schedules are persisted per game in
+scheduler.db and set either at game creation (via first player) or by
+the GM via /gm_schedule.
 """
 
 import asyncio
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
 from aiohttp import web
 
-from database import init_db, load_scheduler_state, save_scheduler_state
+from database import (
+    init_db,
+    load_game_schedule,
+    save_game_schedule,
+    delete_game_schedule,
+    list_game_schedules,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Get configuration from environment
 GAME_SERVER_API_URL = os.getenv("GAME_SERVER_API_URL", "http://game-server:8000")
-GAME_SCHEDULE_RAW = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))
+DEFAULT_SCHEDULE_RAW = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))
 try:
     GAME_SCHEDULER_PORT = int(os.getenv("GAME_SCHEDULER_PORT", "8001"))
 except (ValueError, TypeError):
@@ -76,13 +84,9 @@ def parse_schedule(schedule: str) -> tuple[str, int | str]:
     raise ValueError(f"Invalid schedule format: {schedule}")
 
 
-GAME_SCHEDULE = parse_schedule(GAME_SCHEDULE_RAW)
-
-
-def _compute_next_run(schedule: tuple[str, int | str], from_time: datetime | None = None) -> datetime:
+def _compute_next_run(schedule_type: str, schedule_value: str | int, from_time: datetime | None = None) -> datetime:
     """Compute next run time from a given from_time (default now)."""
-    schedule_type, schedule_value = schedule
-    now = from_time or datetime.now()
+    now = from_time or datetime.now(timezone.utc)
 
     if schedule_type == "interval":
         try:
@@ -99,133 +103,349 @@ def _compute_next_run(schedule: tuple[str, int | str], from_time: datetime | Non
     return next_run
 
 
-class GameScheduler:
-    """Scheduler that calls game-server to generate turns on a schedule."""
+def _schedule_label(schedule_type: str, schedule_value: str | int) -> str:
+    """Human-readable label for a schedule."""
+    if schedule_type == "daily":
+        return f"daily at {schedule_value}"
+    return f"every {schedule_value}s"
 
-    def __init__(self):
-        self.api_url = GAME_SERVER_API_URL
-        self.game_id = GAME_ID
-        self.last_generation: datetime | None = None
-        self.mode: str = "scheduled"  # "scheduled" | "paused"
-        self.next_run_at: datetime | None = None
-        self._pause_event = asyncio.Event()
-        self._pause_event.set()  # Not paused initially
 
-        # Load persisted state
-        self._load_state()
+DEFAULT_SCHEDULE = parse_schedule(DEFAULT_SCHEDULE_RAW)
 
-    def _load_state(self) -> None:
-        """Load scheduler state from database, applying env var overrides."""
-        init_db()
-        state = load_scheduler_state()
 
-        schedule_type_str = str(GAME_SCHEDULE[0])
-        schedule_value_str = str(GAME_SCHEDULE[1])
+class GameScheduleState:
+    """Mutable in-memory state for one game's schedule."""
 
-        if state:
-            self.mode = state.get("mode", "scheduled")
-            if state.get("last_run_at"):
-                self.last_generation = datetime.fromisoformat(state["last_run_at"])
-            if state.get("next_run_at"):
-                self.next_run_at = datetime.fromisoformat(state["next_run_at"])
+    def __init__(self, game_id: str, row: dict[str, Any] | None):
+        self.game_id = game_id
+        self.mode: str = "scheduled"
+
+        if row:
+            self.mode = row.get("mode", "scheduled")
+            self.schedule_type = row.get("schedule_type", DEFAULT_SCHEDULE[0])
+            # schedule_value is stored as string in DB; for interval it's "28800"
+            self.schedule_value: str = row.get("schedule_value", str(DEFAULT_SCHEDULE[1]))
+            raw_last = row.get("last_run_at")
+            self.last_generation: datetime | None = datetime.fromisoformat(raw_last).replace(tzinfo=timezone.utc) if raw_last else None
+            raw_next = row.get("next_run_at")
+            self.next_run_at: datetime | None = datetime.fromisoformat(raw_next).replace(tzinfo=timezone.utc) if raw_next else None
         else:
-            # First run: seed defaults
-            save_scheduler_state(
+            self.schedule_type = DEFAULT_SCHEDULE[0]
+            self.schedule_value = str(DEFAULT_SCHEDULE[1])
+            self.last_generation: datetime | None = None
+            self.next_run_at: datetime | None = None
+            # Seed defaults
+            save_game_schedule(
+                game_id=game_id,
                 mode=self.mode,
-                last_run_at=None,
-                next_run_at=None,
-                schedule_type=schedule_type_str,
-                schedule_value=schedule_value_str,
-                game_id=self.game_id,
+                schedule_type=self.schedule_type,
+                schedule_value=self.schedule_value,
             )
 
-        if self.mode == "paused":
-            self._pause_event.clear()
+        self.next_run_at = self.next_run_at or _compute_next_run(self.schedule_type, self.schedule_value)
 
-        # If no next_run_at set, compute from now
-        if self.next_run_at is None:
-            self.next_run_at = _compute_next_run(GAME_SCHEDULE)
+    def get_schedule_tuple(self) -> tuple[str, str]:
+        """Return (type, value_str) for this state."""
+        return (self.schedule_type, str(self.schedule_value))
 
-        logger.info(f"GameScheduler initialized: mode={self.mode}, next_run_at={self.next_run_at.isoformat() if self.next_run_at else 'none'}")
-
-    def _persist(self) -> None:
-        """Write current state to database."""
-        schedule_type_str = str(GAME_SCHEDULE[0])
-        schedule_value_str = str(GAME_SCHEDULE[1])
-        save_scheduler_state(
+    def persist(self) -> None:
+        save_game_schedule(
+            game_id=self.game_id,
             mode=self.mode,
+            schedule_type=self.schedule_type,
+            schedule_value=self.schedule_value,
             last_run_at=self.last_generation.isoformat() if self.last_generation else None,
             next_run_at=self.next_run_at.isoformat() if self.next_run_at else None,
-            schedule_type=schedule_type_str,
-            schedule_value=schedule_value_str,
-            game_id=self.game_id,
         )
 
     def reset_timer(self) -> datetime:
-        """Reset next_run_at to now + interval (or next HH:MM for daily schedule)."""
-        self.next_run_at = _compute_next_run(GAME_SCHEDULE)
-        self._persist()
-        delay_s = (self.next_run_at - datetime.now()).total_seconds()
-        logger.info(f"Timer reset: next run at {self.next_run_at.strftime('%Y-%m-%d %H:%M:%S')} (in {delay_s / 3600:.1f}h)")
+        self.next_run_at = _compute_next_run(self.schedule_type, self.schedule_value)
+        self.persist()
         return self.next_run_at
 
-    def pause(self) -> None:
-        """Pause the scheduling loop."""
-        self.mode = "paused"
-        self._pause_event.clear()
-        self._persist()
-        logger.info("Scheduler paused")
-
-    def resume(self) -> datetime:
-        """Resume the scheduling loop and reset timer."""
-        self.mode = "scheduled"
-        self.next_run_at = _compute_next_run(GAME_SCHEDULE)
-        self._pause_event.set()
-        self._persist()
-        delay_s = (self.next_run_at - datetime.now()).total_seconds()
-        logger.info(f"Scheduler resumed, next run at {self.next_run_at.strftime('%Y-%m-%d %H:%M:%S')} (in {delay_s / 3600:.1f}h)")
-        return self.next_run_at
-
-    def get_status(self) -> dict[str, Any]:
-        """Return current scheduler status."""
-        schedule_type_str = str(GAME_SCHEDULE[0])
-        schedule_value_str = str(GAME_SCHEDULE[1])
+    def to_dict(self) -> dict[str, Any]:
         return {
-            "schedule_type": schedule_type_str,
-            "schedule_value": schedule_value_str,
+            "game_id": self.game_id,
+            "mode": self.mode,
+            "schedule_type": self.schedule_type,
+            "schedule_value": str(self.schedule_value),
             "last_run_at": self.last_generation.isoformat() if self.last_generation else None,
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
-            "mode": self.mode,
-            "game_id": self.game_id,
         }
 
-    # ── API client methods ──
 
-    async def check_game_state(self) -> dict[str, Any]:
-        """Check current game state and verify ship/crew are alive."""
+class GameScheduler:
+    """Scheduler that manages per-game schedules and calls game-server to generate turns."""
+
+    def __init__(self):
+        self.api_url = GAME_SERVER_API_URL
+        self._games: dict[str, GameScheduleState] = {}
+        self._paused_games: set[str] = set()  # game_ids paused via /scheduler/pause
+        self._loop_running = False
+        self._global_paused = False
+        self._pause_event = asyncio.Event()
+        self._pause_event.set()
+
+        self._load_all_states()
+
+    def _load_all_states(self) -> None:
+        """Load all persisted schedules from DB."""
+        init_db(default_schedule=DEFAULT_SCHEDULE_RAW)
+        rows = list_game_schedules()
+        for row in rows:
+            gid = row["game_id"]
+            state = GameScheduleState(gid, row)
+            self._games[gid] = state
+            if state.mode == "paused":
+                self._paused_games.add(gid)
+
+        logger.info(f"Loaded {len(self._games)} game schedule(s) from DB")
+        if not self._games:
+            logger.info("No persisted schedules; games must be registered explicitly via /gm_schedule or on first start")
+
+        logger.info(f"Loaded {len(self._games)} game schedule(s) from DB")
+
+    # ── Game management ──
+
+    def register_game(self, game_id: str, schedule_raw: str | None = None) -> GameScheduleState:
+        """Register a game with the scheduler. Uses default or provided schedule.
+
+        If the game already exists and was ended, reactivates it.
+        """
+        existing = self._games.get(game_id)
+        if existing:
+            if existing.mode == "ended":
+                existing.mode = "scheduled"
+                self._paused_games.discard(game_id)
+                existing.reset_timer()
+                existing.persist()
+                logger.info(f"Reactivated ended game '{game_id}' with schedule {_schedule_label(existing.schedule_type, existing.schedule_value)}")
+            return existing
+
+        row = load_game_schedule(game_id)
+        if row:
+            # Was persisted from a previous run
+            state = GameScheduleState(game_id, row)
+        else:
+            # Seed with env default or provided schedule
+            stype, svalue = parse_schedule(schedule_raw or DEFAULT_SCHEDULE_RAW)
+            state = GameScheduleState(game_id, None)
+            state.schedule_type = stype
+            state.schedule_value = str(svalue)
+            state.persist()
+
+        self._games[game_id] = state
+        logger.info(f"Registered game '{game_id}' with schedule {_schedule_label(state.schedule_type, state.schedule_value)}")
+        return state
+
+    def unregister_game(self, game_id: str) -> bool:
+        """Mark a game as ended — keeps schedule in DB for potential restart."""
+        state = self._games.get(game_id)
+        if not state:
+            return False
+        state.mode = "ended"
+        self._paused_games.add(game_id)  # stop scheduling
+        state.persist()
+        logger.info(f"Game '{game_id}' marked as ended")
+        return True
+
+    def set_schedule(self, game_id: str, schedule_raw: str) -> GameScheduleState:
+        """Set a new schedule format for an existing game."""
+        state = self._games.get(game_id)
+        if not state:
+            state = self.register_game(game_id, schedule_raw)
+        else:
+            stype, svalue = parse_schedule(schedule_raw)
+            state.schedule_type = stype
+            state.schedule_value = str(svalue)
+            state.next_run_at = _compute_next_run(stype, svalue)
+            state.persist()
+            logger.info(f"Schedule for '{game_id}' set to {_schedule_label(stype, svalue)}, next run at {state.next_run_at}")
+        return state
+
+    def pause_game(self, game_id: str) -> bool:
+        """Pause scheduling for one game."""
+        state = self._games.get(game_id)
+        if not state:
+            return False
+        state.mode = "paused"
+        self._paused_games.add(game_id)
+        state.persist()
+        logger.info(f"Paused game '{game_id}'")
+        return True
+
+    def resume_game(self, game_id: str) -> bool:
+        """Resume scheduling for one game (resets timer)."""
+        state = self._games.get(game_id)
+        if not state:
+            return False
+        state.mode = "scheduled"
+        self._paused_games.discard(game_id)
+        state.reset_timer()
+        state.persist()
+        logger.info(f"Resumed game '{game_id}', next run at {state.next_run_at}")
+        return True
+
+    def get_status(self, game_id: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
+        """Return status for one or all games."""
+        if game_id:
+            state = self._games.get(game_id)
+            return state.to_dict() if state else {"error": "unknown_game", "game_id": game_id}
+        return [s.to_dict() for s in self._games.values()]
+
+    # ── Scheduling loop ──
+
+    async def _generate_turn_for_game(self, game_id: str) -> dict[str, Any]:
+        """Generate the next turn for a specific game."""
+        logger.info(f"=== SCHEDULED TURN STARTED for game '{game_id}' ===")
+
+        state = self._games.get(game_id)
+        if not state:
+            return {"status": "error", "message": f"Game '{game_id}' not registered"}
+
+        # Step 0: Check if game has started (>= 3 players)
+        game_started = await self.is_game_started(game_id)
+        if not game_started:
+            logger.info(f"Game '{game_id}' not started yet — waiting for more players (need at least 3)")
+            return {"status": "game_not_started", "message": "Game has not started yet, waiting for more players"}
+
+        # Step 1: Validate game state
+        is_active = await self.validate_game_active(game_id)
+        if not is_active:
+            logger.warning(f"Game '{game_id}' ended — stopping generation")
+            return {"status": "game_ended", "message": "Game has ended, no new episode generated"}
+
+        # Step 2: Get current game state
+        api_state = await self.check_game_state(game_id)
+        current_turn = api_state.get("turn", 1)
+        logger.info(f"Scheduled turn for game '{game_id}', Turn {current_turn}")
+
+        # Step 3: Auto-select actions for unresponsive players from the PREVIOUS turn.
+        if current_turn > 1:
+            prev_turn = current_turn - 1
+            logger.info(f"Checking players for auto-selection on turn {prev_turn} in game '{game_id}'")
+            await self.check_and_auto_select_actions(game_id, prev_turn)
+
+        # Step 4: Trigger the next turn
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.api_url}/admin/continue-game",
+                    params={
+                        "game_id": game_id,
+                        "language": "en",
+                    },
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(f"API error for game '{game_id}': {resp.status} - {error_text}")
+                        raise Exception(f"API error: {resp.status}")
+
+                    result = await resp.json()
+                    state.last_generation = datetime.now(timezone.utc)
+                    state.reset_timer()
+                    state.persist()
+
+                    logger.info(f"=== SCHEDULED TURN COMPLETED for game '{game_id}' ===")
+                    logger.info(f"Turn {current_turn} generation submitted: {result.get('status')}")
+                    return result
+
+        except Exception as e:
+            logger.error(f"Failed to generate turn for game '{game_id}': {e}", exc_info=True)
+            raise
+
+    async def run_scheduling_loop(self):
+        """Run the scheduling loop for all registered games."""
+        if self._loop_running:
+            return
+        self._loop_running = True
+        active = sum(1 for s in self._games.values() if s.mode not in ("paused", "ended"))
+        logger.info(f"Starting multi-game scheduling loop ({active} active of {len(self._games)} total game(s))")
+
+        while True:
+            try:
+                await self._pause_event.wait()
+
+                now = datetime.now(timezone.utc)
+                # Find the game whose next_run_at is nearest
+                nearest: tuple[str, datetime] | None = None
+                for gid, state in list(self._games.items()):
+                    if gid in self._paused_games or state.mode == "ended":
+                        continue
+                    if state.next_run_at is None or state.next_run_at <= now:
+                        state.next_run_at = _compute_next_run(state.schedule_type, state.schedule_value)
+                        state.persist()
+                    if nearest is None or state.next_run_at < nearest[1]:
+                        nearest = (gid, state.next_run_at)
+
+                if nearest is None:
+                    # No scheduled games — sleep and re-check
+                    await asyncio.sleep(60)
+                    continue
+
+                gid, next_time = nearest
+                delay = (next_time - now).total_seconds()
+                if delay > 0:
+                    total_next = f"next: game='{gid}' in {delay / 3600:.1f}h ({delay:.0f}s)"
+                    logger.info(total_next)
+                    await asyncio.sleep(min(delay, 3600))  # wake at most every hour
+
+                # Fine-grained loop: check which games are due now
+                due_games = []
+                now = datetime.now(timezone.utc)
+                for gid, state in list(self._games.items()):
+                    if gid in self._paused_games:
+                        continue
+                    if state.next_run_at and state.next_run_at <= now:
+                        due_games.append(gid)
+
+                if not due_games:
+                    continue
+
+                for gid in due_games:
+                    result = await self._generate_turn_for_game(gid)
+                    if result.get("status") == "game_ended":
+                        logger.info(f"Game '{gid}' has ended, marking as ended")
+                        self.unregister_game(gid)
+
+            except asyncio.CancelledError:
+                break
+            except (OSError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.error(f"Error in scheduling loop: {e}", exc_info=True)
+                await asyncio.sleep(60)
+
+    async def run_single_generation(self, game_id: str | None = None):
+        """Run a single generation for a specific game or the first registered."""
+        gid = game_id or next(iter(self._games.keys()), GAME_ID)
+        logger.info(f"Running single generation for game '{gid}'")
+        result = await self._generate_turn_for_game(gid)
+        logger.info(f"Result: {result}")
+        return result
+
+    # ── API client methods (per-game) ──
+
+    async def check_game_state(self, game_id: str) -> dict[str, Any]:
         try:
             async with (
                 aiohttp.ClientSession() as session,
-                session.get(f"{self.api_url}/game/state", params={"game_id": self.game_id}) as resp,
+                session.get(f"{self.api_url}/game/state", params={"game_id": game_id}) as resp,
             ):
                 if resp.status != 200:
                     raise Exception(f"API error: {resp.status}")
                 return await resp.json()
         except Exception as e:
-            logger.error(f"Failed to get game state: {e}", exc_info=True)
+            logger.error(f"Failed to get game state for '{game_id}': {e}", exc_info=True)
             raise
 
-    async def validate_game_active(self) -> bool:
-        """Validate that game is still active (ship and crew alive)."""
+    async def validate_game_active(self, game_id: str) -> bool:
         try:
-            state = await self.check_game_state()
+            state = await self.check_game_state(game_id)
             return state.get("status") == "active" and state.get("ship_alive", True) and state.get("crew_health", 0) > 0
         except Exception as e:
-            logger.error(f"Failed to validate game active: {e}", exc_info=True)
+            logger.error(f"Failed to validate game '{game_id}' active: {e}", exc_info=True)
             return False
 
-    async def is_game_started(self, game_id: str = "default_game") -> bool:
-        """Check if game has officially started (>= 3 players joined)."""
+    async def is_game_started(self, game_id: str) -> bool:
         try:
             async with (
                 aiohttp.ClientSession() as session,
@@ -236,11 +456,10 @@ class GameScheduler:
                 data = await resp.json()
                 return data.get("started", False)
         except Exception as e:
-            logger.error(f"Failed to check game started status: {e}", exc_info=True)
+            logger.error(f"Failed to check game started for '{game_id}': {e}", exc_info=True)
             return False
 
-    async def get_players_in_game(self, game_id: str = "default_game") -> list[int]:
-        """Get list of player IDs in the current game."""
+    async def get_players_in_game(self, game_id: str) -> list[int]:
         try:
             async with aiohttp.ClientSession() as session:
                 endpoints = [
@@ -248,15 +467,11 @@ class GameScheduler:
                     f"{self.api_url}/players/{game_id}/list",
                     f"{self.api_url}/players",
                 ]
-
                 for endpoint in endpoints:
                     async with session.get(endpoint) as resp:
                         if resp.status != 200:
-                            logger.debug(f"get_players_in_game: {endpoint} returned {resp.status}")
                             continue
-
                         result = await resp.json()
-
                         if isinstance(result, list):
                             player_ids = []
                             for item in result:
@@ -269,30 +484,23 @@ class GameScheduler:
                             if player_ids:
                                 return player_ids
                             continue
-
                         if isinstance(result, dict):
                             player_ids = result.get("player_ids", []) or result.get("players", []) or []
                             if player_ids:
                                 return player_ids
                             continue
-
-                logger.warning(f"No players found for game {self.game_id}")
                 return []
         except Exception as e:
-            logger.error(f"Failed to get players in game: {e}", exc_info=True)
+            logger.error(f"Failed to get players in game '{game_id}': {e}", exc_info=True)
             return []
 
-    async def check_and_auto_select_actions(self, turn: int):
-        """Check for players who haven't selected actions and auto-select for them."""
+    async def check_and_auto_select_actions(self, game_id: str, turn: int):
         try:
-            player_ids = await self.get_players_in_game(self.game_id)
-
+            player_ids = await self.get_players_in_game(game_id)
             if not player_ids:
-                logger.info("No players found in game")
+                logger.info(f"No players in game '{game_id}'")
                 return
-
-            logger.info(f"Checking {len(player_ids)} players for action selection on turn {turn}")
-
+            logger.info(f"Checking {len(player_ids)} players for action selection on turn {turn} in game '{game_id}'")
             for player_id in player_ids:
                 async with (
                     aiohttp.ClientSession() as session,
@@ -302,25 +510,19 @@ class GameScheduler:
                         briefing = await resp.json()
                         if briefing.get("selected_action_id"):
                             continue
-
-                logger.info(f"Player {player_id} has not selected action, auto-selecting")
-                await self._select_auto_action(player_id, turn)
+                logger.info(f"Player {player_id} (game '{game_id}') has not selected action, auto-selecting")
+                await self._select_auto_action(game_id, player_id, turn)
         except Exception as e:
-            logger.error(f"Failed to check and auto-select actions: {e}", exc_info=True)
+            logger.error(f"Failed to check auto-select for game '{game_id}': {e}", exc_info=True)
 
-    async def _select_auto_action(self, player_id: int, turn: int) -> dict[str, Any] | None:
-        """Select default action for player who hasn't chosen within timeout."""
+    async def _select_auto_action(self, game_id: str, player_id: int, turn: int) -> dict[str, Any] | None:
         try:
-            logger.info(f"[AUTO_ACTION] Calling LLM auto-action for player {player_id} on turn {turn}")
-
+            logger.info(f"[AUTO_ACTION] Calling LLM auto-action for player {player_id} in game '{game_id}' on turn {turn}")
             async with (
                 aiohttp.ClientSession() as session,
                 session.post(
                     f"{self.api_url}/game/auto-action/{player_id}/{turn}",
-                    params={
-                        "language": "en",
-                        "game_id": self.game_id,
-                    },
+                    params={"language": "en", "game_id": game_id},
                 ) as resp,
             ):
                 if resp.status == 200:
@@ -331,122 +533,9 @@ class GameScheduler:
                     error_text = await resp.text()
                     logger.error(f"[AUTO_ACTION] LLM auto-action failed for player {player_id}: {resp.status} - {error_text}")
                     return None
-
         except Exception as e:
             logger.error(f"[AUTO_ACTION] Failed to select auto action for player {player_id}: {e}", exc_info=True)
             return None
-
-    async def generate_scheduled_turn(self) -> dict:
-        """Generate the next scheduled turn.
-
-        1. Auto-selects actions for unresponsive players on the PREVIOUS turn.
-        2. Triggers the next turn via /admin/continue-game.
-        """
-        logger.info("=== SCHEDULED TURN STARTED ===")
-
-        # Step 0: Check if game has started (>= 3 players)
-        game_started = await self.is_game_started(self.game_id)
-        if not game_started:
-            logger.info("Game not started yet - waiting for more players (need at least 3)")
-            return {
-                "status": "game_not_started",
-                "message": "Game has not started yet, waiting for more players",
-            }
-
-        # Step 1: Validate game state before generation
-        is_active = await self.validate_game_active()
-        if not is_active:
-            logger.warning("Game ended - stopping generation")
-            return {
-                "status": "game_ended",
-                "message": "Game has ended, no new episode generated",
-            }
-
-        # Step 2: Get current game state
-        state = await self.check_game_state()
-        current_turn = state.get("turn", 1)
-
-        logger.info(f"Scheduled turn for Turn {current_turn}")
-
-        # Step 3: Auto-select actions for unresponsive players from the PREVIOUS turn.
-        if current_turn > 1:
-            prev_turn = current_turn - 1
-            logger.info(f"Checking for players who need auto-selection on turn {prev_turn}")
-            await self.check_and_auto_select_actions(prev_turn)
-
-        # Step 4: Trigger the next turn via /admin/continue-game.
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.api_url}/admin/continue-game",
-                    params={
-                        "game_id": self.game_id,
-                        "language": "en",
-                    },
-                ) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(f"API error: {resp.status} - {error_text}")
-                        raise Exception(f"API error: {resp.status}")
-
-                    result = await resp.json()
-                    self.last_generation = datetime.now()
-                    self._persist()
-
-                    logger.info("=== SCHEDULED TURN COMPLETED ===")
-                    logger.info(f"Turn {current_turn} generation submitted (background): {result.get('status')}")
-
-                    return result
-
-        except Exception as e:
-            logger.error(f"Failed to generate scheduled turn: {e}", exc_info=True)
-            raise
-
-    async def run_scheduled_loop(self):
-        """Run the scheduling loop with pause support."""
-        schedule_type, schedule_value = GAME_SCHEDULE
-        schedule_desc = f"every {schedule_value}s" if schedule_type == "interval" else f"daily at {schedule_value}"
-        logger.info(f"Starting scheduled loop: {schedule_desc}")
-
-        while True:
-            try:
-                # Wait for pause to be cleared
-                await self._pause_event.wait()
-
-                # Compute delay until next run
-                now = datetime.now()
-                if self.next_run_at is None or self.next_run_at <= now:
-                    self.next_run_at = _compute_next_run(GAME_SCHEDULE)
-                    self._persist()
-
-                delay = (self.next_run_at - now).total_seconds()
-                if delay > 0:
-                    logger.info(f"Next turn in {delay / 3600:.1f}h ({delay:.0f}s)")
-                    await asyncio.sleep(delay)
-
-                # Re-check pause after sleep
-                if self.mode == "paused":
-                    continue
-
-                # Generate scheduled turn
-                result = await self.generate_scheduled_turn()
-
-                if result.get("status") == "game_ended":
-                    logger.info("Game has ended, stopping scheduled generation")
-                    break
-
-                logger.info(f"Generation completed: Turn {result.get('turn')}")
-
-            except Exception as e:
-                logger.error(f"Error in scheduled loop: {e}", exc_info=True)
-                await asyncio.sleep(3600)
-
-    async def run_single_generation(self):
-        """Run a single generation cycle (for testing)."""
-        logger.info("Running single generation cycle")
-        result = await self.generate_scheduled_turn()
-        logger.info(f"Result: {result}")
-        return result
 
 
 # ── HTTP API handlers ──
@@ -454,46 +543,126 @@ class GameScheduler:
 
 async def handle_status(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
-    status = scheduler.get_status()
-    logger.info(f"GET /scheduler/status — mode={status['mode']}, next_run={status.get('next_run_at', 'none')}, schedule={status['schedule_type']}:{status['schedule_value']}")
+    game_id = request.query.get("game_id")
+    status = scheduler.get_status(game_id=game_id)
     return web.json_response(status)
 
 
-async def handle_reset(request: web.Request) -> web.Response:
+async def handle_register_game(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
-    logger.info("POST /scheduler/reset — resetting timer")
-    next_run = scheduler.reset_timer()
-    return web.json_response({"status": "ok", "next_run_at": next_run.isoformat()})
+    game_id = request.match_info.get("game_id", "")
+    if not game_id:
+        return web.json_response({"status": "error", "message": "Missing game_id"}, status=400)
+
+    # Optional schedule override in query or body
+    schedule_raw = request.query.get("schedule")
+    if not schedule_raw:
+        try:
+            body = await request.json()
+            schedule_raw = body.get("schedule")
+        except Exception:
+            schedule_raw = None  # Body missing or not JSON — use default schedule
+
+    state = scheduler.register_game(game_id, schedule_raw=schedule_raw)
+    return web.json_response({"status": "ok", "game": state.to_dict()})
+
+
+async def handle_unregister_game(request: web.Request) -> web.Response:
+    scheduler: GameScheduler = request.app["scheduler"]
+    game_id = request.match_info.get("game_id", "")
+    if not game_id:
+        return web.json_response({"status": "error", "message": "Missing game_id"}, status=400)
+    deleted = scheduler.unregister_game(game_id)
+    return web.json_response({"status": "ok" if deleted else "not_found"})
+
+
+async def handle_set_schedule(request: web.Request) -> web.Response:
+    scheduler: GameScheduler = request.app["scheduler"]
+    game_id = request.match_info.get("game_id", "")
+    if not game_id:
+        return web.json_response({"status": "error", "message": "Missing game_id"}, status=400)
+
+    try:
+        body = await request.json()
+        schedule_raw = body.get("schedule", "")
+    except Exception:
+        return web.json_response({"status": "error", "message": "Invalid JSON body"}, status=400)
+
+    if not schedule_raw.strip():
+        return web.json_response({"status": "error", "message": "Missing 'schedule' field"}, status=400)
+
+    try:
+        parse_schedule(schedule_raw)  # validate
+    except ValueError as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+    state = scheduler.set_schedule(game_id, schedule_raw)
+    return web.json_response({"status": "ok", "game": state.to_dict()})
 
 
 async def handle_pause(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
-    next_run = scheduler.next_run_at
-    logger.info("POST /scheduler/pause — pausing scheduler" + (f", was scheduled at {next_run.strftime('%Y-%m-%d %H:%M:%S')}" if next_run else ""))
-    scheduler.pause()
-    return web.json_response({"status": "ok", "mode": "paused"})
+    game_id = request.query.get("game_id", "")
+    if not game_id:
+        return web.json_response({"status": "error", "message": "Missing game_id query param"}, status=400)
+    ok = scheduler.pause_game(game_id)
+    return web.json_response({"status": "ok" if ok else "not_found"})
 
 
 async def handle_resume(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
-    logger.info("POST /scheduler/resume — resuming scheduler")
-    next_run = scheduler.resume()
-    return web.json_response({"status": "ok", "mode": "scheduled", "next_run_at": next_run.isoformat()})
+    game_id = request.query.get("game_id", "")
+    if not game_id:
+        return web.json_response({"status": "error", "message": "Missing game_id query param"}, status=400)
+    ok = scheduler.resume_game(game_id)
+    return web.json_response({"status": "ok" if ok else "not_found"})
+
+
+async def handle_generate_now(request: web.Request) -> web.Response:
+    scheduler: GameScheduler = request.app["scheduler"]
+    game_id = request.query.get("game_id", "")
+    logger.info(f"POST /scheduler/generate-now — manual generation for game '{game_id}'")
+    result = await scheduler.run_single_generation(game_id=game_id or None)
+    return web.json_response(result)
 
 
 def create_app() -> web.Application:
-    """Create aiohttp application with scheduler endpoints."""
+    """Create aiohttp application with per-game scheduler endpoints."""
     app = web.Application()
 
     scheduler = GameScheduler()
     app["scheduler"] = scheduler
 
+    # ── Per-game management ──
     app.router.add_get("/scheduler/status", handle_status)
-    app.router.add_post("/scheduler/reset", handle_reset)
+    app.router.add_post("/scheduler/register/{game_id}", handle_register_game)
+    app.router.add_delete("/scheduler/game/{game_id}", handle_unregister_game)
+    app.router.add_post("/scheduler/schedule/{game_id}", handle_set_schedule)
     app.router.add_post("/scheduler/pause", handle_pause)
     app.router.add_post("/scheduler/resume", handle_resume)
 
-    # Start scheduling loop as background task
+    # Legacy endpoints (backwards compatibility for single-game setups)
+    # Also aliased for game-specific requests via query param
+    async def handle_legacy_pause(request: web.Request) -> web.Response:
+        scheduler: GameScheduler = request.app["scheduler"]
+        game_id = request.query.get("game_id", "") or os.getenv("GAME_ID", "default_game")
+        if not game_id:
+            return web.json_response({"status": "error", "message": "No game_id"}, status=400)
+        ok = scheduler.pause_game(game_id)
+        return web.json_response({"status": "ok" if ok else "not_found"})
+
+    async def handle_legacy_resume(request: web.Request) -> web.Response:
+        scheduler: GameScheduler = request.app["scheduler"]
+        game_id = request.query.get("game_id", "") or os.getenv("GAME_ID", "default_game")
+        if not game_id:
+            return web.json_response({"status": "error", "message": "No game_id"}, status=400)
+        ok = scheduler.resume_game(game_id)
+        return web.json_response({"status": "ok" if ok else "not_found"})
+
+    app.router.add_post("/scheduler/reset", handle_generate_now)
+    app.router.add_post("/scheduler/generate-now", handle_generate_now)
+
+    # ── Start scheduling loop ──
     async def start_scheduler(app: web.Application) -> None:
         mode = os.getenv("GAME_SCHEDULER_MODE", "scheduled").lower()
         sched: GameScheduler = app["scheduler"]
@@ -501,21 +670,18 @@ def create_app() -> web.Application:
             logger.info("Running in single mode (one generation)")
             asyncio.create_task(sched.run_single_generation())
         else:
-            logger.info("Running in scheduled mode")
-            asyncio.create_task(sched.run_scheduled_loop())
+            logger.info("Running in multi-game scheduled mode")
+            asyncio.create_task(sched.run_scheduling_loop())
 
     app.on_startup.append(start_scheduler)
-
     return app
 
 
 def main():
     """Main entry point."""
-    logger.info("Starting Game Scheduler HTTP API")
+    logger.info("Starting Game Scheduler HTTP API (per-game scheduling)")
     logger.info(f"GAME_SERVER_API_URL: {GAME_SERVER_API_URL}")
-    schedule_type, schedule_val = GAME_SCHEDULE
-    desc = f"daily at {schedule_val}" if schedule_type == "daily" else f"every {schedule_val}s"
-    logger.info(f"GAME_SCHEDULE: {desc}")
+    logger.info(f"DEFAULT_SCHEDULE: {_schedule_label(DEFAULT_SCHEDULE[0], DEFAULT_SCHEDULE[1])}")
     logger.info(f"GAME_SCHEDULER_PORT: {GAME_SCHEDULER_PORT}")
 
     app = create_app()

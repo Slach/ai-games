@@ -106,6 +106,14 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE player_briefings RENAME COLUMN day TO turn;
         """.strip(),
     ),
+    (
+        10,
+        """
+        ALTER TABLE game_state ADD COLUMN finale_narrative TEXT DEFAULT '';
+        ALTER TABLE game_state ADD COLUMN finale_outcome_type TEXT DEFAULT '';
+        ALTER TABLE game_state ADD COLUMN finale_image_url TEXT DEFAULT '';
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -147,7 +155,10 @@ def init_db():
         status TEXT DEFAULT 'active',
         ship_alive INTEGER DEFAULT 1,
         crew_health INTEGER DEFAULT 100,
-        last_updated TEXT NOT NULL
+        last_updated TEXT NOT NULL,
+        finale_narrative TEXT DEFAULT '',
+        finale_outcome_type TEXT DEFAULT '',
+        finale_image_url TEXT DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS onboarding_sessions (
         session_id TEXT PRIMARY KEY,
@@ -977,6 +988,9 @@ def get_game_state(game_id: str = "default_game") -> dict[str, Any]:
         "crew_health": row["crew_health"],
         "last_death_turn": row["last_death_turn"] if "last_death_turn" in row.keys() else 0,
         "last_updated": row["last_updated"],
+        "finale_narrative": row["finale_narrative"] if "finale_narrative" in row.keys() else "",
+        "finale_outcome_type": row["finale_outcome_type"] if "finale_outcome_type" in row.keys() else "",
+        "finale_image_url": row["finale_image_url"] if "finale_image_url" in row.keys() else "",
     }
 
 
@@ -1052,6 +1066,27 @@ def end_game(reason: str = "game_over", game_id: str = "default_game") -> dict[s
     return get_game_state(game_id)
 
 
+def save_game_finale(
+    game_id: str,
+    finale_narrative: str,
+    finale_outcome_type: str = "",
+    finale_image_url: str = "",
+) -> None:
+    """Save the LLM-generated game-over finale to game_state."""
+    _ensure_game_state(game_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE game_state
+           SET finale_narrative = ?, finale_outcome_type = ?, finale_image_url = ?
+           WHERE game_id = ?""",
+        (finale_narrative, finale_outcome_type, finale_image_url, game_id),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"[FINALE] Saved finale for {game_id}: {finale_outcome_type}")
+
+
 # ============== Games ==============
 
 
@@ -1109,11 +1144,23 @@ def get_game(game_id: str) -> dict[str, Any] | None:
 
 
 def get_available_games() -> list[dict[str, Any]]:
-    """Get all available games"""
+    """Get all available (active) games"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("SELECT * FROM games WHERE status = 'active'")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+def get_all_games() -> list[dict[str, Any]]:
+    """Get ALL games including ended ones"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM games ORDER BY status ASC")
     rows = cursor.fetchall()
     conn.close()
 

@@ -81,6 +81,7 @@ from database import (
     save_game_image,
     save_game_title_and_welcome,
     save_player_action,
+    save_game_finale,
     save_player_briefing,
     set_last_death_turn,
     start_game,
@@ -145,6 +146,18 @@ uvicorn_access.addFilter(HealthCheckFilter())
 # _analyze_turn_outcome can await them before pushing the outcome.
 # This ensures action images arrive BEFORE outcome text, not after.
 _pending_action_tasks: dict[tuple[int, str], set[asyncio.Task]] = {}
+
+# Per-(turn, game_id) async lock to prevent concurrent outcome analysis.
+# Guards against the race: auto-action (create_task) vs continue-game (await).
+_outcome_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _get_outcome_lock(turn: int, game_id: str) -> asyncio.Lock:
+    """Get or create an async lock for (turn, game_id)."""
+    key = (turn, game_id)
+    if key not in _outcome_locks:
+        _outcome_locks[key] = asyncio.Lock()
+    return _outcome_locks[key]
 
 
 def generate_game_id(length: int = 6) -> str:
@@ -268,8 +281,14 @@ def _question_has_sg_tags(question: OnboardingQuestion) -> bool:
 async def generate_dynamic_onboarding_questions(
     language: str = "en",
     game_id: str = "default_game",
+    skip_images: bool = False,
 ) -> list[OnboardingQuestion]:
-    """Generate dynamic onboarding questions using LLM with json_schema and enrich with images via ComfyUI."""
+    """Generate dynamic onboarding questions using LLM with json_schema.
+
+    When skip_images is True, only generates questions (text + image_prompt) without
+    calling ComfyUI. Image generation can be done later via
+    generate_onboarding_question_images().
+    """
     logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
     start_time = datetime.now()
     questions: list[OnboardingQuestion] = []
@@ -323,47 +342,63 @@ async def generate_dynamic_onboarding_questions(
         gen_time = (datetime.now() - start_time).total_seconds()
         logger.info(f"Question generation took {gen_time:.2f} seconds")
 
-        # Generate images for each question in parallel via ComfyUI
-        logger.info("=== Generating images for onboarding questions ===")
-        image_start = datetime.now()
-        try:
-            image_generator = create_image_generator()
-
-            async def _generate_question_image(q: OnboardingQuestion) -> str | None:
-                """Generate image for a single question using LLM-generated image_prompt."""
-                prompt = q.image_prompt
-                if not prompt:
-                    logger.warning(f"No image_prompt for question {q.id}, skipping image generation")
-                    return None
-                url = await image_generator.generate_image(
-                    prompt=prompt,
-                    filename_prefix=f"{game_id}/onboarding_q_{q.id}",
-                    width=768,
-                    height=768,
-                )
-                return url
-
-            tasks = [_generate_question_image(q) for q in questions]
-            image_urls = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for q, url_or_err in zip(questions, image_urls, strict=False):
-                if isinstance(url_or_err, str) and url_or_err:
-                    q.image_url = url_or_err
-                elif isinstance(url_or_err, Exception):
-                    logger.warning(f"Image generation failed for question {q.id}: {url_or_err}")
-
-            img_time = (datetime.now() - image_start).total_seconds()
-            success_count = sum(1 for u in image_urls if isinstance(u, str) and u)
-            logger.info(f"Question images: {success_count}/{len(questions)} generated in {img_time:.2f}s")
-        except Exception as img_err:
-            logger.warning(f"Question image generation failed entirely: {img_err}")
-            # Continue without images - questions are still usable
+        if not skip_images:
+            await generate_onboarding_question_images(questions, game_id)
 
         return questions
 
     except Exception as e:
         logger.error(f"Failed to generate dynamic onboarding questions: {e}", exc_info=True)
         raise
+
+
+async def generate_onboarding_question_images(
+    questions: list[OnboardingQuestion],
+    game_id: str = "default_game",
+) -> list[OnboardingQuestion]:
+    """Generate ComfyUI images for each onboarding question (in parallel).
+
+    Mutates question.image_url in-place and returns the list for convenience.
+    Safe to call in background — logs failures but never raises.
+    """
+    if not questions:
+        return questions
+    logger.info("=== Generating images for onboarding questions (background) ===")
+    image_start = datetime.now()
+    try:
+        image_generator = create_image_generator()
+
+        async def _generate_one(q: OnboardingQuestion) -> tuple[OnboardingQuestion, str | None]:
+            prompt = q.image_prompt
+            if not prompt:
+                logger.warning(f"No image_prompt for question {q.id}, skipping image generation")
+                return q, None
+            url = await image_generator.generate_image(
+                prompt=prompt,
+                filename_prefix=f"{game_id}/onboarding_q_{q.id}",
+                width=768,
+                height=768,
+            )
+            return q, url
+
+        tasks = [_generate_one(q) for q in questions]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"Image generation task failed: {result}")
+                continue
+            q, url = result
+            if url:
+                q.image_url = url
+
+        img_time = (datetime.now() - image_start).total_seconds()
+        success_count = sum(1 for q in questions if q.image_url)
+        logger.info(f"Question images: {success_count}/{len(questions)} generated in {img_time:.2f}s")
+    except Exception as img_err:
+        logger.warning(f"Question image generation failed entirely: {img_err}")
+
+    return questions
 
 
 async def _generate_option_images_for_question(
@@ -729,6 +764,22 @@ async def _notify_scheduler(action: str) -> None:
         logger.warning(f"Failed to notify scheduler ({action}): {e}")
 
 
+async def _register_game_in_scheduler(game_id: str) -> None:
+    """Register a newly started game with the scheduler."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{GAME_SCHEDULER_URL}/scheduler/register/{game_id}",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    logger.info(f"Game '{game_id}' registered with scheduler")
+                else:
+                    logger.warning(f"Scheduler register returned {resp.status}")
+    except Exception as e:
+        logger.warning(f"Failed to register game '{game_id}' with scheduler: {e}")
+
+
 app = FastAPI(
     title="AI Game Server API",
     description="API for AI-powered cooperative game with Telegram bot interface",
@@ -770,6 +821,107 @@ async def health_check():
 # ============== Onboarding endpoints ==============
 
 
+# Per-player async lock to prevent concurrent background onboarding image tasks
+_onboarding_image_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_onboarding_image_lock(session_id: str) -> asyncio.Lock:
+    if session_id not in _onboarding_image_locks:
+        _onboarding_image_locks[session_id] = asyncio.Lock()
+    return _onboarding_image_locks[session_id]
+
+
+async def _background_onboarding_images(
+    player_id: int,
+    game_id: str,
+    session_id: str,
+    questions: list[OnboardingQuestion],
+    game_title_data: dict,
+    language: str = "ru",
+    needs_splash: bool = False,
+) -> None:
+    """Background task: generate onboarding question images + splash, then push to bot.
+
+    Runs after fast onboarding return. Acquires a per-session lock to prevent
+    duplicate concurrent generations. On completion, pushes full onboarding data
+    (with image URLs) to the telegram-bot via /push/onboarding-ready.
+    """
+    lock = _get_onboarding_image_lock(session_id)
+    async with lock:
+        logger.info(f"[ONBOARDING_BG] Starting background image generation for player {player_id} (session {session_id})")
+        bg_start = datetime.now()
+
+        try:
+            # 1. Generate question images
+            if questions:
+                await generate_onboarding_question_images(questions, game_id)
+
+            # 2. Update session questions in DB with image URLs
+            try:
+                from database import get_onboarding_session as _get_session
+                from database import update_onboarding_session as _update_session_db
+                sess = _get_session(session_id)
+                if sess:
+                    _update_session_db(
+                        session_id,
+                        current_question=sess.get("current_question", 0),
+                        answers=sess.get("answers", {}),
+                        completed=sess.get("completed", False),
+                        language=language,
+                        questions=[q.model_dump() for q in questions],
+                    )
+                    logger.info(f"[ONBOARDING_BG] Updated session {session_id} questions with image URLs")
+                else:
+                    logger.warning(f"[ONBOARDING_BG] Session {session_id} not found for question update")
+            except Exception as e:
+                logger.warning(f"[ONBOARDING_BG] Failed to update session questions: {e}")
+
+            # 3. Generate splash images if needed
+            if needs_splash:
+                title_for_prompt = game_title_data.get("title", "")
+                welcome_for_prompt = game_title_data.get("welcome_text", "")
+                try:
+                    logger.info(f"[ONBOARDING_BG] Generating 3 splash images for {title_for_prompt}...")
+                    cg = create_image_generator()
+                    urls = await cg.generate_splash_images(
+                        game_title=title_for_prompt,
+                        welcome_text=welcome_for_prompt,
+                        count=3,
+                        game_id=game_id,
+                    )
+                    saved = 0
+                    for url in urls:
+                        if url:
+                            save_game_image(type="splash", image_url=url, game_id=game_id)
+                            saved += 1
+                    logger.info(f"[ONBOARDING_BG] Saved {saved}/3 splash images")
+                except Exception as e:
+                    logger.error(f"[ONBOARDING_BG] Splash generation failed: {e}", exc_info=True)
+
+            # 4. Push onboarding-ready to telegram-bot
+            try:
+                first_question = questions[0].model_dump() if questions else None
+                from push_client import push_onboarding_ready as _push_ready
+                success = await _push_ready(
+                    player_id=player_id,
+                    game_id=game_id,
+                    session_id=session_id,
+                    question=first_question,
+                    game_title=game_title_data.get("title", ""),
+                    welcome_message=game_title_data.get("welcome_text", ""),
+                    language=language,
+                )
+                logger.info(f"[ONBOARDING_BG] Push onboarding-ready {'succeeded' if success else 'FAILED'} for player {player_id}")
+            except Exception as e:
+                logger.error(f"[ONBOARDING_BG] Push onboarding-ready failed: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"[ONBOARDING_BG] Background image generation failed for player {player_id}: {e}", exc_info=True)
+
+        bg_time = (datetime.now() - bg_start).total_seconds()
+        logger.info(f"[ONBOARDING_BG] Background images for player {player_id} took {bg_time:.2f} seconds")
+
+
 @app.post("/onboarding/start")
 async def start_onboarding(request: StartOnboardingRequest):
     """Start a new onboarding session for a player"""
@@ -792,11 +944,13 @@ async def start_onboarding(request: StartOnboardingRequest):
             detail=(f"Game is full ({current_count}/{GAME_START_MAX_PLAYERS} players). No more players can join at this time."),
         )
 
-    # Generate role questions (dynamic or static fallback) with images
-    logger.info("Generating dynamic onboarding questions...")
+    # Generate role questions (text-only, skip ComfyUI images for fast return).
+    # Images are generated asynchronously in background after the response.
+    logger.info("Generating dynamic onboarding questions (text-only)...")
     role_questions = await generate_dynamic_onboarding_questions(
         language=request.language,
         game_id=request.game_id,
+        skip_images=True,
     )
     logger.info(f"Generated {len(role_questions)} role questions")
 
@@ -847,33 +1001,7 @@ async def start_onboarding(request: StartOnboardingRequest):
             # Save fallback title to database
             update_game_title(request.game_id, game_title_data["title"])
 
-    # Generate 3 splash images SYNCHRONOUSLY (blocks until done)
-    existing_splash = get_game_image_count("splash", request.game_id)
-    if existing_splash < 3:
-        title_for_prompt = game_title_data.get("title", "")
-        welcome_for_prompt = game_title_data.get("welcome_text", "")
-
-        try:
-            logger.info(f"[SPLASH] Generating 3 splash images for {title_for_prompt}...")
-            cg = create_image_generator()
-            urls = await cg.generate_splash_images(
-                game_title=title_for_prompt,
-                welcome_text=welcome_for_prompt,
-                count=3,
-                game_id=request.game_id,
-            )
-            saved = 0
-            for url in urls:
-                if url:
-                    save_game_image(type="splash", image_url=url, game_id=request.game_id)
-                    saved += 1
-            logger.info(f"[SPLASH] Saved {saved}/3 splash images")
-        except Exception as e:
-            logger.error(f"[SPLASH] Generation failed: {e}", exc_info=True)
-    else:
-        logger.info(f"[SPLASH] {existing_splash} splash images already in DB, skipping")
-
-    # Create session with pre-generated questions and shuffle_seed
+    # Create session with pre-generated questions (no images yet) and shuffle_seed
     session = create_onboarding_session(
         request.player_id,
         request.language,
@@ -892,24 +1020,43 @@ async def start_onboarding(request: StartOnboardingRequest):
         False,
         request.language,
     )
-    logger.info(f"Onboarding session created: {session['session_id']}")
+    session_id = session["session_id"]
+    logger.info(f"Onboarding session created: {session_id}")
 
     # Log generation time
     gen_time = (datetime.now() - start_time).total_seconds()
-    logger.info(f"Total onboarding start took {gen_time:.2f} seconds")
+    logger.info(f"Fast onboarding start took {gen_time:.2f} seconds")
 
     next_question = dynamic_questions[0] if dynamic_questions else None
     if next_question:
         logger.info(f"First question: id={next_question.id}, text={next_question.text}...")
 
+    # Kick off background task: generate question images + splash images,
+    # update session in DB, push to telegram-bot via /push/onboarding-ready
+    needs_splash = get_game_image_count("splash", request.game_id) < 3
+    needs_question_images = any(q.image_prompt for q in dynamic_questions)
+    if needs_splash or needs_question_images:
+        asyncio.create_task(
+            _background_onboarding_images(
+                player_id=request.player_id,
+                game_id=request.game_id,
+                session_id=session_id,
+                questions=dynamic_questions,
+                game_title_data=game_title_data,
+                language=request.language,
+                needs_splash=needs_splash,
+            )
+        )
+
     result = {
-        "session_id": session["session_id"],
+        "session_id": session_id,
         "game_id": request.game_id,
         "question": next_question.model_dump() if next_question else None,
         "game_title": game_title_data.get("title", ""),
         "welcome_message": game_title_data.get("welcome_text", ""),
+        "pending_images": True,
     }
-    logger.info("=== START ONBOARDING COMPLETED ===")
+    logger.info("=== START ONBOARDING COMPLETED (fast return) ===")
     return result
 
 
@@ -1192,6 +1339,9 @@ async def complete_onboarding(session_id: str):
     game_was_started = False
     if player_count >= GAME_START_MIN_PLAYERS:
         game_was_started = start_game(game_id)
+        if game_was_started:
+            # Register this game with the scheduler
+            asyncio.create_task(_register_game_in_scheduler(game_id))
 
     game_started = is_game_started(game_id)
 
@@ -1484,6 +1634,26 @@ async def get_game_title_endpoint(game_id: str = "default_game"):
 async def get_game_state_endpoint(game_id: str = "default_game"):
     """Get current game state"""
     return get_game_state(game_id)
+
+
+@app.get("/game/finale")
+async def get_game_finale_endpoint(game_id: str = "default_game"):
+    """Get the game-over finale narrative (if game ended).
+
+    Returns 404 if the game is still active or no finale was generated.
+    """
+    state = get_game_state(game_id)
+    if state["status"] == "active":
+        raise HTTPException(status_code=404, detail="Game is still active")
+    if not state.get("finale_narrative"):
+        raise HTTPException(status_code=404, detail="No finale generated yet")
+    return {
+        "game_id": game_id,
+        "status": state["status"],
+        "finale_narrative": state["finale_narrative"],
+        "finale_outcome_type": state["finale_outcome_type"],
+        "finale_image_url": state["finale_image_url"],
+    }
 
 
 @app.get("/game/started")
@@ -2379,532 +2549,557 @@ async def _analyze_turn_outcome(
     turn: int,
     language: str = "ru",
     game_id: str = "default_game",
+    force: bool = False,
 ):
     """Analyze all decisions for a turn (player + NPC) to produce combined outcome.
 
-    Called automatically when all players have submitted their choices,
-    or can be triggered manually.
+    Called automatically when all players have submitted their choices (from
+    /game/action or /game/auto-action), or triggered manually via
+    /admin/analyze-turn with force=True.
+
+    Guarded by per-(turn, game_id) async lock + DB idempotency check to prevent
+    duplicate LLM calls when auto-action and continue-game race.
     """
-    logger.info(f"[OUTCOME] Analyzing combined outcome for Turn {turn}")
+    logger.info(f"[OUTCOME] Analyzing combined outcome for Turn {turn} (force={force})")
 
-    try:
-        # Get all briefings for this turn
-        all_briefings = get_all_briefings_for_turn(turn, game_id)
-        if not all_briefings:
-            logger.warning(f"[OUTCOME] No briefings found for Turn {turn}")
-            return
-
-        # Get global circumstances
-        game_turn = get_game_turn(turn, game_id)
-        global_circ_str = game_turn.get("global_circumstances", "{}") if game_turn else "{}"
-        try:
-            global_circ = json.loads(global_circ_str)
-        except (json.JSONDecodeError, TypeError):
-            global_circ = {}
-
-        # Build decisions list (name, role, action, consequence, rationale)
-        all_decisions = []
-        for b in all_briefings:
-            selected_id = b.get("selected_action_id")
-            if not selected_id:
-                continue
-
-            choices = b.get("choices", [])
-            action_text = ""
-            consequence = ""
-            for c in choices:
-                if c.get("id") == selected_id:
-                    action_text = c.get("text", "")
-                    consequence = c.get("consequence", "")
-                    break
-
-            cr = b.get("consequence_result", {})
-            if isinstance(cr, str):
-                try:
-                    cr = json.loads(cr)
-                except (json.JSONDecodeError, TypeError):
-                    cr = {}
-
-            # Look up role from profile or NPC
-            player_id = b.get("player_id")
-            npc_key = b.get("npc_key")
-            role_name = ""
-            entity_name = "?"
-
-            if player_id:
-                p = get_player_profile(player_id)
-                if p:
-                    role_name = p.get("role", "")
-                    entity_name = str(player_id)
-            elif npc_key:
-                n = get_npc_profile(npc_key)
-                if n:
-                    role_name = n.get("role", "")
-                    entity_name = n.get("npc_name", npc_key)
-
-            all_decisions.append(
-                {
-                    "player_id": player_id,
-                    "npc_key": npc_key,
-                    "name": entity_name,
-                    "role": role_name,
-                    "action_id": selected_id,
-                    "action_text": action_text,
-                    "consequence": cr.get("consequence") or consequence,
-                    "rationale": b.get("choice_rationale", ""),
-                }
-            )
-
-        if not all_decisions:
-            logger.warning(f"[OUTCOME] No decisions made yet for Turn {turn}")
-            return
-
-        # Also add NPC decisions from the combined outcome
-        # NPC decisions were already analyzed during turn generation
-
-        # Build cumulative summary from ALL previous turns for full story context
-        previous_summary = _build_cumulative_story_summary(
-            current_turn=turn,
-            language=language,
-            game_id=game_id,
-        )
-
-        # Get mission context for progress tracking
-        mission = get_mission(None, game_id)
-
-        # Build full crew roster from all briefings — prevents LLM from inventing members
-        crew_roster = []
-        for b in all_briefings:
-            player_id = b.get("player_id")
-            npc_key = b.get("npc_key")
-            role_name = "?"
-            entity_name = "?"
-            is_dead = False
-            if player_id:
-                p = get_player_profile(player_id)
-                if p:
-                    role_name = p.get("role", "?")
-                    entity_name = p.get("player_name", "") or str(player_id)
-                    is_dead = bool(p.get("is_dead", False))
-            elif npc_key:
-                n = get_npc_profile(npc_key)
-                if n:
-                    role_name = n.get("role", "?")
-                    entity_name = n.get("npc_name", npc_key)
-                    is_dead = not n.get("is_active", True)
-            crew_roster.append({"name": entity_name, "role": role_name, "is_dead": is_dead})
-
-        # Analyze with LLM
-        gm = create_game_server(language=language)
-        outcome = gm.analyze_combined_outcome(
-            global_circ,
-            all_decisions,
-            previous_summary,
-            mission_context=mission,
-            crew_roster=crew_roster,
-        )
-
-        # Save the combined outcome
-        update_game_turn_outcome(turn, json.dumps(outcome, ensure_ascii=False), game_id)
-        logger.info(f"[OUTCOME] Combined outcome saved for Turn {turn}")
-
-        # Apply mission progress through the rules layer (P0+P1):
-        # normalizes objectives, accumulates with regression caps + tempo floor,
-        # and computes completion from real thresholds (fixes defect B/C).
-        mission_progress = outcome.get("mission_progress", [])
-        mission_completed = False
-        if mission:
-            updated_mission = apply_mission_progress(mission, mission_progress)
-            update_mission_stage_progress(
-                updated_mission["stage_progress"],
-                updated_mission["current_stage"],
-                game_id=game_id,
-                completed=updated_mission["completed"],
-            )
-            for stage_key, pts in updated_mission["stage_progress"].items():
-                logger.info(f"[MISSION] Stage {stage_key} progress now {pts}")
-            if updated_mission["completed"]:
-                mission_completed = True
-                end_game("mission_complete", game_id)
-                logger.info("[MISSION] MISSION COMPLETE! Game ended.")
-            mission = updated_mission
-
-        # Rate-limit crew deaths through the rules layer (P3):
-        # at most one death per DEATH_COOLDOWN_TURNS, never below min_alive;
-        # excess proposed deaths are demoted to critical injuries.
-        state = get_game_state(game_id)
-        alive_count = sum(1 for r in crew_roster if not r.get("is_dead"))
-        outcome, new_last_death_turn = apply_death_limits(
-            outcome,
-            turn=turn,
-            last_death_turn=int(state.get("last_death_turn", 0) or 0),
-            alive_count=alive_count,
-        )
-        if new_last_death_turn != int(state.get("last_death_turn", 0) or 0):
-            set_last_death_turn(game_id, new_last_death_turn)
-            logger.info(f"[DEATH] Cooldown window starts at turn {new_last_death_turn}")
-
-        # ========== Process ship damage from new structured fields ==========
-        ship_hull = outcome.get("ship_hull_integrity", 100)
-        ship_shields = outcome.get("ship_shields", 100)
-        ship_systems_offline = outcome.get("ship_systems_offline", [])
-        ship_destroyed = outcome.get("ship_destroyed", False)
-
-        # Compute crew_health from hull (hull=0 → crew_health=0, hull=100 → crew_health=100)
-        # Shields also contribute to survival chances
-        crew_health = max(0, min(100, int(ship_hull * 0.7 + ship_shields * 0.3)))
-
-        logger.info(f"[SHIP] Turn {turn}: hull={ship_hull}%, shields={ship_shields}%, systems_offline={ship_systems_offline}, destroyed={ship_destroyed}")
-
-        # Handle crew injuries (new structured field)
-        crew_injured = outcome.get("crew_injured", [])
-        for injury_entry in crew_injured:
-            if isinstance(injury_entry, list) and len(injury_entry) >= 2:
-                injured_name = injury_entry[0]
-                injured_role = injury_entry[1]
-                severity = injury_entry[2] if len(injury_entry) >= 3 else "unknown"
-                # Try to find the player and log their injury
-                for d in all_decisions:
-                    if d.get("name") == injured_name or d.get("role") == injured_role:
-                        pid = d.get("player_id")
-                        if pid:
-                            logger.info(f"[INJURY] Player {pid} ({injured_role}) injured: {severity}")
-                            # Critical injuries → player becomes spectator for this turn
-                            if severity == "critical":
-                                logger.info(f"[INJURY] Player {pid} critically injured, out of action")
-                        break
-
-        # Handle crew deaths
-        dead_crew = outcome.get("dead_crew_members", [])
-        for death_entry in dead_crew:
-            # death_entry could be [name, role]
-            if isinstance(death_entry, list) and len(death_entry) >= 2:
-                entity_name = death_entry[0]
-                entity_role = death_entry[1]
-                found = False
-                # Try to find the player by looking up their entity name
-                for d in all_decisions:
-                    if d.get("name") == entity_name or d.get("role") == entity_role:
-                        pid = d.get("player_id")
-                        if pid:
-                            mark_player_dead(pid, game_id)
-                            logger.info(f"[DEATH] Player {pid} ({entity_role}) marked as dead")
-                            found = True
-                        break
-                # If not a player, try to deactivate the NPC
-                if not found:
-                    for d in all_decisions:
-                        if d.get("name") == entity_name or d.get("role") == entity_role:
-                            npc_key = d.get("npc_key")
-                            if npc_key:
-                                deactivate_npc(npc_key)
-                                logger.info(f"[DEATH] NPC {npc_key} ({entity_role}) deactivated")
-                                break
-
-        # Handle ship destruction
-        if ship_destroyed:
-            end_game("ship_destroyed", game_id)
-            logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
-
-        # Handle crew wiped — all crew members dead
-        live_players = get_live_players(game_id)
-        active_npcs = get_all_active_npcs(game_id)
-        crew_wiped = len(live_players) == 0 and len(active_npcs) == 0
-        if crew_wiped and not ship_destroyed:
-            end_game("crew_wiped", game_id)
-            logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
-
-        # Also update game state with computed crew_health
-        state = get_game_state(game_id)
-        ship_alive = not ship_destroyed and state.get("ship_alive", True)
-        update_game_state(
-            state["turn"],
-            "active" if ship_alive else "ship_destroyed",
-            ship_alive=ship_alive,
-            crew_health=crew_health,
-            game_id=game_id,
-        )
-
-        # Log ship systems offline
-        if ship_systems_offline:
-            logger.info(f"[SHIP] Systems offline: {', '.join(ship_systems_offline)}")
-
-        # ── Push outcome to all alive players ──────────────────────
-        # Build outcome text from the LLM result
-        outcome_text = outcome.get("outcome_narrative", "") or outcome.get("narrative", "") or outcome.get("summary", "") or outcome.get("outcome", "")
-        if not outcome_text:
-            # Fallback: clean up JSON string for display
-            raw = json.dumps(outcome, ensure_ascii=False)
-            outcome_text = raw[:500] + ("..." if len(raw) > 500 else "")
-
-        # Build death notices for the push payload
-        # Resolve actual NPC/player names from profiles instead of using LLM-generated names
-        death_notices = []
-        for death_entry in dead_crew:
-            if isinstance(death_entry, list) and len(death_entry) >= 2:
-                llm_name = str(death_entry[0])
-                llm_role = str(death_entry[1])
-                real_name = llm_name
-                # Try to find the real NPC/player name from briefings
-                for b in all_briefings:
-                    # Check NPC
-                    if b.get("npc_key"):
-                        n = get_npc_profile(b["npc_key"])
-                        if n and (n.get("role") == llm_role or n.get("npc_name") == llm_name):
-                            real_name = n.get("npc_name", llm_name)
-                            break
-                    # Check player
-                    if b.get("player_id"):
-                        p = get_player_profile(b["player_id"])
-                        if p and (p.get("role") == llm_role or p.get("player_name") == llm_name):
-                            real_name = p.get("player_name", "") or str(b["player_id"])
-                            break
-                death_notices.append({"name": real_name, "role": llm_role})
-
-        # ── Generate outcome scene image ──────────────────────────
-        outcome_image_url = None
-        try:
-            outcome_narrative = outcome.get("outcome_narrative", "")
-            ship_status_str = outcome.get("ship_status_change", "")
-            crew_morale_str = outcome.get("crew_morale_change", "")
-            # Build a prompt from the outcome narrative
-            outcome_prompt = (
-                f"Sci-fi cinematic scene illustrating the aftermath of events. "
-                f"{outcome_narrative[:600]} "
-                f"Ship status: {ship_status_str[:200]}. "
-                f"Crew morale: {crew_morale_str[:200]}. "
-                f"Dramatic lighting, starship interior or exterior, "
-                f"Star Trek aesthetic, 4K quality, cinematic composition."
-            )
-            image_gen = create_image_generator()
-            outcome_image_url = await image_gen.generate_scene_image(
-                prompt=outcome_prompt,
-                filename_prefix=f"{game_id}/outcome_turn{turn}",
-            )
-            if outcome_image_url:
-                save_game_image(
-                    type="outcome",
-                    image_url=outcome_image_url,
-                    game_id=game_id,
-                    turn=turn,
-                    prompt=outcome_prompt,
+    lock = _get_outcome_lock(turn, game_id)
+    async with lock:
+        # Idempotency: if outcome already computed, skip (unless forced)
+        if not force:
+            existing = get_game_turn(turn, game_id)
+            if existing and existing.get("combined_outcome", "").strip():
+                logger.info(
+                    f"[OUTCOME] Turn {turn} already has combined outcome, skipping"
                 )
-                logger.info(f"[OUTCOME] Outcome image generated for turn {turn}: {outcome_image_url}")
-            else:
-                logger.warning(f"[OUTCOME] Outcome image generation returned None for turn {turn}")
-        except Exception as img_err:
-            logger.warning(f"[OUTCOME] Failed to generate outcome image for turn {turn}: {img_err}")
+                return
 
-        # Get alive players
         try:
-            alive_players = get_live_players(game_id)
-        except Exception:
-            alive_players = get_players_in_game(game_id)
+            # Get all briefings for this turn
+            all_briefings = get_all_briefings_for_turn(turn, game_id)
+            if not all_briefings:
+                logger.warning(f"[OUTCOME] No briefings found for Turn {turn}")
+                return
 
-        # Compute crew counts for outcome display
-        total_crew = len(all_briefings)  # all participants (players + NPCs)
-        dead_this_turn = len(dead_crew)
-        alive_crew = total_crew - dead_this_turn
+            # Get global circumstances
+            game_turn = get_game_turn(turn, game_id)
+            global_circ_str = game_turn.get("global_circumstances", "{}") if game_turn else "{}"
+            try:
+                global_circ = json.loads(global_circ_str)
+            except (json.JSONDecodeError, TypeError):
+                global_circ = {}
 
-        # ── Await pending action image tasks ───────────────────────
-        # Ensures action images (showing the consequences of player
-        # actions) arrive BEFORE the outcome text, not after.
-        action_key = (turn, game_id)
-        pending = list(_pending_action_tasks.pop(action_key, set()))
-        if pending:
-            logger.info(f"[OUTCOME] Waiting for {len(pending)} action image(s) before pushing outcome for turn {turn}")
-            results = await asyncio.gather(*pending, return_exceptions=True)
-            for i, r in enumerate(results):
-                if isinstance(r, Exception):
-                    logger.warning(f"[OUTCOME] Action image task {i} failed: {r}")
+            # Build decisions list (name, role, action, consequence, rationale)
+            all_decisions = []
+            for b in all_briefings:
+                selected_id = b.get("selected_action_id")
+                if not selected_id:
+                    continue
 
-        # ── Build action images array with captions ────────────────
-        # After awaiting all pending tasks, briefings now have chosen_action_url populated.
-        # Format: 'Ход X — Имя — Роль — Действие'
-        action_images = []
-        all_briefings_fresh = get_all_briefings_for_turn(turn, game_id) or all_briefings
-        gs = get_game_strings(language)
-        caption_prefix = gs["turn_prefix_simple"].format(turn=turn)
+                choices = b.get("choices", [])
+                action_text = ""
+                consequence = ""
+                for c in choices:
+                    if c.get("id") == selected_id:
+                        action_text = c.get("text", "")
+                        consequence = c.get("consequence", "")
+                        break
 
-        for b in all_briefings_fresh:
-            action_url = b.get("chosen_action_url")
-            if not action_url:
-                continue
+                cr = b.get("consequence_result", {})
+                if isinstance(cr, str):
+                    try:
+                        cr = json.loads(cr)
+                    except (json.JSONDecodeError, TypeError):
+                        cr = {}
 
-            # Determine entity name and role
-            player_id = b.get("player_id")
-            npc_key = b.get("npc_key")
+                # Look up role from profile or NPC
+                player_id = b.get("player_id")
+                npc_key = b.get("npc_key")
+                role_name = ""
+                entity_name = "?"
 
-            if player_id:
-                p = get_player_profile(player_id)
-                if p:
-                    entity_name = p.get("player_name", "") or str(player_id)
-                    role_name = p.get("role", "")
-                else:
-                    entity_name = str(player_id)
-                    role_name = b.get("role", "")
-            elif npc_key:
-                n = get_npc_profile(npc_key)
-                if n:
-                    entity_name = n.get("npc_name", npc_key)
-                    role_name = n.get("role", "")
-                else:
-                    entity_name = npc_key
-                    role_name = b.get("role", "")
-            else:
-                continue
+                if player_id:
+                    p = get_player_profile(player_id)
+                    if p:
+                        role_name = p.get("role", "")
+                        entity_name = str(player_id)
+                elif npc_key:
+                    n = get_npc_profile(npc_key)
+                    if n:
+                        role_name = n.get("role", "")
+                        entity_name = n.get("npc_name", npc_key)
 
-            # Find action text
-            selected_id = b.get("selected_action_id")
-            action_text = ""
-            for c in b.get("choices", []):
-                if c.get("id") == selected_id:
-                    action_text = c.get("text", c.get("description", ""))
-                    break
-            if not action_text:
-                action_text = selected_id or ""
-
-            # Truncate action text for caption (max 60 chars)
-            short_action = action_text[:57] + "..." if len(action_text) > 60 else action_text
-
-            caption = f"{caption_prefix} — {entity_name} — {role_name} — {short_action}"
-            action_images.append(
-                {
-                    "image_url": action_url,
-                    "caption": caption,
-                    "player_id": player_id,
-                    "npc_key": npc_key,
-                }
-            )
-
-        # ── Build injury notices for push ───────────────────────────
-        injury_notices = []
-        crew_injured_list = outcome.get("crew_injured", [])
-        for injury_entry in crew_injured_list:
-            if isinstance(injury_entry, list) and len(injury_entry) >= 2:
-                injury_notices.append(
+                all_decisions.append(
                     {
-                        "name": str(injury_entry[0]),
-                        "role": str(injury_entry[1]),
-                        "severity": str(injury_entry[2]) if len(injury_entry) >= 3 else "unknown",
+                        "player_id": player_id,
+                        "npc_key": npc_key,
+                        "name": entity_name,
+                        "role": role_name,
+                        "action_id": selected_id,
+                        "action_text": action_text,
+                        "consequence": cr.get("consequence") or consequence,
+                        "rationale": b.get("choice_rationale", ""),
                     }
                 )
 
-        # ── Build personal outcomes for push ────────────────────────
-        personal_outcomes = outcome.get("personal_outcomes", [])
+            if not all_decisions:
+                logger.warning(f"[OUTCOME] No decisions made yet for Turn {turn}")
+                return
 
-        # Push outcome synchronously so message order is deterministic
-        # (outcome arrives BEFORE new turn briefings)
-        try:
-            await push_turn_outcome(
-                game_id=game_id,
-                turn=turn,
-                outcome_text=outcome_text,
-                alive_players=alive_players,
-                outcome_image_url=outcome_image_url,
-                ship_status="destroyed" if ship_destroyed else "alive",
-                mission_progress=mission_progress,
-                death_notices=death_notices,
-                injury_notices=injury_notices,
-                personal_outcomes=personal_outcomes,
-                action_images=action_images,
+            # Also add NPC decisions from the combined outcome
+            # NPC decisions were already analyzed during turn generation
+
+            # Build cumulative summary from ALL previous turns for full story context
+            previous_summary = _build_cumulative_story_summary(
+                current_turn=turn,
                 language=language,
-                ship_hull_integrity=ship_hull,
-                ship_shields=ship_shields,
-                ship_systems_offline=ship_systems_offline,
-                total_crew_count=total_crew,
-                alive_crew_count=alive_crew,
+                game_id=game_id,
             )
-            logger.info(f"[OUTCOME] Outcome delivered for turn {turn} to {len(alive_players)} players")
-        except Exception as push_err:
-            logger.error(f"[OUTCOME] Failed to deliver outcome for turn {turn}: {push_err}", exc_info=True)
 
-        # ── Game Over: generate and deliver finale ──────────────────
-        game_ended = mission_completed or ship_destroyed or crew_wiped
-        if game_ended:
+            # Get mission context for progress tracking
+            mission = get_mission(None, game_id)
+
+            # Build full crew roster from all briefings — prevents LLM from inventing members
+            crew_roster = []
+            for b in all_briefings:
+                player_id = b.get("player_id")
+                npc_key = b.get("npc_key")
+                role_name = "?"
+                entity_name = "?"
+                is_dead = False
+                if player_id:
+                    p = get_player_profile(player_id)
+                    if p:
+                        role_name = p.get("role", "?")
+                        entity_name = p.get("player_name", "") or str(player_id)
+                        is_dead = bool(p.get("is_dead", False))
+                elif npc_key:
+                    n = get_npc_profile(npc_key)
+                    if n:
+                        role_name = n.get("role", "?")
+                        entity_name = n.get("npc_name", npc_key)
+                        is_dead = not n.get("is_active", True)
+                crew_roster.append({"name": entity_name, "role": role_name, "is_dead": is_dead})
+
+            # Analyze with LLM
+            gm = create_game_server(language=language)
+            outcome = gm.analyze_combined_outcome(
+                global_circ,
+                all_decisions,
+                previous_summary,
+                mission_context=mission,
+                crew_roster=crew_roster,
+            )
+
+            # Save the combined outcome
+            update_game_turn_outcome(turn, json.dumps(outcome, ensure_ascii=False), game_id)
+            logger.info(f"[OUTCOME] Combined outcome saved for Turn {turn}")
+
+            # Apply mission progress through the rules layer (P0+P1):
+            # normalizes objectives, accumulates with regression caps + tempo floor,
+            # and computes completion from real thresholds (fixes defect B/C).
+            mission_progress = outcome.get("mission_progress", [])
+            mission_completed = False
+            if mission:
+                updated_mission = apply_mission_progress(mission, mission_progress)
+                update_mission_stage_progress(
+                    updated_mission["stage_progress"],
+                    updated_mission["current_stage"],
+                    game_id=game_id,
+                    completed=updated_mission["completed"],
+                )
+                for stage_key, pts in updated_mission["stage_progress"].items():
+                    logger.info(f"[MISSION] Stage {stage_key} progress now {pts}")
+                if updated_mission["completed"]:
+                    mission_completed = True
+                    end_game("mission_complete", game_id)
+                    logger.info("[MISSION] MISSION COMPLETE! Game ended.")
+                mission = updated_mission
+
+            # Rate-limit crew deaths through the rules layer (P3):
+            # at most one death per DEATH_COOLDOWN_TURNS, never below min_alive;
+            # excess proposed deaths are demoted to critical injuries.
+            state = get_game_state(game_id)
+            alive_count = sum(1 for r in crew_roster if not r.get("is_dead"))
+            outcome, new_last_death_turn = apply_death_limits(
+                outcome,
+                turn=turn,
+                last_death_turn=int(state.get("last_death_turn", 0) or 0),
+                alive_count=alive_count,
+            )
+            if new_last_death_turn != int(state.get("last_death_turn", 0) or 0):
+                set_last_death_turn(game_id, new_last_death_turn)
+                logger.info(f"[DEATH] Cooldown window starts at turn {new_last_death_turn}")
+
+            # ========== Process ship damage from new structured fields ==========
+            ship_hull = outcome.get("ship_hull_integrity", 100)
+            ship_shields = outcome.get("ship_shields", 100)
+            ship_systems_offline = outcome.get("ship_systems_offline", [])
+            ship_destroyed = outcome.get("ship_destroyed", False)
+
+            # Compute crew_health from hull (hull=0 → crew_health=0, hull=100 → crew_health=100)
+            # Shields also contribute to survival chances
+            crew_health = max(0, min(100, int(ship_hull * 0.7 + ship_shields * 0.3)))
+
+            logger.info(f"[SHIP] Turn {turn}: hull={ship_hull}%, shields={ship_shields}%, systems_offline={ship_systems_offline}, destroyed={ship_destroyed}")
+
+            # Handle crew injuries (new structured field)
+            crew_injured = outcome.get("crew_injured", [])
+            for injury_entry in crew_injured:
+                if isinstance(injury_entry, list) and len(injury_entry) >= 2:
+                    injured_name = injury_entry[0]
+                    injured_role = injury_entry[1]
+                    severity = injury_entry[2] if len(injury_entry) >= 3 else "unknown"
+                    # Try to find the player and log their injury
+                    for d in all_decisions:
+                        if d.get("name") == injured_name or d.get("role") == injured_role:
+                            pid = d.get("player_id")
+                            if pid:
+                                logger.info(f"[INJURY] Player {pid} ({injured_role}) injured: {severity}")
+                                # Critical injuries → player becomes spectator for this turn
+                                if severity == "critical":
+                                    logger.info(f"[INJURY] Player {pid} critically injured, out of action")
+                            break
+
+            # Handle crew deaths
+            dead_crew = outcome.get("dead_crew_members", [])
+            for death_entry in dead_crew:
+                # death_entry could be [name, role]
+                if isinstance(death_entry, list) and len(death_entry) >= 2:
+                    entity_name = death_entry[0]
+                    entity_role = death_entry[1]
+                    found = False
+                    # Try to find the player by looking up their entity name
+                    for d in all_decisions:
+                        if d.get("name") == entity_name or d.get("role") == entity_role:
+                            pid = d.get("player_id")
+                            if pid:
+                                mark_player_dead(pid, game_id)
+                                logger.info(f"[DEATH] Player {pid} ({entity_role}) marked as dead")
+                                found = True
+                            break
+                    # If not a player, try to deactivate the NPC
+                    if not found:
+                        for d in all_decisions:
+                            if d.get("name") == entity_name or d.get("role") == entity_role:
+                                npc_key = d.get("npc_key")
+                                if npc_key:
+                                    deactivate_npc(npc_key)
+                                    logger.info(f"[DEATH] NPC {npc_key} ({entity_role}) deactivated")
+                                    break
+
+            # Handle ship destruction
+            if ship_destroyed:
+                end_game("ship_destroyed", game_id)
+                logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
+
+            # Handle crew wiped — all crew members dead
+            live_players = get_live_players(game_id)
+            active_npcs = get_all_active_npcs(game_id)
+            crew_wiped = len(live_players) == 0 and len(active_npcs) == 0
+            if crew_wiped and not ship_destroyed:
+                end_game("crew_wiped", game_id)
+                logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
+
+            # Also update game state with computed crew_health
+            state = get_game_state(game_id)
+            ship_alive = not ship_destroyed and state.get("ship_alive", True)
+            update_game_state(
+                state["turn"],
+                "active" if ship_alive else "ship_destroyed",
+                ship_alive=ship_alive,
+                crew_health=crew_health,
+                game_id=game_id,
+            )
+
+            # Log ship systems offline
+            if ship_systems_offline:
+                logger.info(f"[SHIP] Systems offline: {', '.join(ship_systems_offline)}")
+
+            # ── Push outcome to all alive players ──────────────────────
+            # Build outcome text from the LLM result
+            outcome_text = outcome.get("outcome_narrative", "") or outcome.get("narrative", "") or outcome.get("summary", "") or outcome.get("outcome", "")
+            if not outcome_text:
+                # Fallback: clean up JSON string for display
+                raw = json.dumps(outcome, ensure_ascii=False)
+                outcome_text = raw[:500] + ("..." if len(raw) > 500 else "")
+
+            # Build death notices for the push payload
+            # Resolve actual NPC/player names from profiles instead of using LLM-generated names
+            death_notices = []
+            for death_entry in dead_crew:
+                if isinstance(death_entry, list) and len(death_entry) >= 2:
+                    llm_name = str(death_entry[0])
+                    llm_role = str(death_entry[1])
+                    real_name = llm_name
+                    # Try to find the real NPC/player name from briefings
+                    for b in all_briefings:
+                        # Check NPC
+                        if b.get("npc_key"):
+                            n = get_npc_profile(b["npc_key"])
+                            if n and (n.get("role") == llm_role or n.get("npc_name") == llm_name):
+                                real_name = n.get("npc_name", llm_name)
+                                break
+                        # Check player
+                        if b.get("player_id"):
+                            p = get_player_profile(b["player_id"])
+                            if p and (p.get("role") == llm_role or p.get("player_name") == llm_name):
+                                real_name = p.get("player_name", "") or str(b["player_id"])
+                                break
+                    death_notices.append({"name": real_name, "role": llm_role})
+
+            # ── Generate outcome scene image ──────────────────────────
+            outcome_image_url = None
             try:
-                outcome_type = "victory" if mission_completed else "defeat"
-                logger.info(f"[GAME_OVER] Game ended: {outcome_type}, generating finale...")
+                outcome_narrative = outcome.get("outcome_narrative", "")
+                ship_status_str = outcome.get("ship_status_change", "")
+                crew_morale_str = outcome.get("crew_morale_change", "")
+                # Build a prompt from the outcome narrative
+                outcome_prompt = (
+                    f"Sci-fi cinematic scene illustrating the aftermath of events. "
+                    f"{outcome_narrative[:600]} "
+                    f"Ship status: {ship_status_str[:200]}. "
+                    f"Crew morale: {crew_morale_str[:200]}. "
+                    f"Dramatic lighting, starship interior or exterior, "
+                    f"Star Trek aesthetic, 4K quality, cinematic composition."
+                )
+                image_gen = create_image_generator()
+                outcome_image_url = await image_gen.generate_scene_image(
+                    prompt=outcome_prompt,
+                    filename_prefix=f"{game_id}/outcome_turn{turn}",
+                )
+                if outcome_image_url:
+                    save_game_image(
+                        type="outcome",
+                        image_url=outcome_image_url,
+                        game_id=game_id,
+                        turn=turn,
+                        prompt=outcome_prompt,
+                    )
+                    logger.info(f"[OUTCOME] Outcome image generated for turn {turn}: {outcome_image_url}")
+                else:
+                    logger.warning(f"[OUTCOME] Outcome image generation returned None for turn {turn}")
+            except Exception as img_err:
+                logger.warning(f"[OUTCOME] Failed to generate outcome image for turn {turn}: {img_err}")
 
-                # Build mission summary for the LLM prompt
-                mission_summary_parts = []
-                if mission:
-                    for obj in mission.get("objectives", []):
-                        stage = obj.get("stage", "?")
-                        name = obj.get("name", "")
-                        progress = mission.get("stage_progress", {}).get(str(stage), 0)
-                        threshold = obj.get("success_threshold", "?")
-                        done = "✓" if progress >= threshold else "✗"
-                        mission_summary_parts.append(f"{done} Этап {stage}: {name} ({progress}/{threshold})")
-                mission_summary = "\n".join(mission_summary_parts) if mission_summary_parts else "No mission data"
+            # Get alive players
+            try:
+                alive_players = get_live_players(game_id)
+            except Exception:
+                logger.warning(f"Failed to get live players for game {game_id}, falling back to all players", exc_info=True)
+                alive_players = get_players_in_game(game_id)
 
-                # Get outcome_type label for LLM
-                gs = get_game_strings(language)
-                go_msgs = gs.get("game_over", {})
-                outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
+            # Compute crew counts for outcome display
+            total_crew = len(all_briefings)  # all participants (players + NPCs)
+            dead_this_turn = len(dead_crew)
+            alive_crew = total_crew - dead_this_turn
 
-                gm = create_game_server(language=language)
-                game_over = gm.generate_game_over_outcome(
-                    outcome_type=outcome_label,
-                    outcome_narrative=outcome_text[:2000],
-                    mission_summary=mission_summary,
+            # ── Await pending action image tasks ───────────────────────
+            # Ensures action images (showing the consequences of player
+            # actions) arrive BEFORE the outcome text, not after.
+            action_key = (turn, game_id)
+            pending = list(_pending_action_tasks.pop(action_key, set()))
+            if pending:
+                logger.info(f"[OUTCOME] Waiting for {len(pending)} action image(s) before pushing outcome for turn {turn}")
+                results = await asyncio.gather(*pending, return_exceptions=True)
+                for i, r in enumerate(results):
+                    if isinstance(r, Exception):
+                        logger.warning(f"[OUTCOME] Action image task {i} failed: {r}")
+
+            # ── Build action images array with captions ────────────────
+            # After awaiting all pending tasks, briefings now have chosen_action_url populated.
+            # Format: 'Ход X — Имя — Роль — Действие'
+            action_images = []
+            all_briefings_fresh = get_all_briefings_for_turn(turn, game_id) or all_briefings
+            gs = get_game_strings(language)
+            caption_prefix = gs["turn_prefix_simple"].format(turn=turn)
+
+            for b in all_briefings_fresh:
+                action_url = b.get("chosen_action_url")
+                if not action_url:
+                    continue
+
+                # Determine entity name and role
+                player_id = b.get("player_id")
+                npc_key = b.get("npc_key")
+
+                if player_id:
+                    p = get_player_profile(player_id)
+                    if p:
+                        entity_name = p.get("player_name", "") or str(player_id)
+                        role_name = p.get("role", "")
+                    else:
+                        entity_name = str(player_id)
+                        role_name = b.get("role", "")
+                elif npc_key:
+                    n = get_npc_profile(npc_key)
+                    if n:
+                        entity_name = n.get("npc_name", npc_key)
+                        role_name = n.get("role", "")
+                    else:
+                        entity_name = npc_key
+                        role_name = b.get("role", "")
+                else:
+                    continue
+
+                # Find action text
+                selected_id = b.get("selected_action_id")
+                action_text = ""
+                for c in b.get("choices", []):
+                    if c.get("id") == selected_id:
+                        action_text = c.get("text", c.get("description", ""))
+                        break
+                if not action_text:
+                    action_text = selected_id or ""
+
+                # Truncate action text for caption (max 60 chars)
+                short_action = action_text[:57] + "..." if len(action_text) > 60 else action_text
+
+                caption = f"{caption_prefix} — {entity_name} — {role_name} — {short_action}"
+                action_images.append(
+                    {
+                        "image_url": action_url,
+                        "caption": caption,
+                        "player_id": player_id,
+                        "npc_key": npc_key,
+                    }
                 )
 
-                finale_narrative = game_over.get("finale_narrative", "")
-                finale_image_prompt = game_over.get("finale_image_prompt", "")
-
-                # Generate finale image via ComfyUI
-                finale_image_url = None
-                if finale_image_prompt:
-                    try:
-                        image_gen = create_image_generator()
-                        finale_image_url = await image_gen.generate_scene_image(
-                            prompt=finale_image_prompt,
-                            filename_prefix=f"{game_id}/finale_{outcome_type}",
-                        )
-                        if finale_image_url:
-                            save_game_image(
-                                type="finale",
-                                image_url=finale_image_url,
-                                game_id=game_id,
-                                turn=turn,
-                                prompt=finale_image_prompt,
-                            )
-                            logger.info(f"[GAME_OVER] Finale image generated: {finale_image_url}")
-                    except Exception as img_err:
-                        logger.warning(f"[GAME_OVER] Failed to generate finale image: {img_err}")
-
-                # Build available games list (excluding this finished game)
-                all_games = get_available_games()
-                available_games = []
-                for game in all_games:
-                    if game["game_id"] == game_id:
-                        continue
-                    gid = game["game_id"]
-                    available_games.append(
+            # ── Build injury notices for push ───────────────────────────
+            injury_notices = []
+            crew_injured_list = outcome.get("crew_injured", [])
+            for injury_entry in crew_injured_list:
+                if isinstance(injury_entry, list) and len(injury_entry) >= 2:
+                    injury_notices.append(
                         {
-                            "game_id": gid,
-                            "name": get_game_title(gid) or game.get("name", ""),
-                            "player_count": get_player_count_in_game(gid),
-                            "language": get_game_language(gid),
+                            "name": str(injury_entry[0]),
+                            "role": str(injury_entry[1]),
+                            "severity": str(injury_entry[2]) if len(injury_entry) >= 3 else "unknown",
                         }
                     )
 
-                await push_game_over(
-                    game_id=game_id,
-                    finale_narrative=finale_narrative or outcome_text[:1000],
-                    finale_image_url=finale_image_url,
-                    outcome_type=outcome_type,
-                    alive_players=alive_players,
-                    available_games=available_games,
-                    language=language,
-                )
-                logger.info(f"[GAME_OVER] Finale delivered to {len(alive_players)} players: {outcome_type}")
-            except Exception as go_err:
-                logger.error(f"[GAME_OVER] Finale generation/delivery failed: {go_err}", exc_info=True)
+            # ── Build personal outcomes for push ────────────────────────
+            personal_outcomes = outcome.get("personal_outcomes", [])
 
-    except Exception as e:
-        logger.error(f"[OUTCOME] Analysis failed for Turn {turn}: {e}", exc_info=True)
+            # Push outcome synchronously so message order is deterministic
+            # (outcome arrives BEFORE new turn briefings)
+            try:
+                await push_turn_outcome(
+                    game_id=game_id,
+                    turn=turn,
+                    outcome_text=outcome_text,
+                    alive_players=alive_players,
+                    outcome_image_url=outcome_image_url,
+                    ship_status="destroyed" if ship_destroyed else "alive",
+                    mission_progress=mission_progress,
+                    death_notices=death_notices,
+                    injury_notices=injury_notices,
+                    personal_outcomes=personal_outcomes,
+                    action_images=action_images,
+                    language=language,
+                    ship_hull_integrity=ship_hull,
+                    ship_shields=ship_shields,
+                    ship_systems_offline=ship_systems_offline,
+                    total_crew_count=total_crew,
+                    alive_crew_count=alive_crew,
+                )
+                logger.info(f"[OUTCOME] Outcome delivered for turn {turn} to {len(alive_players)} players")
+            except Exception as push_err:
+                logger.error(f"[OUTCOME] Failed to deliver outcome for turn {turn}: {push_err}", exc_info=True)
+
+            # ── Game Over: generate and deliver finale ──────────────────
+            game_ended = mission_completed or ship_destroyed or crew_wiped
+            if game_ended:
+                try:
+                    outcome_type = "victory" if mission_completed else "defeat"
+                    logger.info(f"[GAME_OVER] Game ended: {outcome_type}, generating finale...")
+
+                    # Build mission summary for the LLM prompt
+                    mission_summary_parts = []
+                    if mission:
+                        for obj in mission.get("objectives", []):
+                            stage = obj.get("stage", "?")
+                            name = obj.get("name", "")
+                            progress = mission.get("stage_progress", {}).get(str(stage), 0)
+                            threshold = obj.get("success_threshold", "?")
+                            done = "✓" if progress >= threshold else "✗"
+                            mission_summary_parts.append(f"{done} Этап {stage}: {name} ({progress}/{threshold})")
+                    mission_summary = "\n".join(mission_summary_parts) if mission_summary_parts else "No mission data"
+
+                    # Get outcome_type label for LLM
+                    gs = get_game_strings(language)
+                    go_msgs = gs.get("game_over", {})
+                    outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
+
+                    gm = create_game_server(language=language)
+                    game_over = gm.generate_game_over_outcome(
+                        outcome_type=outcome_label,
+                        outcome_narrative=outcome_text[:2000],
+                        mission_summary=mission_summary,
+                    )
+
+                    finale_narrative = game_over.get("finale_narrative", "")
+                    finale_image_prompt = game_over.get("finale_image_prompt", "")
+
+                    # Generate finale image via ComfyUI
+                    finale_image_url = None
+                    if finale_image_prompt:
+                        try:
+                            image_gen = create_image_generator()
+                            finale_image_url = await image_gen.generate_scene_image(
+                                prompt=finale_image_prompt,
+                                filename_prefix=f"{game_id}/finale_{outcome_type}",
+                            )
+                            if finale_image_url:
+                                save_game_image(
+                                    type="finale",
+                                    image_url=finale_image_url,
+                                    game_id=game_id,
+                                    turn=turn,
+                                    prompt=finale_image_prompt,
+                                )
+                                logger.info(f"[GAME_OVER] Finale image generated: {finale_image_url}")
+                        except Exception as img_err:
+                            logger.warning(f"[GAME_OVER] Failed to generate finale image: {img_err}")
+
+                    # Build available games list (excluding this finished game)
+                    all_games = get_available_games()
+                    available_games = []
+                    for game in all_games:
+                        if game["game_id"] == game_id:
+                            continue
+                        gid = game["game_id"]
+                        available_games.append(
+                            {
+                                "game_id": gid,
+                                "name": get_game_title(gid) or game.get("name", ""),
+                                "player_count": get_player_count_in_game(gid),
+                                "language": get_game_language(gid),
+                            }
+                        )
+
+                    await push_game_over(
+                        game_id=game_id,
+                        finale_narrative=finale_narrative or outcome_text[:1000],
+                        finale_image_url=finale_image_url,
+                        outcome_type=outcome_type,
+                        alive_players=alive_players,
+                        available_games=available_games,
+                        language=language,
+                    )
+                    logger.info(f"[GAME_OVER] Finale delivered to {len(alive_players)} players: {outcome_type}")
+
+                    # Persist finale so /turn can replay it later
+                    save_game_finale(
+                        game_id=game_id,
+                        finale_narrative=finale_narrative or outcome_text[:2000],
+                        finale_outcome_type=outcome_type,
+                        finale_image_url=finale_image_url or "",
+                    )
+                except Exception as go_err:
+                    logger.error(f"[GAME_OVER] Finale generation/delivery failed: {go_err}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"[OUTCOME] Analysis failed for Turn {turn}: {e}", exc_info=True)
 
 
 # ============== Admin endpoints ==============
@@ -4507,7 +4702,7 @@ async def admin_analyze_turn(
         turn_num = turn
 
     logger.info(f"[ADMIN] Manual outcome analysis for Turn {turn_num}")
-    await _analyze_turn_outcome(turn_num, language=language, game_id=game_id)
+    await _analyze_turn_outcome(turn_num, language=language, game_id=game_id, force=True)
 
     game_turn = get_game_turn(turn_num, game_id)
     outcome_str = game_turn.get("combined_outcome", "{}") if game_turn else "{}"
@@ -5119,7 +5314,8 @@ async def admin_restart_game(
 
     logger.info("=== ADMIN RESTART GAME COMPLETED ===")
 
-    asyncio.create_task(_notify_scheduler("reset"))
+    # Re-register with scheduler (reactivates if previously ended)
+    asyncio.create_task(_register_game_in_scheduler(game_id))
 
     return {
         "status": "success",

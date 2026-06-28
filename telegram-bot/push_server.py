@@ -12,7 +12,7 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from aiogram.exceptions import TelegramBadRequest
 from aiohttp import web
-from language import get_actions, get_bridge, get_current_turn, get_notifications, get_push_outcome
+from language import get_actions, get_bridge, get_current_turn, get_notifications, get_onboarding, get_push_outcome
 from retry import call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -807,6 +807,167 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "sent": sent_player_ids})
 
 
+async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
+    """Handle POST /push/onboarding-ready — onboarding images are ready.
+
+    Called by game-server after background image generation completes.
+    Sends (or updates) the first question with images to the player.
+    """
+    bot: Bot = request.app["bot"]
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    player_id = payload.get("player_id")
+    game_id = payload.get("game_id", "default_game")
+    session_id = payload.get("session_id", "")
+    language = payload.get("language", "ru")
+    question = payload.get("question")
+    game_title = payload.get("game_title", "")
+    welcome_message = payload.get("welcome_message", "")
+
+    if not player_id:
+        return web.json_response({"error": "Missing player_id"}, status=400)
+
+    logger.info(
+        f"[PUSH_ONBOARDING] Received onboarding-ready for player {player_id}, "
+        f"session {session_id}, has_question={bool(question)}, has_images={bool(question and question.get('image_url'))}"
+    )
+
+    try:
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+        from aiogram.exceptions import TelegramBadRequest
+
+        # Build the full onboarding message
+        welcome_text = welcome_message or ""
+        if game_title:
+            welcome_text = f"**{_escape_md(game_title)}**\n\n{welcome_text}" if welcome_text else f"**{_escape_md(game_title)}**"
+
+        # Send splash image with game description
+        splash_sent = False
+        try:
+            import aiohttp as _aiohttp
+            GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
+            async with _aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{GAME_SERVER_URL}/content/splash-image",
+                    params={"game_id": game_id},
+                    timeout=_aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        splash_data = await resp.json()
+                        splash_url = splash_data.get("image_url")
+                        if splash_url:
+                            # Download and send splash image
+                            async with session.get(splash_url, timeout=_aiohttp.ClientTimeout(total=30)) as img_resp:
+                                if img_resp.status == 200:
+                                    photo_data = await img_resp.read()
+                                    photo = BufferedInputFile(photo_data, filename="splash.png")
+                                    await bot.send_photo(
+                                        chat_id=player_id,
+                                        photo=photo,
+                                        caption=welcome_text,
+                                        parse_mode="Markdown",
+                                    )
+                                    splash_sent = True
+        except Exception as e:
+            logger.warning(f"[PUSH_ONBOARDING] Failed to send splash image for player {player_id}: {e}")
+
+        if not splash_sent and welcome_text:
+            await bot.send_message(
+                chat_id=player_id,
+                text=welcome_text,
+                parse_mode="Markdown",
+            )
+
+        # Send first question with images (if available)
+        if question:
+            # Update player state with session info
+            from player_store import update_player_state
+            update_player_state(
+                player_id,
+                onboarding_session_id=session_id,
+                game_id=game_id,
+                current_question_id=question.get("id", 1),
+                current_options=question.get("options", []),
+                current_question_text=question.get("text", ""),
+                current_question_image_url=question.get("image_url"),
+            )
+
+            # Build keyboard and send question
+            options = question.get("options", [])
+            keyboard_rows = []
+            for i, opt in enumerate(options):
+                keyboard_rows.append([
+                    InlineKeyboardButton(
+                        text=f"{i + 1}. {_escape_md(opt.get('label', opt['value']))}",
+                        callback_data=f"answer:{question['id']}:{i}:{opt['value']}",
+                    )
+                ])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+            image_url = question.get("image_url")
+            question_text = question.get("text", "")
+            options_text = "\n\n".join(
+                f"{i + 1}. {_escape_md(o.get('label', o['value']))}" for i, o in enumerate(options)
+            )
+            full_text = get_onboarding(language)["question_prefix"].format(
+                id=question["id"],
+                text=_escape_md(question_text),
+            )
+            if options_text:
+                full_text += f"\n\n---\n\n{options_text}"
+
+            if image_url:
+                try:
+                    import aiohttp as _aiohttp2
+                    async with _aiohttp2.ClientSession() as session:
+                        async with session.get(image_url, timeout=_aiohttp2.ClientTimeout(total=30)) as img_resp:
+                            if img_resp.status == 200:
+                                photo_data = await img_resp.read()
+                                photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
+                                await bot.send_photo(
+                                    chat_id=player_id,
+                                    photo=photo,
+                                    caption=full_text,
+                                    parse_mode="Markdown",
+                                    reply_markup=keyboard,
+                                )
+                            else:
+                                await bot.send_message(
+                                    chat_id=player_id,
+                                    text=full_text,
+                                    parse_mode="Markdown",
+                                    reply_markup=keyboard,
+                                )
+                except Exception as e:
+                    logger.warning(f"[PUSH_ONBOARDING] Failed to send question image for player {player_id}: {e}")
+                    await bot.send_message(
+                        chat_id=player_id,
+                        text=full_text,
+                        parse_mode="Markdown",
+                        reply_markup=keyboard,
+                    )
+            else:
+                await bot.send_message(
+                    chat_id=player_id,
+                    text=full_text,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
+
+        return web.json_response({"status": "ok", "player_id": player_id})
+
+    except TelegramBadRequest as e:
+        logger.error(f"[PUSH_ONBOARDING] Telegram error for player {player_id}: {e}")
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.error(f"[PUSH_ONBOARDING] Unexpected error for player {player_id}: {e}", exc_info=True)
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_health(request: web.Request) -> web.Response:
     """Handle GET /health for health checks."""
     return web.json_response({"status": "ok"})
@@ -858,6 +1019,7 @@ async def start_push_server(
     app.router.add_post("/push/outcome", handle_push_outcome)
     app.router.add_post("/push/game-over", handle_push_game_over)
     app.router.add_post("/push/gm-notification", handle_gm_notification)
+    app.router.add_post("/push/onboarding-ready", handle_push_onboarding_ready)
     app.router.add_get("/health", handle_health)
 
     runner = web.AppRunner(app)

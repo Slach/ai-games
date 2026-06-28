@@ -74,10 +74,16 @@ def escape_markdown(text: str) -> str:
 
 
 def _format_scheduler_time(iso_string: str) -> str:
-    """Convert ISO datetime string like '2026-06-28T02:38:40.024464'
-    to a human-readable format: '2026-06-28 02:38:40'."""
+    """Convert ISO datetime string to a human-readable format with timezone.
+
+    Scheduler stores times in UTC. Example output: '2026-06-28 15:19 UTC'.
+    """
     try:
-        return datetime.fromisoformat(iso_string).strftime("%Y-%m-%d %H:%M:%S")
+        dt = datetime.fromisoformat(iso_string)
+        if dt.tzinfo is None:
+            from datetime import timezone as _tz
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.strftime("%Y-%m-%d %H:%M %Z")
     except (ValueError, TypeError):
         logger.warning(f"Failed to parse scheduler time: {iso_string}", stack_info=True)
         return iso_string
@@ -147,6 +153,82 @@ def _mark_briefing_sent(player_id: int, turn_num: int) -> None:
     """Record that a briefing was sent — updates both in-memory cache and DB."""
     _last_sent_briefing_turn[player_id] = turn_num
     update_player_state(player_id, last_briefing_turn_sent=turn_num)
+
+
+async def _download_image(url: str, timeout: int = 30) -> bytes | None:
+    """Download an image from URL and return raw bytes."""
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp,
+        ):
+            if resp.status == 200:
+                return await resp.read()
+            logger.warning(f"Failed to download image from {url}: HTTP {resp.status}")
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to download image from {url}: {e}")
+        return None
+
+
+async def _send_split_message(
+    target: types.Message,
+    text: str,
+    parse_mode: str | None = None,
+    max_len: int = 4096,
+) -> None:
+    """Send a potentially long message as one or more parts.
+
+    If text fits within max_len, sends as one message.
+    If too long, splits at paragraph boundaries (\\n\\n).
+    """
+    if len(text) <= max_len:
+        await target.answer(text, parse_mode=parse_mode)
+        return
+
+    # Split at paragraph boundaries
+    parts: list[str] = []
+    paragraphs = text.split("\n\n")
+    current = ""
+    for para in paragraphs:
+        if current and len(current) + len(para) + 2 > max_len:
+            parts.append(current)
+            current = para
+        elif current:
+            current += "\n\n" + para
+        else:
+            if len(para) > max_len:
+                # Single paragraph too long — split at line boundaries
+                lines = para.split("\n")
+                for line in lines:
+                    if current and len(current) + len(line) + 1 > max_len:
+                        parts.append(current)
+                        current = line
+                    elif current:
+                        current += "\n" + line
+                    else:
+                        # Single line too long — hard cut
+                        if len(line) > max_len:
+                            for i in range(0, len(line), max_len - 3):
+                                chunk = line[i:i + max_len - 3]
+                                if i + max_len - 3 < len(line):
+                                    chunk += "..."
+                                parts.append(chunk)
+                        else:
+                            current = line
+                if current:
+                    parts.append(current)
+                current = ""
+            else:
+                current = para
+    if current:
+        parts.append(current)
+
+    # Send parts with continuation markers
+    total = len(parts)
+    for i, part in enumerate(parts):
+        prefix = f"({i + 1}/{total}) " if total > 1 else ""
+        await target.answer(prefix + part, parse_mode=parse_mode)
 
 
 # ============== Helper Functions ==============
@@ -966,6 +1048,7 @@ async def player_language_selection_callback(callback: types.CallbackQuery, stat
         return
 
     player_id = callback.from_user.id
+    logger.info("[HANDLER] player_language_selection_callback")
     message = callback.message
 
     if not isinstance(message, types.Message):
@@ -1073,26 +1156,11 @@ async def start_onboarding_flow(
                 "player_name": player_name,
                 "language": effective_language,
             },
-            timeout_total=600,
+            timeout_total=120,
         )
         logger.info(f"Onboarding start response: {result}")
         if result is None:
             raise Exception("No response from API when starting onboarding")
-
-        welcome_text = result.get("welcome_message") or msgs["welcome"]
-        game_title = result.get("game_title", "")
-        if game_title:
-            welcome_text = f"**{game_title}**\n\n{welcome_text}" if welcome_text else f"**{game_title}**"
-
-        # Send splash image with game description as caption
-        # NOTE: No main menu keyboard during onboarding — buttons show only after completion
-        splash_sent = await send_random_splash_image(message, welcome_text, game_id=game_id)
-        if not splash_sent:
-            # Fallback: send text-only if no splash image available
-            await message.answer(
-                welcome_text,
-                parse_mode="Markdown",
-            )
 
         session_id = result.get("session_id")
         resolved_game_id = result.get("game_id", game_id)
@@ -1104,6 +1172,9 @@ async def start_onboarding_flow(
         if not question:
             raise Exception("No question returned from API")
 
+        pending_images = result.get("pending_images", False)
+
+        # Always save session + question state so it survives restarts
         await state.update_data(
             session_id=session_id,
             game_id=resolved_game_id,
@@ -1120,14 +1191,36 @@ async def start_onboarding_flow(
             current_question_image_url=question.get("image_url"),
         )
 
-        logger.info(f"First onboarding question: id={question['id']}, text={question['text']}...")
-        logger.info(f"Question options: {[opt['value'] for opt in question['options']]}")
-        if question.get("image_url"):
-            logger.info(f"Question has image: {question['image_url']}")
+        if pending_images:
+            # Images are being generated in background.
+            # Show "please wait" message — the actual question with images
+            # will be delivered via /push/onboarding-ready.
+            wait_text = msgs.get("generating_images") or (
+                "🎨 Generating illustrations for your adventure...\n"
+                "This should take about a minute. Please wait."
+            )
+            await message.answer(wait_text, parse_mode="Markdown")
+            await state.set_state(OnboardingState.waiting_for_answer)
+            logger.info(f"Onboarding pending_images for player {player_id}, waiting for push")
+        else:
+            # Backward-compat / fast path: images already available
+            welcome_text = result.get("welcome_message") or msgs["welcome"]
+            game_title = result.get("game_title", "")
+            if game_title:
+                welcome_text = f"**{game_title}**\n\n{welcome_text}" if welcome_text else f"**{game_title}**"
 
-        keyboard = create_onboarding_keyboard(question["options"], question["id"])
-        await send_question_with_image(message, question, keyboard, effective_language)
-        await state.set_state(OnboardingState.waiting_for_answer)
+            splash_sent = await send_random_splash_image(message, welcome_text, game_id=game_id)
+            if not splash_sent:
+                await message.answer(welcome_text, parse_mode="Markdown")
+
+            logger.info(f"First onboarding question: id={question['id']}, text={question['text']}...")
+            logger.info(f"Question options: {[opt['value'] for opt in question['options']]}")
+            if question.get("image_url"):
+                logger.info(f"Question has image: {question['image_url']}")
+
+            keyboard = create_onboarding_keyboard(question["options"], question["id"])
+            await send_question_with_image(message, question, keyboard, effective_language)
+            await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
         logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}", exc_info=True)
@@ -1538,6 +1631,7 @@ async def cmd_profile(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_profile")
     player_lang = get_player_language(player_id)
 
     try:
@@ -1618,17 +1712,69 @@ async def cmd_turn(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_turn")
     player_lang = get_player_language(player_id)
 
     try:
         msgs = lang.get_current_turn(player_lang)
 
-        # First try to get personal briefing (new system)
+        # ── Check game state ────────────────────────────────────────
+        state = await api_request("GET", "/game/state")
+        if not state:
+            await message.answer(lang.get_errors(player_lang)["api_error"])
+            return
+
+        game_status = state.get("status", "active")
+        # state.turn is the NEXT turn to generate; latest completed is turn-1
+        current_turn_num = max(1, (state.get("turn", 1) or 1) - 1)
+
+        # ── Game over: show finale ──────────────────────────────────
+        if game_status != "active":
+            reason_map = {
+                "mission_complete": msgs["game_over_reason_mission_complete"],
+                "ship_destroyed": msgs["game_over_reason_ship_destroyed"],
+                "crew_wiped": msgs["game_over_reason_crew_wiped"],
+                "game_over": msgs["game_over_reason_game_over"],
+            }
+            reason = reason_map.get(game_status, game_status)
+
+            try:
+                finale = await api_request("GET", "/game/finale", ignore_codes=(404,))
+            except Exception:
+                logger.error(f"Failed to fetch finale for player {player_id}", exc_info=True)
+                finale = None
+
+            if finale:
+                # Show finale image if available
+                finale_image_url = finale.get("finale_image_url")
+                if finale_image_url:
+                    try:
+                        img_data = await _download_image(finale_image_url)
+                        if img_data:
+                            photo = BufferedInputFile(img_data, filename="finale.png")
+                            title_text = msgs["game_over_victory_title"] if finale.get("finale_outcome_type") == "victory" else msgs["game_over_defeat_title"]
+                            await message.answer_photo(photo=photo, caption=f"*{title_text}*", parse_mode="Markdown")
+                            logger.info(f"[TURN] Sent finale image to player {player_id}")
+                    except Exception as e:
+                        logger.warning(f"[TURN] Failed to send finale image: {e}")
+
+                title_text = msgs["game_over_victory_title"] if finale.get("finale_outcome_type") == "victory" else msgs["game_over_defeat_title"]
+                full_text = f"*{title_text}*\n\n*{reason}*\n\n{finale['finale_narrative']}"
+                await _send_split_message(
+                    message, full_text, parse_mode="Markdown", max_len=4096
+                )
+            else:
+                # No finale available — show basic game-over info
+                title_text = msgs["game_over_defeat_title"]
+                await message.answer(
+                    f"*{title_text}*\n\n*{reason}*\n\n{msgs['game_over_no_finale']}",
+                    parse_mode="Markdown",
+                )
+            return
+
+        # ── Game is active — try personal briefing (new system) ──────
         briefing = None
-        current_turn_num = 1
         try:
-            state = await api_request("GET", "/game/state")
-            current_turn_num = state.get("turn", 1) if state else 1
             briefing = await api_request(
                 "GET",
                 f"/game/briefing/{player_id}/{current_turn_num}",
@@ -1664,71 +1810,121 @@ async def cmd_turn(message: types.Message):
                     exc_info=True,
                 )
 
-            crew_behavior_text = ""
+            # Send action image first, if available
+            chosen_action_url = briefing.get("chosen_action_url")
+            if chosen_action_url:
+                try:
+                    img_data = await _download_image(chosen_action_url)
+                    if img_data:
+                        photo = BufferedInputFile(img_data, filename="action.png")
+                        await message.answer_photo(photo=photo)
+                        logger.info(f"[TURN] Sent action image for player {player_id}, turn {briefing['turn']}")
+                except Exception as e:
+                    logger.warning(f"[TURN] Failed to send action image: {e}")
+
+            # Briefing message: split if too long
+            briefing_text = msgs["briefing_header"].format(briefing=briefing["briefing"])
+            actions_block = "\n\n" + msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"]
+
             if crew_dialogues:
                 dialogue_lines = []
                 for d in crew_dialogues:
                     line = f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}"
                     dialogue_lines.append(line)
-                crew_separator = "\n---\n"
-                crew_behavior_text = f"\n\n{msgs['crew_dialogues']}\n{crew_separator.join(dialogue_lines)}"
+                crew_text = msgs["crew_dialogues"] + "\n" + "\n---\n".join(dialogue_lines)
 
-            # Send action image first, if available
-            chosen_action_url = briefing.get("chosen_action_url")
-            if chosen_action_url:
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        resp = await session.get(
-                            chosen_action_url,
-                            timeout=aiohttp.ClientTimeout(total=30),
-                        )
-                        if resp.status == 200:
-                            photo_data = await resp.read()
-                            photo = BufferedInputFile(photo_data, filename="action.png")
-                            await message.answer_photo(
-                                photo=photo,
-                            )
-                            logger.info(f"[TURN] Sent action image for player {player_id}, turn {briefing['turn']}")
-                        else:
-                            logger.warning(f"[TURN] Failed to download action image: {resp.status}")
-                except Exception as e:
-                    logger.warning(f"[TURN] Failed to send action image: {e}")
-
-            await message.answer(
-                msgs["briefing_header"].format(briefing=briefing["briefing"]) + crew_behavior_text + "\n\n" + msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"],
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
+                # Send briefing
+                await _send_split_message(message, briefing_text, parse_mode="Markdown")
+                # Send dialogues
+                await _send_split_message(message, crew_text, parse_mode="Markdown")
+                # Send actions
+                await message.answer(actions_block, parse_mode="Markdown", reply_markup=keyboard)
+            else:
+                full = briefing_text + actions_block
+                await _send_split_message(message, full, parse_mode="Markdown")
+                if keyboard:
+                    await message.answer(
+                        msgs["select_action"],
+                        parse_mode="Markdown",
+                        reply_markup=keyboard,
+                    )
         else:
-            # Legacy system: show global story
+            # Legacy system: show global story — split into parts
             turn_data = await api_request("GET", "/game/current-turn")
             if turn_data is None:
                 await message.answer(lang.get_errors(player_lang)["api_error"])
                 return
 
-            # Create action keyboard if there are actions to select
-            keyboard = None
-            if turn_data.get("player_actions"):
-                keyboard = create_action_keyboard(turn_data["player_actions"])
+            turn_number = turn_data["turn"]
 
-            # Build actions text
-            actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(turn_data.get("player_actions", []))])
+            # Part 1: Story + scene image
+            scene_image_url = None
+            try:
+                scene_resp = await api_request(
+                    "GET",
+                    "/game/bridge-image",
+                    params={"turn": turn_number, "game_id": turn_data.get("game_id", "default_game")},
+                    ignore_codes=(404,),
+                )
+                if scene_resp:
+                    scene_image_url = scene_resp.get("image_url")
+            except Exception:
+                logger.warning(
+                    f"Failed to fetch scene image for player {player_id} turn {turn_number}",
+                    exc_info=True,
+                )
 
-            # Build crew behavior text from NPC dialogues (integrated, no separate section)
-            crew_behavior_text = ""
+            if scene_image_url:
+                try:
+                    img_data = await _download_image(scene_image_url)
+                    if img_data:
+                        photo = BufferedInputFile(img_data, filename="scene.png")
+                        caption = msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"])
+                        # Truncate caption to 1024 Telegram limit for photos
+                        if len(caption) > 1024:
+                            caption = caption[:1021] + "..."
+                        await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
+                        logger.info(f"[TURN] Sent scene image for player {player_id}, turn {turn_number}")
+                    else:
+                        await _send_split_message(
+                            message,
+                            msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"]),
+                            parse_mode="Markdown",
+                        )
+                except Exception as e:
+                    logger.warning(f"[TURN] Failed to send scene image: {e}")
+                    # Fallback: send story without image
+                    await _send_split_message(
+                        message,
+                        msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"]),
+                        parse_mode="Markdown",
+                    )
+            else:
+                await _send_split_message(
+                    message,
+                    msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"]),
+                    parse_mode="Markdown",
+                )
+
+            # Part 2: Crew dialogues (if any)
             if turn_data.get("crew_dialogues"):
                 dialogue_lines = []
                 for d in turn_data["crew_dialogues"]:
                     line = f"*{d['npc']}*: {d['dialogue']}"
                     dialogue_lines.append(line)
-                crew_separator = "\n---\n"
-                crew_behavior_text = f"\n\n{msgs['crew_dialogues']}\n{crew_separator.join(dialogue_lines)}"
+                crew_text = msgs["crew_dialogues"] + "\n" + "\n---\n".join(dialogue_lines)
+                await _send_split_message(message, crew_text, parse_mode="Markdown")
 
-            await message.answer(
-                msgs["title"].format(turn=turn_data["turn"]) + f"\n\n{msgs['story'].format(story=turn_data['story'])}" + crew_behavior_text + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
+            # Part 3: Actions + keyboard (or selected action if already chosen)
+            player_actions = turn_data.get("player_actions", [])
+            if player_actions:
+                keyboard = create_action_keyboard(player_actions)
+                actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(player_actions)])
+                await message.answer(
+                    msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"],
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
 
     except Exception as e:
         logger.error(f"Failed to get current turn for player {player_id}: {e}", exc_info=True)
@@ -1741,6 +1937,7 @@ async def cmd_bridge(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_bridge")
 
     try:
         # Get mission info
@@ -1779,6 +1976,7 @@ async def cmd_team(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_team")
     msgs = lang.get_team(get_player_language(player_id))
 
     try:
@@ -1881,6 +2079,7 @@ async def cmd_invite(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_invite")
 
     try:
         profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
@@ -1993,6 +2192,7 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_reset")
     reset_msgs = lang.get_reset(get_player_language(player_id))
 
     # Only offer reset when there is something to wipe (a profile or an in-flight
@@ -2030,6 +2230,7 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
         await callback.answer()
         return
     player_id = callback.from_user.id
+    logger.info("[HANDLER] reset_confirm_callback")
     player_lang = get_player_language(player_id)
     reset_msgs = lang.get_reset(player_lang)
 
@@ -2074,7 +2275,7 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
     try:
         _last_sent_briefing_turn.pop(player_id, None)
     except KeyError:
-        pass
+        pass  # Not in cache — fine, nothing to clear
     try:
         update_player_state(player_id, last_briefing_turn_sent=None)
     except Exception as e:
@@ -2098,6 +2299,7 @@ async def cmd_help(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_help")
 
     msgs = lang.get_help(get_player_language(player_id))
 
@@ -2136,6 +2338,7 @@ async def cmd_gm_start(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_start")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2194,6 +2397,7 @@ async def cmd_gm_kick(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_kick")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2259,6 +2463,7 @@ async def cmd_gm_list(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_list")
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2267,7 +2472,7 @@ async def cmd_gm_list(message: types.Message):
         return
 
     try:
-        result = await api_request("GET", "/admin/list-games")
+        result = await api_request("GET", "/admin/list-games", params={"include_ended": "true"})
         games = result.get("games", []) if result else []
 
         if not games:
@@ -2275,18 +2480,48 @@ async def cmd_gm_list(message: types.Message):
             return
 
         lines = [gm_msgs["games_list_header"], ""]
+        ended_lines = []
+        active_count = 0
+
+        # Fetch per-game scheduler status for scheduling info
+        sched_by_game: dict[str, dict] = {}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{GAME_SCHEDULER_URL}/scheduler/status",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        sched_data = await resp.json()
+                        # Response is a LIST of per-game status dicts
+                        if isinstance(sched_data, list):
+                            for entry in sched_data:
+                                gid = entry.get("game_id")
+                                if gid:
+                                    sched_by_game[gid] = entry
+        except Exception:
+            logger.warning("Failed to fetch scheduler status for /gm_list", exc_info=True)
+
         for idx, game in enumerate(games, start=1):
             game_id = game.get("game_id", "unknown")
             title = game.get("title") or game.get("name") or gm_msgs["default_game_title"]
             player_count = game.get("player_count", 0)
             onboarding_count = game.get("onboarding_count", 0)
             turn = game.get("current_turn", 0)
-            started = game.get("started", False)
-            status = "started" if started else "waiting"
-            status_icon = "🚀" if started else "⏳"
+            game_status = game.get("status", "active")
             lang_flag = lang.get_language_flag(game.get("language", "ru"))
-            lines.append(
-                gm_msgs["games_list_entry"].format(
+
+            if game_status != "active":
+                # Ended game — collect separately
+                ended_lines.append(
+                    f"{idx}. `{game_id}` — {title} (🏁 {gm_msgs['game_ended_label']}, 🎯 Turn: {turn}) {lang_flag}"
+                )
+            else:
+                active_count += 1
+                started = game.get("started", False)
+                status = "started" if started else "waiting"
+                status_icon = "🚀" if started else "⏳"
+                line = gm_msgs["games_list_entry"].format(
                     idx=idx,
                     game_id=game_id,
                     title=title,
@@ -2295,27 +2530,25 @@ async def cmd_gm_list(message: types.Message):
                     onboarding_count=onboarding_count,
                     status_icon=status_icon,
                     status=status,
-                )
-                + f" {lang_flag}"
-            )
+                ) + f" {lang_flag}"
 
-        # Append scheduler status
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{GAME_SCHEDULER_URL}/scheduler/status",
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status == 200:
-                        sched = await resp.json()
-                        lines.append("")
-                        if sched.get("mode") == "paused":
-                            lines.append(gm_msgs["scheduler_paused"])
-                        elif sched.get("next_run_at"):
-                            time_str = _format_scheduler_time(sched["next_run_at"])
-                            lines.append(gm_msgs["next_turn_auto"].format(time=time_str))
-        except Exception:
-            pass
+                # Append per-game scheduling info
+                sched = sched_by_game.get(game_id)
+                if sched:
+                    mode = sched.get("mode", "")
+                    if mode == "paused":
+                        line += f"  — ⏸ {gm_msgs['scheduler_paused_label']}"
+                    elif sched.get("next_run_at"):
+                        time_str = _format_scheduler_time(sched["next_run_at"])
+                        line += f"  — ⏭ {gm_msgs['next_turn_short'].format(time=time_str)}"
+
+                lines.append(line)
+
+        # Append ended games section if any
+        if ended_lines:
+            lines.append("")
+            lines.append(f"🏁 **{gm_msgs['game_ended_label']}:**")
+            lines.extend(ended_lines)
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
@@ -2332,6 +2565,7 @@ async def cmd_gm_pause(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_pause")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2397,6 +2631,7 @@ async def cmd_gm_continue(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_continue")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2456,6 +2691,7 @@ async def cmd_gm_turn(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_turn")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2515,6 +2751,7 @@ async def cmd_gm_restart(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_restart")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2617,6 +2854,7 @@ async def cmd_gm_status(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_status")
     player_lang = get_player_language(player_id)
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2642,19 +2880,42 @@ async def cmd_gm_status(message: types.Message):
             await message.answer(gm_msgs["status_error"].format(error="No response"))
             return
 
-        # Build header
+        # Build header — detect if game has ended
+        game_status = result.get("status", "active")
+        game_ended = game_status != "active"
         ship = gm_msgs["ship_intact"] if result.get("ship_alive") else gm_msgs["ship_destroyed"]
-        status_label = result.get("status", "?")
-        header = gm_msgs["status_header"].format(
-            game_id=game_id,
-            turn=result.get("current_turn", result.get("turn", 1)),
-            status=status_label,
-            ship=ship,
-            player_count=result.get("player_count", 0),
-            alive_count=result.get("alive_count", 0),
-            npc_count=result.get("npc_count", 0),
-            npc_alive_count=result.get("npc_alive_count", 0),
-        )
+
+        if game_ended:
+            # Map status codes to human-readable reasons
+            reason_map = {
+                "mission_complete": gm_msgs["ended_reason_mission_complete"],
+                "ship_destroyed": gm_msgs["ended_reason_ship_destroyed"],
+                "crew_wiped": gm_msgs["ended_reason_crew_wiped"],
+                "game_over": gm_msgs["ended_reason_game_over"],
+            }
+            reason = reason_map.get(game_status, game_status)
+            header = gm_msgs["status_ended_header"].format(
+                game_id=game_id,
+                turn=result.get("current_turn", result.get("turn", 1)),
+                reason=reason,
+                ship=ship,
+                player_count=result.get("player_count", 0),
+                alive_count=result.get("alive_count", 0),
+                npc_count=result.get("npc_count", 0),
+                npc_alive_count=result.get("npc_alive_count", 0),
+            )
+        else:
+            status_label = game_status
+            header = gm_msgs["status_header"].format(
+                game_id=game_id,
+                turn=result.get("current_turn", result.get("turn", 1)),
+                status=status_label,
+                ship=ship,
+                player_count=result.get("player_count", 0),
+                alive_count=result.get("alive_count", 0),
+                npc_count=result.get("npc_count", 0),
+                npc_alive_count=result.get("npc_alive_count", 0),
+            )
 
         # Build players section
         players_text = ""
@@ -2701,22 +2962,23 @@ async def cmd_gm_status(message: types.Message):
         # Combine full message
         full_message = header + "\n" + players_text + "\n\n" + npcs_text
 
-        # Fetch scheduler status
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{GAME_SCHEDULER_URL}/scheduler/status",
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status == 200:
-                        sched = await resp.json()
-                        if sched.get("mode") == "paused":
-                            full_message += "\n\n" + gm_msgs["scheduler_paused"]
-                        elif sched.get("next_run_at"):
-                            time_str = _format_scheduler_time(sched["next_run_at"])
-                            full_message += "\n\n" + gm_msgs["next_turn_at"].format(time=time_str)
-        except Exception:
-            pass  # Scheduler unavailable, omit the line
+        # Fetch scheduler status — only show for active games, skip for ended games
+        if not game_ended:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{GAME_SCHEDULER_URL}/scheduler/status",
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        if resp.status == 200:
+                            sched = await resp.json()
+                            if sched.get("mode") == "paused":
+                                full_message += "\n\n" + gm_msgs["scheduler_paused"]
+                            elif sched.get("next_run_at"):
+                                time_str = _format_scheduler_time(sched["next_run_at"])
+                                full_message += "\n\n" + gm_msgs["next_turn_at"].format(time=time_str)
+            except Exception:
+                logger.warning(f"Failed to fetch scheduler status for game {game_id}", exc_info=True)
 
         # Telegram's limit is 4096 chars; use 3950 as safe threshold
         MAX_STATUS_LEN = 3950
@@ -2746,6 +3008,7 @@ async def cmd_gm_lang(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_lang")
     gm_msgs = lang.get_gm_commands(get_player_language(player_id))
 
     if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
@@ -2797,6 +3060,7 @@ async def handle_voice_message(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] handle_voice_message")
 
     msgs = lang.get_messages(get_player_language(player_id))
     await message.answer(msgs["voice_received"])
@@ -2821,6 +3085,7 @@ async def handle_text_message(message: types.Message):
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info("[HANDLER] handle_text_message")
     player_lang = get_player_language(player_id)
 
     try:
@@ -2872,6 +3137,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
         return
     msg: types.Message = callback.message  # type: ignore[assignment]
     player_id = callback.from_user.id
+    logger.info("[HANDLER] handle_onboarding_inline_answer")
     player_lang = get_player_language(player_id)
 
     parts = callback.data.split(":")
@@ -3030,6 +3296,7 @@ async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMCon
         return
     msg: types.Message = callback.message
     player_id = callback.from_user.id
+    logger.info("[HANDLER] clear_onboarding_callback")
 
     parts = callback.data.split(":")
     if len(parts) != 2:
@@ -3073,6 +3340,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         return
     answer_text = message.text
     player_id = message.from_user.id
+    logger.info("[HANDLER] onboarding_answer")
     error_msgs = lang.get_errors(get_player_language(player_id))
 
     logger.info(f"Onboarding answer handler called: player={player_id}, text='{answer_text}'")
@@ -3208,6 +3476,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
 async def action_selection(callback: types.CallbackQuery):
     """Handle player action selection"""
     player_id = callback.from_user.id
+    logger.info("[HANDLER] action_selection")
     player_lang = get_player_language(player_id)
     if callback.data is None:
         await callback.answer(lang.get_errors(player_lang)["invalid_format"])
@@ -3262,7 +3531,7 @@ async def action_selection(callback: types.CallbackQuery):
         try:
             action_lang = await get_game_language("default_game", fallback=player_lang)
         except Exception:
-            pass
+            logger.warning(f"Failed to get game language for fallback, using player lang", exc_info=True)
         msgs = lang.get_actions(action_lang)
         if callback.message:
             await callback.message.answer(msgs["error"].format(error=str(e)))
@@ -3271,6 +3540,7 @@ async def action_selection(callback: types.CallbackQuery):
 async def refresh_game(callback: types.CallbackQuery):
     """Refresh game information"""
     player_id = callback.from_user.id
+    logger.info("[HANDLER] refresh_game")
     player_lang = get_player_language(player_id)
     if callback.data is None:
         await callback.answer(lang.get_errors(player_lang)["invalid_format"])

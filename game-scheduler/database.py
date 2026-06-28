@@ -1,10 +1,10 @@
 """
-SQLite database for Game Scheduler — persistent scheduler state.
+SQLite database for Game Scheduler — persistent per-game scheduler state.
 """
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,38 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent / "scheduler.db"
 
-MIGRATIONS: list[tuple[int, str]] = []
+# ── Migrations ──────────────────────────────────────────────────────
+# Each entry: (version, SQL). Applied sequentially on init_db().
+# DO NOT edit existing entries — add new ones.
+
+MIGRATIONS: list[tuple[int, str]] = [
+    (
+        1,
+        """
+        -- Upgrade: add per-game schedule table, migrate old single-row data,
+        -- apply env-var default for games not yet tracked.
+        CREATE TABLE IF NOT EXISTS game_schedules (
+            game_id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL DEFAULT 'scheduled',
+            schedule_type TEXT NOT NULL DEFAULT 'interval',
+            schedule_value TEXT NOT NULL DEFAULT '8h',
+            last_run_at TEXT,
+            next_run_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        -- Migrate old single-row into per-game entry IF it exists
+        INSERT OR IGNORE INTO game_schedules
+            (game_id, mode, schedule_type, schedule_value,
+             last_run_at, next_run_at, created_at, updated_at)
+        SELECT
+            game_id, mode, schedule_type, schedule_value,
+            last_run_at, next_run_at, updated_at, updated_at
+        FROM scheduler_state WHERE id = 1;
+        """,
+    ),
+]
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -21,8 +52,14 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
-def init_db() -> None:
-    """Initialize database: create tables, apply migrations, seed defaults."""
+def init_db(default_schedule: str = "8h") -> None:
+    """Initialize database: create tables, apply migrations, seed defaults.
+
+    Args:
+        default_schedule: The env-var default schedule string (e.g. "8h")
+                          used when creating entries for games without a
+                          persisted schedule.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     conn.execute("PRAGMA journal_mode=WAL")
@@ -51,7 +88,7 @@ def init_db() -> None:
             cursor.executescript(sql)
             cursor.execute(
                 "INSERT INTO migrations (version, applied_at) VALUES (?, ?)",
-                (version, datetime.now().isoformat()),
+                (version, datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
     conn.commit()
@@ -59,42 +96,67 @@ def init_db() -> None:
     logger.info("Scheduler database initialized")
 
 
-def load_scheduler_state() -> dict[str, Any]:
-    """Load persisted scheduler state. Returns defaults if no row exists."""
+# ── Per-game schedule helpers ───────────────────────────────────────
+
+
+def load_game_schedule(game_id: str) -> dict[str, Any] | None:
+    """Load persisted schedule for one game. Returns None if not found."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    row = cursor.execute("SELECT * FROM scheduler_state WHERE id = 1").fetchone()
+    row = cursor.execute("SELECT * FROM game_schedules WHERE game_id = ?", (game_id,)).fetchone()
     conn.close()
     if row is None:
-        return {}
+        return None
     return dict(row)
 
 
-def save_scheduler_state(
+def save_game_schedule(
+    game_id: str,
     mode: str,
-    last_run_at: str | None,
-    next_run_at: str | None,
     schedule_type: str,
     schedule_value: str,
-    game_id: str,
+    last_run_at: str | None = None,
+    next_run_at: str | None = None,
 ) -> None:
-    """Persist scheduler state (upsert singleton row)."""
+    """Upsert a schedule for a specific game."""
+    now = datetime.now(timezone.utc).isoformat()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO scheduler_state (id, mode, last_run_at, next_run_at, schedule_type, schedule_value, game_id, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        INSERT INTO game_schedules
+            (game_id, mode, schedule_type, schedule_value,
+             last_run_at, next_run_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(game_id) DO UPDATE SET
             mode = excluded.mode,
-            last_run_at = excluded.last_run_at,
-            next_run_at = excluded.next_run_at,
             schedule_type = excluded.schedule_type,
             schedule_value = excluded.schedule_value,
-            game_id = excluded.game_id,
+            last_run_at = excluded.last_run_at,
+            next_run_at = excluded.next_run_at,
             updated_at = excluded.updated_at
         """,
-        (mode, last_run_at, next_run_at, schedule_type, schedule_value, game_id, datetime.now().isoformat()),
+        (game_id, mode, schedule_type, schedule_value, last_run_at, next_run_at, now, now),
     )
     conn.commit()
     conn.close()
+
+
+def delete_game_schedule(game_id: str) -> bool:
+    """Remove a game from the scheduler. Returns True if deleted."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM game_schedules WHERE game_id = ?", (game_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def list_game_schedules() -> list[dict[str, Any]]:
+    """Load all persisted game schedules."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    rows = cursor.execute("SELECT * FROM game_schedules ORDER BY game_id").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
