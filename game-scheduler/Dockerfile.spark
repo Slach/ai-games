@@ -16,4 +16,4 @@ RUN uv pip install --no-cache --system --break-system-packages -r requirements.t
 
 COPY *.py .
 ENV PYTHONDONTWRITEBYTECODE=1
-CMD ["python", "game_master.py"]
+CMD ["python", "main.py"]
