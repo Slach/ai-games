@@ -35,6 +35,24 @@ MIGRATIONS: list[tuple[int, str]] = [
     (3, "ALTER TABLE player_states ADD COLUMN current_question_text TEXT DEFAULT NULL;"),
     (4, "ALTER TABLE player_states ADD COLUMN current_question_image_url TEXT DEFAULT NULL;"),
     (5, "ALTER TABLE player_states RENAME COLUMN last_briefing_day_sent TO last_briefing_turn_sent;"),
+    (
+        6,
+        """
+        CREATE TABLE IF NOT EXISTS push_queue (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id   INTEGER NOT NULL,
+            push_type   TEXT NOT NULL,
+            payload     TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            error       TEXT DEFAULT NULL,
+            retry_count INTEGER DEFAULT 0,
+            turn        INTEGER DEFAULT NULL,
+            game_id     TEXT DEFAULT NULL,
+            created_at  TEXT NOT NULL,
+            sent_at     TEXT DEFAULT NULL
+        );
+        """,
+    ),
 ]
 
 
@@ -91,6 +109,20 @@ def init_db(db_path: str = DB_PATH) -> None:
         created_at   TEXT     DEFAULT (datetime('now')),
         PRIMARY KEY (referred_id, referrer_id, game_id)
     );
+
+    CREATE TABLE IF NOT EXISTS push_queue (
+        id          INTEGER  PRIMARY KEY AUTOINCREMENT,
+        player_id   INTEGER  NOT NULL,
+        push_type   TEXT     NOT NULL,
+        payload     TEXT     NOT NULL,
+        status      TEXT     NOT NULL DEFAULT 'pending',
+        error       TEXT     DEFAULT NULL,
+        retry_count INTEGER  DEFAULT 0,
+        turn        INTEGER  DEFAULT NULL,
+        game_id     TEXT     DEFAULT NULL,
+        created_at  TEXT     NOT NULL,
+        sent_at     TEXT     DEFAULT NULL
+    );
     """
     )
 
@@ -113,3 +145,93 @@ def init_db(db_path: str = DB_PATH) -> None:
                 conn.rollback()
 
     conn.close()
+
+
+# ── Push Queue helpers ────────────────────────────────────────────
+
+
+def insert_push_message(
+    player_id: int,
+    push_type: str,
+    payload: str,
+    turn: int | None = None,
+    game_id: str | None = None,
+    db_path: str = DB_PATH,
+) -> int:
+    """Insert a pending push message. Returns the new row id."""
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO push_queue (player_id, push_type, payload, status, turn, game_id, created_at)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?)""",
+        (player_id, push_type, payload, turn, game_id, datetime.now().isoformat()),
+    )
+    row_id: int = cursor.lastrowid or 0
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def mark_push_sent(push_id: int, db_path: str = DB_PATH) -> bool:
+    """Mark a push message as successfully sent."""
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE push_queue SET status = 'sent', sent_at = ? WHERE id = ?",
+        (datetime.now().isoformat(), push_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def mark_push_failed(push_id: int, error: str, db_path: str = DB_PATH) -> bool:
+    """Mark a push message as failed, incrementing retry_count."""
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE push_queue SET status = 'failed', error = ?, retry_count = retry_count + 1 WHERE id = ?",
+        (error, push_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def mark_push_expired(push_id: int, db_path: str = DB_PATH) -> bool:
+    """Mark a push message as expired (turn already passed)."""
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE push_queue SET status = 'expired', sent_at = ? WHERE id = ?",
+        (datetime.now().isoformat(), push_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def get_pending_push_messages(db_path: str = DB_PATH) -> list[dict]:
+    """Get all pending push messages, ordered by id (insertion order)."""
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM push_queue WHERE status = 'pending' ORDER BY id")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_pending_for_player(player_id: int, db_path: str = DB_PATH) -> list[dict]:
+    """Get pending push messages for a specific player, ordered by id."""
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM push_queue WHERE status = 'pending' AND player_id = ? ORDER BY id",
+        (player_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

@@ -259,12 +259,12 @@ docker compose exec telegram-bot ping game-server
 ## Configuration Details
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | LLM_URL | <http://llama.cpp:8090/v1> | LLM endpoint |
 | LLM_API_KEY | placeholder-key-for-llama-cpp | Required by OpenAI client |
 | COMFYUI_URL | <http://comfyui:8188> | Image gen endpoint |
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
-| GAME_SCHEDULE_TIME | 08:00 | Turn generation time |
+| GAME_SCHEDULE | 8h | Turn schedule: Nh/Nm/Ns, HH:MM, HH:MM,..., DAY-HH:MM |
 | GAME_SCHEDULER_MODE | scheduled | single/simulation/scheduled |
 
 ## Future Enhancements

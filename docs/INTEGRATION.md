@@ -284,7 +284,7 @@ A scheduled task runner that triggers turn episode generation.
 
 ```python
 GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
-GAME_SCHEDULE_TIME  = os.getenv("GAME_SCHEDULE_TIME", "08:00")  # UTC
+GAME_SCHEDULE  = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))  # Nh/Nm/Ns, HH:MM, HH:MM,..., DAY-HH:MM
 GAME_SCHEDULER_MODE    = os.getenv("GAME_SCHEDULER_MODE", "scheduled")  # single | simulation | scheduled
 ```
 
@@ -385,7 +385,7 @@ All inter-service dependencies use `condition: service_healthy`.
 | `COMFYUI_URL` | `http://comfyui:8188` | game-server | Image generation endpoint |
 | `TELEGRAM_BOT_TOKEN` | _(required)_ | telegram-bot | Telegram bot token from @BotFather |
 | `GAME_SERVER_URL` | `http://game-server:8000` | telegram-bot, game-scheduler | API URL |
-| `GAME_SCHEDULE_TIME` | `08:00` | game-scheduler | Daily generation time (UTC) |
+| `GAME_SCHEDULE` | `8h` | game-scheduler | Turn schedule: Nh/Nm/Ns, HH:MM, HH:MM,..., DAY-HH:MM |
 | `GAME_SCHEDULER_MODE` | `scheduled` | game-scheduler | Run mode |
 | `ONBOARDING_QUESTIONS_COUNT` | `5` | game-server | Questions per onboarding |
 | `ONBOARDING_OPTIONS_COUNT` | `5` | game-server | Options per question |

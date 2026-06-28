@@ -39,8 +39,10 @@ from database import (
     end_game,
     get_all_active_npcs,
     get_all_briefings_for_turn,
+    get_all_games,
     get_all_npcs,
     get_available_games,
+    get_all_roles,
     get_available_roles,
     get_db_connection,
     get_dead_players,
@@ -385,7 +387,7 @@ async def generate_onboarding_question_images(
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.warning(f"Image generation task failed: {result}")
                 continue
             q, url = result
@@ -860,6 +862,7 @@ async def _background_onboarding_images(
             try:
                 from database import get_onboarding_session as _get_session
                 from database import update_onboarding_session as _update_session_db
+
                 sess = _get_session(session_id)
                 if sess:
                     _update_session_db(
@@ -902,6 +905,7 @@ async def _background_onboarding_images(
             try:
                 first_question = questions[0].model_dump() if questions else None
                 from push_client import push_onboarding_ready as _push_ready
+
                 success = await _push_ready(
                     player_id=player_id,
                     game_id=game_id,
@@ -1771,6 +1775,21 @@ async def get_current_game_turn(game_id: str = Query("default_game")):
     return turn_data
 
 
+@app.get("/games/current-turns")
+async def get_all_current_turns():
+    """Get current turn for every active game.
+
+    Returns a dict {game_id: current_turn} where current_turn is the
+    latest completed turn (game_state.turn - 1, minimum 1).
+    """
+    games = get_all_games()
+    result: dict[str, int] = {}
+    for g in games:
+        state = get_game_state(g["game_id"])
+        result[g["game_id"]] = max(1, state["turn"] - 1)
+    return result
+
+
 @app.get("/game/poll/{player_id}")
 async def poll_game_updates(player_id: int, since: str | None = None):
     """Poll for new game updates (turns, actions, messages) since last poll"""
@@ -2113,12 +2132,16 @@ async def get_player_briefing_endpoint(player_id: int, turn: int):
     briefing = get_player_briefing(turn, player_id, game_id=game_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found")
+    # Scene image for this turn
+    briefing_image_url = get_random_game_image(type="scene", turn=turn, game_id=game_id)
     return {
         "briefing": briefing["briefing"],
         "choices": briefing["choices"],
         "selected_action_id": briefing.get("selected_action_id"),
         "turn": briefing["turn"],
         "chosen_action_url": briefing.get("chosen_action_url"),
+        "briefing_image_url": briefing_image_url,
+        "avatar_url": profile.get("avatar_url") if profile else None,
     }
 
 
@@ -2568,9 +2591,7 @@ async def _analyze_turn_outcome(
         if not force:
             existing = get_game_turn(turn, game_id)
             if existing and existing.get("combined_outcome", "").strip():
-                logger.info(
-                    f"[OUTCOME] Turn {turn} already has combined outcome, skipping"
-                )
+                logger.info(f"[OUTCOME] Turn {turn} already has combined outcome, skipping")
                 return
 
         try:
@@ -2800,16 +2821,20 @@ async def _analyze_turn_outcome(
                 end_game("crew_wiped", game_id)
                 logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
 
-            # Also update game state with computed crew_health
+            # Also update game state with computed crew_health.
+            # Skip if the game has already ended — end_game() already set
+            # the correct status (mission_complete, ship_destroyed, etc.).
             state = get_game_state(game_id)
             ship_alive = not ship_destroyed and state.get("ship_alive", True)
-            update_game_state(
-                state["turn"],
-                "active" if ship_alive else "ship_destroyed",
-                ship_alive=ship_alive,
-                crew_health=crew_health,
-                game_id=game_id,
-            )
+            game_already_ended = mission_completed or ship_destroyed or crew_wiped
+            if not game_already_ended:
+                update_game_state(
+                    state["turn"],
+                    "active" if ship_alive else "ship_destroyed",
+                    ship_alive=ship_alive,
+                    crew_health=crew_health,
+                    game_id=game_id,
+                )
 
             # Log ship systems offline
             if ship_systems_offline:
@@ -4603,6 +4628,89 @@ async def admin_kick_player(request: KickPlayerRequest):
         "kicked_player_id": kicked_player_id,
         "role_key": role_key,
         "role_name": replaced["role_name"],
+        "npc_key": replaced["npc_key"],
+        "npc_name": replaced["npc_name"],
+        "reason": request.reason,
+    }
+
+
+class AutoKickBlockedRequest(BaseModel):
+    """Request to auto-kick a player who blocked the bot."""
+
+    player_id: int
+    reason: str = "bot was blocked"
+
+
+@app.post("/admin/auto-kick-blocked")
+async def admin_auto_kick_blocked(request: AutoKickBlockedRequest):
+    """Auto-kick a player who blocked the bot. Called by telegram-bot push server.
+
+    Looks up the player's game and role, replaces them with an NPC.
+    Idempotent: returns success if the player is already kicked/not in a game.
+    """
+    logger.info("=== AUTO KICK BLOCKED ===")
+    logger.info(f"player_id={request.player_id}, reason={request.reason}")
+
+    profile = get_player_profile(request.player_id)
+    if not profile:
+        logger.info(f"Player {request.player_id} has no profile, nothing to kick")
+        return {"status": "no_profile", "player_id": request.player_id}
+
+    game_id = profile.get("game_id", "") or ""
+    if not game_id:
+        logger.info(f"Player {request.player_id} is not in any game")
+        return {"status": "not_in_game", "player_id": request.player_id}
+
+    # Find which role this player holds in the game
+    role_key = None
+    all_roles = get_all_roles(game_id, language="en")
+    for r in all_roles:
+        if r.get("taken_by") == request.player_id:
+            role_key = r.get("role_key", "")
+            break
+
+    if not role_key:
+        logger.info(f"Player {request.player_id} holds no role in game {game_id}")
+        # Still clear game_id so they don't keep failing pushes
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE player_profiles SET game_id = NULL WHERE player_id = ?",
+            (request.player_id,),
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "no_role", "player_id": request.player_id, "game_id": game_id}
+
+    replaced = _replace_player_with_npc(
+        player_id=request.player_id,
+        role_key=role_key,
+        game_id=game_id,
+        reason=request.reason,
+        language="en",
+    )
+
+    # Remove from game but keep the profile data
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE player_profiles SET game_id = NULL WHERE player_id = ?",
+        (request.player_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    # Skip notification — user blocked the bot, they won't see it anyway.
+    # Skip NPC avatar generation — kick was automatic, not manual.
+
+    logger.info("=== AUTO KICK BLOCKED COMPLETED ===")
+    logger.info(f"Kicked blocked player {request.player_id} from game {game_id}, replaced with NPC {replaced['npc_name']} ({role_key})")
+
+    return {
+        "status": "kicked",
+        "kicked_player_id": request.player_id,
+        "game_id": game_id,
+        "role_key": role_key,
         "npc_key": replaced["npc_key"],
         "npc_name": replaced["npc_name"],
         "reason": request.reason,

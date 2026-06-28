@@ -2,7 +2,7 @@
 
 ## Base URL
 
-```
+```http
 http://game-server:8000
 ```
 
@@ -17,7 +17,7 @@ URL format: `http://comfyui:8188/view?filename=FILENAME&subfolder=SUBFOLDER&type
 ComfyUI appends `_00001_` (batch counter) and `.png` automatically.
 
 | Type | `filename_prefix` in code | Example resulting URL |
-|------|--------------------------|----------------------|
+| ---- | ------------------------ | --------------------- |
 | `avatar` | `{game_id}/avatar_{player_id}` | `http://comfyui:8188/view?filename=avatar_123456_00001_.png&subfolder=default_game&type=output` |
 | `loading` | `{game_id}/loading_{i}` | `http://comfyui:8188/view?filename=loading_2_00001_.png&subfolder=default_game&type=output` |
 | `splash` | `{game_id}/splash_{i}` | `http://comfyui:8188/view?filename=splash_2_00001_.png&subfolder=default_game&type=output` |
@@ -897,13 +897,13 @@ by the game-server when >= 3 players join (game starts). The GM can override sch
 ### Registration & Lifecycle
 
 | Event | What happens |
-|-------|-------------|
+| ----- | ------------ |
 | Game starts (>= 3 players join) | Game-server calls `POST /scheduler/register/{game_id}` with default schedule |
 | Game ends (ship destroyed / mission complete / crew wiped) | Scheduler sets `mode: "ended"` — schedule is **preserved** in DB for restart |
 | GM runs `/gm_schedule <game_id> 10m` | Telegram bot calls `POST /scheduler/schedule/{game_id}` with new schedule |
 | Scheduler restart | Loads all persisted schedules from DB; ended/paused games are skipped |
 
-### Endpoints
+### Scheduler Endpoints
 
 #### Scheduler Status
 
@@ -940,7 +940,12 @@ game-server when the game starts.
 {"schedule": "6h"}
 ```
 
-Schedule formats: `"Nh"`, `"Nm"`, `"Ns"` (interval) or `"HH:MM"` (daily at that time).
+Schedule formats:
+
+- `"Nh"`, `"Nm"`, `"Ns"` — interval (e.g. `"6h"`, `"30m"`, `"30s"`)
+- `"HH:MM"` — daily at that time (e.g. `"08:00"`)
+- `"HH:MM,HH:MM,..."` — multiple times per day (e.g. `"08:00,12:00,14:00"`)
+- `"DAY-HH:MM,..."` — multi-daily by weekday (e.g. `"mon-08:00,wed-12:00"`)
 
 #### Pause / Resume
 

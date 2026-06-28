@@ -80,7 +80,7 @@ This service triggers generation on schedule. It calls the game-server endpoints
 
 **Modes:**
 
-- `scheduled` (default) - runs daily generation on schedule based on GAME_SCHEDULE_TIME
+- `scheduled` (default) - runs generation on schedule based on GAME_SCHEDULE
 - `single` - single generation for testing/debugging
 
 ```bash
@@ -226,5 +226,5 @@ docker-compose restart telegram-bot
 | `LLM_MODEL` | LLM model name | `unsloth/Qwen3.5-27B` |
 | `COMFYUI_URL` | ComfyUI backend endpoint | `http://comfyui:8188` |
 | `GAME_SERVER_URL` | Game Master API endpoint | `http://game-server:8000` |
-| `GAME_SCHEDULE_TIME` | Turn generation time (24h format) | `08:00` |
+| `GAME_SCHEDULE` | Turn schedule: Nh/Nm/Ns, HH:MM, HH:MM,..., DAY-HH:MM | `8h` |
 | `GAME_SCHEDULER_MODE` | Scheduler mode: `scheduled` or `single` | `scheduled` |

@@ -97,8 +97,8 @@ Database: SQLite (game_server.db per service)
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  Scheduler triggers next turn (configurable interval: 8h,      │
-│  30m, or daily at HH:MM)                                       │
+│  Scheduler triggers next turn (configurable: interval Nh/Nm/Ns, │
+│  daily HH:MM, multi-daily DAY-HH:MM)                           │
 ├────────────────────────────────────────────────────────────────┤
 │  PREVIOUS TURN CLEANUP:                                         │
 │  - Auto-select actions for players who didn't choose            │
@@ -166,7 +166,7 @@ Database: SQLite (game_server.db per service)
 ### 4. Game Master Scheduler — `game-scheduler/game_server.py`
 
 - Standalone async service that calls game-server
-- Configurable schedule: interval (8h, 30m, 30s) or daily at HH:MM
+- Configurable schedule: interval (Nh/Nm/Ns), daily (HH:MM or HH:MM,...), multi-daily (DAY-HH:MM)
 - Modes: `scheduled` (loop) or `single` (one-shot for testing)
 - Turn lifecycle orchestration:
   1. Auto-select actions for unresponsive players (previous turn)

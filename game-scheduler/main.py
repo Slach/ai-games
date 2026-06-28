@@ -21,7 +21,6 @@ from database import (
     init_db,
     load_game_schedule,
     save_game_schedule,
-    delete_game_schedule,
     list_game_schedules,
 )
 
@@ -48,22 +47,34 @@ except (ValueError, TypeError):
 GAME_ID = os.getenv("GAME_ID", "default_game")
 
 
-def parse_schedule(schedule: str) -> tuple[str, int | str]:
+def parse_schedule(schedule: str) -> tuple[str, str]:
     """Parse schedule string into (type, value).
 
     Supported formats:
-    - HH:MM (e.g., "08:00") — daily at that time
     - Nh (e.g., "6h") — every N hours
     - Nm (e.g., "30m") — every N minutes
     - Ns (e.g., "30s") — every N seconds (testing)
+    - HH:MM (e.g., "08:00") — daily at that time
+    - HH:MM,HH:MM,... (e.g., "08:00,12:00,14:00") — daily at multiple times
+    - DAY-HH:MM,... (e.g., "mon-08:00,wed-12:00") — multi-daily by weekday
 
     Returns:
-        ("daily", "HH:MM") or ("interval", seconds)
+        ("interval", seconds_str) | ("daily", "HH:MM"|"HH:MM,...") |
+        ("multi_daily", "day-HH:MM,...")
     """
     s = schedule.strip().lower()
 
-    # HH:MM format — daily at specific time
-    if re.match(r"^\d{1,2}:\d{2}$", s):
+    # Multi-daily: day-time pairs like mon-08:00,wed-12:00
+    if re.match(r"^[a-z]{3}-\d{1,2}:\d{2}(,[a-z]{3}-\d{1,2}:\d{2})*$", s):
+        _DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+        for slot in s.split(","):
+            day, _ = slot.split("-", 1)
+            if day not in _DAYS:
+                raise ValueError(f"Invalid day '{day}' in schedule: {schedule}. Use mon/tue/wed/thu/fri/sat/sun")
+        return ("multi_daily", s)
+
+    # Daily: single or multiple HH:MM times
+    if re.match(r"^\d{1,2}:\d{2}(,\d{1,2}:\d{2})*$", s):
         return ("daily", s)
 
     # Interval format: Nh, Nm, Ns
@@ -75,16 +86,16 @@ def parse_schedule(schedule: str) -> tuple[str, int | str]:
             raise ValueError(f"Invalid schedule format: {schedule}") from None
         unit = m.group(2)
         if unit == "h":
-            return ("interval", value * 3600)
+            return ("interval", str(value * 3600))
         elif unit == "m":
-            return ("interval", value * 60)
+            return ("interval", str(value * 60))
         else:  # seconds
-            return ("interval", value)
+            return ("interval", str(value))
 
     raise ValueError(f"Invalid schedule format: {schedule}")
 
 
-def _compute_next_run(schedule_type: str, schedule_value: str | int, from_time: datetime | None = None) -> datetime:
+def _compute_next_run(schedule_type: str, schedule_value: str, from_time: datetime | None = None) -> datetime:
     """Compute next run time from a given from_time (default now)."""
     now = from_time or datetime.now(timezone.utc)
 
@@ -95,18 +106,40 @@ def _compute_next_run(schedule_type: str, schedule_value: str | int, from_time: 
             seconds = 3600.0
         return now + timedelta(seconds=seconds)
 
-    # Daily mode — next occurrence of HH:MM
-    schedule_hour, schedule_minute = map(int, str(schedule_value).split(":"))
-    next_run = now.replace(hour=schedule_hour, minute=schedule_minute, second=0, microsecond=0)
-    if next_run <= now:
-        next_run += timedelta(days=1)
-    return next_run
+    if schedule_type == "daily":
+        candidates: list[datetime] = []
+        for t in schedule_value.split(","):
+            h, m = map(int, t.strip().split(":"))
+            candidate = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if candidate <= now:
+                candidate += timedelta(days=1)
+            candidates.append(candidate)
+        return min(candidates)
+
+    if schedule_type == "multi_daily":
+        _DOW = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+        candidates: list[datetime] = []
+        for slot in schedule_value.split(","):
+            day, time_str = slot.strip().split("-", 1)
+            h, m = map(int, time_str.split(":"))
+            target_dow = _DOW[day]
+            days_ahead = (target_dow - now.weekday()) % 7
+            candidate = now.replace(hour=h, minute=m, second=0, microsecond=0) + timedelta(days=days_ahead)
+            if days_ahead == 0 and candidate <= now:
+                candidate += timedelta(days=7)
+            candidates.append(candidate)
+        return min(candidates)
+
+    # Fallback: treat as 8h interval
+    return now + timedelta(hours=8)
 
 
 def _schedule_label(schedule_type: str, schedule_value: str | int) -> str:
     """Human-readable label for a schedule."""
     if schedule_type == "daily":
-        return f"daily at {schedule_value}"
+        return f"daily: {schedule_value}"
+    if schedule_type == "multi_daily":
+        return f"multi-daily: {schedule_value}"
     return f"every {schedule_value}s"
 
 
@@ -618,6 +651,19 @@ async def handle_resume(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok" if ok else "not_found"})
 
 
+async def handle_reset(request: web.Request) -> web.Response:
+    scheduler: GameScheduler = request.app["scheduler"]
+    game_id = request.query.get("game_id", "") or os.getenv("GAME_ID", "default_game")
+    if not game_id:
+        return web.json_response({"status": "error", "message": "No game_id"}, status=400)
+    state = scheduler._games.get(game_id)
+    if not state:
+        return web.json_response({"status": "error", "message": f"Unknown game '{game_id}'"}, status=404)
+    new_next = state.reset_timer()
+    logger.info(f"POST /scheduler/reset — reset timer for game '{game_id}', next={new_next.isoformat()}")
+    return web.json_response({"status": "ok", "next_run_at": new_next.isoformat()})
+
+
 async def handle_generate_now(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
     game_id = request.query.get("game_id", "")
@@ -659,7 +705,7 @@ def create_app() -> web.Application:
         ok = scheduler.resume_game(game_id)
         return web.json_response({"status": "ok" if ok else "not_found"})
 
-    app.router.add_post("/scheduler/reset", handle_generate_now)
+    app.router.add_post("/scheduler/reset", handle_reset)
     app.router.add_post("/scheduler/generate-now", handle_generate_now)
 
     # ── Start scheduling loop ──

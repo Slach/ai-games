@@ -82,11 +82,36 @@ def _format_scheduler_time(iso_string: str) -> str:
         dt = datetime.fromisoformat(iso_string)
         if dt.tzinfo is None:
             from datetime import timezone as _tz
+
             dt = dt.replace(tzinfo=_tz.utc)
         return dt.strftime("%Y-%m-%d %H:%M %Z")
     except (ValueError, TypeError):
         logger.warning(f"Failed to parse scheduler time: {iso_string}", stack_info=True)
         return iso_string
+
+
+def _format_schedule_label(schedule_type: str, schedule_value: str) -> str:
+    """Convert raw schedule type/value into a compact label.
+
+    Returns strings like '8h', '30m', 'daily 08:00',
+    '08:00,12:00', 'mon-08:00,wed-12:00'.
+    """
+    if schedule_type == "daily":
+        return schedule_value
+    if schedule_type == "multi_daily":
+        return schedule_value
+    if schedule_type == "interval":
+        try:
+            seconds = int(schedule_value)
+        except (ValueError, TypeError):
+            return str(schedule_value)
+        if seconds >= 3600 and seconds % 3600 == 0:
+            return f"{seconds // 3600}h"
+        elif seconds >= 60 and seconds % 60 == 0:
+            return f"{seconds // 60}m"
+        else:
+            return f"{seconds}s"
+    return str(schedule_value)
 
 
 # ============== Configuration ==============
@@ -210,7 +235,7 @@ async def _send_split_message(
                         # Single line too long — hard cut
                         if len(line) > max_len:
                             for i in range(0, len(line), max_len - 3):
-                                chunk = line[i:i + max_len - 3]
+                                chunk = line[i : i + max_len - 3]
                                 if i + max_len - 3 < len(line):
                                     chunk += "..."
                                 parts.append(chunk)
@@ -687,6 +712,14 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             )
 
         # Send invite link if bot username and game ID are available
+        global BOT_USERNAME
+        if not BOT_USERNAME:
+            try:
+                bot_me = await call_with_retry(lambda: bot.get_me(), max_retries=3)
+                BOT_USERNAME = bot_me.username
+                logger.info(f"Bot username resolved on demand (avatar): {BOT_USERNAME}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch bot username on demand (avatar): {e}")
         if BOT_USERNAME:
             game_id = profile.get("game_id", "")
             if game_id:
@@ -1195,10 +1228,7 @@ async def start_onboarding_flow(
             # Images are being generated in background.
             # Show "please wait" message — the actual question with images
             # will be delivered via /push/onboarding-ready.
-            wait_text = msgs.get("generating_images") or (
-                "🎨 Generating illustrations for your adventure...\n"
-                "This should take about a minute. Please wait."
-            )
+            wait_text = msgs.get("generating_images") or ("🎨 Generating illustrations for your adventure...\nThis should take about a minute. Please wait.")
             await message.answer(wait_text, parse_mode="Markdown")
             await state.set_state(OnboardingState.waiting_for_answer)
             logger.info(f"Onboarding pending_images for player {player_id}, waiting for push")
@@ -1559,6 +1589,14 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 )
 
             # Send invite link for existing player
+            global BOT_USERNAME
+            if not BOT_USERNAME and message.bot is not None:
+                try:
+                    bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3)  # type: ignore[union-attr]
+                    BOT_USERNAME = bot_me.username
+                    logger.info(f"Bot username resolved on demand (start): {BOT_USERNAME}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch bot username on demand (start): {e}")
             if BOT_USERNAME:
                 game_id = profile.get("game_id", "")
                 if game_id and message.bot is not None:
@@ -1602,20 +1640,35 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
 
         else:
             if game_id:
-                # Deep link to a specific game — fetch its language
+                # Deep link to a specific game — ask for player name before onboarding
                 game_lang = DEFAULT_LANGUAGE
+                game_name = ""
                 try:
                     result = await api_request("GET", "/admin/list-games")
                     games = result.get("games", []) if result else []
                     for g in games:
                         if g.get("game_id") == game_id:
                             game_lang = g.get("language", DEFAULT_LANGUAGE)
+                            game_name = g.get("name", "")
                             break
                 except Exception as e:
                     logger.warning(f"Failed to fetch language for game {game_id}: {e}")
 
-                await send_random_loading_image(message, language=game_lang)
-                await start_onboarding_flow(message, state, player_id, game_id, language=game_lang)
+                onboarding_msgs = lang.get_onboarding(game_lang)
+                if game_name:
+                    await message.answer(
+                        onboarding_msgs["selected_game"].format(game_name=game_name),
+                        parse_mode="Markdown",
+                    )
+                await message.answer(
+                    onboarding_msgs["name_question"],
+                    parse_mode="Markdown",
+                )
+                await state.update_data(
+                    game_id=game_id,
+                    game_language=game_lang,
+                )
+                await state.set_state(OnboardingState.waiting_for_name)
             else:
                 # New player — ask for language preference first
                 await show_player_language_selection(message, state)
@@ -1760,9 +1813,7 @@ async def cmd_turn(message: types.Message):
 
                 title_text = msgs["game_over_victory_title"] if finale.get("finale_outcome_type") == "victory" else msgs["game_over_defeat_title"]
                 full_text = f"*{title_text}*\n\n*{reason}*\n\n{finale['finale_narrative']}"
-                await _send_split_message(
-                    message, full_text, parse_mode="Markdown", max_len=4096
-                )
+                await _send_split_message(message, full_text, parse_mode="Markdown", max_len=4096)
             else:
                 # No finale available — show basic game-over info
                 title_text = msgs["game_over_defeat_title"]
@@ -1810,7 +1861,34 @@ async def cmd_turn(message: types.Message):
                     exc_info=True,
                 )
 
-            # Send action image first, if available
+            # Send scene image first (introductory image for the turn)
+            briefing_image_url = briefing.get("briefing_image_url")
+            if briefing_image_url:
+                try:
+                    img_data = await _download_image(briefing_image_url)
+                    if img_data:
+                        photo = BufferedInputFile(img_data, filename="scene.png")
+                        caption = msgs["title"].format(turn=briefing["turn"])
+                        if len(caption) > 1024:
+                            caption = caption[:1021] + "..."
+                        await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
+                        logger.info(f"[TURN] Sent scene image for player {player_id}, turn {briefing['turn']}")
+                except Exception as e:
+                    logger.warning(f"[TURN] Failed to send scene image: {e}")
+
+            # Send player avatar before personal briefing
+            avatar_url = briefing.get("avatar_url")
+            if avatar_url:
+                try:
+                    img_data = await _download_image(avatar_url)
+                    if img_data:
+                        photo = BufferedInputFile(img_data, filename="avatar.png")
+                        await message.answer_photo(photo=photo)
+                        logger.info(f"[TURN] Sent avatar for player {player_id}")
+                except Exception as e:
+                    logger.warning(f"[TURN] Failed to send avatar: {e}")
+
+            # Send action image, if available
             chosen_action_url = briefing.get("chosen_action_url")
             if chosen_action_url:
                 try:
@@ -1822,8 +1900,8 @@ async def cmd_turn(message: types.Message):
                 except Exception as e:
                     logger.warning(f"[TURN] Failed to send action image: {e}")
 
-            # Briefing message: split if too long
-            briefing_text = msgs["briefing_header"].format(briefing=briefing["briefing"])
+            # Briefing message: split if too long (title line includes turn number)
+            briefing_text = msgs["title"].format(turn=briefing["turn"]) + "\n\n" + msgs["briefing_header"].format(briefing=briefing["briefing"])
             actions_block = "\n\n" + msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"]
 
             if crew_dialogues:
@@ -2101,12 +2179,26 @@ async def cmd_invite(message: types.Message):
         game_lang = await get_game_language(game_id, fallback=get_player_language(player_id))
         msgs = lang.get_onboarding(game_lang)
 
-        if not BOT_USERNAME or message.bot is None:
+        if message.bot is None:
             await message.answer(
                 "Bot username is not available. Invite links cannot be generated at this moment.",
                 reply_markup=create_main_menu_keyboard(),
             )
             return
+
+        global BOT_USERNAME
+        if not BOT_USERNAME:
+            try:
+                bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3)  # type: ignore[union-attr]
+                BOT_USERNAME = bot_me.username
+                logger.info(f"Bot username resolved on demand: {BOT_USERNAME}")
+            except Exception as e:
+                logger.error("Failed to fetch bot username on demand", exc_info=e)
+                await message.answer(
+                    "Bot username is not available. Invite links cannot be generated at this moment.",
+                    reply_markup=create_main_menu_keyboard(),
+                )
+                return
 
         # Fetch game title
         game_title = ""
@@ -2513,34 +2605,44 @@ async def cmd_gm_list(message: types.Message):
 
             if game_status != "active":
                 # Ended game — collect separately
-                ended_lines.append(
-                    f"{idx}. `{game_id}` — {title} (🏁 {gm_msgs['game_ended_label']}, 🎯 Turn: {turn}) {lang_flag}"
-                )
+                ended_lines.append(f"{idx}. `{game_id}` — {title} (🏁 {gm_msgs['game_ended_label']}, 🎯 Turn: {turn}) {lang_flag}")
             else:
                 active_count += 1
                 started = game.get("started", False)
                 status = "started" if started else "waiting"
                 status_icon = "🚀" if started else "⏳"
-                line = gm_msgs["games_list_entry"].format(
-                    idx=idx,
-                    game_id=game_id,
-                    title=title,
-                    turn=turn,
-                    player_count=player_count,
-                    onboarding_count=onboarding_count,
-                    status_icon=status_icon,
-                    status=status,
-                ) + f" {lang_flag}"
+                line = (
+                    gm_msgs["games_list_entry"].format(
+                        idx=idx,
+                        game_id=game_id,
+                        title=title,
+                        turn=turn,
+                        player_count=player_count,
+                        onboarding_count=onboarding_count,
+                        status_icon=status_icon,
+                        status=status,
+                    )
+                    + f" {lang_flag}"
+                )
 
                 # Append per-game scheduling info
                 sched = sched_by_game.get(game_id)
                 if sched:
+                    schedule_type = sched.get("schedule_type", "")
+                    schedule_value = sched.get("schedule_value", "")
+                    schedule_label = _format_schedule_label(schedule_type, schedule_value) if schedule_type else ""
                     mode = sched.get("mode", "")
                     if mode == "paused":
-                        line += f"  — ⏸ {gm_msgs['scheduler_paused_label']}"
+                        if schedule_label:
+                            line += f"  — {schedule_label}, ⏸ {gm_msgs['scheduler_paused_label']}"
+                        else:
+                            line += f"  — ⏸ {gm_msgs['scheduler_paused_label']}"
                     elif sched.get("next_run_at"):
                         time_str = _format_scheduler_time(sched["next_run_at"])
-                        line += f"  — ⏭ {gm_msgs['next_turn_short'].format(time=time_str)}"
+                        if schedule_label:
+                            line += f"  — ⏭ {schedule_label}, {gm_msgs['next_turn_short'].format(time=time_str)}"
+                        else:
+                            line += f"  — ⏭ {gm_msgs['next_turn_short'].format(time=time_str)}"
 
                 lines.append(line)
 
@@ -2556,10 +2658,72 @@ async def cmd_gm_list(message: types.Message):
         await message.answer(gm_msgs["list_games_error"].format(error=e))
 
 
-async def cmd_gm_pause(message: types.Message):
-    """GM command: Toggle scheduler pause/resume.
+async def cmd_gm_schedule(message: types.Message):
+    """GM command: Set the schedule format for a game.
 
-    Usage: /gm_pause
+    Usage: /gm_schedule <game_id> <format>
+    Only executable by the configured Game Master user.
+    """
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_schedule")
+    gm_msgs = lang.get_gm_commands(get_player_language(player_id))
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        logger.warning(f"Unauthorized /gm_schedule attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer(gm_msgs["schedule_usage"], parse_mode="Markdown")
+        return
+
+    game_id = parts[1].strip()
+    schedule_raw = parts[2].strip()
+
+    await message.answer(
+        gm_msgs["setting_schedule"].format(schedule=schedule_raw, game_id=game_id),
+        parse_mode="Markdown",
+    )
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{GAME_SCHEDULER_URL}/scheduler/schedule/{game_id}",
+                json={"schedule": schedule_raw},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    await message.answer(gm_msgs["schedule_error"].format(error=f"HTTP {resp.status}: {error_text}"))
+                    return
+                result = await resp.json()
+
+        if result.get("status") == "ok":
+            game = result["game"]
+            schedule_type = game.get("schedule_type", "")
+            schedule_value = game.get("schedule_value", "")
+            schedule_label = _format_schedule_label(schedule_type, schedule_value)
+            next_run_at = game.get("next_run_at")
+            next_run = _format_scheduler_time(next_run_at) if next_run_at else "—"
+            await message.answer(
+                gm_msgs["schedule_set"].format(game_id=game_id, schedule_label=schedule_label, next_run=next_run),
+                parse_mode="Markdown",
+            )
+        else:
+            error_msg = result.get("message", gm_msgs["unknown_error"])
+            await message.answer(gm_msgs["schedule_error"].format(error=error_msg))
+    except Exception as e:
+        logger.error(f"Failed to set schedule for game {game_id}: {e}", exc_info=True)
+        await message.answer(gm_msgs["schedule_error"].format(error=e))
+
+
+async def cmd_gm_pause(message: types.Message):
+    """GM command: Toggle scheduler pause/resume for a game.
+
+    Usage: /gm_pause [<game_id>]
     Only executable by the configured Game Master user.
     """
     if message.from_user is None:
@@ -2576,11 +2740,16 @@ async def cmd_gm_pause(message: types.Message):
 
     gm_msgs = lang.get_gm_commands(player_lang)
 
+    # Parse optional game_id; default to env GAME_ID
+    parts = (message.text or "").split()
+    game_id = parts[1].strip() if len(parts) > 1 else os.getenv("GAME_ID", "default_game")
+
     try:
         # First, check current state
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"{GAME_SCHEDULER_URL}/scheduler/status",
+                params={"game_id": game_id},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 if resp.status != 200:
@@ -2592,6 +2761,7 @@ async def cmd_gm_pause(message: types.Message):
             if sched.get("mode") == "paused":
                 async with session.post(
                     f"{GAME_SCHEDULER_URL}/scheduler/resume",
+                    params={"game_id": game_id},
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status == 200:
@@ -2606,6 +2776,7 @@ async def cmd_gm_pause(message: types.Message):
             else:
                 async with session.post(
                     f"{GAME_SCHEDULER_URL}/scheduler/pause",
+                    params={"game_id": game_id},
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status == 200:
@@ -2968,6 +3139,7 @@ async def cmd_gm_status(message: types.Message):
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
                         f"{GAME_SCHEDULER_URL}/scheduler/status",
+                        params={"game_id": game_id},
                         timeout=aiohttp.ClientTimeout(total=5),
                     ) as resp:
                         if resp.status == 200:
@@ -3531,7 +3703,7 @@ async def action_selection(callback: types.CallbackQuery):
         try:
             action_lang = await get_game_language("default_game", fallback=player_lang)
         except Exception:
-            logger.warning(f"Failed to get game language for fallback, using player lang", exc_info=True)
+            logger.warning("Failed to get game language for fallback, using player lang", exc_info=True)
         msgs = lang.get_actions(action_lang)
         if callback.message:
             await callback.message.answer(msgs["error"].format(error=str(e)))
@@ -3629,6 +3801,7 @@ async def main():
     dp.message.register(cmd_gm_start, Command("gm_start"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list, Command("gm_list"))
+    dp.message.register(cmd_gm_schedule, Command("gm_schedule"))
     dp.message.register(cmd_gm_pause, Command("gm_pause"))
     dp.message.register(cmd_gm_continue, Command("gm_continue"))
     dp.message.register(cmd_gm_turn, Command("gm_turn"))

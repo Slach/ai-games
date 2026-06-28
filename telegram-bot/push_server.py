@@ -1,6 +1,12 @@
-"""HTTP server for receiving push briefings from game-server."""
+"""HTTP server for receiving push briefings from game-server.
+
+Messages are first persisted to SQLite (push_queue table) then delivered
+by a background worker.  Per-player ordering is guaranteed: a failed
+message blocks subsequent messages for the same player until it succeeds.
+"""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -9,10 +15,29 @@ from typing import Any
 
 import aiohttp
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import (
+    BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+)
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiohttp import web
-from language import get_actions, get_bridge, get_current_turn, get_notifications, get_onboarding, get_push_outcome
+from database import (
+    get_pending_push_messages,
+    insert_push_message,
+    mark_push_expired,
+    mark_push_failed,
+    mark_push_sent,
+)
+from language import (
+    get_actions,
+    get_bridge,
+    get_current_turn,
+    get_notifications,
+    get_onboarding,
+    get_push_outcome,
+)
 from retry import call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -26,6 +51,8 @@ class _HealthCheckFilter(logging.Filter):
 logging.getLogger("aiohttp.access").addFilter(_HealthCheckFilter())
 
 
+# ── Configuration ──────────────────────────────────────────────────
+
 try:
     PUSH_SERVER_PORT = int(os.getenv("PUSH_SERVER_PORT", "9090"))
 except (ValueError, TypeError):
@@ -38,10 +65,109 @@ except (ValueError, TypeError):
     logger.warning("Invalid TELEGRAM_BOT_GAME_MASTER_ID env var, using default 0")
     GAME_MASTER_ID = 0
 
+GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
+
+
+# ── Per-player ordering & state ────────────────────────────────────
+
+# {player_id: asyncio.Lock} — ensures serial message delivery per player
+_player_locks: dict[int, asyncio.Lock] = {}
+
+# {game_id: current_turn} — updated from batch-fetch at startup and on
+# each incoming briefing payload.
+_current_turns: dict[str, int] = {}
+
+# Fires when _current_turns is first populated (startup batch fetch completes)
+_current_turns_ready = asyncio.Event()
+
+# Background worker task
+_sender_task: asyncio.Task[None] | None = None
+
+# Track players already auto-kicked (avoid repeated kick API calls)
+_blocked_players: set[int] = set()
+
+
+async def _auto_kick_blocked_player(player_id: int) -> bool:
+    """Call game-server to replace blocked player with NPC. Idempotent."""
+    if player_id in _blocked_players:
+        return True
+    _blocked_players.add(player_id)
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{GAME_SERVER_URL}/admin/auto-kick-blocked",
+                json={"player_id": player_id, "reason": "bot was blocked"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp,
+        ):
+            if resp.status == 200:
+                result = await resp.json()
+                logger.warning(
+                    "[BLOCKED] Auto-kicked player %d from game %s (status=%s)",
+                    player_id,
+                    result.get("game_id", "?"),
+                    result.get("status", "?"),
+                )
+                return True
+            else:
+                logger.error(
+                    "[BLOCKED] Auto-kick API returned %d for player %d",
+                    resp.status,
+                    player_id,
+                )
+                return False
+    except Exception as e:
+        logger.error(
+            "[BLOCKED] Failed to auto-kick player %d: %s",
+            player_id,
+            e,
+            exc_info=True,
+        )
+        return False
+
+
+def _get_player_lock(player_id: int) -> asyncio.Lock:
+    """Get or create the per-player asyncio.Lock."""
+    if player_id not in _player_locks:
+        _player_locks[player_id] = asyncio.Lock()
+    return _player_locks[player_id]
+
+
+async def _fetch_current_turns() -> dict[str, int]:
+    """Batch-fetch {game_id: current_turn} from game-server."""
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                f"{GAME_SERVER_URL}/games/current-turns",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp,
+        ):
+            if resp.status == 200:
+                data = await resp.json()
+                logger.info(
+                    "[PUSH] Fetched current turns for %d game(s): %s",
+                    len(data),
+                    data,
+                )
+                return {str(k): int(v) for k, v in data.items()}
+            else:
+                logger.warning("[PUSH] Failed to fetch current turns: HTTP %s", resp.status)
+    except Exception as e:
+        logger.warning("[PUSH] Failed to fetch current turns: %s", e)
+    return {}
+
+
+# ── Pending action image coordination ──────────────────────────────
+
 # Track pending action image deliveries so /push/outcome can wait for
 # action images to be sent to Telegram BEFORE the outcome message.
 # Key: (player_id, turn) -> asyncio.Event()
 _pending_action_events: dict[tuple[int, int], asyncio.Event] = {}
+
+
+# ── Helpers ────────────────────────────────────────────────────────
 
 
 def _escape_md(text: str) -> str:
@@ -57,11 +183,7 @@ def _build_briefing_text(
     language: str,
     personal_title: str = "",
 ) -> str:
-    """Build the full briefing message text for a player.
-
-    Uses personal_title (LLM-generated greeting with name+role) as the header
-    when available, falling back to the standard "Turn {turn}" title.
-    """
+    """Build the full briefing message text for a player."""
     current = get_current_turn(language)
     crew_txt = ""
     if crew_dialogues:
@@ -72,8 +194,6 @@ def _build_briefing_text(
 
     acts = "\n\n".join(f"{i + 1} - {_escape_md(a.get('text', a.get('description', '')))}" for i, a in enumerate(choices))
 
-    # Use personal_title when available (LLM-generated with name + role + greeting)
-    # Fall back to standard title format
     if personal_title:
         title_line = f"🎯 *{personal_title}*"
     else:
@@ -106,19 +226,34 @@ async def _download_image(url: str, timeout: int = 30) -> bytes | None:
     return None
 
 
-async def handle_push_briefings(request: web.Request) -> web.Response:
-    """Handle POST /push/briefings from game-server."""
-    bot: Bot = request.app["bot"]
-    language: str = request.app.get("language", "ru")
-    last_sent: dict[int, int | None] = request.app["last_sent_briefing_turn"]
-    mark_sent_fn: Callable[[int, int], None] = request.app["mark_sent_fn"]
-    create_keyboard_fn: Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] = request.app["create_keyboard_fn"]
+# ── Message delivery functions (called by background worker) ──────
 
-    try:
-        payload = await request.json()
-    except Exception as e:
-        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+_EXPIRED_NOTICE_RU = "К сожалению, мы не смогли доставить вам это сообщение вовремя — ход состоялся без вашего участия."
+_EXPIRED_NOTICE_EN = "Unfortunately we were unable to deliver this message in time — the turn took place without your participation."
 
+_EXPIRED_NOTICE: dict[str, str] = {
+    "ru": _EXPIRED_NOTICE_RU,
+    "en": _EXPIRED_NOTICE_EN,
+}
+
+
+def _is_stale(turn: int | None, game_id: str | None) -> bool:
+    """Check whether a message for *turn* of *game_id* is stale."""
+    if turn is None or game_id is None:
+        return False
+    current = _current_turns.get(game_id)
+    return current is not None and turn < current
+
+
+async def _deliver_briefing(
+    payload: dict[str, Any],
+    bot: Bot,
+    language: str,
+    create_keyboard_fn: Callable,
+    mark_sent_fn: Callable,
+    last_sent: dict[int, int],
+) -> bool:
+    """Deliver a /push/briefings message to all players in the payload."""
     turn = payload.get("turn")
     players = payload.get("players", [])
     bridge_url = payload.get("bridge_image_url")
@@ -129,25 +264,24 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
     global_narrative = payload.get("global_narrative", "")
     was_restarted = payload.get("was_restarted", False)
     language = payload.get("language", language)
+    game_id = payload.get("game_id", "default_game")
 
     if not turn or not players:
-        return web.json_response({"status": "error", "message": "Missing turn or players"}, status=400)
+        return True  # nothing to send → success
 
-    sent_player_ids: list[int] = []
-    already_sent = False
+    stale = _is_stale(turn, game_id)
 
     for player_data in players:
         player_id = player_data.get("player_id")
         if not player_id:
             continue
 
-        # Dedup: skip if already sent for this turn (unless force_resend)
+        # Dedup: skip if already sent for this turn
         if not force_resend and last_sent.get(player_id) == turn:
-            already_sent = True
             continue
 
         try:
-            # 0. Send "game restarted" notification (first turn after restart)
+            # Game restarted notification
             if was_restarted:
                 notif_msgs = get_notifications(language)
                 restart_msg = notif_msgs.get("game_restarted", "")
@@ -160,7 +294,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                         )
                     )
 
-            # 1. Send bridge image + mission (first turn only)
+            # Bridge image + mission (first turn only)
             if is_first_turn and bridge_url:
                 bridge_msgs = get_bridge(language)
                 caption = bridge_msgs.get("title", "")
@@ -187,11 +321,9 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                         )
                     )
 
-                # Send mission description as separate message
                 if mission:
                     desc = mission.get("description", "")
                     if desc:
-                        bridge_msgs = get_bridge(language)
                         await call_with_retry(
                             lambda: bot.send_message(
                                 chat_id=player_id,
@@ -200,7 +332,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                             )
                         )
 
-            # 2. Send scene image (common for all players) before global narrative
+            # Scene image
             scene_url = player_data.get("scene_url")
             if scene_url:
                 img_data = await _download_image(scene_url)
@@ -208,9 +340,6 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     photo = BufferedInputFile(img_data, filename="scene.png")
                     current_msgs = get_current_turn(language)
                     intro_title = current_msgs.get("global_intro_title", "Turn {turn}").format(turn=turn)
-                    # If global_narrative is long enough to need a separate
-                    # text message (step 3), only put the title in the caption
-                    # to avoid showing the same "Ход N — Общая вводная" twice.
                     caption = f"*{intro_title}*"
                     narrative_too_long = global_narrative and len(global_narrative) > 900
                     if not narrative_too_long and global_narrative:
@@ -224,7 +353,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                         )
                     )
 
-            # 3. Send global narrative as separate text (if too long for caption)
+            # Global narrative as separate text (if too long)
             if global_narrative and len(global_narrative) > 900:
                 current_msgs = get_current_turn(language)
                 intro_title = current_msgs.get("global_intro_title", "Turn {turn}").format(turn=turn)
@@ -236,17 +365,15 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     )
                 )
 
-            # 4. Send character image (per-player personal intro image)
+            # Character image
             character_image_url = player_data.get("character_image_url")
             personal_title = player_data.get("personal_title", "")
-
             if character_image_url:
                 img_data = await _download_image(character_image_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="character.png")
-                    # Use personal_title as caption, or build fallback
                     outcome_msgs = get_push_outcome(language)
-                    caption_text = personal_title or (outcome_msgs["character_caption"]).format(turn=turn, role=player_data.get("role", ""))
+                    caption_text = personal_title or outcome_msgs["character_caption"].format(turn=turn, role=player_data.get("role", ""))
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
@@ -256,7 +383,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                         )
                     )
 
-            # 5. Send previous action image (if any)
+            # Previous action image
             chosen_action_url = player_data.get("chosen_action_url")
             if chosen_action_url:
                 img_data = await _download_image(chosen_action_url)
@@ -264,95 +391,90 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
                     photo = BufferedInputFile(img_data, filename="action.png")
                     await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo))
 
-            # 6. Send briefing text + action choices
+            # Briefing text + action choices (or expired notice)
             briefing = player_data.get("briefing", "")
             choices = player_data.get("choices", [])
             if briefing and choices:
-                text = _build_briefing_text(
-                    turn,
-                    briefing,
-                    choices,
-                    crew_dialogues,
-                    language,
-                    personal_title=personal_title,
-                )
-                keyboard = create_keyboard_fn(choices)
-                await call_with_retry(
-                    lambda: bot.send_message(
-                        chat_id=player_id,
-                        text=text,
-                        parse_mode="Markdown",
-                        reply_markup=keyboard,
+                if stale:
+                    # Send without keyboard, with apology notice
+                    text = _build_briefing_text(
+                        turn,
+                        briefing,
+                        choices,
+                        crew_dialogues,
+                        language,
+                        personal_title=personal_title,
                     )
-                )
+                    expired_text = _EXPIRED_NOTICE.get(language, _EXPIRED_NOTICE["en"])
+                    text += f"\n\n_{_escape_md(expired_text)}_"
+                    await call_with_retry(
+                        lambda: bot.send_message(
+                            chat_id=player_id,
+                            text=text,
+                            parse_mode="Markdown",
+                        )
+                    )
+                else:
+                    text = _build_briefing_text(
+                        turn,
+                        briefing,
+                        choices,
+                        crew_dialogues,
+                        language,
+                        personal_title=personal_title,
+                    )
+                    keyboard = create_keyboard_fn(choices)
+                    await call_with_retry(
+                        lambda: bot.send_message(
+                            chat_id=player_id,
+                            text=text,
+                            parse_mode="Markdown",
+                            reply_markup=keyboard,
+                        )
+                    )
 
-            # Mark as sent
+            # Mark as sent (track dedup across bot restarts)
             mark_sent_fn(player_id, turn)
-            sent_player_ids.append(player_id)
-            logger.info(f"[PUSH] Sent turn {turn} briefing to player {player_id}")
 
+        except TelegramBadRequest as e:
+            if "USER_IS_BLOCKED" in str(e):
+                logger.warning(
+                    "[PUSH_BRIEFING] Player %d blocked the bot, auto-kicking",
+                    player_id,
+                )
+                asyncio.create_task(_auto_kick_blocked_player(player_id))
+                continue
+            return False
         except Exception:
-            pass  # Logged with full detail inside _call_with_retry
+            return False  # One player failed → stop
 
-    status = "already_sent" if already_sent and not sent_player_ids else "ok"
-    return web.json_response(
-        {
-            "status": status,
-            "sent": sent_player_ids,
-            "already_sent": already_sent,
-        }
-    )
+    return True
 
 
-async def handle_push_player_chosen_action(request: web.Request) -> web.Response:
-    """Handle POST /push/player-action from game-server.
-
-    Delivers a chosen action image to the player who performed the action.
-    This is called after fire-and-forget action image generation completes.
-    Payload: {"player_id": int, "turn": int, "chosen_action_url": str, "game_id": str}
-    """
-    bot: Bot = request.app["bot"]
-    language: str = request.app.get("language", "ru")
-
-    try:
-        payload = await request.json()
-    except Exception as e:
-        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
-
-    # Use game's language from payload when available
-    language = payload.get("language", language)
-
+async def _deliver_player_action(
+    payload: dict[str, Any],
+    bot: Bot,
+    language: str,
+) -> bool:
+    """Deliver a /push/player-action message."""
     player_id = payload.get("player_id")
     turn = payload.get("turn")
     chosen_action_url = payload.get("chosen_action_url")
+    action_text = payload.get("action_text", "")
+    language = payload.get("language", language)
 
     if not player_id or not turn or not chosen_action_url:
-        return web.json_response(
-            {
-                "status": "error",
-                "message": "Missing player_id, turn or chosen_action_url",
-            },
-            status=400,
-        )
+        return True
 
-    # Signal that this action image is being processed — outcome handler will wait.
-    # Use existing event if outcome handler already created a placeholder (race).
     event_key = (player_id, turn)
     _pending_action_events.setdefault(event_key, asyncio.Event())
 
     try:
-        logger.info(f"[PUSH_ACTION] Sending action image to player {player_id} for turn {turn}")
-
-        # Download and send the action image
         img_data = await _download_image(chosen_action_url)
         if img_data:
             photo = BufferedInputFile(img_data, filename="action_image.png")
             msgs = get_actions(language)
-            action_text = payload.get("action_text", "")
-            if action_text:
-                caption = action_text
-            else:
-                caption = msgs.get("action_caption", "")
+            caption = action_text or msgs.get("action_caption", "")
             await call_with_retry(
                 lambda: bot.send_photo(
                     chat_id=player_id,
@@ -360,46 +482,37 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
                     caption=caption,
                 )
             )
-            logger.info(f"[PUSH_ACTION] Action image delivered to player {player_id}")
-        else:
-            logger.warning(f"[PUSH_ACTION] Failed to download image for player {player_id}")
-
-        return web.json_response({"status": "ok"})
-
-    except Exception as e:
-        # Logged with full detail inside _call_with_retry
-        return web.json_response({"status": "error", "message": str(e)}, status=500)
-
+        return True
+    except TelegramBadRequest as e:
+        if "USER_IS_BLOCKED" in str(e):
+            logger.warning(
+                "[PUSH_ACTION] Player %d blocked the bot, auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            return True
+        return False
+    except Exception:
+        return False
     finally:
-        # Signal that this action image has been processed (success or failure)
         if event_key in _pending_action_events:
             _pending_action_events[event_key].set()
 
 
-async def handle_push_outcome(request: web.Request) -> web.Response:
-    """Handle POST /push/outcome from game-server.
+async def _deliver_outcome(
+    payload: dict[str, Any],
+    bot: Bot,
+    language: str,
+    last_sent_per_player: dict[int, int],
+    current_player_id: int = 0,
+) -> bool:
+    """Deliver a /push/outcome message to all alive players.
 
-    Delivers the combined turn outcome (narrative + status + image) to all alive players.
-    This is called after _analyze_turn_outcome completes.
-
-    Dedup: tracks (player_id, turn) pairs so that retries or duplicate calls
-    do not send the same outcome twice to the same player.
-    New players (not yet tracked) still receive the outcome on retry.
+    Returns True if *current_player_id* (the player whose push_queue entry
+    triggered this call) received the outcome. Errors for other players are
+    logged and skipped — one failing player never blocks the rest.
     """
-    bot: Bot = request.app["bot"]
-    language: str = request.app.get("language", "ru")
-    last_sent_per_player: dict[int, int] = request.app.setdefault("last_sent_outcome_turn", {})
-
-    try:
-        payload = await request.json()
-    except Exception as e:
-        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
-
-    # Use game's language from payload when available
-    language = payload.get("language", language)
-
     turn = payload.get("turn")
-
     outcome_text = payload.get("outcome_text", "")
     alive_players = payload.get("alive_players", [])
     outcome_image_url = payload.get("outcome_image_url")
@@ -414,17 +527,12 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
     total_crew_count = payload.get("total_crew_count")
     alive_crew_count = payload.get("alive_crew_count")
     action_images = payload.get("action_images", [])
+    language = payload.get("language", language)
 
     if not turn or not alive_players:
-        return web.json_response(
-            {"status": "error", "message": "Missing turn or alive_players"},
-            status=400,
-        )
+        return True
 
-    # ── Wait for pending action image deliveries ──────────────────
-    # Ensures action images arrive at Telegram API BEFORE the outcome
-    # message, even when aiohttp processes the outcome request
-    # concurrently with the action image request.
+    # Wait for pending action image deliveries
     wait_events = []
     for pid in alive_players:
         event_key = (pid, turn)
@@ -432,35 +540,32 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         if ev is not None:
             wait_events.append(ev)
         else:
-            # Create a placeholder that may be set later (race: outcome
-            # request arrives before the action image handler started).
-            # If the action handler already registered an event, use it.
             _pending_action_events.setdefault(event_key, asyncio.Event())
             ev = _pending_action_events[event_key]
             wait_events.append(ev)
 
     if wait_events:
-        logger.info(f"[PUSH_OUTCOME] Waiting for {len(wait_events)} action image delivery(es) before sending outcome for turn {turn}")
-        ACTION_WAIT_TIMEOUT = 30.0  # Max seconds to wait for action image delivery
+        logger.info(
+            "[PUSH_OUTCOME] Waiting for %d action image delivery(es) before sending outcome for turn %d",
+            len(wait_events),
+            turn,
+        )
+        ACTION_WAIT_TIMEOUT = 30.0
         results = await asyncio.gather(
             *[asyncio.wait_for(ev.wait(), timeout=ACTION_WAIT_TIMEOUT) for ev in wait_events],
             return_exceptions=True,
         )
-        timed_out = 0
-        for r in results:
-            if isinstance(r, asyncio.TimeoutError):
-                timed_out += 1
+        timed_out = sum(1 for r in results if isinstance(r, asyncio.TimeoutError))
         if timed_out:
-            logger.warning(f"[PUSH_OUTCOME] {timed_out}/{len(wait_events)} action image delivery(es) timed out, proceeding with outcome for turn {turn}")
-        else:
-            logger.info(f"[PUSH_OUTCOME] All action images delivered, sending outcome for turn {turn}")
+            logger.warning(
+                "[PUSH_OUTCOME] %d/%d action image delivery(es) timed out",
+                timed_out,
+                len(wait_events),
+            )
 
-    # ── Pre-download action images for the album ─────────────────
-    # Download all action images once, so we don't re-download for each player.
-    # Maps player_id/npc_key -> BufferedInputFile. Used for the group album.
+    # Pre-download action images for album
     _prefetched_action_photos: dict[int | str, BufferedInputFile | None] = {}
     if action_images:
-        logger.info(f"[PUSH_OUTCOME] Pre-downloading {len(action_images)} action images for album")
         for img_entry in action_images:
             img_url = img_entry.get("image_url")
             if not img_url:
@@ -475,7 +580,6 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
                 _prefetched_action_photos[key] = BufferedInputFile(img_data, filename=f"action_{key}.png")
             else:
                 _prefetched_action_photos[key] = None
-        logger.info(f"[PUSH_OUTCOME] Pre-downloaded {sum(1 for v in _prefetched_action_photos.values() if v)}/{len(action_images)} action images")
 
     # Build outcome message text
     current_msgs = get_current_turn(language)
@@ -489,14 +593,12 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         parts.append("")
         parts.append(status_text)
 
-    # Ship hull and shield status
     if ship_hull_integrity is not None or ship_shields is not None:
         parts.append("")
         hull_str = outcome_msgs["hull"].format(value=ship_hull_integrity)
         shield_str = outcome_msgs["shields"].format(value=ship_shields)
         parts.append(f"{hull_str}  |  {shield_str}")
 
-    # Crew count: "9 из 10 членов экипажа живы" or "10 / 10 crew alive"
     if total_crew_count is not None and alive_crew_count is not None:
         parts.append("")
         crew_key = "crew_alive_one" if alive_crew_count == 1 else "crew_alive"
@@ -516,7 +618,12 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
         for entry in mission_progress:
             stage = entry.get("stage", "?")
             points = entry.get("points", 0)
-            direction = "🟢 +" if points > 0 else ("🔴 " if points < 0 else "⚪ ")
+            if points > 0:
+                direction = "🟢 +"
+            elif points < 0:
+                direction = "🔴 "
+            else:
+                direction = "⚪ "
             parts.append(outcome_msgs["mission_progress_item"].format(direction=direction, points=points, stage=stage))
 
     if ship_systems_offline:
@@ -548,19 +655,14 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             outcome_txt = po.get("outcome_text", "")
             if char_name and outcome_txt:
                 parts.append(f"• {char_name} ({char_role}): {outcome_txt}")
-                parts.append("")  # blank line between items
+                parts.append("")
 
     outcome_message = "\n".join(parts)
 
-    sent_player_ids: list[int] = []
-
-    # ── Helper: send album of OTHER players' and NPCs' actions ─────
+    # Helper: send album of other players'/NPCs' actions
     async def _send_others_album(target_player_id: int):
-        """Send a media group album of actions by other players/NPCs (not this player)."""
         if not action_images:
             return
-
-        # Build InputMediaPhoto list: exclude target player's own actions
         media_items = []
         for img_entry in action_images:
             pid = img_entry.get("player_id")
@@ -568,23 +670,19 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             img_url = img_entry.get("image_url")
             if not img_url:
                 continue
-            # Skip this player's own action — they already got it via push_player_chosen_action
             if pid == target_player_id:
                 continue
-            # Get pre-downloaded photo
             key: int | str = pid if pid is not None else (img_entry.get("npc_key") or f"npc_{hash(img_url)}")
             photo = _prefetched_action_photos.get(key)
             if photo is None:
                 continue
             if not caption:
-                outcome_msgs = get_push_outcome(language)
                 caption = outcome_msgs["turn_prefix"].format(turn=turn)
             media_items.append(InputMediaPhoto(media=photo, caption=caption))
 
         if not media_items:
             return
 
-        # Telegram limits media groups to 10 items per call; split into chunks
         max_group_size = 10
         for chunk_start in range(0, len(media_items), max_group_size):
             chunk = media_items[chunk_start : chunk_start + max_group_size]
@@ -595,22 +693,31 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
                         media=chunk,
                     )
                 )
-                logger.info(f"[PUSH_OUTCOME] Sent actions album (chunk {chunk_start // max_group_size + 1}) to player {target_player_id}: {len(chunk)} images")
             except TelegramBadRequest as album_err:
-                logger.warning(f"[PUSH_OUTCOME] Failed to send actions album to player {target_player_id}: {album_err}")
+                err_str = str(album_err)
+                if "USER_IS_BLOCKED" in err_str:
+                    asyncio.create_task(_auto_kick_blocked_player(target_player_id))
+                logger.warning(
+                    "[PUSH_OUTCOME] Failed to send actions album to player %d: %s",
+                    target_player_id,
+                    album_err,
+                )
             except Exception as album_err:
-                logger.warning(f"[PUSH_OUTCOME] Actions album error for player {target_player_id}: {album_err}")
+                logger.warning(
+                    "[PUSH_OUTCOME] Actions album error for player %d: %s",
+                    target_player_id,
+                    album_err,
+                )
 
+    current_player_delivered = False
     for player_id in alive_players:
-        # Per-player dedup: skip if this player already got outcome for this turn
         if last_sent_per_player.get(player_id) == turn:
+            if player_id == current_player_id:
+                current_player_delivered = True
             continue
-
         try:
-            # 1. Send album of other players' and NPCs' actions FIRST
             await _send_others_album(player_id)
 
-            # 2. Send outcome image
             if outcome_image_url:
                 img_data = await _download_image(outcome_image_url)
                 if img_data:
@@ -622,7 +729,6 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
                         )
                     )
 
-            # 3. Send outcome narrative
             await call_with_retry(
                 lambda: bot.send_message(
                     chat_id=player_id,
@@ -630,40 +736,53 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
                 )
             )
 
-            sent_player_ids.append(player_id)
-            # Mark this player as having received this turn's outcome
             last_sent_per_player[player_id] = turn
-            logger.info(f"[PUSH_OUTCOME] Outcome for turn {turn} sent to player {player_id}")
-
+            if player_id == current_player_id:
+                current_player_delivered = True
+        except TelegramForbiddenError:
+            logger.warning(
+                "[PUSH_OUTCOME] Player %d blocked the bot, auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            continue
+        except TelegramBadRequest as e:
+            if "USER_IS_BLOCKED" in str(e):
+                logger.warning(
+                    "[PUSH_OUTCOME] Player %d blocked the bot, auto-kicking",
+                    player_id,
+                )
+                asyncio.create_task(_auto_kick_blocked_player(player_id))
+                continue
+            logger.error(
+                "[PUSH_OUTCOME] TelegramBadRequest for player %d (turn %d): %s",
+                player_id,
+                turn,
+                e,
+                exc_info=True,
+            )
+            continue
         except Exception as e:
-            # _call_with_retry already logged network errors with detail;
-            # this catches truly unexpected errors from surrounding code
-            logger.error(f"[PUSH_OUTCOME] Failed to send outcome to player {player_id}: {e}", exc_info=True)
+            logger.error(
+                "[PUSH_OUTCOME] Failed for player %d (turn %d): %s",
+                player_id,
+                turn,
+                e,
+                exc_info=True,
+            )
+            continue
 
-    return web.json_response(
-        {
-            "status": "ok",
-            "sent": sent_player_ids,
-        }
-    )
+    return current_player_delivered
 
 
-async def handle_gm_notification(request: web.Request) -> web.Response:
-    """Handle POST /push/gm-notification from game-server.
-
-    Sends a Telegram message to the Game Master about turn generation
-    progress, success, or failure.
-    """
-    bot: Bot = request.app["bot"]
-
-    try:
-        payload = await request.json()
-    except Exception as e:
-        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
-
+async def _deliver_gm_notification(
+    payload: dict[str, Any],
+    bot: Bot,
+) -> bool:
+    """Deliver a /push/gm-notification message."""
     game_id = payload.get("game_id", "")
     turn = payload.get("turn", 0)
-    status = payload.get("status", "")  # "success" or "error"
+    status = payload.get("status", "")
     error = payload.get("error", "")
     players = payload.get("players", 0)
     npcs = payload.get("npcs", 0)
@@ -681,7 +800,6 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
         else:
             msg = f"❌ **Error generating turn {turn} for game `{game_id}`**\n\n{safe_error}"
 
-    # Send to GM if we have a bot and GM ID
     if bot and GAME_MASTER_ID > 0:
         try:
             await call_with_retry(
@@ -691,41 +809,39 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
                     parse_mode="Markdown",
                 )
             )
-            logger.info(f"[PUSH_GM] Notification sent to GM for game {game_id} turn {turn}: {status}")
         except Exception as e:
-            logger.error(f"[PUSH_GM] Failed to send GM notification: {e}", exc_info=True)
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-    else:
-        logger.warning(f"[PUSH_GM] Cannot send GM notification: bot={bool(bot)}, GAME_MASTER_ID={GAME_MASTER_ID}")
-
-    return web.json_response({"status": "ok"})
+            logger.error("[PUSH_GM] Failed to send GM notification: %s", e, exc_info=True)
+            return False
+    return True
 
 
-async def handle_push_game_over(request: web.Request) -> web.Response:
-    """Handle POST /push/game-over from game-server.
+async def _deliver_game_over(
+    payload: dict[str, Any],
+    bot: Bot,
+    current_player_id: int = 0,
+    last_sent: dict[int, str] | None = None,
+) -> bool:
+    """Deliver a /push/game-over message to all alive players.
 
-    Delivers the game-over finale (victory or defeat) to all alive players.
-    Includes: finale image, finale narrative, and inline keyboard with
-    available games + "New Game" button.
+    Returns True if *current_player_id* (the player whose push_queue entry
+    triggered this call) received the finale. Errors for other players are
+    logged and skipped — one failing player never blocks the rest.
+
+    Uses last_sent dict (player_id → game_id) to avoid sending the same
+    game-over to a player multiple times.
     """
-    bot: Bot = request.app["bot"]
-
-    try:
-        payload = await request.json()
-    except Exception as e:
-        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
-
+    game_id = payload.get("game_id", "")
+    if last_sent is None:
+        last_sent = {}
     language = payload.get("language", "ru")
     finale_narrative = payload.get("finale_narrative", "")
     finale_image_url = payload.get("finale_image_url")
-    outcome_type = payload.get("outcome_type", "defeat")  # "victory" or "defeat"
+    outcome_type = payload.get("outcome_type", "defeat")
     alive_players = payload.get("alive_players", [])
     available_games = payload.get("available_games", [])
 
     if not alive_players:
-        return web.json_response({"status": "error", "message": "Missing alive_players"}, status=400)
-
-    from language import get_onboarding
+        return True
 
     onboarding_msgs = get_onboarding(language)
     if outcome_type == "victory":
@@ -760,12 +876,15 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
         ]
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-
     continue_text = onboarding_msgs.get("game_over_continue", "")
 
-    sent_player_ids: list[int] = []
-
+    current_player_delivered = False
     for player_id in alive_players:
+        # Dedup: skip if this game-over was already sent to this player
+        if last_sent.get(player_id) == game_id:
+            if player_id == current_player_id:
+                current_player_delivered = True
+            continue
         try:
             if finale_image_url:
                 img_data = await _download_image(finale_image_url)
@@ -798,28 +917,48 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
                     )
                 )
 
-            sent_player_ids.append(player_id)
-            logger.info(f"[PUSH_GAME_OVER] Finale sent to player {player_id}: {outcome_type}")
-
+            if player_id == current_player_id:
+                current_player_delivered = True
+            last_sent[player_id] = game_id
+        except TelegramForbiddenError:
+            logger.warning(
+                "[PUSH_GAME_OVER] Player %d blocked the bot, auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            continue
+        except TelegramBadRequest as e:
+            if "USER_IS_BLOCKED" in str(e):
+                logger.warning(
+                    "[PUSH_GAME_OVER] Player %d blocked the bot, auto-kicking",
+                    player_id,
+                )
+                asyncio.create_task(_auto_kick_blocked_player(player_id))
+                continue
+            logger.error(
+                "[PUSH_GAME_OVER] TelegramBadRequest for player %d: %s",
+                player_id,
+                e,
+                exc_info=True,
+            )
+            continue
         except Exception as e:
-            logger.error(f"[PUSH_GAME_OVER] Failed to send finale to player {player_id}: {e}", exc_info=True)
+            logger.error(
+                "[PUSH_GAME_OVER] Failed for player %d: %s",
+                player_id,
+                e,
+                exc_info=True,
+            )
+            continue
 
-    return web.json_response({"status": "ok", "sent": sent_player_ids})
+    return current_player_delivered
 
 
-async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
-    """Handle POST /push/onboarding-ready — onboarding images are ready.
-
-    Called by game-server after background image generation completes.
-    Sends (or updates) the first question with images to the player.
-    """
-    bot: Bot = request.app["bot"]
-
-    try:
-        payload = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON"}, status=400)
-
+async def _deliver_onboarding_ready(
+    payload: dict[str, Any],
+    bot: Bot,
+) -> bool:
+    """Deliver a /push/onboarding-ready message."""
     player_id = payload.get("player_id")
     game_id = payload.get("game_id", "default_game")
     session_id = payload.get("session_id", "")
@@ -829,51 +968,45 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
     welcome_message = payload.get("welcome_message", "")
 
     if not player_id:
-        return web.json_response({"error": "Missing player_id"}, status=400)
-
-    logger.info(
-        f"[PUSH_ONBOARDING] Received onboarding-ready for player {player_id}, "
-        f"session {session_id}, has_question={bool(question)}, has_images={bool(question and question.get('image_url'))}"
-    )
+        return True
 
     try:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
-        from aiogram.exceptions import TelegramBadRequest
-
-        # Build the full onboarding message
         welcome_text = welcome_message or ""
         if game_title:
             welcome_text = f"**{_escape_md(game_title)}**\n\n{welcome_text}" if welcome_text else f"**{_escape_md(game_title)}**"
 
-        # Send splash image with game description
+        # Send splash image
         splash_sent = False
         try:
-            import aiohttp as _aiohttp
-            GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
-            async with _aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     f"{GAME_SERVER_URL}/content/splash-image",
                     params={"game_id": game_id},
-                    timeout=_aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status == 200:
-                        splash_data = await resp.json()
-                        splash_url = splash_data.get("image_url")
-                        if splash_url:
-                            # Download and send splash image
-                            async with session.get(splash_url, timeout=_aiohttp.ClientTimeout(total=30)) as img_resp:
-                                if img_resp.status == 200:
-                                    photo_data = await img_resp.read()
-                                    photo = BufferedInputFile(photo_data, filename="splash.png")
-                                    await bot.send_photo(
-                                        chat_id=player_id,
-                                        photo=photo,
-                                        caption=welcome_text,
-                                        parse_mode="Markdown",
-                                    )
-                                    splash_sent = True
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    splash_data = await resp.json()
+                    splash_url = splash_data.get("image_url")
+                    if splash_url:
+                        async with session.get(splash_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
+                            if img_resp.status == 200:
+                                photo_data = await img_resp.read()
+                                photo = BufferedInputFile(photo_data, filename="splash.png")
+                                await bot.send_photo(
+                                    chat_id=player_id,
+                                    photo=photo,
+                                    caption=welcome_text,
+                                    parse_mode="Markdown",
+                                )
+                                splash_sent = True
         except Exception as e:
-            logger.warning(f"[PUSH_ONBOARDING] Failed to send splash image for player {player_id}: {e}")
+            logger.warning(
+                "[PUSH_ONBOARDING] Failed to send splash image for player %d: %s",
+                player_id,
+                e,
+            )
 
         if not splash_sent and welcome_text:
             await bot.send_message(
@@ -882,10 +1015,10 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
                 parse_mode="Markdown",
             )
 
-        # Send first question with images (if available)
+        # Send first question with images
         if question:
-            # Update player state with session info
             from player_store import update_player_state
+
             update_player_state(
                 player_id,
                 onboarding_session_id=session_id,
@@ -896,23 +1029,22 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
                 current_question_image_url=question.get("image_url"),
             )
 
-            # Build keyboard and send question
             options = question.get("options", [])
             keyboard_rows = []
             for i, opt in enumerate(options):
-                keyboard_rows.append([
-                    InlineKeyboardButton(
-                        text=f"{i + 1}. {_escape_md(opt.get('label', opt['value']))}",
-                        callback_data=f"answer:{question['id']}:{i}:{opt['value']}",
-                    )
-                ])
+                keyboard_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"{i + 1}. {_escape_md(opt.get('label', opt['value']))}",
+                            callback_data=f"answer:{question['id']}:{i}:{opt['value']}",
+                        )
+                    ]
+                )
             keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
             image_url = question.get("image_url")
             question_text = question.get("text", "")
-            options_text = "\n\n".join(
-                f"{i + 1}. {_escape_md(o.get('label', o['value']))}" for i, o in enumerate(options)
-            )
+            options_text = "\n\n".join(f"{i + 1}. {_escape_md(o.get('label', o['value']))}" for i, o in enumerate(options))
             full_text = get_onboarding(language)["question_prefix"].format(
                 id=question["id"],
                 text=_escape_md(question_text),
@@ -922,9 +1054,8 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
 
             if image_url:
                 try:
-                    import aiohttp as _aiohttp2
-                    async with _aiohttp2.ClientSession() as session:
-                        async with session.get(image_url, timeout=_aiohttp2.ClientTimeout(total=30)) as img_resp:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
                             if img_resp.status == 200:
                                 photo_data = await img_resp.read()
                                 photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
@@ -943,7 +1074,11 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
                                     reply_markup=keyboard,
                                 )
                 except Exception as e:
-                    logger.warning(f"[PUSH_ONBOARDING] Failed to send question image for player {player_id}: {e}")
+                    logger.warning(
+                        "[PUSH_ONBOARDING] Failed to send question image for player %d: %s",
+                        player_id,
+                        e,
+                    )
                     await bot.send_message(
                         chat_id=player_id,
                         text=full_text,
@@ -958,19 +1093,449 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
                     reply_markup=keyboard,
                 )
 
-        return web.json_response({"status": "ok", "player_id": player_id})
-
+        return True
     except TelegramBadRequest as e:
-        logger.error(f"[PUSH_ONBOARDING] Telegram error for player {player_id}: {e}")
-        return web.json_response({"error": str(e)}, status=400)
+        if "USER_IS_BLOCKED" in str(e):
+            logger.warning(
+                "[PUSH_ONBOARDING] Player %d blocked the bot during onboarding, auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            return True
+        logger.error("[PUSH_ONBOARDING] Telegram error for player %d: %s", player_id, e)
+        return False
     except Exception as e:
-        logger.error(f"[PUSH_ONBOARDING] Unexpected error for player {player_id}: {e}", exc_info=True)
-        return web.json_response({"error": str(e)}, status=500)
+        logger.error(
+            "[PUSH_ONBOARDING] Unexpected error for player %d: %s",
+            player_id,
+            e,
+            exc_info=True,
+        )
+        return False
+
+
+# ── Unified message dispatcher ─────────────────────────────────────
+
+_DELIVER_FNS = {
+    "briefing": _deliver_briefing,
+    "action": _deliver_player_action,
+    "outcome": _deliver_outcome,
+    "gm_notification": _deliver_gm_notification,
+    "game_over": _deliver_game_over,
+    "onboarding": _deliver_onboarding_ready,
+}
+
+
+async def _dispatch_one(
+    row: dict[str, Any],
+    bot: Bot,
+    language: str,
+    create_keyboard_fn: Callable,
+    mark_sent_fn: Callable,
+    last_sent_briefing: dict[int, int],
+    last_sent_outcome: dict[int, int],
+    last_sent_game_over: dict[int, str],
+) -> bool:
+    """Try to deliver a single push_queue row. Returns True on success."""
+    push_type = row["push_type"]
+    push_id = row["id"]
+    player_id = row["player_id"]
+
+    try:
+        payload = json.loads(row["payload"])
+    except (ValueError, KeyError):
+        logger.error("[PUSH] Corrupt payload in push_queue #%d, marking failed", push_id)
+        mark_push_failed(push_id, "Corrupt JSON payload")
+        return True  # Don't block — this message will never succeed
+
+    deliver_fn = _DELIVER_FNS.get(push_type)
+    if deliver_fn is None:
+        logger.error("[PUSH] Unknown push_type '%s' for #%d", push_type, push_id)
+        mark_push_failed(push_id, f"Unknown push_type: {push_type}")
+        return True
+
+    try:
+        if push_type == "briefing":
+            success = await deliver_fn(
+                payload,
+                bot,
+                language,
+                create_keyboard_fn,
+                mark_sent_fn,
+                last_sent_briefing,
+            )
+        elif push_type == "outcome":
+            success = await deliver_fn(payload, bot, language, last_sent_outcome, player_id)
+        elif push_type == "action":
+            success = await deliver_fn(payload, bot, language)
+        elif push_type == "game_over":
+            success = await deliver_fn(payload, bot, player_id, last_sent_game_over)
+        else:
+            success = await deliver_fn(payload, bot)
+
+        if success:
+            # Staleness check: mark as expired if turn is behind
+            turn = row.get("turn")
+            game_id = row.get("game_id")
+            if _is_stale(turn, game_id) and push_type == "briefing":
+                mark_push_expired(push_id)
+            else:
+                mark_push_sent(push_id)
+            logger.info(
+                "[PUSH] Delivered #%d (type=%s, player=%s, turn=%s)",
+                push_id,
+                push_type,
+                player_id,
+                turn,
+            )
+            return True
+        else:
+            mark_push_failed(push_id, f"Delivery failed for {push_type} to player {player_id}")
+            logger.warning("[PUSH] Failed to deliver #%d", push_id)
+            return False
+    except TelegramBadRequest as e:
+        err_str = str(e)
+        if "USER_IS_BLOCKED" in err_str:
+            logger.warning(
+                "[PUSH] Player %d blocked the bot (caught in _dispatch_one), auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            mark_push_sent(push_id)  # Don't retry
+            return True
+        logger.error("[PUSH] TelegramBadRequest delivering #%d: %s", push_id, e, exc_info=True)
+        mark_push_failed(push_id, str(e))
+        return False
+    except Exception as e:
+        logger.error("[PUSH] Exception delivering #%d: %s", push_id, e, exc_info=True)
+        mark_push_failed(push_id, str(e))
+        return False
+
+
+# ── Background sender loop ─────────────────────────────────────────
+
+
+async def _sender_loop(
+    bot: Bot,
+    language: str,
+    create_keyboard_fn: Callable,
+    mark_sent_fn: Callable,
+    last_sent_briefing: dict[int, int],
+    last_sent_outcome: dict[int, int],
+    last_sent_game_over: dict[int, str],
+    poll_interval: float = 1.0,
+):
+    """Background task that drains push_queue in per-player order."""
+    logger.info("[PUSH_SENDER] Background sender started")
+    while True:
+        try:
+            pending = get_pending_push_messages()
+            if not pending:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            # Group by player_id, preserving insertion order
+            by_player: dict[int, list[dict]] = {}
+            for msg in pending:
+                by_player.setdefault(msg["player_id"], []).append(msg)
+
+            for player_id, messages in by_player.items():
+                lock = _get_player_lock(player_id)
+                async with lock:
+                    for msg in messages:
+                        # Re-check status — may have been processed
+                        # by another concurrent delivery.
+                        if msg["status"] != "pending":
+                            continue
+
+                        ok = await _dispatch_one(
+                            msg,
+                            bot,
+                            language,
+                            create_keyboard_fn,
+                            mark_sent_fn,
+                            last_sent_briefing,
+                            last_sent_outcome,
+                            last_sent_game_over,
+                        )
+                        if not ok:
+                            # Stop processing this player — order preserved
+                            break
+
+        except Exception:
+            logger.error(
+                "[PUSH_SENDER] Unexpected error in sender loop",
+                exc_info=True,
+            )
+
+        await asyncio.sleep(poll_interval)
+
+
+# ── Startup flush (before HTTP server starts) ──────────────────────
+
+
+async def _startup_flush(
+    bot: Bot,
+    language: str,
+    create_keyboard_fn: Callable,
+    mark_sent_fn: Callable,
+    last_sent_briefing: dict[int, int],
+    last_sent_outcome: dict[int, int],
+    last_sent_game_over: dict[int, str],
+) -> None:
+    """Synchronously drain all pending messages before starting HTTP."""
+    logger.info("[PUSH_STARTUP] Fetching current turns from game-server...")
+    turns = await _fetch_current_turns()
+    _current_turns.update(turns)
+    _current_turns_ready.set()
+
+    pending = get_pending_push_messages()
+    if not pending:
+        logger.info("[PUSH_STARTUP] No pending messages to flush")
+        return
+
+    logger.info("[PUSH_STARTUP] Flushing %d pending message(s)...", len(pending))
+
+    by_player: dict[int, list[dict]] = {}
+    for msg in pending:
+        by_player.setdefault(msg["player_id"], []).append(msg)
+
+    for player_id, messages in by_player.items():
+        for msg in messages:
+            ok = await _dispatch_one(
+                msg,
+                bot,
+                language,
+                create_keyboard_fn,
+                mark_sent_fn,
+                last_sent_briefing,
+                last_sent_outcome,
+                last_sent_game_over,
+            )
+            if not ok:
+                logger.warning(
+                    "[PUSH_STARTUP] Stopped processing player %d after failed message #%d — %d message(s) remain pending",
+                    player_id,
+                    msg["id"],
+                    len(messages),
+                )
+                break
+
+    logger.info("[PUSH_STARTUP] Startup flush complete")
+
+
+# ── HTTP Handlers (save to DB, return immediately) ─────────────────
+
+
+async def handle_push_briefings(request: web.Request) -> web.Response:
+    """Handle POST /push/briefings — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    turn = payload.get("turn")
+    players = payload.get("players", [])
+    game_id = payload.get("game_id", "default_game")
+
+    if not turn or not players:
+        return web.json_response({"status": "error", "message": "Missing turn or players"}, status=400)
+
+    # Update current_turns cache
+    _current_turns[game_id] = turn
+
+    inserted = 0
+    for player_data in players:
+        player_id = player_data.get("player_id")
+        if not player_id:
+            continue
+
+        # Build a per-player payload so the sender can process
+        # individual players without iterating over the full list.
+        per_player_payload = {
+            **payload,
+            "players": [player_data],
+        }
+        insert_push_message(
+            player_id=player_id,
+            push_type="briefing",
+            payload=json.dumps(per_player_payload, ensure_ascii=False),
+            turn=turn,
+            game_id=game_id,
+        )
+        inserted += 1
+
+    logger.info(
+        "[PUSH] Queued %d briefing(s) for turn %d, game %s",
+        inserted,
+        turn,
+        game_id,
+    )
+    return web.json_response({"status": "ok", "queued": inserted})
+
+
+async def handle_push_player_chosen_action(request: web.Request) -> web.Response:
+    """Handle POST /push/player-action — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    player_id = payload.get("player_id")
+    turn = payload.get("turn")
+    game_id = payload.get("game_id", "default_game")
+    chosen_action_url = payload.get("chosen_action_url")
+
+    if not player_id or not turn or not chosen_action_url:
+        return web.json_response(
+            {"status": "error", "message": "Missing player_id, turn or chosen_action_url"},
+            status=400,
+        )
+
+    insert_push_message(
+        player_id=player_id,
+        push_type="action",
+        payload=json.dumps(payload, ensure_ascii=False),
+        turn=turn,
+        game_id=game_id,
+    )
+
+    logger.info(
+        "[PUSH_ACTION] Queued action image for player %d, turn %d",
+        player_id,
+        turn,
+    )
+    return web.json_response({"status": "ok", "queued": 1})
+
+
+async def handle_push_outcome(request: web.Request) -> web.Response:
+    """Handle POST /push/outcome — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    turn = payload.get("turn")
+    alive_players = payload.get("alive_players", [])
+    game_id = payload.get("game_id", "default_game")
+
+    if not turn or not alive_players:
+        return web.json_response(
+            {"status": "error", "message": "Missing turn or alive_players"},
+            status=400,
+        )
+
+    inserted = 0
+    for player_id in alive_players:
+        insert_push_message(
+            player_id=player_id,
+            push_type="outcome",
+            payload=json.dumps(payload, ensure_ascii=False),
+            turn=turn,
+            game_id=game_id,
+        )
+        inserted += 1
+
+    logger.info(
+        "[PUSH_OUTCOME] Queued %d outcome(s) for turn %d, game %s",
+        inserted,
+        turn,
+        game_id,
+    )
+    return web.json_response({"status": "ok", "queued": inserted})
+
+
+async def handle_gm_notification(request: web.Request) -> web.Response:
+    """Handle POST /push/gm-notification — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    game_id = payload.get("game_id", "")
+    turn = payload.get("turn", 0)
+
+    insert_push_message(
+        player_id=GAME_MASTER_ID,
+        push_type="gm_notification",
+        payload=json.dumps(payload, ensure_ascii=False),
+        turn=turn,
+        game_id=game_id,
+    )
+
+    logger.info(
+        "[PUSH_GM] Queued GM notification for game %s, turn %s",
+        game_id,
+        turn,
+    )
+    return web.json_response({"status": "ok", "queued": 1})
+
+
+async def handle_push_game_over(request: web.Request) -> web.Response:
+    """Handle POST /push/game-over — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    alive_players = payload.get("alive_players", [])
+    game_id = payload.get("game_id", "default_game")
+
+    if not alive_players:
+        return web.json_response({"status": "error", "message": "Missing alive_players"}, status=400)
+
+    inserted = 0
+    for player_id in alive_players:
+        insert_push_message(
+            player_id=player_id,
+            push_type="game_over",
+            payload=json.dumps(payload, ensure_ascii=False),
+            game_id=game_id,
+        )
+        inserted += 1
+
+    logger.info(
+        "[PUSH_GAME_OVER] Queued %d game-over message(s) for game %s",
+        inserted,
+        game_id,
+    )
+    return web.json_response({"status": "ok", "queued": inserted})
+
+
+async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
+    """Handle POST /push/onboarding-ready — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    player_id = payload.get("player_id")
+    game_id = payload.get("game_id", "default_game")
+
+    if not player_id:
+        return web.json_response({"error": "Missing player_id"}, status=400)
+
+    insert_push_message(
+        player_id=player_id,
+        push_type="onboarding",
+        payload=json.dumps(payload, ensure_ascii=False),
+        game_id=game_id,
+    )
+
+    logger.info(
+        "[PUSH_ONBOARDING] Queued onboarding-ready for player %d, game %s",
+        player_id,
+        game_id,
+    )
+    return web.json_response({"status": "ok", "player_id": player_id})
 
 
 async def handle_health(request: web.Request) -> web.Response:
     """Handle GET /health for health checks."""
     return web.json_response({"status": "ok"})
+
+
+# ── Server entry point ─────────────────────────────────────────────
 
 
 async def start_push_server(
@@ -980,14 +1545,19 @@ async def start_push_server(
     mark_sent_fn: Callable[[int, int], None] | None = None,
     create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None) = None,
 ) -> web.AppRunner:
-    """Start the push HTTP server.
+    """Start the push HTTP server with persistent delivery queue.
+
+    1. Startup flush: fetch current turns from game-server, then
+       synchronously deliver all pending messages.
+    2. Start background sender worker.
+    3. Start HTTP server.
 
     Args:
         bot: aiogram Bot instance
-        language: Bot language code
-        last_sent_briefing_turn: Shared dict for dedup (from bot.py)
-        mark_sent_fn: Function to mark briefing as sent (from bot.py)
-        create_keyboard_fn: Function to create action keyboard (from bot.py)
+        language: Default bot language
+        last_sent_briefing_turn: Shared dict for briefing dedup
+        mark_sent_fn: Function to mark briefing as sent
+        create_keyboard_fn: Function to create action keyboard
 
     Returns:
         web.AppRunner for graceful shutdown
@@ -1007,6 +1577,38 @@ async def start_push_server(
 
         create_keyboard_fn = _noop_keyboard
 
+    # Per-player outcome dedup dict
+    last_sent_outcome: dict[int, int] = {}
+    # Per-player game-over dedup dict (player_id → game_id)
+    last_sent_game_over: dict[int, str] = {}
+
+    # Startup flush — deliver any messages that were pending from a
+    # previous run before we start accepting new ones.
+    await _startup_flush(
+        bot,
+        language,
+        create_keyboard_fn,
+        mark_sent_fn,
+        last_sent_briefing_turn,
+        last_sent_outcome,
+        last_sent_game_over,
+    )
+
+    # Start background sender
+    global _sender_task
+    _sender_task = asyncio.create_task(
+        _sender_loop(
+            bot,
+            language,
+            create_keyboard_fn,
+            mark_sent_fn,
+            last_sent_briefing_turn,
+            last_sent_outcome,
+            last_sent_game_over,
+        )
+    )
+
+    # Build aiohttp app
     app = web.Application()
     app["bot"] = bot
     app["language"] = language
@@ -1027,5 +1629,5 @@ async def start_push_server(
     site = web.TCPSite(runner, "0.0.0.0", PUSH_SERVER_PORT)
     await site.start()
 
-    logger.info(f"[PUSH_SERVER] Started on port {PUSH_SERVER_PORT}")
+    logger.info("[PUSH_SERVER] Started on port %d", PUSH_SERVER_PORT)
     return runner
