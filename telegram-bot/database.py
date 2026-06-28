@@ -1,7 +1,7 @@
 """
 Database initialization and migration management for the Telegram bot.
 
-Follows the same pattern as game-server-api/database.py:
+Follows the same pattern as game-server/database.py:
 - A global MIGRATIONS list tracks schema changes by version number.
 - init_db() creates the migrations table, all current tables with full
   schemas, then applies any pending migrations to bring existing databases

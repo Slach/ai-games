@@ -43,12 +43,12 @@
 
 - **LLM prompts go in `prompts.py`.** All system prompts, user prompts,
   onboarding questions, outcome generation, NPC dialogue, and daily
-  briefings must be defined in `game-server-api/prompts.py`. Never embed
+  briefings must be defined in `game-server/prompts.py`. Never embed
   prompt strings in handlers, routers, or other modules.
 
 - **Use `language.py` constants, never raw strings.** Never compare against
   `== 'ru'` or `== 'en'` directly — always import and use `LANGUAGE_RU` /
-  `LANGUAGE_EN` from `telegram-bot/language.py` (or `game-server-api/language.py`
+  `LANGUAGE_EN` from `telegram-bot/language.py` (or `game-server/language.py`
   depending on the service). This keeps locale checks consistent and
   grep-friendly.
 
@@ -128,7 +128,7 @@ Stops only the target containers (preserving DB volumes and ComfyUI outputs),
 rebuilds them from the current source, and starts fresh containers.
 
 ```bash
-docker compose --progress=plain stop telegram-bot game-scheduler game-server-api --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server-api
+docker compose --progress=plain stop telegram-bot game-scheduler game-server --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server
 ```
 
 ### Full wipe — destroy all game data, ComfyUI outputs, and rebuild from scratch
@@ -152,14 +152,14 @@ docker compose logs -t > /tmp/compose.logs
 
 ### Run tests
 
-Activate the virtual environment and use `unittest` from `game-server-api/`:
+Activate the virtual environment and use `unittest` from `game-server/`:
 
 ```bash
-cd game-server-api && ../.venv/bin/python -m unittest discover -s tests
+cd game-server && ../.venv/bin/python -m unittest discover -s tests
 ```
 
 Or run specific test modules:
 
 ```bash
-cd game-server-api && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
+cd game-server && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
 ```

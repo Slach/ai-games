@@ -46,7 +46,7 @@ New migration #26: `ALTER TABLE onboarding_sessions ADD COLUMN shuffle_seed INTE
 
 Options are shuffled deterministically using `random.Random(seed).shuffle(options)`.
 
-### 3. Gender Hybrid Support (`game_master.py`)
+### 3. Gender Hybrid Support (`game_server.py`)
 
 Modify `calculate_gender_from_answers()`:
 
@@ -130,7 +130,7 @@ async def generate_species_gender_option_images(
     return question
 ```
 
-### 6. LLM Prompt Generation (`game_master.py`)
+### 6. LLM Prompt Generation (`game_server.py`)
 
 New method `generate_species_option_prompts()`:
 
@@ -230,11 +230,11 @@ When `complete_onboarding()` generates the final avatar, pass both `species_resu
 
 | File | Changes |
 |------|---------|
-| `game-server-api/prompts.py` | New `build_interleaved_species_gender_questions()`, shuffled options |
-| `game-server-api/main.py` | New `generate_species_gender_option_images()`, updated answer flow |
-| `game-server-api/game_master.py` | New `generate_species_option_prompts()`, updated `calculate_gender_from_answers()` |
-| `game-server-api/image_generator.py` | Add `COMFYUI_IMAGE_CONCURRENCY` semaphore |
-| `game-server-api/database.py` | Add `shuffle_seed` column to `onboarding_sessions` |
+| `game-server/prompts.py` | New `build_interleaved_species_gender_questions()`, shuffled options |
+| `game-server/main.py` | New `generate_species_gender_option_images()`, updated answer flow |
+| `game-server/game_server.py` | New `generate_species_option_prompts()`, updated `calculate_gender_from_answers()` |
+| `game-server/image_generator.py` | Add `COMFYUI_IMAGE_CONCURRENCY` semaphore |
+| `game-server/database.py` | Add `shuffle_seed` column to `onboarding_sessions` |
 | `telegram-bot/language.py` | Add hybrid display strings for species/gender in profile |
 | `telegram-bot/bot.py` | Display hybrid info in `/profile` |
 

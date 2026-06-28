@@ -3,7 +3,7 @@
 **Дата:** 2026-06-27
 **Статус:** Draft (на рассмотрении)
 **Автор:** расследование кодовой базы
-**Связанные файлы:** `game-server-api/main.py`, `game-server-api/game_master.py`, `game-server-api/prompts.py`, `game-server-api/database.py`
+**Связанные файлы:** `game-server/main.py`, `game-server/game_server.py`, `game-server/prompts.py`, `game-server/database.py`
 
 ---
 
@@ -33,7 +33,7 @@
 2. Для каждого игрока — персональный брифинг с 3–4 вариантами действий, у
    каждого **скрытое последствие** (`build_personal_briefing_system`, `prompts.py:1157`).
 3. Живые игроки выбирают первыми; NPC выбирают вслепую после.
-4. Один LLM-вызов `analyze_combined_outcome` (`game_master.py:~2290`) анализирует
+4. Один LLM-вызов `analyze_combined_outcome` (`game_server.py:~2290`) анализирует
    ВСЕ решения и возвращает структурированный исход: `mission_progress`,
    `dead_crew_members`, `crew_injured`, `ship_hull_integrity`, `ship_shields`,
    `personal_outcomes`, `next_day_hook` и т.д. (схема `COMBINED_OUTCOME_SCHEMA`,
@@ -70,9 +70,9 @@ game_state.day: 3, crew_health: 96
 ### 2.2. Три связанных дефекта в коде
 
 **Дефект A — поля `current_stage`/`total_stages` никогда не задаются.**
-`MISSION_SCHEMA` (`game_master.py:600`) содержит только `[name, description,
+`MISSION_SCHEMA` (`game_server.py:600`) содержит только `[name, description,
 objectives]` — полей `current_stage`/`total_stages` в схеме **нет**.
-`generate_mission` (`game_master.py:2372`) возвращает результат LLM как есть
+`generate_mission` (`game_server.py:2372`) возвращает результат LLM как есть
 (и fallback-ветка тоже их не задаёт). Далее `create_mission`
 (`database.py:1744`) сохраняет:
 
@@ -116,7 +116,7 @@ completed = current_stage >= total_stages              # N >= N
 
 ### 2.3. Рекомендуемое исправление (робастное)
 
-1. В `generate_mission` (`game_master.py:2372`) нормализовать результат перед
+1. В `generate_mission` (`game_server.py:2372`) нормализовать результат перед
    возвратом (и для основного, и для fallback-пути):
 
    ```python
@@ -387,8 +387,8 @@ P2–P3 снимут повторяемость и избыточную лета
   промпты исхода.
 - Прочитан цикл применения исхода: `main.py` ~2430–2640 (прогресс, смерти,
   `crew_health`, завершение).
-- Прочитаны `generate_mission` (`game_master.py:2372`) и `MISSION_SCHEMA`
-  (`game_master.py:600`), `create_mission`/`get_mission`/
+- Прочитаны `generate_mission` (`game_server.py:2372`) и `MISSION_SCHEMA`
+  (`game_server.py:600`), `create_mission`/`get_mission`/
   `update_mission_stage_progress` (`database.py:1744–1816`).
-- Проверены реальные данные в `game-server-api/game_master.db`.
+- Проверены реальные данные в `game-server/game_server.db`.
 - Код **не менялся** — только расследование.

@@ -1,8 +1,8 @@
 """
-Telegram Bot for AI Game Master - New Architecture
+Telegram Bot for AI Game Server - New Architecture
 
 Key Features:
-1. Onboarding via API - Questions fetched from game-server-api
+1. Onboarding via API - Questions fetched from game-server
 2. Multiple Games Support - Track which game each player participates in
 3. Polling Mechanism - Periodic polling for updates from API
 4. Enhanced Game Flow - Better state management and inline keyboards
@@ -13,7 +13,7 @@ Architecture:
 - Maintains existing language support (Russian/English)
 - Uses existing language.py for messages
 - Proper error handling and logging
-- Async HTTP calls to game-server-api
+- Async HTTP calls to game-server
 """
 
 import asyncio
@@ -86,7 +86,7 @@ def _format_scheduler_time(iso_string: str) -> str:
 # ============== Configuration ==============
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
+GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
 GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
 
 DEFAULT_LANGUAGE = "en"
@@ -234,7 +234,7 @@ async def api_request(
     Returns:
         Response JSON as dict, or None if status code is in ignore_codes
     """
-    url = f"{GAME_MASTER_API_URL}{endpoint}"
+    url = f"{GAME_SERVER_URL}{endpoint}"
 
     # Direct connection - no proxy for internal API calls
     session = aiohttp.ClientSession()
@@ -298,7 +298,7 @@ async def send_image_from_api_url(
     caption: str = "",
     reply_markup=None,
 ) -> bool:
-    """Fetch an image from a URL (from game-server-api) and send as photo.
+    """Fetch an image from a URL (from game-server) and send as photo.
 
     Returns True if sent successfully, False otherwise.
     """

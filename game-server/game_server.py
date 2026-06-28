@@ -1,5 +1,5 @@
 """
-Game Master Agent - Direct OpenAI API for game orchestration
+Game Server - Direct OpenAI API for game orchestration
 
 Uses openai client with json_schema response_format for all LLM calls.
 Compatible with llama.cpp / vLLM / any OpenAI-compatible endpoint.
@@ -771,12 +771,12 @@ NPC_NAME_SCHEMA = {
 }
 
 
-# ============== Game Master Agent ==============
+# ============== Game Server ==============
 
 
-class GameMasterAgent:
+class GameServer:
     """
-    Game Master agent using direct OpenAI API calls with json_schema
+    Game Server agent using direct OpenAI API calls with json_schema
     structured outputs for all LLM interactions.
     """
 
@@ -798,7 +798,7 @@ class GameMasterAgent:
         )
 
         self._init_default_npcs()
-        logger.info(f"GameMasterAgent initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
+        logger.info(f"GameServer initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
 
     def _get_player_briefing_schema(self) -> dict[str, object]:
         """Build the player briefing JSON schema with dynamic maxItems."""
@@ -1067,7 +1067,7 @@ class GameMasterAgent:
         cleaned = re.sub(r"\s*```", "", cleaned)
 
         # Try to find JSON object or array
-        for pat in GameMasterAgent._JSON_BLOCK_PATTERNS:
+        for pat in GameServer._JSON_BLOCK_PATTERNS:
             match = pat.search(cleaned)
             if match:
                 return match.group()
@@ -1720,7 +1720,7 @@ spatial presence\n"
 
         Returns dict with primary species, secondary (for hybrid), and hybrid flag.
         """
-        tag_counts = GameMasterAgent._count_tags_from_answers(answers, "species_tags", questions)
+        tag_counts = GameServer._count_tags_from_answers(answers, "species_tags", questions)
         if not tag_counts:
             return {"primary": "", "secondary": "", "hybrid": False}
 
@@ -1746,7 +1746,7 @@ spatial presence\n"
 
         Returns dict with primary gender, secondary (for hybrid), and hybrid flag.
         """
-        tag_counts = GameMasterAgent._count_tags_from_answers(answers, "gender_tags", questions)
+        tag_counts = GameServer._count_tags_from_answers(answers, "gender_tags", questions)
         if not tag_counts:
             return {"primary": "", "secondary": "", "hybrid": False}
 
@@ -2723,10 +2723,10 @@ spatial presence\n"
 # ============== Factory Function ==============
 
 
-def create_game_master_agent(language: str = "en") -> GameMasterAgent:
-    """Create and initialize Game Master agent.
+def create_game_server(language: str = "en") -> GameServer:
+    """Create and initialize Game Server agent.
 
     Args:
         language: Language for content generation ("en" or "ru")
     """
-    return GameMasterAgent(language=language)
+    return GameServer(language=language)

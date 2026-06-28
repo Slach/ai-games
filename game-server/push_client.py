@@ -210,7 +210,7 @@ async def push_gm_notification(
     npcs: int = 0,
     language: str = "ru",
 ) -> bool:
-    """Push a notification to the Game Master about turn generation status.
+    """Push a notification to the Game Server about turn generation status.
 
     Called after background turn generation completes (success or failure)
     so the GM gets a Telegram message without waiting for the HTTP response.

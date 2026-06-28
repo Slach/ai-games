@@ -1,5 +1,5 @@
 """
-Game Scheduler — HTTP API service that triggers game-server-api on a schedule.
+Game Scheduler — HTTP API service that triggers game-server on a schedule.
 
 Runs a scheduling loop as a background task and exposes an HTTP API
 for timer control (reset, pause, resume) and status queries.
@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Get configuration from environment
-GAME_SERVER_API_URL = os.getenv("GAME_SERVER_API_URL", "http://game-server-api:8000")
+GAME_SERVER_API_URL = os.getenv("GAME_SERVER_API_URL", "http://game-server:8000")
 GAME_SCHEDULE_RAW = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))
 try:
     GAME_SCHEDULER_PORT = int(os.getenv("GAME_SCHEDULER_PORT", "8001"))
@@ -100,7 +100,7 @@ def _compute_next_run(schedule: tuple[str, int | str], from_time: datetime | Non
 
 
 class GameScheduler:
-    """Scheduler that calls game-server-api to generate turns on a schedule."""
+    """Scheduler that calls game-server to generate turns on a schedule."""
 
     def __init__(self):
         self.api_url = GAME_SERVER_API_URL

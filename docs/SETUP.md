@@ -38,22 +38,22 @@ docker-compose up -d
 
 ```bash
 docker-compose ps
-docker-compose logs -f game-server-api
+docker-compose logs -f game-server
 docker-compose logs -f telegram-bot
 ```
 
 ## 5. Service Modes
 
-### Game Master API (game-server-api)
+### Game Master API (game-server)
 
 Runs as a REST API server:
 
 ```bash
 # In Docker
-docker-compose logs game-server-api
+docker-compose logs game-server
 
 # Locally for testing
-cd game-server-api
+cd game-server
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -76,7 +76,7 @@ python bot.py
 
 ### Game Master Scheduler (game-scheduler)
 
-This service triggers generation on schedule. It calls the game-server-api endpoints to generate content.
+This service triggers generation on schedule. It calls the game-server endpoints to generate content.
 
 **Modes:**
 
@@ -85,7 +85,7 @@ This service triggers generation on schedule. It calls the game-server-api endpo
 
 ```bash
 # Test single generation
-docker compose run --rm game-scheduler GAME_MASTER_MODE=single python game_master.py
+docker compose run --rm game-scheduler GAME_SCHEDULER_MODE=single python game_server.py
 
 ```
 
@@ -196,7 +196,7 @@ docker-compose restart telegram-bot
          │
          ▼
 ┌───────────────────────────┐
-│    game-server-api        │  ← REST API, AI generation, database
+│    game-server        │  ← REST API, AI generation, database
 │  (FastAPI + OpenAI Agent) │
 └────────┬──────────────────┘
          ▲
@@ -212,7 +212,7 @@ docker-compose restart telegram-bot
 **Service Descriptions:**
 
 - **telegram-bot**: Player interface via Telegram commands and inline keyboards
-- **game-server-api**: FastAPI REST API with OpenAI-based Game Master agent, handles story generation, player profiles, actions, and messages
+- **game-server**: FastAPI REST API with OpenAI-based Game Master agent, handles story generation, player profiles, actions, and messages
 - **game-scheduler**: Scheduler service that triggers daily episode generation (runs at configured time or manually)
 - **comfyui**: GPU-accelerated content generation backend with HuggingFace models
 
@@ -225,6 +225,6 @@ docker-compose restart telegram-bot
 | `LLM_API_KEY` | API key for LLM (any value for llama.cpp) | `placeholder-key-for-llama-cpp` |
 | `LLM_MODEL` | LLM model name | `unsloth/Qwen3.5-27B` |
 | `COMFYUI_URL` | ComfyUI backend endpoint | `http://comfyui:8188` |
-| `GAME_MASTER_API_URL` | Game Master API endpoint | `http://game-server-api:8000` |
+| `GAME_SERVER_URL` | Game Master API endpoint | `http://game-server:8000` |
 | `GAME_SCHEDULE_TIME` | Turn generation time (24h format) | `08:00` |
-| `GAME_MASTER_MODE` | Scheduler mode: `scheduled` or `single` | `scheduled` |
+| `GAME_SCHEDULER_MODE` | Scheduler mode: `scheduled` or `single` | `scheduled` |

@@ -1,5 +1,5 @@
 """
-Language constants for Game Master API
+Language constants for Game Server API
 All user-facing strings should be defined here with Russian and English versions
 """
 

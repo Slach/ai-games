@@ -3,7 +3,7 @@
 ## Base URL
 
 ```
-http://game-server-api:8000
+http://game-server:8000
 ```
 
 All game-specific endpoints accept `?game_id=...` query parameter (default: `"default_game"`).

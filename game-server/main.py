@@ -1,5 +1,5 @@
 """
-Game Master API - FastAPI service for AI Game Master
+Game Server API - FastAPI service for AI Game Server
 """
 
 import asyncio
@@ -99,7 +99,7 @@ from database import (
 from game_rules import apply_mission_progress, apply_death_limits
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from game_master import create_game_master_agent
+from game_server import create_game_server
 from image_generator import (
     DEFAULT_LOADING_FALLBACK_URL,
     DEFAULT_SPLASH_FALLBACK_URL,
@@ -231,7 +231,7 @@ class KickPlayerRequest(BaseModel):
     """Request to kick a player by role"""
 
     role_key: str
-    reason: str = "Kicked by Game Master"
+    reason: str = "Kicked by Game Server"
     game_id: str
     language: str = "ru"
 
@@ -274,7 +274,7 @@ async def generate_dynamic_onboarding_questions(
     start_time = datetime.now()
     questions: list[OnboardingQuestion] = []
     try:
-        game_master = create_game_master_agent(language=language)
+        game_server = create_game_server(language=language)
         logger.info("Game Master agent created successfully")
 
         # Query underrepresented roles from recent onboarding history
@@ -299,7 +299,7 @@ async def generate_dynamic_onboarding_questions(
             logger.warning(f"Failed to query underrepresented roles: {e}")
             hint = ""
 
-        raw_questions = game_master.generate_onboarding_questions(
+        raw_questions = game_server.generate_onboarding_questions(
             underrepresented_hint=hint,
         )
         logger.info(f"LLM returned {len(raw_questions)} questions")
@@ -401,7 +401,7 @@ async def _generate_option_images_for_question(
     session_answers = session.get("answers", {})
     session_questions = session.get("questions", [])
 
-    game_master = create_game_master_agent(language=language)
+    game_server = create_game_server(language=language)
 
     # Count all tags from already-answered questions
     for qid_str, selected_value in session_answers.items():
@@ -423,7 +423,7 @@ async def _generate_option_images_for_question(
                 break
 
     # Generate LLM prompts for each option
-    prompts_dict = game_master.generate_species_option_prompts(
+    prompts_dict = game_server.generate_species_option_prompts(
         question=question.model_dump(),
         accumulated_tags=accumulated_tags,
         tag_type=tag_type,
@@ -497,9 +497,9 @@ async def generate_dynamic_species_gender_question(
     session_answers = {k: v for k, v in session.get("answers", {}).items() if str(k) not in ("-1", "-2", "-3")}
     session_questions = session.get("questions", [])
 
-    game_master = create_game_master_agent(language=language)
-    accumulated = game_master._count_tags_from_answers(session_answers, tag_field, session_questions)
-    generated = game_master.generate_dynamic_species_gender_question(dimension, sg_step, accumulated)
+    game_server = create_game_server(language=language)
+    accumulated = game_server._count_tags_from_answers(session_answers, tag_field, session_questions)
+    generated = game_server.generate_dynamic_species_gender_question(dimension, sg_step, accumulated)
 
     prefix = "s" if dimension == "species" else "g"
     options = [
@@ -545,9 +545,9 @@ def generate_player_profile_from_answers(
     if not available:
         raise ValueError("All crew positions are filled. No roles available.")
 
-    game_master = create_game_master_agent(language=language)
+    game_server = create_game_server(language=language)
 
-    role_result = game_master.assign_role_from_answers(answers, available, questions=questions)
+    role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
 
     assigned_key = role_result.get("role_key", "")
 
@@ -557,7 +557,7 @@ def generate_player_profile_from_answers(
         available = get_available_roles(game_id, language=language)
         if not available:
             raise ValueError("All crew positions are filled while re-assigning.")
-        role_result = game_master.assign_role_from_answers(answers, available, questions=questions)
+        role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
         assigned_key = role_result.get("role_key", "")
         role_data = get_role_by_key(assigned_key, language=language, game_id=game_id)
 
@@ -572,7 +572,7 @@ def generate_player_profile_from_answers(
         if not available:
             raise ValueError("All crew positions are filled.")
         # Use point-based assignment to pick the best remaining role, not just first
-        role_result = game_master.assign_role_from_answers(answers, available, questions=questions)
+        role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
         fallback_key = role_result.get("role_key", available[0]["role_key"])
         fallback_taken = take_role(fallback_key, player_id, game_id)
         if not fallback_taken:
@@ -600,8 +600,8 @@ def generate_player_profile_from_answers(
     logger.info(f"[ROLE] Player {player_id} assigned role: {role_data['role_name']} ({assigned_key}), scores: {role_result.get('reasoning', '')}")
 
     # Calculate species and gender from answers
-    species_result = game_master.calculate_species_from_answers(answers, questions=questions)
-    gender_result = game_master.calculate_gender_from_answers(answers, questions=questions)
+    species_result = game_server.calculate_species_from_answers(answers, questions=questions)
+    gender_result = game_server.calculate_gender_from_answers(answers, questions=questions)
 
     species_primary = species_result.get("primary", "")
     species_hybrid = species_result.get("hybrid", False)
@@ -628,7 +628,7 @@ def generate_player_profile_from_answers(
     # Generate species+gender narrative description via LLM
     species_description = ""
     try:
-        species_description = game_master.generate_species_gender_description(
+        species_description = game_server.generate_species_gender_description(
             species_result=species_result,
             gender_result=gender_result,
             role=role_data["role_name"],
@@ -699,7 +699,7 @@ async def _generate_loading_images():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    logger.info("Game Master API starting up")
+    logger.info("Game Server API starting up")
     init_db()
     logger.info("Database initialized and migrations run")
 
@@ -707,7 +707,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_generate_loading_images())
 
     yield
-    logger.info("Game Master API shutting down")
+    logger.info("Game Server API shutting down")
 
 
 GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
@@ -730,7 +730,7 @@ async def _notify_scheduler(action: str) -> None:
 
 
 app = FastAPI(
-    title="AI Game Master API",
+    title="AI Game Server API",
     description="API for AI-powered cooperative game with Telegram bot interface",
     version="2.0.0",
     lifespan=lifespan,
@@ -740,7 +740,7 @@ app = FastAPI(
 # - GAME_MASTER_API_URL: internal Docker URL (for development / self-reference)
 # - CORS_ORIGIN: external/public URL for browser frontend (Telegram Mini App)
 # Only browsers enforce CORS; backend services (telegram-bot, game-scheduler) don't need it.
-cors_origins = [os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")]
+cors_origins = [os.getenv("GAME_MASTER_API_URL", "http://game-server:8000")]
 extra_cors = os.getenv("CORS_ORIGIN", "")
 if extra_cors:
     cors_origins.append(extra_cors)
@@ -759,7 +759,7 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"service": "AI Game Master API", "status": "running", "version": "2.0.0"}
+    return {"service": "AI Game Server API", "status": "running", "version": "2.0.0"}
 
 
 @app.get("/health")
@@ -827,7 +827,7 @@ async def start_onboarding(request: StartOnboardingRequest):
         }
     else:
         try:
-            gm = create_game_master_agent(language=request.language)
+            gm = create_game_server(language=request.language)
             game_title_data = gm.generate_game_title()
 
             if game_title_data.get("title"):
@@ -1024,7 +1024,7 @@ async def complete_onboarding(session_id: str):
     # Step 1: Generate avatar prompt (LLM) with fallback to template
     avatar_prompt = ""
     try:
-        game_master = create_game_master_agent(language=session.get("language", "en"))
+        game_server = create_game_server(language=session.get("language", "en"))
 
         species_desc = profile.get("species_description") or ""
         species_type = profile.get("species", "") or ""
@@ -1041,7 +1041,7 @@ async def complete_onboarding(session_id: str):
         else:
             avatar_description_combined = profile.get("avatar_description", "")
 
-        avatar_prompt = game_master.generate_avatar_prompt(
+        avatar_prompt = game_server.generate_avatar_prompt(
             role=profile["role"],
             traits=profile["personality_traits"],
             avatar_description=avatar_description_combined,
@@ -1236,7 +1236,7 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
     # Step 1: Generate avatar prompt (LLM) with fallback to template
     avatar_prompt = ""
     try:
-        game_master = create_game_master_agent(language=language)
+        game_server = create_game_server(language=language)
 
         species_desc = profile.get("species_description") or ""
         species_type = profile.get("species", "") or ""
@@ -1253,7 +1253,7 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
         else:
             avatar_description_combined = profile.get("avatar_description", "")
 
-        avatar_prompt = game_master.generate_avatar_prompt(
+        avatar_prompt = game_server.generate_avatar_prompt(
             role=profile["role"],
             traits=profile["personality_traits"],
             avatar_description=avatar_description_combined,
@@ -1815,7 +1815,7 @@ async def auto_select_action(
             logger.error(f"Failed to parse global_circumstances: {e}", exc_info=True)
 
     # 4. Generate LLM choice
-    gm = create_game_master_agent(language=language)
+    gm = create_game_server(language=language)
     player_name = profile.get("player_name", "") or ""
     decision = gm.generate_player_auto_choice(
         choices=choices,
@@ -1826,7 +1826,7 @@ async def auto_select_action(
     )
 
     action_id = decision.get("action_id", "")
-    rationale = decision.get("rationale", "Auto-selected by Game Master")
+    rationale = decision.get("rationale", "Auto-selected by Game Server")
 
     if not action_id:
         raise HTTPException(status_code=500, detail="LLM returned no valid action")
@@ -1916,9 +1916,9 @@ async def submit_game_message(request: GameMessageRequest):
     # Generate response from game master
     try:
         language = "ru" if any(c in message for c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя") else "en"
-        game_master = create_game_master_agent(language=language)
+        game_server = create_game_server(language=language)
 
-        response = game_master.process_player_message(player_id=player_id, message=message, player_profile=profile_data)
+        response = game_server.process_player_message(player_id=player_id, message=message, player_profile=profile_data)
 
         add_game_message(player_id, response, "text_response")
 
@@ -2083,7 +2083,7 @@ async def _generate_chosen_action_image(
         # with fallback to string concatenation
         prompt = ""
         try:
-            gm = create_game_master_agent(language="en")
+            gm = create_game_server(language="en")
             prompt = gm.generate_chosen_action_prompt(
                 role=role,
                 traits=traits,
@@ -2209,7 +2209,7 @@ async def _generate_npc_chosen_action_image(
         # Generate prompt via LLM
         prompt = ""
         try:
-            gm = create_game_master_agent(language="en")
+            gm = create_game_server(language="en")
             prompt = gm.generate_chosen_action_prompt(
                 role=role,
                 traits=traits,
@@ -2495,7 +2495,7 @@ async def _analyze_turn_outcome(
             crew_roster.append({"name": entity_name, "role": role_name, "is_dead": is_dead})
 
         # Analyze with LLM
-        gm = create_game_master_agent(language=language)
+        gm = create_game_server(language=language)
         outcome = gm.analyze_combined_outcome(
             global_circ,
             all_decisions,
@@ -2843,7 +2843,7 @@ async def _analyze_turn_outcome(
                 go_msgs = gs.get("game_over", {})
                 outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
 
-                gm = create_game_master_agent(language=language)
+                gm = create_game_server(language=language)
                 game_over = gm.generate_game_over_outcome(
                     outcome_type=outcome_label,
                     outcome_narrative=outcome_text[:2000],
@@ -2932,7 +2932,7 @@ async def admin_create_game(request: CreateGameRequest):
     # Generate and persist title + welcome text once, at game creation.
     # These describe the ship shared by all players and must stay stable across onboardings.
     try:
-        gm = create_game_master_agent(language=request.language)
+        gm = create_game_server(language=request.language)
         title_data = gm.generate_game_title()
         if title_data.get("title"):
             save_game_title_and_welcome(
@@ -2968,7 +2968,7 @@ async def admin_set_language(request: SetLanguageRequest):
     set_game_language(request.game_id, request.language)
     logger.info(f"Language for game {request.game_id} set to '{request.language}'")
 
-    gm = create_game_master_agent(language=request.language)
+    gm = create_game_server(language=request.language)
 
     # Regenerate game title in the new language
     new_title = ""
@@ -3126,7 +3126,7 @@ async def generate_turn_episode(
     logger.info(f"Language: {language}")
     logger.info(f"Previous actions count: {len(previous_actions) if previous_actions else 0}")
 
-    game_master = create_game_master_agent(language=language)
+    game_server = create_game_server(language=language)
 
     player_role = "Crew Member" if language != "ru" else "Член экипажа"
     logger.info(f"Player role: {player_role}")
@@ -3139,14 +3139,14 @@ async def generate_turn_episode(
             action_summaries.append(f"Turn {action.get('turn', 0)}: Player chose '{action.get('choice')}'")
         summary = " | ".join(action_summaries)
 
-    story = game_master.generate_turn_story(
+    story = game_server.generate_turn_story(
         turn=turn_num,
         previous_summary=summary or state["last_updated"],
         player_role=player_role,
     )
 
     logger.info("Generating NPC dialogues...")
-    dialogues = game_master.generate_crew_dialogues(
+    dialogues = game_server.generate_crew_dialogues(
         story=story,
         player_role=player_role,
         crew_members=_get_crew_members(game_id),
@@ -3195,10 +3195,10 @@ async def generate_chosen_action_image(
     image_generator = create_image_generator()
     role = profile["role"]
     traits = profile["personality_traits"]
-    # Generate prompt via LLM if game_master is available
+    # Generate prompt via LLM if game_server is available
     prompt = ""
     try:
-        gm = create_game_master_agent(language="en")
+        gm = create_game_server(language="en")
         prompt = gm.generate_chosen_action_prompt(
             role=role,
             traits=traits,
@@ -3511,7 +3511,7 @@ async def _original_start_game(request: StartGameRequest):
 
     # 3. Create NPCs for all unfilled roles
     npcs_created = []
-    gm = create_game_master_agent(language=language)
+    gm = create_game_server(language=language)
 
     # Collect names to avoid: player names + existing NPC names being reused
     avoid_names: set[str] = set()
@@ -3998,7 +3998,7 @@ async def _original_start_game(request: StartGameRequest):
 
     # NPC dialogues
     player_role = all_participants[0]["role"] if all_participants else "Crew Member"
-    from game_master import GameStory
+    from game_server import GameStory
 
     dialog_story = GameStory(
         turn=turn_num,
@@ -4680,7 +4680,7 @@ async def _original_continue_game(
         game_id=game_id,
     )
 
-    gm = create_game_master_agent(language=language)
+    gm = create_game_server(language=language)
 
     # Fetch mission data for story consistency
     mission_data = get_mission(None, game_id) or {}
@@ -4948,7 +4948,7 @@ async def _original_continue_game(
 
     # NPC dialogues
     player_role = all_participants[0]["role"] if all_participants else "Crew Member"
-    from game_master import GameStory
+    from game_server import GameStory
 
     dialog_story = GameStory(
         turn=turn_num,

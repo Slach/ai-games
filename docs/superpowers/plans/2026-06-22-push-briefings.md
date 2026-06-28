@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** Replace the polling loop in `telegram-bot` with push delivery from `game-server-api`.
+**Goal:** Replace the polling loop in `telegram-bot` with push delivery from `game-server`.
 After `/admin/start-game`, `/admin/continue-game`, or `/admin/regenerate-turn` finish generating
 content, the API calls `telegram-bot` directly with the briefings to send.
 
-**Architecture:** `game-server-api` becomes the single source of truth for delivery. After
+**Architecture:** `game-server` becomes the single source of truth for delivery. After
 generating and saving all content, it fires a background task that calls `telegram-bot`'s new
 `/push/briefings` HTTP endpoint with exponential retry. `telegram-bot` receives the payload,
 downloads images, and sends them via Telegram API. The polling loop is deleted.
@@ -27,9 +27,9 @@ downloads images, and sends them via Telegram API. The polling loop is deleted.
 
 | File | Responsibility | Status |
 |------|---------------|--------|
-| `game-server-api/push_client.py` | 🆕 Exponential retry HTTP client that calls `telegram-bot` | ✅ IMPLEMENTED |
+| `game-server/push_client.py` | 🆕 Exponential retry HTTP client that calls `telegram-bot` | ✅ IMPLEMENTED |
 | `telegram-bot/push_server.py` | 🆕 aiohttp server with `/push/briefings` endpoint | ✅ IMPLEMENTED |
-| `game-server-api/main.py` | 🔧 Add push calls after `/admin/*` endpoints | ✅ IMPLEMENTED (lines 2680, 3171) |
+| `game-server/main.py` | 🔧 Add push calls after `/admin/*` endpoints | ✅ IMPLEMENTED (lines 2680, 3171) |
 | `telegram-bot/bot.py` | 🔧 Удалить polling loop, запустить push server в `main()` | ✅ IMPLEMENTED |
 | `docker-compose.yaml` | 🔧 Add port 9090, env vars for push | ✅ IMPLEMENTED |
 | `docs/RULES_RU.md` | 🔧 Update architecture diagram | ❌ Не обновлено |
@@ -40,7 +40,7 @@ downloads images, and sends them via Telegram API. The polling loop is deleted.
 
 **Files:**
 
-- Create: `game-server-api/push_client.py`
+- Create: `game-server/push_client.py`
 
 **Interfaces:**
 
@@ -160,8 +160,8 @@ async def push_briefings(
 - [x] **Step 2: Commit**
 
 ```bash
-git add game-server-api/push_client.py
-git commit -m "feat(game-server-api): add push_client with exponential retry"
+git add game-server/push_client.py
+git commit -m "feat(game-server): add push_client with exponential retry"
 ```
 
 ---
@@ -186,7 +186,7 @@ git commit -m "feat(game-server-api): add push_client with exponential retry"
 - [x] **Step 1: Create push_server.py with aiohttp endpoint**
 
 ```python
-"""HTTP server for receiving push briefings from game-server-api."""
+"""HTTP server for receiving push briefings from game-server."""
 
 import asyncio
 import logging
@@ -263,7 +263,7 @@ async def _download_image(url: str, timeout: int = 30) -> bytes | None:
 
 
 async def handle_push_briefings(request: web.Request) -> web.Response:
-    """Handle POST /push/briefings from game-server-api."""
+    """Handle POST /push/briefings from game-server."""
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
     last_sent: dict[int, int | None] = request.app["last_sent_briefing_day"]
@@ -438,11 +438,11 @@ git commit -m "feat(telegram-bot): add push server with /push/briefings endpoint
 
 ---
 
-### Task 3: Add push calls to game-server-api endpoints
+### Task 3: Add push calls to game-server endpoints
 
 **Files:**
 
-- Modify: `game-server-api/main.py` (add push_call after start-game, continue-game, regenerate-turn)
+- Modify: `game-server/main.py` (add push_call after start-game, continue-game, regenerate-turn)
 
 **Interfaces:**
 
@@ -537,8 +537,8 @@ except Exception as push_err:
 - [x] **Step 5: Commit**
 
 ```bash
-git add game-server-api/main.py
-git commit -m "feat(game-server-api): add push_briefings calls after game endpoints"
+git add game-server/main.py
+git commit -m "feat(game-server): add push_briefings calls after game endpoints"
 ```
 
 ---
@@ -733,10 +733,10 @@ telegram-bot:
     - PUSH_SERVER_PORT=9090
 ```
 
-- [x] **Step 2: Add env vars for game-server-api**
+- [x] **Step 2: Add env vars for game-server**
 
 ```yaml
-game-server-api:
+game-server:
   # ... existing config ...
   environment:
     # ... existing env vars ...
@@ -800,7 +800,7 @@ Same diagram but in English.
 - [x] **Step 3: Update AGENTS.md**
 
 In the "Architecture Overview" section, update the system diagram to match the new push architecture.
-Add a note: "Briefings are pushed from game-server-api → telegram-bot via HTTP with exponential retry.
+Add a note: "Briefings are pushed from game-server → telegram-bot via HTTP with exponential retry.
 No polling loop needed."
 
 - [x] **Step 4: Commit**
@@ -819,7 +819,7 @@ git commit -m "docs: update architecture diagrams for push-based delivery"
 | telegram-bot HTTP server on 9090 | Task 2 — push_server.py |
 | Endpoint POST /push/briefings | Task 2 — handle_push_briefings |
 | Dedup in push endpoint | Task 2 — last_sent check |
-| game-server-api push client with retry | Task 1 — push_client.py |
+| game-server push client with retry | Task 1 — push_client.py |
 | Exponential backoff 1-60s | Task 1 — push_briefings loop |
 | Push after /admin/start-game | Task 3 — Step 2 |
 | Push after /admin/continue-game | Task 3 — Step 3 |

@@ -28,7 +28,7 @@ while players make individual choices to progress through the narrative.
 │  - Commands: /start, /profile, /turn, /help                     │
 │  - Onboarding flow with FSM                                      │
 │  - Message handling (text & voice)                               │
-│  - Push server (receives briefings from game-server-api)         │
+│  - Push server (receives briefings from game-server)         │
 └──────────────────────┬──────────────────────────────────────────┘
                        │
                        ▼
@@ -37,7 +37,7 @@ while players make individual choices to progress through the narrative.
 │                                                                  │
 │  ┌──────────────────────┐  ┌───────────────────────┐           │
 │  │ Game Master Agent    │  │ Image Generator       │           │
-│  │ (game_master.py)     │  │ (image_generator.py)  │           │
+│  │ (game_server.py)     │  │ (image_generator.py)  │           │
 │  │ - Story generation   │  │ - Comic strip gen     │           │
 │  │ - NPC decisions      │  │ - Avatar generation   │           │
 │  │ - Player briefings   │  │ - ComfyUI integration │           │
@@ -68,7 +68,7 @@ while players make individual choices to progress through the narrative.
                         │  avatars)  │
                         └────────────┘
 
-Database: SQLite (game_master.db per service)
+Database: SQLite (game_server.db per service)
 - Player profiles with species/gender/role
 - Onboarding sessions with score history
 - Game turns (story, circumstances, outcomes)
@@ -130,7 +130,7 @@ Database: SQLite (game_master.db per service)
 
 ## Core Components
 
-### 1. Game Master Agent (LLM) — `game-server-api/game_master.py`
+### 1. Game Master Agent (LLM) — `game-server/game_server.py`
 
 - Turn story generation using LLM (llama.cpp via OpenAI-compatible API)
 - NPC decision generation with personalities
@@ -142,7 +142,7 @@ Database: SQLite (game_master.db per service)
 - Content prompt generation for visual assets
 - Language support (English/Russian)
 
-### 2. Game Server API — `game-server-api/main.py`
+### 2. Game Server API — `game-server/main.py`
 
 - FastAPI service for game orchestration
 - Onboarding endpoints (questions, profile creation)
@@ -163,9 +163,9 @@ Database: SQLite (game_master.db per service)
 - Push server (`push_server.py`) for receiving briefings from API
 - Language support (per-player preference)
 
-### 4. Game Master Scheduler — `game-scheduler/game_master.py`
+### 4. Game Master Scheduler — `game-scheduler/game_server.py`
 
-- Standalone async service that calls game-server-api
+- Standalone async service that calls game-server
 - Configurable schedule: interval (8h, 30m, 30s) or daily at HH:MM
 - Modes: `scheduled` (loop) or `single` (one-shot for testing)
 - Turn lifecycle orchestration:
@@ -173,16 +173,16 @@ Database: SQLite (game_master.db per service)
   2. Trigger next turn via `/admin/continue-game`
 - Runtime: `docker compose run --rm game-scheduler` for debugging
 
-### 5. Image Generator — `game-server-api/image_generator.py`
+### 5. Image Generator — `game-server/image_generator.py`
 
 - Comic strip generation for players via ComfyUI
 - Avatar generation for player profiles
 - Pixelle MCP integration for image generation
 - Image storage and retrieval
 
-### 6. Database — `game-server-api/database.py`
+### 6. Database — `game-server/database.py`
 
-- SQLite database (`game_master.db`)
+- SQLite database (`game_server.db`)
 - Player profiles (species, gender, role, traits, name)
 - Onboarding sessions with score history
 - Game turns (global circumstances, story, outcomes)
@@ -193,13 +193,13 @@ Database: SQLite (game_master.db per service)
 - Game messages and notifications
 - Schema migrations via `MIGRATIONS` list
 
-### 7. Game Rules — `game-server-api/game_rules.py`
+### 7. Game Rules — `game-server/game_rules.py`
 
 - Ship role definitions and constraints
 - Mission normalization and seed selection
 - Species and gender definitions for onboarding
 
-### 8. Prompts — `game-server-api/prompts.py`
+### 8. Prompts — `game-server/prompts.py`
 
 - All LLM prompts: onboarding, story, briefings, NPC decisions,
   outcomes, missions, game-over, auto-action, content generation
@@ -212,7 +212,7 @@ Database: SQLite (game_master.db per service)
 | Service | Description | GPU |
 |---------|-------------|-----|
 | `comfyui` | Image generation backend (ComfyUI) | Yes |
-| `game-server-api` | FastAPI game orchestration | No |
+| `game-server` | FastAPI game orchestration | No |
 | `telegram-bot` | aiogram bot + push server | No |
 | `game-scheduler` | Turn scheduler | No |
 
@@ -224,8 +224,8 @@ service on that network.
 **Apply code changes without wiping data:**
 
 ```bash
-docker compose --progress=plain stop telegram-bot game-scheduler game-server-api --timeout=1 \
-  && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server-api
+docker compose --progress=plain stop telegram-bot game-scheduler game-server --timeout=1 \
+  && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server
 ```
 
 **Full wipe and rebuild:**
@@ -246,7 +246,7 @@ docker compose run --rm game-scheduler
 **Run tests:**
 
 ```bash
-cd game-server-api && ../.venv/bin/python -m unittest discover -s tests
+cd game-server && ../.venv/bin/python -m unittest discover -s tests
 ```
 
 ## Implementation Status

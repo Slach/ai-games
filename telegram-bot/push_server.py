@@ -1,4 +1,4 @@
-"""HTTP server for receiving push briefings from game-server-api."""
+"""HTTP server for receiving push briefings from game-server."""
 
 import asyncio
 import logging
@@ -107,7 +107,7 @@ async def _download_image(url: str, timeout: int = 30) -> bytes | None:
 
 
 async def handle_push_briefings(request: web.Request) -> web.Response:
-    """Handle POST /push/briefings from game-server-api."""
+    """Handle POST /push/briefings from game-server."""
     bot: Bot = request.app["bot"]
     language: str = request.app.get("language", "ru")
     last_sent: dict[int, int | None] = request.app["last_sent_briefing_turn"]
@@ -305,7 +305,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
 
 
 async def handle_push_player_chosen_action(request: web.Request) -> web.Response:
-    """Handle POST /push/player-action from game-server-api.
+    """Handle POST /push/player-action from game-server.
 
     Delivers a chosen action image to the player who performed the action.
     This is called after fire-and-forget action image generation completes.
@@ -377,7 +377,7 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
 
 
 async def handle_push_outcome(request: web.Request) -> web.Response:
-    """Handle POST /push/outcome from game-server-api.
+    """Handle POST /push/outcome from game-server.
 
     Delivers the combined turn outcome (narrative + status + image) to all alive players.
     This is called after _analyze_turn_outcome completes.
@@ -649,7 +649,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
 
 async def handle_gm_notification(request: web.Request) -> web.Response:
-    """Handle POST /push/gm-notification from game-server-api.
+    """Handle POST /push/gm-notification from game-server.
 
     Sends a Telegram message to the Game Master about turn generation
     progress, success, or failure.
@@ -702,7 +702,7 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
 
 
 async def handle_push_game_over(request: web.Request) -> web.Response:
-    """Handle POST /push/game-over from game-server-api.
+    """Handle POST /push/game-over from game-server.
 
     Delivers the game-over finale (victory or defeat) to all alive players.
     Includes: finale image, finale narrative, and inline keyboard with

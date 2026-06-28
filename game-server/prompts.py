@@ -1,5 +1,5 @@
 """
-LLM prompt constants for Game Master API
+LLM prompt constants for Game Server API
 All prompt strings organized by language (ru/en)
 """
 
@@ -271,7 +271,7 @@ LLM_DIRECTIVES = {
     },
 }
 
-# Game Master prompts (system/user pairs for each LLM call)
+# Game Server prompts (system/user pairs for each LLM call)
 PROMPTS = {
     LANGUAGE_RU: {
         "onboarding_questions": {

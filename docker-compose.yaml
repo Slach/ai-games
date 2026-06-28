@@ -50,11 +50,11 @@ services:
               capabilities: [gpu]
 
   # Game Server API - FastAPI service for game orchestration
-  game-server-api:
-    image: game-server-api:spark-full
+  game-server:
+    image: game-server:spark-full
     build:
       dockerfile: Dockerfile.spark
-      context: game-server-api/
+      context: game-server/
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -68,7 +68,7 @@ services:
       # Web server bind address (0.0.0.0 needed in Docker)
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-8000}
-      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
+      - GAME_SERVER_URL=${GAME_SERVER_URL:-http://game-server:8000}
       - GAME_SCHEDULER_URL=${GAME_SCHEDULER_URL:-http://game-scheduler:8001}
       # CORS origin for browser frontend (Telegram Mini App), e.g. https://t.me
       - CORS_ORIGIN=${CORS_ORIGIN:-}
@@ -92,7 +92,7 @@ services:
       - spark-network
     restart: unless-stopped
     volumes:
-      - ./game-server-api/:/app/
+      - ./game-server/:/app/
 
   # Telegram Bot - Player interface via Telegram
   telegram-bot:
@@ -105,7 +105,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_GAME_MASTER_ID=${TELEGRAM_BOT_GAME_MASTER_ID:-}
-      - GAME_MASTER_API_URL=${GAME_MASTER_API_URL:-http://game-server-api:8000}
+      - GAME_SERVER_URL=${GAME_SERVER_URL:-http://game-server:8000}
       - GAME_SCHEDULER_URL=${GAME_SCHEDULER_URL:-http://game-scheduler:8001}
       - AI_FSM_DB=/app/bot_storage.db
       - PLAYER_STATE_DB=/app/player_states.db
@@ -114,7 +114,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      game-server-api:
+      game-server:
         condition: service_healthy
     networks:
       - spark-network
@@ -137,7 +137,7 @@ services:
     volumes:
       - ./telegram-bot/:/app/
 
-  # Game Scheduler - triggers turn generation via game-server-api
+  # Game Scheduler - triggers turn generation via game-server
   # Can be run manually for debugging: docker compose run --rm game-scheduler
   game-scheduler:
     image: game-scheduler:spark-full
@@ -147,10 +147,10 @@ services:
     ports:
       - "${GAME_SCHEDULER_PORT:-8001}:8001"
     depends_on:
-      game-server-api:
+      game-server:
         condition: service_healthy
     environment:
-      - GAME_SERVER_API_URL=${GAME_SERVER_API_URL:-http://game-server-api:8000}
+      - GAME_SERVER_API_URL=${GAME_SERVER_API_URL:-http://game-server:8000}
       - GAME_SCHEDULE=${GAME_SCHEDULE:-8h}
       - GAME_SCHEDULER_MODE=${GAME_SCHEDULER_MODE:-scheduled}
       - GAME_SCHEDULER_PORT=8001

@@ -8,7 +8,7 @@ unique story, personalized comics, and NPC interactions based on player choices.
 ```mermaid
 graph TD
     A[Telegram API] --> B[telegram-bot]
-    B --> C[game-server-api]
+    B --> C[game-server]
     D[game-scheduler] --> C
     C --> E[comfyui]
     C --> G[llama.cpp<br/>external]
@@ -24,12 +24,12 @@ graph TD
 
 | Service | Port | Description |
 |---------|------|-------------|
-| game-server-api | 8000 | FastAPI backend with SQLite persistence |
+| game-server | 8000 | FastAPI backend with SQLite persistence |
 | telegram-bot | N/A | Telegram bot interface |
 | comfyui | 8188 | Image/Video generation backend |
 | game-scheduler | N/A | Turn generation scheduler (run manually for debugging) |
 
-### Game Master API (`game-server-api/`)
+### Game Master API (`game-server/`)
 
 FastAPI service that orchestrates the game:
 
@@ -75,7 +75,7 @@ Scheduled task runner that triggers daily episode generation. Can be run manuall
 
 ```bash
 # Run single generation cycle for testing
-GAME_MASTER_MODE=single docker compose run --rm game-scheduler
+GAME_SCHEDULER_MODE=single docker compose run --rm game-scheduler
 ```
 
 **Ports:** None
@@ -122,14 +122,14 @@ docker compose up -d
 1. Check logs:
 
 ```bash
-docker compose logs -f game-server-api
+docker compose logs -f game-server
 docker compose logs -f telegram-bot
 ```
 
 1. Run single generation cycle (for testing):
 
 ```bash
-GAME_MASTER_MODE=single docker compose run --rm game-scheduler
+GAME_SCHEDULER_MODE=single docker compose run --rm game-scheduler
 ```
 
 ## Onboarding Flow
@@ -192,7 +192,7 @@ NPCs have distinct personalities and speech styles.
 
 ```bash
 # Game Master API
-cd game-server-api
+cd game-server
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
@@ -205,7 +205,7 @@ python bot.py
 # Game Master (for debugging)
 cd game-scheduler
 pip install -r requirements.txt
-GAME_MASTER_MODE=single python game_master.py
+GAME_SCHEDULER_MODE=single python game_server.py
 ```
 
 After running this, you must generate a new turn via Telegram:
@@ -215,13 +215,13 @@ After running this, you must generate a new turn via Telegram:
 Activate the project virtual environment and run:
 
 ```bash
-cd game-server-api && ../.venv/bin/python -m unittest discover -s tests
+cd game-server && ../.venv/bin/python -m unittest discover -s tests
 ```
 
 Or specific modules:
 
 ```bash
-cd game-server-api && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
+cd game-server && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
 ```
 
 ## API Documentation
@@ -232,11 +232,11 @@ Visit `http://localhost:8000/docs` for Swagger UI.
 
 ### API Connection Failed
 
-Check game-server-api health:
+Check game-server health:
 
 ```bash
 curl http://localhost:8000/health
-docker compose logs game-server-api
+docker compose logs game-server
 ```
 
 ### GPU Not Available
@@ -253,7 +253,7 @@ nvidia-smi
 # Check if bot token is set
 docker compose exec telegram-bot env | grep TELEGRAM
 # Verify API connectivity
-docker compose exec telegram-bot ping game-server-api
+docker compose exec telegram-bot ping game-server
 ```
 
 ## Configuration Details
@@ -265,7 +265,7 @@ docker compose exec telegram-bot ping game-server-api
 | COMFYUI_URL | <http://comfyui:8188> | Image gen endpoint |
 | TELEGRAM_BOT_TOKEN | (required) | Telegram bot token |
 | GAME_SCHEDULE_TIME | 08:00 | Turn generation time |
-| GAME_MASTER_MODE | scheduled | single/simulation/scheduled |
+| GAME_SCHEDULER_MODE | scheduled | single/simulation/scheduled |
 
 ## Future Enhancements
 

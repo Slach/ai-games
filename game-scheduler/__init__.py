@@ -1,10 +1,7 @@
 """
-Game Master Module for AI Game
-
-This module implements the complete Daily Game Play Loop as specified in PROJECT_PLAN.md,
-using OpenAI SDK for orchestration.
+Game Scheduler module — triggers game-server on a schedule.
 """
 
-from .game_master import GameMasterScheduler
+from .main import GameScheduler
 
-__all__ = ["GameMasterScheduler"]
+__all__ = ["GameScheduler"]

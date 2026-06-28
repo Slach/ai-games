@@ -127,7 +127,7 @@ class TestApplyMissionProgress(unittest.TestCase):
 
 from unittest.mock import patch  # noqa: E402
 
-from game_master import GameMasterAgent  # noqa: E402
+from game_server import GameServer  # noqa: E402
 
 
 class TestGenerateMissionNormalization(unittest.TestCase):
@@ -143,8 +143,8 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         }
 
     def test_generate_mission_normalizes_objectives_and_stages(self):
-        agent = GameMasterAgent(language="en")
-        with patch.object(GameMasterAgent, "_call_llm", return_value=self._fake_llm_result()):
+        agent = GameServer(language="en")
+        with patch.object(GameServer, "_call_llm", return_value=self._fake_llm_result()):
             result = agent.generate_mission([{"role": "Pilot", "type": "player"}])
         self.assertEqual([o["stage"] for o in result["objectives"]], [1, 2, 3])
         self.assertEqual([o["name"] for o in result["objectives"]], ["A", "B", "C"])

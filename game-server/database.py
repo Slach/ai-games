@@ -1,5 +1,5 @@
 """
-SQLite database storage for Game Master API
+SQLite database storage for Game Server API
 """
 
 import json
@@ -42,7 +42,7 @@ except (ValueError, TypeError):
     GAME_START_MAX_PLAYERS = 10
 
 # Database path
-DB_PATH = Path(__file__).parent / "game_master.db"
+DB_PATH = Path(__file__).parent / "game_server.db"
 
 
 def get_db_connection():

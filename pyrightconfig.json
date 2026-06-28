@@ -2,7 +2,7 @@
     "venvPath": ".",
     "venv": ".venv",
     "include": [
-        "game-server-api",
+        "game-server",
         "game-master",
         "telegram-bot"
     ],

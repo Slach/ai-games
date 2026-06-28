@@ -4,7 +4,10 @@
 
 **Goal:** Rename game-scheduler → game-scheduler, convert it to an HTTP API service with scheduler state persistence, synchronize /gm_* commands with scheduling timer, fix "day"→"turn" terminology everywhere.
 
-**Architecture:** game-scheduler becomes an aiohttp API server (port 8001) with the scheduling loop as a background task. game-server-api calls game-scheduler's `/scheduler/reset` after each turn. Telegram bot calls `/scheduler/status` for `/gm_status` and `/gm_list`, and `/scheduler/pause|resume` for `/gm_pause`.
+**Architecture:** game-scheduler becomes an aiohttp API server (port 8001) with the
+scheduling loop as a background task. game-server calls game-scheduler's
+`/scheduler/reset` after each turn. Telegram bot calls `/scheduler/status` for
+`/gm_status` and `/gm_list`, and `/scheduler/pause|resume` for `/gm_pause`.
 
 **Tech Stack:** Python 3, aiohttp, SQLite, asyncio
 
@@ -18,7 +21,7 @@
 - Database schema changes must use `MIGRATIONS` list
 - Use `git mv` for renaming files/directories
 - `PYTHONDONTWRITEBYTECODE=1` for all Python invocations
-- `game-server-api/game_master.py` and `game-server-api/game_master.db` NOT renamed
+- `game-server/game_server.py` and `game-server/game_server.db` NOT renamed
 
 ---
 
@@ -54,10 +57,10 @@ Replace `game-scheduler` service block. Current lines ~139-157, replace with:
     ports:
       - "${GAME_SCHEDULER_PORT:-8001}:8001"
     depends_on:
-      game-server-api:
+      game-server:
         condition: service_healthy
     environment:
-      - GAME_SERVER_API_URL=${GAME_SERVER_API_URL:-http://game-server-api:8000}
+      - GAME_SERVER_API_URL=${GAME_SERVER_API_URL:-http://game-server:8000}
       - GAME_SCHEDULE=${GAME_SCHEDULE:-8h}
       - GAME_SCHEDULER_MODE=${GAME_SCHEDULER_MODE:-scheduled}
       - GAME_SCHEDULER_PORT=8001
@@ -73,13 +76,13 @@ Replace `game-scheduler` service block. Current lines ~139-157, replace with:
 
 ```bash
 ls game-scheduler/
-# Expect: Dockerfile.spark  game_master.py  __init__.py  pyrightconfig.json  requirements.txt  .ruff_cache
+# Expect: Dockerfile.spark  game_server.py  __init__.py  pyrightconfig.json  requirements.txt  .ruff_cache
 ```
 
 - [ ] **Step 4: Quick grep for stale references**
 
 ```bash
-grep -rn 'game-scheduler' docker-compose.yaml telegram-bot/ game-server-api/ --include='*.py' --include='*.yaml' --include='*.yml' | grep -v game_master.py | grep -v game_master.db | grep -v GAME_MASTER_ID | grep -v GAME_MASTER_API_URL
+grep -rn 'game-scheduler' docker-compose.yaml telegram-bot/ game-server/ --include='*.py' --include='*.yaml' --include='*.yml' | grep -v game_server.py | grep -v game_server.db | grep -v GAME_MASTER_ID | grep -v GAME_SERVER_URL
 # Should have zero results (only the allowed exceptions remain)
 ```
 
@@ -248,11 +251,11 @@ git commit -m "feat: add game-scheduler/database.py with scheduler_state persist
 
 ---
 
-### Task 3: Refactor game-scheduler/game_master.py → GameScheduler HTTP API
+### Task 3: Refactor game-scheduler/game_server.py → GameScheduler HTTP API
 
 **Files:**
 
-- Modify: `game-scheduler/game_master.py` (full rewrite)
+- Modify: `game-scheduler/game_server.py` (full rewrite)
 
 **Interfaces:**
 
@@ -264,7 +267,7 @@ The file needs a full rewrite. Key changes from current:
 
 1. Class rename: `GameMasterScheduler` → `GameScheduler`
 2. All "day" terminology → "turn" (variables, comments, docstrings)
-3. Env var: `GAME_MASTER_API_URL` → `GAME_SERVER_API_URL`  
+3. Env var: `GAME_SERVER_URL` → `GAME_SERVER_API_URL`  
 4. Env var: `GAME_MASTER_MODE` → `GAME_SCHEDULER_MODE`
 5. Add `self.mode`, `self.next_run_at` attributes, loaded from DB on init
 6. Add `self._pause_event = asyncio.Event()` for pause mechanism
@@ -276,7 +279,7 @@ Here's the full rewritten file:
 
 ```python
 """
-Game Scheduler — HTTP API service that triggers game-server-api on a schedule.
+Game Scheduler — HTTP API service that triggers game-server on a schedule.
 
 Runs a scheduling loop as a background task and exposes an HTTP API
 for timer control (reset, pause, resume) and status queries.
@@ -302,7 +305,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Get configuration from environment
-GAME_SERVER_API_URL = os.getenv("GAME_SERVER_API_URL", "http://game-server-api:8000")
+GAME_SERVER_API_URL = os.getenv("GAME_SERVER_API_URL", "http://game-server:8000")
 GAME_SCHEDULE_RAW = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))
 GAME_SCHEDULER_PORT = int(os.getenv("GAME_SCHEDULER_PORT", "8001"))
 try:
@@ -373,7 +376,7 @@ def _compute_next_run(schedule: tuple[str, int | str], from_time: datetime | Non
 
 
 class GameScheduler:
-    """Scheduler that calls game-server-api to generate turns on a schedule."""
+    """Scheduler that calls game-server to generate turns on a schedule."""
 
     def __init__(self):
         self.api_url = GAME_SERVER_API_URL
@@ -811,7 +814,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 1: Write the file**
 
-Write `game-scheduler/game_master.py` with the content above (full replacement).
+Write `game-scheduler/game_server.py` with the content above (full replacement).
 
 - [ ] **Step 2: Verify it imports**
 
@@ -866,24 +869,24 @@ asyncio.run(test())
 - [ ] **Step 4: Commit**
 
 ```bash
-git add game-scheduler/game_master.py
+git add game-scheduler/game_server.py
 git commit -m "refactor: GameScheduler HTTP API with pause/resume/reset/trigger endpoints"
 ```
 
 ---
 
-### Task 4: game-server-api — "day" → "turn" + scheduler callback
+### Task 4: game-server — "day" → "turn" + scheduler callback
 
 **Files:**
 
-- Modify: `game-server-api/main.py`
+- Modify: `game-server/main.py`
 
 **Interfaces:**
 
 - Consumes: game-scheduler HTTP API at `{GAME_SCHEDULER_URL}`
 - Produces: `_notify_scheduler(action)` function, renamed functions
 
-Changes in `game-server-api/main.py`:
+Changes in `game-server/main.py`:
 
 1. Add env var near other env vars (around line 70-90):
 
@@ -969,7 +972,7 @@ Find the return statement and add before it:
 
 - [ ] **Step 1: Add GAME_SCHEDULER_URL env var**
 
-Around line 70-90 in `game-server-api/main.py`, add after other env var definitions:
+Around line 70-90 in `game-server/main.py`, add after other env var definitions:
 
 ```python
 GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
@@ -1006,14 +1009,14 @@ Edit all the comment lines listed above.
 - [ ] **Step 9: Run existing tests**
 
 ```bash
-cd game-server-api && PYTHONDONTWRITEBYTECODE=1 ../.venv/bin/python -m unittest discover -s tests -v
+cd game-server && PYTHONDONTWRITEBYTECODE=1 ../.venv/bin/python -m unittest discover -s tests -v
 # Expect: all tests pass
 ```
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add game-server-api/main.py
+git add game-server/main.py
 git commit -m "refactor: day->turn terminology, add scheduler callback after turns"
 ```
 
@@ -1211,9 +1214,9 @@ git commit -m "feat: /gm_pause command, scheduler info in /gm_status and /gm_lis
 
 - Modify: `docker-compose.yaml`
 
-Add `GAME_SCHEDULER_URL` to `game-server-api` and `telegram-bot` environment blocks:
+Add `GAME_SCHEDULER_URL` to `game-server` and `telegram-bot` environment blocks:
 
-In `game-server-api` environment block (find it in docker-compose.yaml), add:
+In `game-server` environment block (find it in docker-compose.yaml), add:
 
 ```yaml
       - GAME_SCHEDULER_URL=${GAME_SCHEDULER_URL:-http://game-scheduler:8001}
@@ -1230,32 +1233,32 @@ In `telegram-bot` environment block, add:
 
 ```bash
 git add docker-compose.yaml
-git commit -m "chore: add GAME_SCHEDULER_URL env to game-server-api and telegram-bot services"
+git commit -m "chore: add GAME_SCHEDULER_URL env to game-server and telegram-bot services"
 ```
 
 ---
 
 ### Task 7: Final verification
 
-- [ ] **Step 1: Run game-server-api tests**
+- [ ] **Step 1: Run game-server tests**
 
 ```bash
-cd game-server-api && PYTHONDONTWRITEBYTECODE=1 ../.venv/bin/python -m unittest discover -s tests -v
+cd game-server && PYTHONDONTWRITEBYTECODE=1 ../.venv/bin/python -m unittest discover -s tests -v
 # Expect: all pass
 ```
 
 - [ ] **Step 2: Verify game-scheduler starts**
 
 ```bash
-cd game-scheduler && PYTHONDONTWRITEBYTECODE=1 GAME_SCHEDULER_MODE=single timeout 10 python game_master.py 2>&1 | head -20
+cd game-scheduler && PYTHONDONTWRITEBYTECODE=1 GAME_SCHEDULER_MODE=single timeout 10 python game_server.py 2>&1 | head -20
 # Expect: "Starting Game Scheduler HTTP API", "Running in single mode"
-# May error on game-server-api call (not running) — that's fine
+# May error on game-server call (not running) — that's fine
 ```
 
-- [ ] **Step 3: Grep for remaining "day" in game-scheduler and game-server-api main.py**
+- [ ] **Step 3: Grep for remaining "day" in game-scheduler and game-server main.py**
 
 ```bash
-grep -n 'day\|Day' game-scheduler/game_master.py game-server-api/main.py 2>/dev/null | grep -v 'daily\|today\|yesterday\|day = \|days=1\|timedelta'
+grep -n 'day\|Day' game-scheduler/game_server.py game-server/main.py 2>/dev/null | grep -v 'daily\|today\|yesterday\|day = \|days=1\|timedelta'
 # Expect: zero results (or only "daily" in parse_schedule and _compute_next_run)
 ```
 
@@ -1266,11 +1269,11 @@ grep -rn 'game-scheduler' docker-compose.yaml .env* 2>/dev/null
 # Expect: zero results
 ```
 
-- [ ] **Step 5: Final grep for "GAME_MASTER_MODE"**
+- [x] **Step 5: Final grep for "GAME_MASTER_MODE"** — renamed to `GAME_SCHEDULER_MODE`
 
 ```bash
 grep -rn 'GAME_MASTER_MODE' . 2>/dev/null
-# Expect: zero results
+# Expect: zero results (done)
 ```
 
 - [ ] **Step 6: Cleanup: remove old scheduler.db if it was created during testing**

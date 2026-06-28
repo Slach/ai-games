@@ -9,7 +9,7 @@ This document describes all integration points in the AI Game Master system. The
 ```mermaid
 graph TD
     subgraph "Docker (spark-network)"
-        TG[telegram-bot] --> GS[game-server-api:8000]
+        TG[telegram-bot] --> GS[game-server:8000]
         GM[game-scheduler] --> GS
         GS --> CF[comfyui:8188]
     end
@@ -34,18 +34,18 @@ graph TD
 
 | Source | Target | Protocol | Port | Purpose |
 |--------|--------|----------|------|---------|
-| `telegram-bot` | `game-server-api` | HTTP (REST) | 8000 | Game state, onboarding, actions |
-| `game-scheduler` | `game-server-api` | HTTP (REST) | 8000 | Trigger turn generation |
-| `game-server-api` | `llama.cpp` | HTTP (OpenAI API) | 8090 | LLM calls for stories, dialogues, prompts |
-| `game-server-api` | `comfyui` | HTTP (ComfyUI API) | 8188 | Image generation, workflow execution |
+| `telegram-bot` | `game-server` | HTTP (REST) | 8000 | Game state, onboarding, actions |
+| `game-scheduler` | `game-server` | HTTP (REST) | 8000 | Trigger turn generation |
+| `game-server` | `llama.cpp` | HTTP (OpenAI API) | 8090 | LLM calls for stories, dialogues, prompts |
+| `game-server` | `comfyui` | HTTP (ComfyUI API) | 8188 | Image generation, workflow execution |
 | `telegram-bot` | `Telegram API` | HTTPS (Bot API) | 443 | Send/receive messages |
-| `game-server-api` | SQLite file | Local file I/O | — | Database persistence |
+| `game-server` | SQLite file | Local file I/O | — | Database persistence |
 
 ---
 
 ## 1. LLM Integration (OpenAI-compatible API)
 
-**Files:** `game-server-api/game_master.py`
+**Files:** `game-server/game_server.py`
 
 The Game Master Agent uses the OpenAI Python client to call any OpenAI-compatible endpoint (llama.cpp, vLLM, OpenAI API).
 
@@ -125,7 +125,7 @@ extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
 ## 2. ComfyUI Integration (Image Generation)
 
-**Files:** `game-server-api/image_generator.py`
+**Files:** `game-server/image_generator.py`
 
 Direct HTTP API integration for text-to-image generation using Z-Image Turbo model.
 
@@ -197,7 +197,7 @@ When image generation fails, the system falls back to placeholder images:
 
 ## 3. Game Server API (REST)
 
-**Files:** `game-server-api/main.py`
+**Files:** `game-server/main.py`
 
 FastAPI service on port 8000. All other services communicate through this API.
 
@@ -239,7 +239,7 @@ The bot uses the python-telegram-bot library to interact with the Telegram Bot A
 
 ```python
 TELEGRAM_BOT_TOKEN    = os.getenv("TELEGRAM_BOT_TOKEN")
-GAME_MASTER_API_URL   = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
+GAME_SERVER_URL   = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
 TELEGRAM_SOCKS_PROXY  = os.getenv("TELEGRAM_SOCKS_PROXY")  # Optional
 ```
 
@@ -259,7 +259,7 @@ TELEGRAM_SOCKS_PROXY  = os.getenv("TELEGRAM_SOCKS_PROXY")  # Optional
 - Text chat with Game Master
 - State machine (AI FSM DB) for onboarding flow
 
-### API Calls to game-server-api
+### API Calls to game-server
 
 The bot makes HTTP requests to the Game Master API:
 
@@ -276,16 +276,16 @@ The bot makes HTTP requests to the Game Master API:
 
 ## 5. Game Master Scheduler
 
-**Files:** `game-scheduler/game_master.py`
+**Files:** `game-scheduler/game_server.py`
 
 A scheduled task runner that triggers turn episode generation.
 
 ### Configuration
 
 ```python
-GAME_MASTER_API_URL = os.getenv("GAME_MASTER_API_URL", "http://game-server-api:8000")
+GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
 GAME_SCHEDULE_TIME  = os.getenv("GAME_SCHEDULE_TIME", "08:00")  # UTC
-GAME_MASTER_MODE    = os.getenv("GAME_MASTER_MODE", "scheduled")  # single | simulation | scheduled
+GAME_SCHEDULER_MODE    = os.getenv("GAME_SCHEDULER_MODE", "scheduled")  # single | simulation | scheduled
 ```
 
 ### Modes
@@ -306,7 +306,7 @@ GAME_MASTER_MODE    = os.getenv("GAME_MASTER_MODE", "scheduled")  # single | sim
 
 ## 6. Database Integration
 
-**Files:** `game-server-api/database.py`
+**Files:** `game-server/database.py`
 
 SQLite database for all persistent state.
 
@@ -327,7 +327,7 @@ SQLite database for all persistent state.
 
 ### Database Location
 
-- Development: `./game-server-api/data/` directory (mounted volume)
+- Development: `./game-server/data/` directory (mounted volume)
 - The SQLite file path is configurable via env variable
 
 ---
@@ -346,14 +346,14 @@ All services use Docker DNS for service discovery:
 
 - `http://comfyui:8188` — ComfyUI
 - `http://llama.cpp:8090/v1` — llama.cpp (external)
-- `http://game-server-api:8000` — Game Master API
+- `http://game-server:8000` — Game Master API
 
 ### Health Check Dependencies
 
 ```
-llama.cpp (external) → game-server-api → telegram-bot
+llama.cpp (external) → game-server → telegram-bot
                                        → game-scheduler
-                      comfyui → game-server-api
+                      comfyui → game-server
 ```
 
 All inter-service dependencies use `condition: service_healthy`.
@@ -378,17 +378,17 @@ All inter-service dependencies use `condition: service_healthy`.
 
 | Variable | Default | Service | Description |
 |----------|---------|---------|-------------|
-| `LLM_URL` | `http://llama.cpp:8090/v1` | game-server-api | LLM endpoint |
-| `LLM_API_KEY` | `placeholder-key-for-llama-cpp` | game-server-api | API key (required by client) |
-| `LLM_MODEL` | `unsloth/Qwen3.5-27B` | game-server-api | Model name |
-| `LLM_MAX_TOKENS` | `32768` | game-server-api | Max tokens per LLM call |
-| `COMFYUI_URL` | `http://comfyui:8188` | game-server-api | Image generation endpoint |
+| `LLM_URL` | `http://llama.cpp:8090/v1` | game-server | LLM endpoint |
+| `LLM_API_KEY` | `placeholder-key-for-llama-cpp` | game-server | API key (required by client) |
+| `LLM_MODEL` | `unsloth/Qwen3.5-27B` | game-server | Model name |
+| `LLM_MAX_TOKENS` | `32768` | game-server | Max tokens per LLM call |
+| `COMFYUI_URL` | `http://comfyui:8188` | game-server | Image generation endpoint |
 | `TELEGRAM_BOT_TOKEN` | _(required)_ | telegram-bot | Telegram bot token from @BotFather |
-| `GAME_MASTER_API_URL` | `http://game-server-api:8000` | telegram-bot, game-scheduler | API URL |
+| `GAME_SERVER_URL` | `http://game-server:8000` | telegram-bot, game-scheduler | API URL |
 | `GAME_SCHEDULE_TIME` | `08:00` | game-scheduler | Daily generation time (UTC) |
-| `GAME_MASTER_MODE` | `scheduled` | game-scheduler | Run mode |
-| `ONBOARDING_QUESTIONS_COUNT` | `5` | game-server-api | Questions per onboarding |
-| `ONBOARDING_OPTIONS_COUNT` | `5` | game-server-api | Options per question |
+| `GAME_SCHEDULER_MODE` | `scheduled` | game-scheduler | Run mode |
+| `ONBOARDING_QUESTIONS_COUNT` | `5` | game-server | Questions per onboarding |
+| `ONBOARDING_OPTIONS_COUNT` | `5` | game-server | Options per question |
 | `AI_FSM_DB` | `./bot_storage.db` | telegram-bot | Bot state database path |
 | `TELEGRAM_SOCKS_PROXY` | — | telegram-bot | Optional SOCKS5 proxy |
 
@@ -403,14 +403,14 @@ All inter-service dependencies use `condition: service_healthy`.
 docker compose ps
 
 # Check service logs
-docker compose logs game-server-api
+docker compose logs game-server
 docker compose logs comfyui
 docker compose logs telegram-bot
 
 # Check network connectivity
-docker compose exec telegram-bot ping game-server-api
-docker compose exec game-server-api curl http://comfyui:8188/
-docker compose exec game-server-api curl http://llama.cpp:8090/v1/models
+docker compose exec telegram-bot ping game-server
+docker compose exec game-server curl http://comfyui:8188/
+docker compose exec game-server curl http://llama.cpp:8090/v1/models
 ```
 
 ### ComfyUI Issues

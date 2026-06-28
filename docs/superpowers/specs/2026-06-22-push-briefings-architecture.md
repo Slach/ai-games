@@ -17,7 +17,7 @@ Currently, briefings are delivered via a **polling loop** in `telegram-bot/bot.p
 ## Goal
 
 Replace polling with **push delivery**: the service that generates content
-(`game-server-api`) is also the service that notifies players, by calling
+(`game-server`) is also the service that notifies players, by calling
 `telegram-bot` directly.
 
 ## Architecture
@@ -28,32 +28,32 @@ Replace polling with **push delivery**: the service that generates content
 Polling loop всё ещё работает, что приводит к дублированию брифингов.
 
 ```
-Scheduler ──POST /admin/generate-day──→ game-server-api
-GM cmd    ──POST /admin/start-game───→ game-server-api
+Scheduler ──POST /admin/generate-day──→ game-server
+GM cmd    ──POST /admin/start-game───→ game-server
 
                                         polling loop (30s) ← ЕЩЁ НЕ УДАЛЁН
-telegram-bot ──GET /game/poll/{id}──→ game-server-api
+telegram-bot ──GET /game/poll/{id}──→ game-server
               ← briefing data
               → bot.send_message() (Telegram)
 
-            game-server-api ──POST /push/briefings──→ telegram-bot:9090
+            game-server ──POST /push/briefings──→ telegram-bot:9090
                                                      ✘ сервер НЕ ЗАПУЩЕН
 ```
 
 ### Target (что нужно сделать)
 
 ```
-Scheduler ──POST /admin/generate-day──→ game-server-api
-GM cmd    ──POST /admin/start-game───→ game-server-api
+Scheduler ──POST /admin/generate-day──→ game-server
+GM cmd    ──POST /admin/start-game───→ game-server
 
-            game-server-api генерирует LLM → ComfyUI → сохраняет в БД
+            game-server генерирует LLM → ComfyUI → сохраняет в БД
                                ↓
                     POST /push/briefings ── exponential retry ──→ telegram-bot:9090
                                                                   ↓
                                                          bot.send_message() (Telegram)
 ```
 
-**Ключевой принцип:** `game-server-api` — единственный источник правды.
+**Ключевой принцип:** `game-server` — единственный источник правды.
 Он знает, какой контент сгенерирован и кому его слать. После сохранения
 в БД он вызывает `telegram-bot` и говорит: "отправь это этим игрокам".
 
@@ -129,9 +129,9 @@ push_runner = await start_push_server(bot)
 # При завершении: push_runner.cleanup()
 ```
 
-### 2. game-server-api: push-клиент с exponential retry
+### 2. game-server: push-клиент с exponential retry
 
-Новый файл `game-server-api/push_client.py`.
+Новый файл `game-server/push_client.py`.
 
 ```python
 # Настройки из окружения
@@ -223,10 +223,10 @@ telegram-bot:
     - "127.0.0.1:9090:9090"   # push-эндпоинт
 ```
 
-Добавить для `game-server-api`:
+Добавить для `game-server`:
 
 ```yaml
-game-server-api:
+game-server:
   # ... существующие настройки ...
   environment:
     # ... существующие ...
@@ -264,8 +264,8 @@ game-server-api:
 |------|-----------|
 | **telegram-bot/push_server.py** | 🆕 Новый файл: aiohttp-сервер с `/push/briefings` |
 | **telegram-bot/bot.py** | Удалить polling loop, `_restart_suppressed_players`, `_send_game_briefings`, `_send_bridge_and_mission`. Запустить push-сервер в `main()` |
-| **game-server-api/push_client.py** | 🆕 Новый файл: клиент с exponential retry |
-| **game-server-api/main.py** | Добавить вызовы `push_briefings()` в `/admin/start-game`, `/admin/continue-game`, `/admin/regenerate-turn`, `/admin/generate-day` |
+| **game-server/push_client.py** | 🆕 Новый файл: клиент с exponential retry |
+| **game-server/main.py** | Добавить вызовы `push_briefings()` в `/admin/start-game`, `/admin/continue-game`, `/admin/regenerate-turn`, `/admin/generate-day` |
 | **docker-compose.yaml** | Добавить порт 9090 для telegram-bot, переменные окружения для push |
 | **docs/RULES_RU.md** | Обновить архитектурную диаграмму — убрать polling, добавить push |
 | **docs/RULES_EN.md** | То же самое |

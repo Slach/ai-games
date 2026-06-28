@@ -6,7 +6,7 @@
 
 **Architecture:** All balance decisions (progress deltas, deaths, damage) are currently made by a single LLM call with zero mechanical guardrails. This plan adds a pure, unit-tested module `game_rules.py` that sits between the LLM's raw `combined_outcome` and the DB write: it normalizes mission objectives, accumulates progress with regression caps + a tempo floor, computes completion from real thresholds, rate-limits crew deaths, and selects mission archetype/seeds deterministically. The LLM keeps its creative role (narrative, twists); the engine guarantees fairness.
 
-**Tech Stack:** Python 3, FastAPI backend, SQLite (`database.py`), OpenAI SDK (`game_master.py`), `unittest` for tests (matches existing `tests/test_comfyui.py`).
+**Tech Stack:** Python 3, FastAPI backend, SQLite (`database.py`), OpenAI SDK (`game_server.py`), `unittest` for tests (matches existing `tests/test_comfyui.py`).
 
 **Spec:** `docs/superpowers/specs/2026-06-27-game-dynamics-and-mission-completion-design.md`
 
@@ -23,7 +23,7 @@
 - **All imports at top of file.** No local/conditional imports.
 - **No `contextlib.suppress`.** Use explicit `try/except` with logging at boundaries.
 - **Fix causes, not symptoms.** No `_clean_*`/`_sanitize_*` shims over upstream output — fix at the source (here, the rules layer enforces the contract).
-- Tests follow the existing `unittest` style in `game-server-api/tests/test_comfyui.py` (with `sys.path.insert` for imports). Run from `game-server-api/` dir.
+- Tests follow the existing `unittest` style in `game-server/tests/test_comfyui.py` (with `sys.path.insert` for imports). Run from `game-server/` dir.
 - `game_rules.py` is **pure** (only `import random` + stdlib typing) — no DB, no LLM, no logging, no imports from this project — to keep it unit-testable and cycle-free.
 
 ---
@@ -32,13 +32,13 @@
 
 | File | Status | Responsibility |
 |------|--------|----------------|
-| `game-server-api/game_rules.py` | **Create** | Pure rules layer: objective normalization, progress accumulation (caps/floor/completion), death rate-limiting, archetype/seed selection. |
-| `game-server-api/tests/test_game_rules.py` | **Create** | Unit tests for `game_rules.py` (pure, fast). |
-| `game-server-api/tests/test_mission_db.py` | **Create** | DB-level tests (temp DB) for mission persistence/normalization. |
-| `game-server-api/database.py` | Modify | Migrations 6+7; `create_mission` derives `total_stages`; `get_mission` normalizes on read (fixes existing stuck data); `get_game_state`/new `set_last_death_day` for death cooldown; persist `archetype`/`seeds`. |
-| `game-server-api/game_master.py` | Modify | `generate_mission` normalizes objectives + sets `current_stage`/`total_stages`, selects & stores seeds; import `game_rules`. |
-| `game-server-api/main.py` | Modify | `_analyze_day_outcome` uses `apply_mission_progress` and `apply_death_limits` instead of the broken inline logic. |
-| `game-server-api/prompts.py` | Modify | `build_mission_prompts` injects archetype/seeds + forbidden openings; combined-outcome prompts reworked (P3); `build_personal_briefing_system` guarantees a defensive action. |
+| `game-server/game_rules.py` | **Create** | Pure rules layer: objective normalization, progress accumulation (caps/floor/completion), death rate-limiting, archetype/seed selection. |
+| `game-server/tests/test_game_rules.py` | **Create** | Unit tests for `game_rules.py` (pure, fast). |
+| `game-server/tests/test_mission_db.py` | **Create** | DB-level tests (temp DB) for mission persistence/normalization. |
+| `game-server/database.py` | Modify | Migrations 6+7; `create_mission` derives `total_stages`; `get_mission` normalizes on read (fixes existing stuck data); `get_game_state`/new `set_last_death_day` for death cooldown; persist `archetype`/`seeds`. |
+| `game-server/game_server.py` | Modify | `generate_mission` normalizes objectives + sets `current_stage`/`total_stages`, selects & stores seeds; import `game_rules`. |
+| `game-server/main.py` | Modify | `_analyze_day_outcome` uses `apply_mission_progress` and `apply_death_limits` instead of the broken inline logic. |
+| `game-server/prompts.py` | Modify | `build_mission_prompts` injects archetype/seeds + forbidden openings; combined-outcome prompts reworked (P3); `build_personal_briefing_system` guarantees a defensive action. |
 
 **Import graph (cycle-free):** `game_rules` → stdlib only. `database` → `game_rules`. `game_master` → `database`, `game_rules`, `prompts`, `language`. `main` → `database`, `game_rules`, `game_master`, `prompts`. No module imports `main`.
 
@@ -48,8 +48,8 @@
 
 **Files:**
 
-- Create: `game-server-api/game_rules.py`
-- Create: `game-server-api/tests/test_game_rules.py`
+- Create: `game-server/game_rules.py`
+- Create: `game-server/tests/test_game_rules.py`
 
 **Interfaces:**
 
@@ -57,7 +57,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Create `game-server-api/tests/test_game_rules.py`:
+Create `game-server/tests/test_game_rules.py`:
 
 ```python
 """Unit tests for the game-rules layer (pure functions, no DB/LLM)."""
@@ -120,12 +120,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules -v`
 Expected: FAIL / ERROR — `ModuleNotFoundError: No module named 'game_rules'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `game-server-api/game_rules.py`:
+Create `game-server/game_rules.py`:
 
 ```python
 """Deterministic game-rules layer between LLM output and the database.
@@ -180,13 +180,13 @@ def normalize_mission_objectives(objectives: list[dict]) -> list[dict]:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules -v`
 Expected: PASS (7 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/game_rules.py game-server-api/tests/test_game_rules.py
+git add game-server/game_rules.py game-server/tests/test_game_rules.py
 git commit -m "feat(rules): add mission objective normalization (P0)"
 ```
 
@@ -196,8 +196,8 @@ git commit -m "feat(rules): add mission objective normalization (P0)"
 
 **Files:**
 
-- Modify: `game-server-api/game_rules.py`
-- Modify: `game-server-api/tests/test_game_rules.py`
+- Modify: `game-server/game_rules.py`
+- Modify: `game-server/tests/test_game_rules.py`
 
 **Interfaces:**
 
@@ -206,7 +206,7 @@ git commit -m "feat(rules): add mission objective normalization (P0)"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `game-server-api/tests/test_game_rules.py` (before the `if __name__` guard):
+Append to `game-server/tests/test_game_rules.py` (before the `if __name__` guard):
 
 ```python
 from game_rules import apply_mission_progress, normalize_mission
@@ -286,12 +286,12 @@ class TestApplyMissionProgress(unittest.TestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules -v`
 Expected: FAIL — `ImportError: cannot import name 'apply_mission_progress'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `game-server-api/game_rules.py` (after `normalize_mission_objectives`):
+Append to `game-server/game_rules.py` (after `normalize_mission_objectives`):
 
 ```python
 # ── Mission state computation ──────────────────────────────────────
@@ -412,13 +412,13 @@ def apply_mission_progress(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules -v`
 Expected: PASS (all tests in the file).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/game_rules.py game-server-api/tests/test_game_rules.py
+git add game-server/game_rules.py game-server/tests/test_game_rules.py
 git commit -m "feat(rules): progress accumulation, completion-from-thresholds, regression caps, tempo floor (P0+P1)"
 ```
 
@@ -428,8 +428,8 @@ git commit -m "feat(rules): progress accumulation, completion-from-thresholds, r
 
 **Files:**
 
-- Modify: `game-server-api/game_master.py` (imports ~L14-22; `generate_mission` L2372-2406; `MISSION_SCHEMA` L600-650)
-- Modify: `game-server-api/tests/test_game_rules.py` (add a test using a mocked `_call_llm`)
+- Modify: `game-server/game_server.py` (imports ~L14-22; `generate_mission` L2372-2406; `MISSION_SCHEMA` L600-650)
+- Modify: `game-server/tests/test_game_rules.py` (add a test using a mocked `_call_llm`)
 
 **Interfaces:**
 
@@ -438,7 +438,7 @@ git commit -m "feat(rules): progress accumulation, completion-from-thresholds, r
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `game-server-api/tests/test_game_rules.py`:
+Append to `game-server/tests/test_game_rules.py`:
 
 ```python
 from unittest.mock import patch
@@ -476,12 +476,12 @@ class TestGenerateMissionNormalization(unittest.TestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestGenerateMissionNormalization -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestGenerateMissionNormalization -v`
 Expected: FAIL — `KeyError: 'current_stage'` or assertion error (current `generate_mission` returns raw LLM result without `current_stage`/`total_stages`).
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `game-server-api/game_master.py`, add `game_rules` to the existing imports near the top (after the `from database import SHIP_ROLE_KEYS` line, ~L14):
+In `game-server/game_server.py`, add `game_rules` to the existing imports near the top (after the `from database import SHIP_ROLE_KEYS` line, ~L14):
 
 ```python
 from game_rules import normalize_mission
@@ -534,13 +534,13 @@ This is the complete method: the `try/except` builds `result` (either from the L
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestGenerateMissionNormalization -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestGenerateMissionNormalization -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/game_master.py game-server-api/tests/test_game_rules.py
+git add game-server/game_server.py game-server/tests/test_game_rules.py
 git commit -m "feat(mission): normalize generated objectives and set completable stages (P0 defect A)"
 ```
 
@@ -550,8 +550,8 @@ git commit -m "feat(mission): normalize generated objectives and set completable
 
 **Files:**
 
-- Modify: `game-server-api/database.py` (`create_mission` L1744-1768; `get_mission` L1769-1797; imports)
-- Create: `game-server-api/tests/test_mission_db.py`
+- Modify: `game-server/database.py` (`create_mission` L1744-1768; `get_mission` L1769-1797; imports)
+- Create: `game-server/tests/test_mission_db.py`
 
 **Interfaces:**
 
@@ -560,7 +560,7 @@ git commit -m "feat(mission): normalize generated objectives and set completable
 
 - [ ] **Step 1: Write the failing test**
 
-Create `game-server-api/tests/test_mission_db.py`:
+Create `game-server/tests/test_mission_db.py`:
 
 ```python
 """DB-level tests for mission persistence and read-time normalization."""
@@ -622,12 +622,12 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_mission_db -v`
+Run: `cd game-server && python -m unittest tests.test_mission_db -v`
 Expected: FAIL — `create_mission` stores `total_stages=1`; `get_mission` returns `total_stages=1` / `current_stage=0` / `completed=False`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `game-server-api/database.py`, add near the top imports (after the existing `from typing import ...` / stdlib imports, before any project import to avoid cycles — `game_rules` imports nothing from this project):
+In `game-server/database.py`, add near the top imports (after the existing `from typing import ...` / stdlib imports, before any project import to avoid cycles — `game_rules` imports nothing from this project):
 
 ```python
 from game_rules import normalize_mission
@@ -685,13 +685,13 @@ with:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_mission_db -v`
+Run: `cd game-server && python -m unittest tests.test_mission_db -v`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/database.py game-server-api/tests/test_mission_db.py
+git add game-server/database.py game-server/tests/test_mission_db.py
 git commit -m "fix(db): derive total_stages on write, normalize mission on read (P0 defects A/B/C, repairs existing data)"
 ```
 
@@ -701,7 +701,7 @@ git commit -m "fix(db): derive total_stages on write, normalize mission on read 
 
 **Files:**
 
-- Modify: `game-server-api/main.py` (imports L17-92; `_analyze_day_outcome` outcome block L2485-2535)
+- Modify: `game-server/main.py` (imports L17-92; `_analyze_day_outcome` outcome block L2485-2535)
 
 **Interfaces:**
 
@@ -710,12 +710,12 @@ git commit -m "fix(db): derive total_stages on write, normalize mission on read 
 
 - [ ] **Step 1: Confirm the broken block is present**
 
-Run: `cd game-server-api && grep -n "if points_int > 0 and stage_num == current_stage" main.py`
+Run: `cd game-server && grep -n "if points_int > 0 and stage_num == current_stage" main.py`
 Expected: a single match around L2517 — confirms the defect-B line still exists.
 
 - [ ] **Step 2: Write the implementation**
 
-In `game-server-api/main.py`, add a top-level import for the rules layer (place it right after the existing `from database import (...)` block, around L17-92). Note: `apply_mission_progress` comes from `game_rules`, **not** `database`:
+In `game-server/main.py`, add a top-level import for the rules layer (place it right after the existing `from database import (...)` block, around L17-92). Note: `apply_mission_progress` comes from `game_rules`, **not** `database`:
 
 ```python
 from game_rules import apply_mission_progress
@@ -799,18 +799,18 @@ Replace it with:
 
 - [ ] **Step 3: Verify no other caller depends on the old behavior**
 
-Run: `cd game-server-api && grep -n "current_stage >= total_stages\|stage_num == current_stage" main.py`
+Run: `cd game-server && grep -n "current_stage >= total_stages\|stage_num == current_stage" main.py`
 Expected: no matches (the broken logic is gone).
 
 - [ ] **Step 4: Run the full test suite to confirm nothing broke**
 
-Run: `cd game-server-api && python -m unittest discover -s tests -v`
+Run: `cd game-server && python -m unittest discover -s tests -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/main.py
+git add game-server/main.py
 git commit -m "feat(main): route mission progress through rules layer (P0+P1 wiring)"
 ```
 
@@ -820,8 +820,8 @@ git commit -m "feat(main): route mission progress through rules layer (P0+P1 wir
 
 **Files:**
 
-- Modify: `game-server-api/game_rules.py`
-- Modify: `game-server-api/tests/test_game_rules.py`
+- Modify: `game-server/game_rules.py`
+- Modify: `game-server/tests/test_game_rules.py`
 
 **Interfaces:**
 
@@ -829,7 +829,7 @@ git commit -m "feat(main): route mission progress through rules layer (P0+P1 wir
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `game-server-api/tests/test_game_rules.py`:
+Append to `game-server/tests/test_game_rules.py`:
 
 ```python
 from game_rules import (
@@ -870,12 +870,12 @@ class TestMissionSeeds(unittest.TestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestMissionSeeds -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestMissionSeeds -v`
 Expected: FAIL — `ImportError: cannot import name 'MISSION_ARCHETYPES'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `game-server-api/game_rules.py`:
+Append to `game-server/game_rules.py`:
 
 ```python
 # ── Mission archetype & seed selection (P2) ────────────────────────
@@ -1052,13 +1052,13 @@ def select_mission_seeds(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestMissionSeeds -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestMissionSeeds -v`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/game_rules.py game-server-api/tests/test_game_rules.py
+git add game-server/game_rules.py game-server/tests/test_game_rules.py
 git commit -m "feat(rules): mission archetype catalog, seed tables, selector (P2)"
 ```
 
@@ -1068,9 +1068,9 @@ git commit -m "feat(rules): mission archetype catalog, seed tables, selector (P2
 
 **Files:**
 
-- Modify: `game-server-api/prompts.py` (`build_mission_prompts` L1043-1069)
-- Modify: `game-server-api/game_master.py` (`generate_mission` — pass seeds)
-- Modify: `game-server-api/tests/test_game_rules.py` (add prompt test)
+- Modify: `game-server/prompts.py` (`build_mission_prompts` L1043-1069)
+- Modify: `game-server/game_server.py` (`generate_mission` — pass seeds)
+- Modify: `game-server/tests/test_game_rules.py` (add prompt test)
 
 **Interfaces:**
 
@@ -1079,7 +1079,7 @@ git commit -m "feat(rules): mission archetype catalog, seed tables, selector (P2
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `game-server-api/tests/test_game_rules.py`:
+Append to `game-server/tests/test_game_rules.py`:
 
 ```python
 from prompts import build_mission_prompts
@@ -1103,12 +1103,12 @@ class TestMissionPromptInjection(unittest.TestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestMissionPromptInjection -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestMissionPromptInjection -v`
 Expected: FAIL — `TypeError: build_mission_prompts() takes 2 positional arguments but 4 were given`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `game-server-api/prompts.py`, first add a top-level import after the existing `from language import (...)` block (around L8-13), so all imports stay at the top per AGENTS.md:
+In `game-server/prompts.py`, first add a top-level import after the existing `from language import (...)` block (around L8-13), so all imports stay at the top per AGENTS.md:
 
 ```python
 from game_rules import FORBIDDEN_OPENINGS, MISSION_ARCHETYPES
@@ -1194,7 +1194,7 @@ def build_mission_prompts(
     return system, user
 ```
 
-Then in `game-server-api/game_master.py`, extend the top-level import added in Task 3 so seeds are selected without an in-function import:
+Then in `game-server/game_server.py`, extend the top-level import added in Task 3 so seeds are selected without an in-function import:
 
 ```python
 from game_rules import normalize_mission, select_mission_seeds
@@ -1221,13 +1221,13 @@ And at the end of `generate_mission`, just before `result = normalize_mission(re
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestMissionPromptInjection -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestMissionPromptInjection -v`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/prompts.py game-server-api/game_master.py game-server-api/tests/test_game_rules.py
+git add game-server/prompts.py game-server/game_server.py game-server/tests/test_game_rules.py
 git commit -m "feat(prompts): inject archetype/seeds + banned-trope list into mission gen (P2)"
 ```
 
@@ -1237,8 +1237,8 @@ git commit -m "feat(prompts): inject archetype/seeds + banned-trope list into mi
 
 **Files:**
 
-- Modify: `game-server-api/database.py` (`MIGRATIONS` list ~L33-49; `create_mission` L1744; `get_mission` L1769)
-- Modify: `game-server-api/tests/test_mission_db.py`
+- Modify: `game-server/database.py` (`MIGRATIONS` list ~L33-49; `create_mission` L1744; `get_mission` L1769)
+- Modify: `game-server/tests/test_mission_db.py`
 
 **Interfaces:**
 
@@ -1247,7 +1247,7 @@ git commit -m "feat(prompts): inject archetype/seeds + banned-trope list into mi
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `game-server-api/tests/test_mission_db.py` `TestMissionPersistence`:
+Append to `game-server/tests/test_mission_db.py` `TestMissionPersistence`:
 
 ```python
     def test_archetype_and_seeds_round_trip(self):
@@ -1262,12 +1262,12 @@ Append to `game-server-api/tests/test_mission_db.py` `TestMissionPersistence`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd game-server-api && python -m unittest tests.test_mission_db -v`
+Run: `cd game-server && python -m unittest tests.test_mission_db -v`
 Expected: FAIL — `sqlite3.OperationalError: table game_missions has no column named archetype`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `game-server-api/database.py`, append a single migration (version 6) to the `MIGRATIONS` list, right after the version-5 entry. It adds both new columns:
+In `game-server/database.py`, append a single migration (version 6) to the `MIGRATIONS` list, right after the version-5 entry. It adds both new columns:
 
 ```python
     (
@@ -1314,13 +1314,13 @@ Then in `get_mission`'s returned dict (the one wrapped in `normalize_mission(...
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd game-server-api && python -m unittest tests.test_mission_db -v`
+Run: `cd game-server && python -m unittest tests.test_mission_db -v`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/database.py game-server-api/tests/test_mission_db.py
+git add game-server/database.py game-server/tests/test_mission_db.py
 git commit -m "feat(db): persist mission archetype/seeds (migration 6) (P2)"
 ```
 
@@ -1330,7 +1330,7 @@ git commit -m "feat(db): persist mission archetype/seeds (migration 6) (P2)"
 
 **Files:**
 
-- Modify: `game-server-api/prompts.py` (`_COMBINED_OUTCOME_SYSTEM_RU` L521, `_COMBINED_OUTCOME_USER_RU` L539, `_COMBINED_OUTCOME_SYSTEM_EN` L580, `_COMBINED_OUTCOME_USER_EN` L598)
+- Modify: `game-server/prompts.py` (`_COMBINED_OUTCOME_SYSTEM_RU` L521, `_COMBINED_OUTCOME_USER_RU` L539, `_COMBINED_OUTCOME_SYSTEM_EN` L580, `_COMBINED_OUTCOME_USER_EN` L598)
 
 **Interfaces:**
 
@@ -1338,12 +1338,12 @@ git commit -m "feat(db): persist mission archetype/seeds (migration 6) (P2)"
 
 - [ ] **Step 1: Confirm current text locations**
 
-Run: `cd game-server-api && grep -n "Must be DRAMATIC\|MUST CHANGE something" prompts.py`
+Run: `cd game-server && grep -n "Must be DRAMATIC\|MUST CHANGE something" prompts.py`
 Expected: 2 matches inside the EN/RU user prompts — confirms the punishment framing to remove.
 
 - [ ] **Step 2: Write the implementation**
 
-In `game-server-api/prompts.py`, replace `_COMBINED_OUTCOME_SYSTEM_RU` (L521) with:
+In `game-server/prompts.py`, replace `_COMBINED_OUTCOME_SYSTEM_RU` (L521) with:
 
 ```python
 _COMBINED_OUTCOME_SYSTEM_RU = (
@@ -1476,21 +1476,21 @@ _COMBINED_OUTCOME_USER_EN = (
 
 - [ ] **Step 3: Verify the punishment framing is gone and `.format()` keys still match**
 
-Run: `cd game-server-api && grep -n "Must be DRAMATIC\|MUST CHANGE something" prompts.py`
+Run: `cd game-server && grep -n "Must be DRAMATIC\|MUST CHANGE something" prompts.py`
 Expected: no matches.
 
-Run: `cd game-server-api && python -c "from prompts import _COMBINED_OUTCOME_USER_RU, _COMBINED_OUTCOME_USER_EN; _COMBINED_OUTCOME_USER_RU.format(setting='',conflict='',narrative='',previous_summary='',mission_text='',decisions_text='',roster_text=''); _COMBINED_OUTCOME_USER_EN.format(setting='',conflict='',narrative='',previous_summary='',mission_text='',decisions_text='',roster_text=''); print('format keys OK')"`
+Run: `cd game-server && python -c "from prompts import _COMBINED_OUTCOME_USER_RU, _COMBINED_OUTCOME_USER_EN; _COMBINED_OUTCOME_USER_RU.format(setting='',conflict='',narrative='',previous_summary='',mission_text='',decisions_text='',roster_text=''); _COMBINED_OUTCOME_USER_EN.format(setting='',conflict='',narrative='',previous_summary='',mission_text='',decisions_text='',roster_text=''); print('format keys OK')"`
 Expected: prints `format keys OK` (confirms no stray `{` braces broke `.format()`).
 
 - [ ] **Step 4: Run the full test suite**
 
-Run: `cd game-server-api && python -m unittest discover -s tests -v`
+Run: `cd game-server && python -m unittest discover -s tests -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/prompts.py
+git add game-server/prompts.py
 git commit -m "feat(prompts): rework combined-outcome prompts — discoveries over punishment, rarer deaths (P3)"
 ```
 
@@ -1500,10 +1500,10 @@ git commit -m "feat(prompts): rework combined-outcome prompts — discoveries ov
 
 **Files:**
 
-- Modify: `game-server-api/game_rules.py`
-- Modify: `game-server-api/tests/test_game_rules.py`
-- Modify: `game-server-api/database.py` (`MIGRATIONS`; `get_game_state` L911; new `set_last_death_day`)
-- Modify: `game-server-api/tests/test_mission_db.py`
+- Modify: `game-server/game_rules.py`
+- Modify: `game-server/tests/test_game_rules.py`
+- Modify: `game-server/database.py` (`MIGRATIONS`; `get_game_state` L911; new `set_last_death_day`)
+- Modify: `game-server/tests/test_mission_db.py`
 
 **Interfaces:**
 
@@ -1512,7 +1512,7 @@ git commit -m "feat(prompts): rework combined-outcome prompts — discoveries ov
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `game-server-api/tests/test_game_rules.py`:
+Append to `game-server/tests/test_game_rules.py`:
 
 ```python
 from game_rules import DEATH_COOLDOWN_TURNS, apply_death_limits
@@ -1573,7 +1573,7 @@ class TestDeathLimits(unittest.TestCase):
         self.assertEqual(last, 3)  # unchanged: not a normal death event
 ```
 
-Append to `game-server-api/tests/test_mission_db.py` a new test class:
+Append to `game-server/tests/test_mission_db.py` a new test class:
 
 ```python
 class TestLastDeathDay(unittest.TestCase):
@@ -1595,12 +1595,12 @@ class TestLastDeathDay(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestDeathLimits tests.test_mission_db.TestLastDeathDay -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestDeathLimits tests.test_mission_db.TestLastDeathDay -v`
 Expected: FAIL — `ImportError: cannot import name 'apply_death_limits'`; and `KeyError: 'last_death_day'` / `AttributeError: ... set_last_death_day`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `game-server-api/game_rules.py`:
+Append to `game-server/game_rules.py`:
 
 ```python
 # ── Crew death rate-limiting (P3) ──────────────────────────────────
@@ -1663,7 +1663,7 @@ def apply_death_limits(
     return result, new_last_death_day
 ```
 
-In `game-server-api/database.py`, append migration 7 to the `MIGRATIONS` list (after the version-6 entry from Task 8):
+In `game-server/database.py`, append migration 7 to the `MIGRATIONS` list (after the version-6 entry from Task 8):
 
 ```python
     (
@@ -1717,13 +1717,13 @@ def set_last_death_day(game_id: str = "default_game", day: int = 0) -> bool:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd game-server-api && python -m unittest tests.test_game_rules.TestDeathLimits tests.test_mission_db.TestLastDeathDay -v`
+Run: `cd game-server && python -m unittest tests.test_game_rules.TestDeathLimits tests.test_mission_db.TestLastDeathDay -v`
 Expected: PASS (7 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/game_rules.py game-server-api/database.py game-server-api/tests/test_game_rules.py game-server-api/tests/test_mission_db.py
+git add game-server/game_rules.py game-server/database.py game-server/tests/test_game_rules.py game-server/tests/test_mission_db.py
 git commit -m "feat(rules): rate-limit crew deaths (cooldown + min-alive), migration 7 (P3)"
 ```
 
@@ -1733,8 +1733,8 @@ git commit -m "feat(rules): rate-limit crew deaths (cooldown + min-alive), migra
 
 **Files:**
 
-- Modify: `game-server-api/main.py` (imports; `_analyze_day_outcome` death block ~L2560-2600)
-- Modify: `game-server-api/prompts.py` (`build_personal_briefing_system` L1160)
+- Modify: `game-server/main.py` (imports; `_analyze_day_outcome` death block ~L2560-2600)
+- Modify: `game-server/prompts.py` (`build_personal_briefing_system` L1160)
 
 **Interfaces:**
 
@@ -1742,12 +1742,12 @@ git commit -m "feat(rules): rate-limit crew deaths (cooldown + min-alive), migra
 
 - [ ] **Step 1: Confirm the death block and game_state read exist**
 
-Run: `cd game-server-api && grep -n "dead_crew = outcome.get\|state = get_game_state(game_id)" main.py`
+Run: `cd game-server && grep -n "dead_crew = outcome.get\|state = get_game_state(game_id)" main.py`
 Expected: matches around L2560 and L2590.
 
 - [ ] **Step 2: Write the implementation**
 
-In `game-server-api/main.py`, add to the top imports (next to the Task 5 `from game_rules import apply_mission_progress`):
+In `game-server/main.py`, add to the top imports (next to the Task 5 `from game_rules import apply_mission_progress`):
 
 ```python
 from game_rules import apply_death_limits
@@ -1776,7 +1776,7 @@ In `_analyze_day_outcome`, immediately AFTER the mission-progress block (the one
 
 > Note: `crew_roster` is already built earlier in `_analyze_day_outcome` (the loop building `{"name","role","is_dead"}` dicts). The existing death-processing loop (`for death_entry in dead_crew:`) downstream now operates on the already-rate-limited `outcome["dead_crew_members"]`, so it needs no further change — but confirm it reads `dead_crew = outcome.get("dead_crew_members", [])` AFTER this insertion point (it does, ~L2560). If the existing line reads `outcome.get` into `dead_crew` later in the function, no edit is needed there.
 
-In `game-server-api/prompts.py`, add a defensive-action guarantee to `build_personal_briefing_system` (L1160). In the RU return string, append before the closing `)`:
+In `game-server/prompts.py`, add a defensive-action guarantee to `build_personal_briefing_system` (L1160). In the RU return string, append before the closing `)`:
 
 ```python
             "Среди вариантов действий ВСЕГДА должен быть хотя бы один безопасный/оборонительный "
@@ -1792,18 +1792,18 @@ And in the EN return string, append before the closing `)`:
 
 - [ ] **Step 3: Verify imports resolve and no syntax errors**
 
-Run: `cd game-server-api && python -c "import main; import prompts; print('imports OK')"`
+Run: `cd game-server && python -c "import main; import prompts; print('imports OK')"`
 Expected: prints `imports OK`.
 
 - [ ] **Step 4: Run the full test suite**
 
-Run: `cd game-server-api && python -m unittest discover -s tests -v`
+Run: `cd game-server && python -m unittest discover -s tests -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add game-server-api/main.py game-server-api/prompts.py
+git add game-server/main.py game-server/prompts.py
 git commit -m "feat(main): apply death limits in outcome; guarantee defensive briefing action (P3 wiring)"
 ```
 
@@ -1813,13 +1813,13 @@ git commit -m "feat(main): apply death limits in outcome; guarantee defensive br
 
 After all tasks land:
 
-- [ ] **Full test suite green:** `cd game-server-api && python -m unittest discover -s tests -v`
-- [ ] **Import smoke test:** `cd game-server-api && python -c "import main, game_master, game_rules, database, prompts; print('OK')"`
+- [ ] **Full test suite green:** `cd game-server && python -m unittest discover -s tests -v`
+- [ ] **Import smoke test:** `cd game-server && python -c "import main, game_master, game_rules, database, prompts; print('OK')"`
 - [ ] **Existing-data repair check (per spec §9):** the stuck `default_game` mission (`current_stage=0, total_stages=1`) is now repaired on read by `get_mission` → `normalize_mission`. Verify:
-  `cd game-server-api && python -c "import database as db; db.DB_PATH=db.DB_PATH; m=db.get_mission(None,'default_game'); print('total_stages',m['total_stages'],'current_stage',m['current_stage'],'completed',m['completed'])"`
+  `cd game-server && python -c "import database as db; db.DB_PATH=db.DB_PATH; m=db.get_mission(None,'default_game'); print('total_stages',m['total_stages'],'current_stage',m['current_stage'],'completed',m['completed'])"`
   Expected: `total_stages` equals the number of objectives (≥2), `current_stage` reflects real progress, `completed` may be True if thresholds already met by `{1:6,2:6,...}`.
 - [ ] **Deploy & regenerate:** apply code without wiping data:
-  `docker compose --progress=plain stop telegram-bot game-scheduler game-server-api --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server-api`
+  `docker compose --progress=plain stop telegram-bot game-scheduler game-server --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server`
   Then trigger a new mission via Telegram `/gm_start <game_id>` (full-wipe) OR continue an existing game `/gm_continue <game_id>` to observe the rules layer in action.
 
 ## Out of scope (deferred — spec P4)
