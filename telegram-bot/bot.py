@@ -1955,7 +1955,7 @@ async def cmd_turn(message: types.Message):
         if briefing and briefing.get("choices"):
             # New system: show personal briefing
             choices = briefing.get("choices", [])
-            keyboard = create_action_keyboard(choices) if choices else None
+            keyboard = create_action_keyboard(choices, selected_action_id=briefing.get("selected_action_id")) if choices else None
 
             actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(choices)])
 
