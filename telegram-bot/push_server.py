@@ -1030,17 +1030,15 @@ async def _deliver_onboarding_ready(
             )
 
             options = question.get("options", [])
-            keyboard_rows = []
+            buttons = []
             for i in range(len(options)):
-                keyboard_rows.append(
-                    [
-                        InlineKeyboardButton(
-                            text=f"[{i + 1}]",
-                            callback_data=f"onb_ans:{question['id']}:{i}",
-                        )
-                    ]
+                buttons.append(
+                    InlineKeyboardButton(
+                        text=str(i + 1),
+                        callback_data=f"onb_ans:{question['id']}:{i}",
+                    )
                 )
-            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons])
 
             image_url = question.get("image_url")
             question_text = question.get("text", "")

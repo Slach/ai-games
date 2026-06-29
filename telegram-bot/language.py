@@ -248,10 +248,12 @@ ERRORS = {
 IMAGES = {
     LANGUAGE_RU: {
         "loading_caption": "🚀 Инициализация системы... Загрузка звёздного компьютера.",
+        "onboarding_wait": "Приготовьтесь ответить на 5 вопросов, которые определят ход вашего дальнейшего приключения. Генерация вопросов займёт около минуты. Пожалуйста, подождите.",
         "processing_caption": "✨ Ваши ответы обрабатываются. Личное дело шифрутеся звёздной пылью",
     },
     LANGUAGE_EN: {
         "loading_caption": "🚀 System initializing... Starship computer booting up.",
+        "onboarding_wait": "Get ready to answer 5 questions that will shape your adventure. Question generation will take about a minute. Please wait.",
         "processing_caption": "✨ Your answer processing. Stellar cartography mapping your destiny",
     },
 }

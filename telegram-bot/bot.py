@@ -975,10 +975,7 @@ def create_onboarding_keyboard(options: list, question_id: int, selected_index: 
                 callback_data=f"onb_ans:{question_id}:{idx}",
             )
         )
-    builder.adjust(len(options))  # one row
-
-    logger.info(f"Created onboarding inline keyboard for question_id={question_id} with {len(options)} buttons")
-
+    builder.adjust(len(options))
     return builder.as_markup()
 
 
@@ -1396,10 +1393,9 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
         parse_mode="Markdown",
     )
 
-    # Send "please wait" message immediately — the onboarding API call below
-    # takes ~30-60s to generate questions via LLM.
-    wait_text = onboarding_msgs.get("generating_images") or ("🎨 Generating illustrations for your adventure...\nThis should take about a minute. Please wait.")
-    await message.answer(wait_text, parse_mode="Markdown")
+    # Send loading image with "please wait" caption immediately — the onboarding
+    # API call below takes ~30-60s to generate questions via LLM.
+    await send_random_loading_image(message, caption_key="onboarding_wait", language=effective_lang)
 
     await state.update_data(player_name=player_name)
 
