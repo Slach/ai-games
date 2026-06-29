@@ -68,7 +68,7 @@ ONBOARDING = {
         "schedule_btn_12h": "12 часов",
         "schedule_btn_24h": "24 часа",
         "schedule_btn_custom": "✏️ Свой формат",
-        "generating_images": "🎨 Генерирую иллюстрации для вашего приключения...\nЭто займёт около минуты. Пожалуйста, подождите.",
+        "generating_images": "Приготовьтесь ответить на 5 вопросов, которые определят ход вашего дальнейшего приключения. Генерация вопросов займёт около минуты. Пожалуйста, подождите.",
         "already_onboarding": "🎨 Ваше имя уже принято, иллюстрации генерируются. Пожалуйста, подождите.",
     },
     LANGUAGE_EN: {
@@ -109,7 +109,7 @@ ONBOARDING = {
         "schedule_btn_12h": "12 hours",
         "schedule_btn_24h": "24 hours",
         "schedule_btn_custom": "✏️ Custom format",
-        "generating_images": "🎨 Generating illustrations for your adventure...\nThis should take about a minute. Please wait.",
+        "generating_images": "Get ready to answer 5 questions that will shape your adventure. Question generation will take about a minute. Please wait.",
         "already_onboarding": "🎨 Your name has already been accepted, illustrations are being generated. Please wait.",
     },
 }

@@ -232,11 +232,11 @@ class GameScheduler:
             if state.mode == "paused":
                 self._paused_games.add(gid)
 
-        logger.info(f"Loaded {len(self._games)} game schedule(s) from DB")
         if not self._games:
-            logger.info("No persisted schedules; games must be registered explicitly via /gm_schedule or on first start")
+            logger.warning("No persisted schedules; games must be registered explicitly via /gm_schedule or on first start")
 
         logger.info(f"Loaded {len(self._games)} game schedule(s) from DB")
+
 
     # ── Game management ──
 

@@ -966,16 +966,16 @@ def create_onboarding_keyboard(options: list, question_id: int, selected_index: 
     builder = InlineKeyboardBuilder()
     for idx in range(len(options)):
         if selected_index == idx:
-            text = f"✅ [{idx + 1}]"
+            text = f"✅ {idx + 1}"
         else:
-            text = f"[{idx + 1}]"
+            text = str(idx + 1)
         builder.add(
             InlineKeyboardButton(
                 text=text,
                 callback_data=f"onb_ans:{question_id}:{idx}",
             )
         )
-    builder.adjust(len(options))  # one row, Telegram wraps if too wide
+    builder.adjust(len(options))  # one row
 
     logger.info(f"Created onboarding inline keyboard for question_id={question_id} with {len(options)} buttons")
 
@@ -1226,10 +1226,9 @@ async def start_onboarding_flow(
 
         if pending_images:
             # Images are being generated in background.
-            # Show "please wait" message — the actual question with images
-            # will be delivered via /push/onboarding-ready.
-            wait_text = msgs.get("generating_images") or ("🎨 Generating illustrations for your adventure...\nThis should take about a minute. Please wait.")
-            await message.answer(wait_text, parse_mode="Markdown")
+            # The "please wait" message was already sent in handle_onboarding_name
+            # before calling us. The actual question with images will be delivered
+            # via /push/onboarding-ready.
             await state.set_state(OnboardingState.waiting_for_answer)
             logger.info(f"Onboarding pending_images for player {player_id}, waiting for push")
         else:
@@ -1397,7 +1396,10 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
         parse_mode="Markdown",
     )
 
-    await send_random_loading_image(message, language=effective_lang)
+    # Send "please wait" message immediately — the onboarding API call below
+    # takes ~30-60s to generate questions via LLM.
+    wait_text = onboarding_msgs.get("generating_images") or ("🎨 Generating illustrations for your adventure...\nThis should take about a minute. Please wait.")
+    await message.answer(wait_text, parse_mode="Markdown")
 
     await state.update_data(player_name=player_name)
 
@@ -1426,6 +1428,12 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
 
         if current_options and current_question_text:
             # Re-send the current question with image and inline keyboard
+            await state.update_data(
+                session_id=session_id,
+                game_id=player_state.get("game_id", "default_game"),
+                current_question_id=current_question_id,
+                current_options=current_options,
+            )
             keyboard = create_onboarding_keyboard(current_options, current_question_id)
             question = {
                 "id": current_question_id,
@@ -3348,10 +3356,15 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
 
     logger.info(f"Inline onboarding answer: player={player_id}, callback_question_id={callback_question_id}, option_idx={option_idx}, session_id={session_id}")
 
-    # Ignore stale button presses from old messages
-    if current_question_id is not None and callback_question_id != current_question_id:
+    # Ignore stale button presses when no active onboarding session
+    if current_question_id is None:
+        logger.warning(f"Stale keyboard press: no active onboarding for player {player_id} (callback_question_id={callback_question_id})")
+        await callback.answer(error_msgs["stale_question"], show_alert=False)
+        return
+
+    # Ignore stale button presses from old messages (wrong question id)
+    if callback_question_id != current_question_id:
         logger.warning(f"Stale keyboard press: callback_question_id={callback_question_id} != current_question_id={current_question_id}, ignoring")
-        error_msgs = lang.get_errors(player_lang)
         await callback.answer(error_msgs["stale_question"], show_alert=False)
         return
 

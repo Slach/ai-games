@@ -183,32 +183,37 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
         if not provided:
             return  # nothing to update
 
-        # Serialise non-scalar types; collect values in column definition order
+        # Build params with a (provided_flag, value) pair per column.
+        # CASE WHEN ? THEN ? ELSE col END keeps columns untouched when not
+        # provided, while allowing explicit NULL.  Column order mirrors
+        # _PLAYER_STATE_COLUMNS (insertion-ordered, Python 3.7+).
         params: list[Any] = []
         for col in _PLAYER_STATE_COLUMNS:
-            value = kwargs.get(col)
-            if value is not None:
+            if col in provided:
+                value = kwargs[col]
                 if col == "last_poll" and isinstance(value, datetime):
                     value = value.isoformat()
                 elif col in ("pending_updates", "current_options"):
-                    value = json.dumps(value, cls=DateTimeEncoder)
-            params.append(value)
+                    value = json.dumps(value, cls=DateTimeEncoder) if value is not None else None
+                params.extend([True, value])
+            else:
+                params.extend([False, None])
 
         params.append(player_id)  # WHERE clause
 
         conn.execute(
             """UPDATE player_states SET
-                game_id = COALESCE(?, game_id),
-                onboarding_session_id = COALESCE(?, onboarding_session_id),
-                current_question = COALESCE(?, current_question),
-                current_question_id = COALESCE(?, current_question_id),
-                current_options = COALESCE(?, current_options),
-                current_question_text = COALESCE(?, current_question_text),
-                current_question_image_url = COALESCE(?, current_question_image_url),
-                last_poll = COALESCE(?, last_poll),
-                pending_updates = COALESCE(?, pending_updates),
-                last_briefing_turn_sent = COALESCE(?, last_briefing_turn_sent),
-                language = COALESCE(?, language),
+                game_id = CASE WHEN ? THEN ? ELSE game_id END,
+                onboarding_session_id = CASE WHEN ? THEN ? ELSE onboarding_session_id END,
+                current_question = CASE WHEN ? THEN ? ELSE current_question END,
+                current_question_id = CASE WHEN ? THEN ? ELSE current_question_id END,
+                current_options = CASE WHEN ? THEN ? ELSE current_options END,
+                current_question_text = CASE WHEN ? THEN ? ELSE current_question_text END,
+                current_question_image_url = CASE WHEN ? THEN ? ELSE current_question_image_url END,
+                last_poll = CASE WHEN ? THEN ? ELSE last_poll END,
+                pending_updates = CASE WHEN ? THEN ? ELSE pending_updates END,
+                last_briefing_turn_sent = CASE WHEN ? THEN ? ELSE last_briefing_turn_sent END,
+                language = CASE WHEN ? THEN ? ELSE language END,
                 updated_at = datetime('now')
             WHERE player_id = ?""",
             params,
