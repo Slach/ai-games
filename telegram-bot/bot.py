@@ -718,7 +718,8 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 try:
                     # Fetch mission, bridge image, game state, and scheduler info
                     mission = await api_request(
-                        "GET", "/game/mission",
+                        "GET",
+                        "/game/mission",
                         params={"game_id": game_id_for_mission},
                         ignore_codes=(404,),
                     )
@@ -728,7 +729,8 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 bridge = None
                 try:
                     bridge = await api_request(
-                        "GET", "/game/bridge-image",
+                        "GET",
+                        "/game/bridge-image",
                         params={"game_id": game_id_for_mission},
                         ignore_codes=(404,),
                     )
@@ -738,7 +740,8 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 game_state = None
                 try:
                     game_state = await api_request(
-                        "GET", "/game/state",
+                        "GET",
+                        "/game/state",
                         params={"game_id": game_id_for_mission},
                     )
                 except Exception:
@@ -774,11 +777,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                                     await bot.send_photo(
                                         chat_id=player_id,
                                         photo=photo,
-                                        caption=escape_markdown(
-                                            onboarding_msgs["game_already_started_mission"].format(
-                                                mission_name=mission.get("name", "")
-                                            )
-                                        ),
+                                        caption=escape_markdown(onboarding_msgs["game_already_started_mission"].format(mission_name=mission.get("name", ""))),
                                         parse_mode="Markdown",
                                     )
                     except Exception as e:
@@ -3545,7 +3544,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             )
 
             # Show loading image while profile/avatar is being generated
-            await send_random_loading_image(msg, caption_key="processing_caption")
+            await send_random_loading_image(msg, caption_key="processing_caption", language=player_lang)
 
             # Avatar generation + onboarding message
             if msg.bot is None:
@@ -3734,7 +3733,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             )
 
             # Show loading image while profile/avatar is being generated
-            await send_random_loading_image(message, caption_key="processing_caption")
+            await send_random_loading_image(message, caption_key="processing_caption", language=get_player_language(player_id))
 
             # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             if message.bot is None:
