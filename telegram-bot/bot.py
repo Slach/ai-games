@@ -711,6 +711,109 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 reply_markup=create_main_menu_keyboard(),
             )
 
+        # If game already started, send mission info with bridge image
+        if game_started:
+            game_id_for_mission = profile.get("game_id", "")
+            if game_id_for_mission:
+                try:
+                    # Fetch mission, bridge image, game state, and scheduler info
+                    mission = await api_request(
+                        "GET", "/game/mission",
+                        params={"game_id": game_id_for_mission},
+                        ignore_codes=(404,),
+                    )
+                except Exception:
+                    mission = None
+
+                bridge = None
+                try:
+                    bridge = await api_request(
+                        "GET", "/game/bridge-image",
+                        params={"game_id": game_id_for_mission},
+                        ignore_codes=(404,),
+                    )
+                except Exception:
+                    pass
+
+                game_state = None
+                try:
+                    game_state = await api_request(
+                        "GET", "/game/state",
+                        params={"game_id": game_id_for_mission},
+                    )
+                except Exception:
+                    pass
+
+                schedule_time = "—"
+                try:
+                    async with aiohttp.ClientSession() as sched_session:
+                        async with sched_session.get(
+                            f"{GAME_SCHEDULER_URL}/scheduler/status",
+                            params={"game_id": game_id_for_mission},
+                            timeout=aiohttp.ClientTimeout(total=5),
+                        ) as sched_resp:
+                            if sched_resp.status == 200:
+                                sched_data = await sched_resp.json()
+                                next_run = sched_data.get("next_run_at")
+                                if next_run:
+                                    schedule_time = _format_scheduler_time(next_run)
+                except Exception:
+                    pass
+
+                # Send bridge image with mission name
+                if bridge and bridge.get("image_url") and mission:
+                    try:
+                        async with aiohttp.ClientSession() as img_session:
+                            async with img_session.get(
+                                bridge["image_url"],
+                                timeout=aiohttp.ClientTimeout(total=30),
+                            ) as img_resp:
+                                if img_resp.status == 200:
+                                    photo_data = await img_resp.read()
+                                    photo = BufferedInputFile(photo_data, filename="bridge.png")
+                                    await bot.send_photo(
+                                        chat_id=player_id,
+                                        photo=photo,
+                                        caption=escape_markdown(
+                                            onboarding_msgs["game_already_started_mission"].format(
+                                                mission_name=mission.get("name", "")
+                                            )
+                                        ),
+                                        parse_mode="Markdown",
+                                    )
+                    except Exception as e:
+                        logger.warning(f"Failed to send bridge image to player {player_id}: {e}")
+
+                # Send mission description, objectives, turn, and schedule
+                if mission:
+                    turn_num = game_state.get("turn", 1) if game_state else 1
+                    # turn in game_state is the NEXT turn to generate; current is turn-1
+                    current_turn = max(1, turn_num - 1)
+                    objectives_list = mission.get("objectives", [])
+                    if isinstance(objectives_list, list) and objectives_list:
+                        obj_lines = []
+                        for o in objectives_list:
+                            if isinstance(o, dict):
+                                obj_lines.append(f"- {escape_markdown(o.get('name', ''))}: {escape_markdown(o.get('description', ''))}")
+                            else:
+                                obj_lines.append(f"- {escape_markdown(str(o))}")
+                        objectives_text = "\n".join(obj_lines)
+                    else:
+                        objectives_text = escape_markdown(str(objectives_list))
+                    try:
+                        await bot.send_message(
+                            chat_id=player_id,
+                            text=onboarding_msgs["game_already_started_info"].format(
+                                mission_description=escape_markdown(mission.get("description", "")),
+                                mission_objectives=objectives_text,
+                                turn=current_turn,
+                                schedule_time=escape_markdown(schedule_time),
+                            ),
+                            parse_mode="Markdown",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send mission info to player {player_id}: {e}")
+
         # Send invite link if bot username and game ID are available
         global BOT_USERNAME
         if not BOT_USERNAME:
