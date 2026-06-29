@@ -1731,6 +1731,7 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
             }
         )
 
+    mission = get_mission(game_id=game_id)
     return {
         "game_id": game_id,
         "title": title,
@@ -1740,6 +1741,8 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
         "ship_alive": state["ship_alive"],
         "crew_health": state["crew_health"],
         "game_started": is_game_started(game_id),
+        "mission_name": mission.get("name", "") if mission else "",
+        "archetype": mission.get("archetype", "") if mission else "",
         "player_count": len(players_list),
         "alive_count": sum(1 for pl in players_list if not pl["is_dead"]),
         "npc_count": len(npcs_list),

@@ -1375,6 +1375,15 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
 
     logger.info(f"Player {player_id} entered name: {player_name}")
 
+    # Guard against re-entry: if onboarding already started, don't start again
+    player_state = get_player_state(player_id)
+    existing_session_id = player_state.get("onboarding_session_id")
+    if existing_session_id:
+        logger.info(f"Player {player_id} already has active session {existing_session_id}, ignoring re-entry")
+        onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
+        await message.answer(onboarding_msgs["already_onboarding"])
+        return
+
     # Store name in FSM data and proceed to onboarding
     data = await state.get_data()
     game_id = data.get("game_id", "default_game")
@@ -3067,6 +3076,8 @@ async def cmd_gm_status(message: types.Message):
             reason = reason_map.get(game_status, game_status)
             header = gm_msgs["status_ended_header"].format(
                 game_id=game_id,
+                mission_name=result.get("mission_name", "") or "—",
+                archetype=result.get("archetype", "") or "—",
                 turn=result.get("current_turn", result.get("turn", 1)),
                 reason=reason,
                 ship=ship,
@@ -3079,6 +3090,8 @@ async def cmd_gm_status(message: types.Message):
             status_label = game_status
             header = gm_msgs["status_header"].format(
                 game_id=game_id,
+                mission_name=result.get("mission_name", "") or "—",
+                archetype=result.get("archetype", "") or "—",
                 turn=result.get("current_turn", result.get("turn", 1)),
                 status=status_label,
                 ship=ship,

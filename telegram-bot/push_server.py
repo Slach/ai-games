@@ -1031,12 +1031,12 @@ async def _deliver_onboarding_ready(
 
             options = question.get("options", [])
             keyboard_rows = []
-            for i, opt in enumerate(options):
+            for i in range(len(options)):
                 keyboard_rows.append(
                     [
                         InlineKeyboardButton(
-                            text=f"{i + 1}. {_escape_md(opt.get('label', opt['value']))}",
-                            callback_data=f"answer:{question['id']}:{i}:{opt['value']}",
+                            text=f"[{i + 1}]",
+                            callback_data=f"onb_ans:{question['id']}:{i}",
                         )
                     ]
                 )
