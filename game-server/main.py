@@ -2082,6 +2082,71 @@ async def auto_select_action(
 # ============== Message endpoints ==============
 
 
+def _build_game_message_context(game_id: str, player_id: int, profile_data: dict[str, Any]) -> dict[str, Any]:
+    """Build rich game context for the Game Master LLM prompt.
+
+    Gathers game title, mission info, current turn state, previous turn
+    outcome, global circumstances, and crew composition.
+    """
+    ctx: dict[str, Any] = {}
+
+    # Game title
+    title = get_game_title(game_id)
+    if title:
+        ctx["game_title"] = title
+
+    # Mission
+    mission = get_mission(game_id=game_id)
+    if mission:
+        ctx["mission_name"] = mission.get("name", "")
+        ctx["mission_description"] = mission.get("description", "")
+        objectives = mission.get("objectives", [])
+        if objectives:
+            obj_lines = []
+            for o in objectives:
+                if isinstance(o, dict):
+                    obj_lines.append(f"— Этап {o.get('stage', '?')}: {o.get('name', '')} — {o.get('description', '')}")
+                else:
+                    obj_lines.append(f"— {o}")
+            ctx["mission_objectives"] = "\n".join(obj_lines)
+
+    # Game state
+    state = get_game_state(game_id)
+    turn_num = state.get("turn", 1)
+    ctx["turn"] = turn_num
+
+    # Previous turn data (current turn - 1, since game_state.turn is the NEXT turn to generate)
+    current_turn = max(1, turn_num - 1)
+    if current_turn >= 1:
+        prev_turn = get_game_turn(current_turn, game_id=game_id)
+        if prev_turn:
+            # Use combined_outcome if available, else previous_turn_summary
+            outcome = prev_turn.get("combined_outcome") or prev_turn.get("previous_turn_summary", "")
+            if outcome:
+                ctx["previous_turn_summary"] = outcome
+            gc_setting = prev_turn.get("global_circumstances", "")
+            if gc_setting:
+                ctx["global_circumstances_setting"] = gc_setting
+
+    # Crew context — players + NPCs
+    crew_lines: list[str] = []
+    player_ids = get_players_in_game(game_id)
+    for pid in player_ids:
+        p = get_player_profile(pid)
+        if p and not p.get("is_dead") and not p.get("is_spectator"):
+            name = p.get("player_name", "") or str(pid)
+            role = p.get("role", "Crew Member")
+            marker = " ← ВЫ" if pid == player_id else ""
+            crew_lines.append(f"— {name} ({role}){marker}")
+    npcs = get_all_active_npcs(game_id)
+    for npc in npcs:
+        crew_lines.append(f"— {npc.get('npc_name', 'NPC')} ({npc.get('role', 'Crew')}) [NPC]")
+    if crew_lines:
+        ctx["crew_context"] = "\n".join(crew_lines)
+
+    return ctx
+
+
 @app.post("/game/messages")
 async def submit_game_message(request: GameMessageRequest):
     """Submit a message to the game master and get response"""
@@ -2093,24 +2158,36 @@ async def submit_game_message(request: GameMessageRequest):
     # Get player profile
     profile = get_player_profile(player_id)
     if not profile:
-        profile_data = {
+        profile_data: dict[str, Any] = {
             "role": "Crew Member",
             "personality_traits": [],
+            "player_name": "",
             "player_id": player_id,
         }
     else:
         profile_data = {
             "role": profile["role"],
-            "personality_traits": profile["personality_traits"],
+            "personality_traits": profile.get("personality_traits", []),
+            "player_name": profile.get("player_name", ""),
             "player_id": player_id,
         }
 
+    # Build game context for the LLM prompt
+    game_id = profile.get("game_id", "default_game") if profile else "default_game"
+    game_context = _build_game_message_context(game_id, player_id, profile_data)
+
     # Generate response from game master
     try:
-        language = "ru" if any(c in message for c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя") else "en"
+        # Use the game's stored language, not character-based detection
+        language = get_game_language(game_id) if profile else "en"
         game_server = create_game_server(language=language)
 
-        response = game_server.process_player_message(player_id=player_id, message=message, player_profile=profile_data)
+        response = game_server.process_player_message(
+            player_id=player_id,
+            message=message,
+            player_profile=profile_data,
+            game_context=game_context,
+        )
 
         add_game_message(player_id, response, "text_response")
 

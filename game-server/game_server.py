@@ -40,7 +40,7 @@ from prompts import (
     build_npc_name_user,
     build_onboarding_prompts,
     build_personal_briefing_system,
-    build_player_message_system,
+    build_player_message_prompts,
     build_species_description_prompts,
 )
 from openai.types.chat import (
@@ -1402,13 +1402,38 @@ class GameServer:
 
     # ============== Player Message ==============
 
-    def process_player_message(self, player_id: int, message: str, player_profile: dict[str, Any]) -> str:
-        """Process a player message and generate Game Master response."""
-        player_role = player_profile.get("role", "Crew Member")
+    def process_player_message(self, player_id: int, message: str, player_profile: dict[str, Any], game_context: dict[str, Any] | None = None) -> str:
+        """Process a player message and generate Game Master response.
 
-        system = build_player_message_system(self.language)
+        Args:
+            player_id: Telegram user ID
+            message: Player's text message
+            player_profile: Dict with role, personality_traits, etc.
+            game_context: Optional dict with game_title, mission_name,
+                mission_description, mission_objectives, turn,
+                previous_turn_summary, global_circumstances_setting,
+                global_circumstances_conflict, global_circumstances_narrative,
+                crew_context.
+        """
+        ctx = game_context or {}
 
-        user = f'Player (role: {player_role}) sent this message:\n\n"{message}"\n\nRespond in character as Game Master.'
+        system, user = build_player_message_prompts(
+            language=self.language,
+            player_name=player_profile.get("player_name", ""),
+            player_role=player_profile.get("role", "Crew Member"),
+            player_traits=player_profile.get("personality_traits", []),
+            message=message,
+            game_title=ctx.get("game_title", ""),
+            mission_name=ctx.get("mission_name", ""),
+            mission_description=ctx.get("mission_description", ""),
+            mission_objectives=ctx.get("mission_objectives", ""),
+            turn=ctx.get("turn", 1),
+            previous_turn_summary=ctx.get("previous_turn_summary", ""),
+            global_circumstances_setting=ctx.get("global_circumstances_setting", ""),
+            global_circumstances_conflict=ctx.get("global_circumstances_conflict", ""),
+            global_circumstances_narrative=ctx.get("global_circumstances_narrative", ""),
+            crew_context=ctx.get("crew_context", ""),
+        )
 
         try:
             parsed = self._call_llm(

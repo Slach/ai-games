@@ -939,11 +939,120 @@ def build_content_prompt_note(language: str) -> str:
 # ── Player message prompts ─────────────────────────────────────────
 
 
-def build_player_message_system(language: str) -> str:
-    """Build system prompt for player message processing."""
+def build_player_message_prompts(
+    language: str,
+    player_name: str,
+    player_role: str,
+    player_traits: list[str],
+    message: str,
+    *,
+    game_title: str = "",
+    mission_name: str = "",
+    mission_description: str = "",
+    mission_objectives: str = "",
+    turn: int = 1,
+    previous_turn_summary: str = "",
+    global_circumstances_setting: str = "",
+    global_circumstances_conflict: str = "",
+    global_circumstances_narrative: str = "",
+    crew_context: str = "",
+) -> tuple[str, str]:
+    """Build system and user prompts for player message processing with full game context."""
+    traits_str = ", ".join(player_traits) if player_traits else ""
+
     if language == LANGUAGE_RU:
-        return "Ты — Game Master космической исследовательской игры в стиле Star Trek. Отвечай в стиле Game Master, направляя叙事. Будь увлекательным и атмосферным."
-    return "You are the Game Master of a Star Trek-style space exploration game. Respond in character as the Game Master, guiding the narrative forward. Keep it engaging and atmospheric."
+        system = (
+            "Ты — Game Master космической исследовательской игры в стиле Star Trek. "
+            "Ты отвечаешь на вопросы игрока от лица Game Master, опираясь на контекст текущей игры. "
+            "Отвечай в характере, учитывая роль и личность игрока, текущую ситуацию на корабле "
+            "и предыдущие события. Будь увлекательным, атмосферным и полезным. "
+            "Не придумывай новых событий, которые противоречат контексту игры."
+        )
+
+        context_parts = []
+        if game_title:
+            context_parts.append(f"Игра: {game_title}")
+        if mission_name:
+            context_parts.append(f"Миссия: {mission_name}")
+        if mission_description:
+            context_parts.append(f"Описание миссии: {mission_description}")
+        if mission_objectives:
+            context_parts.append(f"Этапы миссии:\n{mission_objectives}")
+        context_parts.append(f"Текущий ход: {turn}")
+        if previous_turn_summary:
+            context_parts.append(f"Итог предыдущего хода: {previous_turn_summary}")
+        if global_circumstances_setting or global_circumstances_conflict:
+            circ_parts = []
+            if global_circumstances_setting:
+                circ_parts.append(f"Локация: {global_circumstances_setting}")
+            if global_circumstances_conflict:
+                circ_parts.append(f"Конфликт: {global_circumstances_conflict}")
+            if global_circumstances_narrative:
+                circ_parts.append(f"Ситуация: {global_circumstances_narrative}")
+            if circ_parts:
+                context_parts.append("Текущие обстоятельства:\n" + "\n".join(circ_parts))
+        if crew_context:
+            context_parts.append(f"Экипаж на борту:\n{crew_context}")
+
+        context_block = "\n\n".join(context_parts)
+
+        user = (
+            f"КОНТЕКСТ ИГРЫ:\n{context_block}\n\n"
+            f"ИГРОК:\n"
+            f"Имя: {player_name or 'Неизвестно'}\n"
+            f"Роль: {player_role}\n"
+            f"Черты характера: {traits_str or 'Не указаны'}\n\n"
+            f'СООБЩЕНИЕ ИГРОКА:\n"{message}"\n\n'
+            f"Ответь игроку в роли Game Master, учитывая весь контекст игры и личность персонажа."
+        )
+    else:
+        system = (
+            "You are the Game Master of a Star Trek-style space exploration game. "
+            "You answer player questions as the Game Master, drawing on the current game context. "
+            "Respond in character, taking into account the player's role and personality, "
+            "the current situation aboard the ship, and prior events. "
+            "Be engaging, atmospheric, and helpful. "
+            "Do not invent events that contradict the established game context."
+        )
+
+        context_parts = []
+        if game_title:
+            context_parts.append(f"Game: {game_title}")
+        if mission_name:
+            context_parts.append(f"Mission: {mission_name}")
+        if mission_description:
+            context_parts.append(f"Mission description: {mission_description}")
+        if mission_objectives:
+            context_parts.append(f"Mission stages:\n{mission_objectives}")
+        context_parts.append(f"Current turn: {turn}")
+        if previous_turn_summary:
+            context_parts.append(f"Previous turn outcome: {previous_turn_summary}")
+        if global_circumstances_setting or global_circumstances_conflict:
+            circ_parts = []
+            if global_circumstances_setting:
+                circ_parts.append(f"Location: {global_circumstances_setting}")
+            if global_circumstances_conflict:
+                circ_parts.append(f"Conflict: {global_circumstances_conflict}")
+            if global_circumstances_narrative:
+                circ_parts.append(f"Situation: {global_circumstances_narrative}")
+            if circ_parts:
+                context_parts.append("Current circumstances:\n" + "\n".join(circ_parts))
+        if crew_context:
+            context_parts.append(f"Crew aboard:\n{crew_context}")
+
+        context_block = "\n\n".join(context_parts)
+
+        user = (
+            f"GAME CONTEXT:\n{context_block}\n\n"
+            f"PLAYER:\n"
+            f"Name: {player_name or 'Unknown'}\n"
+            f"Role: {player_role}\n"
+            f"Personality traits: {traits_str or 'Not specified'}\n\n"
+            f'PLAYER MESSAGE:\n"{message}"\n\n'
+            f"Respond to the player in character as Game Master, taking into account the full game context and the character's personality."
+        )
+
+    return system, user
 
 
 # ── Species description prompts ────────────────────────────────────
