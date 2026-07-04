@@ -387,6 +387,27 @@ class GameScheduler:
             logger.error(f"Failed to generate turn for game '{game_id}': {e}", exc_info=True)
             raise
 
+    async def _prune_ended_games(self) -> None:
+        """Stop scheduling games that have ended on the server side.
+
+        A game has ended when its server-side game_state.status is not 'active'
+        (mission_complete, ship_destroyed, crew_wiped, ...). Without this prune, an
+        ended game keeps a future next_run_at and is only dropped when that time
+        fires. Transient API errors are logged and skipped so a healthy game is
+        never unregistered due to a temporary game-server outage.
+        """
+        for gid, state in list(self._games.items()):
+            if gid in self._paused_games or state.mode == "ended":
+                continue
+            try:
+                srv_state = await self.check_game_state(gid)
+            except Exception:
+                logger.warning(f"Could not reach game-server for '{gid}', skipping ended-prune", exc_info=True)
+                continue
+            if srv_state.get("status") != "active":
+                logger.info(f"Game '{gid}' ended on server (status={srv_state.get('status')!r}) — stopping scheduling")
+                self.unregister_game(gid)
+
     async def run_scheduling_loop(self):
         """Run the scheduling loop for all registered games."""
         if self._loop_running:
@@ -398,6 +419,9 @@ class GameScheduler:
         while True:
             try:
                 await self._pause_event.wait()
+
+                # Drop games that have ended on the server before scheduling them
+                await self._prune_ended_games()
 
                 now = datetime.now(timezone.utc)
                 # Find the game whose next_run_at is nearest
