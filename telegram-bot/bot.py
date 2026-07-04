@@ -608,6 +608,11 @@ async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
         profile = await api_request("GET", f"/players/{player_id}/profile")
         return profile
     except Exception:
+        logger.warning(
+            "Failed to fetch player profile for %d",
+            player_id,
+            exc_info=True,
+        )
         return None
 
 
@@ -724,6 +729,11 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         ignore_codes=(404,),
                     )
                 except Exception:
+                    logger.warning(
+                        "[AVATAR] Failed to fetch mission for game %s",
+                        game_id_for_mission,
+                        exc_info=True,
+                    )
                     mission = None
 
                 bridge = None
@@ -735,7 +745,11 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         ignore_codes=(404,),
                     )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "[AVATAR] Failed to fetch bridge image for game %s",
+                        game_id_for_mission,
+                        exc_info=True,
+                    )
 
                 game_state = None
                 try:
@@ -745,7 +759,11 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         params={"game_id": game_id_for_mission},
                     )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "[AVATAR] Failed to fetch game state for game %s",
+                        game_id_for_mission,
+                        exc_info=True,
+                    )
 
                 schedule_time = "—"
                 try:
@@ -761,7 +779,11 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                                 if next_run:
                                     schedule_time = _format_scheduler_time(next_run)
                 except Exception:
-                    pass
+                    logger.warning(
+                        "[AVATAR] Failed to fetch scheduler status for game %s",
+                        game_id_for_mission,
+                        exc_info=True,
+                    )
 
                 # Send bridge image with mission name
                 if bridge and bridge.get("image_url") and mission:
@@ -3867,11 +3889,19 @@ async def refresh_game(callback: types.CallbackQuery):
             crew_dialogues_text = "\n".join([f"- {d['npc']}: {d['dialogue']}" for d in turn_data["crew_dialogues"]])
 
         if isinstance(callback.message, types.Message):
+            # Build main text without crew dialogues (they go in a separate message)
+            main_text = msgs["title"].format(turn=turn_data["turn"]) + f"\n\n{msgs['story'].format(story=turn_data['story'])}" + f"\n\n{msgs['actions'].format(actions=actions_text)}" + f"\n\n{msgs['select_action']}"
             await callback.message.edit_text(
-                msgs["title"].format(turn=turn_data["turn"]) + f"\n\n{msgs['story'].format(story=turn_data['story'])}\n\n{msgs['crew_dialogues']}\n{crew_dialogues_text}" + f"\n\n{msgs['actions'].format(actions=actions_text)}\n\n{msgs['select_action']}",
+                main_text,
                 parse_mode="Markdown",
                 reply_markup=create_action_keyboard(turn_data.get("player_actions", [])),
             )
+            # Crew dialogues as a separate message (avoids 4096 limit)
+            if crew_dialogues_text:
+                await callback.message.answer(
+                    msgs["crew_dialogues"] + "\n" + crew_dialogues_text,
+                    parse_mode="Markdown",
+                )
 
     except Exception as e:
         logger.error(f"Failed to refresh game for player {player_id}: {e}", exc_info=True)

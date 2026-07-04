@@ -125,9 +125,8 @@ async def push_briefings(
             ):
                 if resp.status == 200:
                     body = await resp.json()
-                    sent_count = len(body.get("sent", []))
-                    already = body.get("already_sent", False)
-                    logger.info(f"[PUSH] Delivered turn {turn} for game {game_id}: {'already_sent' if already else sent_count} players")
+                    sent_count = len(body.get("queued", []))
+                    logger.info(f"[PUSH] Delivered turn {turn} for game {game_id}: {sent_count} players")
                     return True
                 else:
                     error_text = await resp.text()

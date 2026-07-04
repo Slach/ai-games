@@ -29,6 +29,7 @@ from database import (
     mark_push_expired,
     mark_push_failed,
     mark_push_sent,
+    reset_failed_for_current_turn,
 )
 from language import (
     get_actions,
@@ -175,23 +176,28 @@ def _escape_md(text: str) -> str:
     return re.sub(r"([_*`\[])", r"\\\1", text)
 
 
+def _build_crew_dialogues_text(
+    crew_dialogues: list[dict[str, str]],
+    language: str,
+) -> str:
+    """Build a separate message with NPC dialogues."""
+    if not crew_dialogues:
+        return ""
+    sep = "\n---\n"
+    lines = [f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}" for d in crew_dialogues]
+    outcome_msgs = get_push_outcome(language)
+    return f"*{outcome_msgs['crew_behavior_header']}*:\n{sep.join(lines)}"
+
+
 def _build_briefing_text(
     turn_num: int,
     briefing: str,
     choices: list[dict[str, Any]],
-    crew_dialogues: list[dict[str, str]],
     language: str,
     personal_title: str = "",
 ) -> str:
-    """Build the full briefing message text for a player."""
+    """Build the briefing message text for a player (without NPC dialogues)."""
     current = get_current_turn(language)
-    crew_txt = ""
-    if crew_dialogues:
-        sep = "\n---\n"
-        lines = [f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}" for d in crew_dialogues]
-        outcome_msgs = get_push_outcome(language)
-        crew_txt = f"\n\n*{outcome_msgs['crew_behavior_header']}*:\n{sep.join(lines)}"
-
     acts = "\n\n".join(f"{i + 1} - {_escape_md(a.get('text', a.get('description', '')))}" for i, a in enumerate(choices))
 
     if personal_title:
@@ -199,7 +205,7 @@ def _build_briefing_text(
     else:
         title_line = current.get("title", "Turn {turn}").format(turn=turn_num)
 
-    return title_line + "\n\n" + current.get("briefing_header", "{briefing}").format(briefing=briefing) + crew_txt + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
+    return title_line + "\n\n" + current.get("briefing_header", "{briefing}").format(briefing=briefing) + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
 
 
 async def _download_image(url: str, timeout: int = 30) -> bytes | None:
@@ -391,6 +397,17 @@ async def _deliver_briefing(
                     photo = BufferedInputFile(img_data, filename="action.png")
                     await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo))
 
+            # Crew dialogues as a separate message (before briefing to avoid 4096 limit)
+            crew_text = _build_crew_dialogues_text(crew_dialogues, language)
+            if crew_text:
+                await call_with_retry(
+                    lambda: bot.send_message(
+                        chat_id=player_id,
+                        text=crew_text,
+                        parse_mode="Markdown",
+                    )
+                )
+
             # Briefing text + action choices (or expired notice)
             briefing = player_data.get("briefing", "")
             choices = player_data.get("choices", [])
@@ -401,7 +418,6 @@ async def _deliver_briefing(
                         turn,
                         briefing,
                         choices,
-                        crew_dialogues,
                         language,
                         personal_title=personal_title,
                     )
@@ -419,7 +435,6 @@ async def _deliver_briefing(
                         turn,
                         briefing,
                         choices,
-                        crew_dialogues,
                         language,
                         personal_title=personal_title,
                     )
@@ -444,8 +459,21 @@ async def _deliver_briefing(
                 )
                 asyncio.create_task(_auto_kick_blocked_player(player_id))
                 continue
+            logger.error(
+                "[PUSH_BRIEFING] TelegramBadRequest for player %d turn %s: %s",
+                player_id,
+                turn,
+                e,
+                exc_info=True,
+            )
             return False
         except Exception:
+            logger.error(
+                "[PUSH_BRIEFING] Unexpected error for player %d turn %s",
+                player_id,
+                turn,
+                exc_info=True,
+            )
             return False  # One player failed → stop
 
     return True
@@ -491,8 +519,21 @@ async def _deliver_player_action(
             )
             asyncio.create_task(_auto_kick_blocked_player(player_id))
             return True
+        logger.error(
+            "[PUSH_ACTION] TelegramBadRequest for player %d turn %s: %s",
+            player_id,
+            turn,
+            e,
+            exc_info=True,
+        )
         return False
     except Exception:
+        logger.error(
+            "[PUSH_ACTION] Unexpected error for player %d turn %s",
+            player_id,
+            turn,
+            exc_info=True,
+        )
         return False
     finally:
         if event_key in _pending_action_events:
@@ -1287,6 +1328,21 @@ async def _startup_flush(
     _current_turns.update(turns)
     _current_turns_ready.set()
 
+    # Retry failed messages whose turn is still current
+    retried_total = 0
+    for game_id, turn in turns.items():
+        retried = reset_failed_for_current_turn(game_id, turn)
+        if retried:
+            retried_total += retried
+            logger.info(
+                "[PUSH_STARTUP] Reset %d failed message(s) to pending for game %s turn %d",
+                retried,
+                game_id,
+                turn,
+            )
+    if retried_total:
+        logger.info("[PUSH_STARTUP] Total %d failed message(s) reset for retry", retried_total)
+
     pending = get_pending_push_messages()
     if not pending:
         logger.info("[PUSH_STARTUP] No pending messages to flush")
@@ -1505,6 +1561,7 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
     try:
         payload = await request.json()
     except Exception:
+        logger.warning("[PUSH_ONBOARDING] Invalid JSON in request", exc_info=True)
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     player_id = payload.get("player_id")

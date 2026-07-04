@@ -214,6 +214,27 @@ def mark_push_expired(push_id: int, db_path: str = DB_PATH) -> bool:
     return updated
 
 
+def reset_failed_for_current_turn(game_id: str, turn: int, db_path: str = DB_PATH) -> int:
+    """Reset failed push messages to pending if their turn equals current turn.
+
+    On bot restart, messages that failed delivery for the *current* turn
+    should be retried — the turn is still active and players need their briefings.
+    Failed messages for older turns stay failed (they're stale).
+
+    Returns number of rows reset.
+    """
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE push_queue SET status = 'pending', error = NULL WHERE status = 'failed' AND game_id = ? AND turn = ?",
+        (game_id, turn),
+    )
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return count
+
+
 def get_pending_push_messages(db_path: str = DB_PATH) -> list[dict]:
     """Get all pending push messages, ordered by id (insertion order)."""
     conn = get_db_connection(db_path)
