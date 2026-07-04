@@ -359,6 +359,7 @@ MENU = {
         "team": "/team",
         "help": "/help",
         "invite": "/invite",
+        "lang": "/lang",
         "reset": "/reset",
     },
     LANGUAGE_EN: {
@@ -368,6 +369,7 @@ MENU = {
         "team": "/team",
         "help": "/help",
         "invite": "/invite",
+        "lang": "/lang",
         "reset": "/reset",
     },
 }

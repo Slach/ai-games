@@ -74,6 +74,7 @@ from database import (
     deactivate_npc,
     init_db,
     is_game_started,
+    is_player_kicked,
     mark_player_dead,
     release_role,
     set_game_language,
@@ -282,6 +283,12 @@ def _question_has_sg_tags(question: OnboardingQuestion) -> bool:
     return any(opt.get("species_tags") or opt.get("gender_tags") for opt in question.options)
 
 
+# Cache: (game_id, language) -> list[OnboardingQuestion]
+# Questions are identical for all players in the same game, so we generate
+# them once and reuse. Avoids LLM timeouts on /onboarding/start.
+_onboarding_questions_cache: dict[tuple[str, str], list[OnboardingQuestion]] = {}
+
+
 async def generate_dynamic_onboarding_questions(
     language: str = "en",
     game_id: str = "default_game",
@@ -295,6 +302,14 @@ async def generate_dynamic_onboarding_questions(
     """
     logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
     start_time = datetime.now()
+
+    # Check cache first — questions are identical for all players in the same game
+    cache_key = (game_id, language)
+    if cache_key in _onboarding_questions_cache:
+        cached = _onboarding_questions_cache[cache_key]
+        logger.info(f"Returning {len(cached)} cached onboarding questions (cache hit)")
+        return cached
+
     questions: list[OnboardingQuestion] = []
     try:
         game_server = create_game_server(language=language)
@@ -348,6 +363,9 @@ async def generate_dynamic_onboarding_questions(
 
         if not skip_images:
             await generate_onboarding_question_images(questions, game_id)
+
+        # Cache for future players of the same game
+        _onboarding_questions_cache[cache_key] = questions
 
         return questions
 
@@ -935,12 +953,28 @@ async def start_onboarding(request: StartOnboardingRequest):
     logger.info("=== START ONBOARDING ===")
     logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
 
-    # Check if player already has a profile
+    # Check if player already has a profile.
+    # If their previous game has ended or they are dead/spectator,
+    # delete the old profile and allow re-onboarding.
     existing_profile = get_player_profile(request.player_id)
 
     if existing_profile:
-        logger.warning(f"Player {request.player_id} already has a profile")
-        raise HTTPException(status_code=400, detail="Player already has a profile")
+        old_game_id = existing_profile.get("game_id", "")
+        is_dead = existing_profile.get("is_dead") or existing_profile.get("is_spectator")
+        game_ended = False
+        if old_game_id:
+            try:
+                game_state = get_game_state(old_game_id)
+                game_ended = game_state.get("status") != "active"
+            except Exception:
+                logger.warning(f"Could not check game state for {old_game_id}", exc_info=True)
+
+        if game_ended or is_dead:
+            logger.info(f"Player {request.player_id} has a profile from {'ended' if game_ended else 'dead/spectator'} game {old_game_id}. Deleting old profile and allowing re-onboarding.")
+            delete_player_profile(request.player_id)
+        else:
+            logger.warning(f"Player {request.player_id} already has an active profile in game {old_game_id}")
+            raise HTTPException(status_code=400, detail="Player already has a profile")
 
     # Check if the game is already full
     current_count = get_player_count_in_game(request.game_id)
@@ -3386,6 +3420,9 @@ def _build_player_briefings_for_push(
             continue  # Only send to real players
         player_id = b.get("player_id")
         if not player_id:
+            continue
+        # Skip kicked players — they were replaced by NPCs
+        if is_player_kicked(player_id):
             continue
         # Get player_name from profile
         p = get_player_profile(player_id)

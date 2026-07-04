@@ -1120,8 +1120,8 @@ def create_main_menu_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboard
     menu = lang.get_menu(language)
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"]), KeyboardButton(text=menu["turn"])],
-            [KeyboardButton(text=menu["team"]), KeyboardButton(text=menu["invite"]), KeyboardButton(text=menu["help"])],
+            [KeyboardButton(text=menu["start"]), KeyboardButton(text=menu["profile"]), KeyboardButton(text=menu["turn"]), KeyboardButton(text=menu["team"])],
+            [KeyboardButton(text=menu["invite"]), KeyboardButton(text=menu["help"]), KeyboardButton(text=menu["lang"]), KeyboardButton(text=menu["reset"])],
         ],
         resize_keyboard=True,
     )
@@ -2630,7 +2630,6 @@ async def cmd_lang(message: types.Message):
     """
     if message.from_user is None:
         return
-    player_id = message.from_user.id
     logger.info("[HANDLER] cmd_lang")
 
     lang_keyboard = InlineKeyboardMarkup(

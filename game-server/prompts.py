@@ -963,9 +963,15 @@ def build_player_message_prompts(
     if language == LANGUAGE_RU:
         system = (
             "Ты — Game Master космической исследовательской игры в стиле Star Trek. "
-            "Ты отвечаешь на вопросы игрока от лица Game Master, опираясь на контекст текущей игры. "
-            "Отвечай в характере, учитывая роль и личность игрока, текущую ситуацию на корабле "
-            "и предыдущие события. Будь увлекательным, атмосферным и полезным. "
+            "Твоя задача — отвечать на сообщения игрока от лица Game Master. "
+            "Ты НЕ пересказываешь игровую ситуацию и не повторяешь контекст — "
+            "ты отвечаешь именно на то, что спросил или сказал игрок. "
+            "Контекст игры (миссия, экипаж, события) дан тебе ТОЛЬКО для справки, "
+            "чтобы твой ответ не противоречил происходящему. "
+            "Отвечай в характере, учитывая роль и личность игрока. "
+            "Будь увлекательным, атмосферным и полезным. "
+            "Если игрок задаёт вопрос — отвечай прямо. "
+            "Если игрок предлагает действие — реагируй на него. "
             "Не придумывай новых событий, которые противоречат контексту игры."
         )
 
@@ -997,21 +1003,26 @@ def build_player_message_prompts(
         context_block = "\n\n".join(context_parts)
 
         user = (
-            f"КОНТЕКСТ ИГРЫ:\n{context_block}\n\n"
-            f"ИГРОК:\n"
-            f"Имя: {player_name or 'Неизвестно'}\n"
-            f"Роль: {player_role}\n"
-            f"Черты характера: {traits_str or 'Не указаны'}\n\n"
-            f'СООБЩЕНИЕ ИГРОКА:\n"{message}"\n\n'
-            f"Ответь игроку в роли Game Master, учитывая весь контекст игры и личность персонажа."
+            f"Игрок {player_name or 'Неизвестно'} ({player_role})"
+            f"{', черты: ' + traits_str if traits_str else ''}"
+            f' написал:\n"{message}"\n\n'
+            f"ОТВЕТЬ НА ЭТО СООБЩЕНИЕ в роли Game Master. "
+            f"Не пересказывай игровую ситуацию — дай прямой ответ на то, "
+            f"что сказал или спросил игрок.\n\n"
+            f"СПРАВОЧНЫЙ КОНТЕКСТ (используй только чтобы не противоречить игре):\n{context_block}"
         )
     else:
         system = (
             "You are the Game Master of a Star Trek-style space exploration game. "
-            "You answer player questions as the Game Master, drawing on the current game context. "
-            "Respond in character, taking into account the player's role and personality, "
-            "the current situation aboard the ship, and prior events. "
+            "Your job is to respond to player messages as the Game Master. "
+            "You DO NOT restate or summarize the game situation — "
+            "you respond directly to what the player said or asked. "
+            "The game context (mission, crew, events) is provided ONLY as background "
+            "so your response doesn't contradict what's happening. "
+            "Respond in character, taking into account the player's role and personality. "
             "Be engaging, atmospheric, and helpful. "
+            "If the player asks a question — answer it directly. "
+            "If the player proposes an action — react to it. "
             "Do not invent events that contradict the established game context."
         )
 
@@ -1043,13 +1054,13 @@ def build_player_message_prompts(
         context_block = "\n\n".join(context_parts)
 
         user = (
-            f"GAME CONTEXT:\n{context_block}\n\n"
-            f"PLAYER:\n"
-            f"Name: {player_name or 'Unknown'}\n"
-            f"Role: {player_role}\n"
-            f"Personality traits: {traits_str or 'Not specified'}\n\n"
-            f'PLAYER MESSAGE:\n"{message}"\n\n'
-            f"Respond to the player in character as Game Master, taking into account the full game context and the character's personality."
+            f"Player {player_name or 'Unknown'} ({player_role})"
+            f"{', traits: ' + traits_str if traits_str else ''}"
+            f' wrote:\n"{message}"\n\n'
+            f"RESPOND TO THIS MESSAGE in character as Game Master. "
+            f"Do not restate the game situation — give a direct response to "
+            f"what the player said or asked.\n\n"
+            f"REFERENCE CONTEXT (use only to stay consistent with the game):\n{context_block}"
         )
 
     return system, user

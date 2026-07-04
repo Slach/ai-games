@@ -451,6 +451,13 @@ async def _deliver_briefing(
             # Mark as sent (track dedup across bot restarts)
             mark_sent_fn(player_id, turn)
 
+        except TelegramForbiddenError:
+            logger.warning(
+                "[PUSH_BRIEFING] Player %d blocked the bot (forbidden), auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            continue
         except TelegramBadRequest as e:
             if "USER_IS_BLOCKED" in str(e):
                 logger.warning(
@@ -1071,6 +1078,7 @@ async def _deliver_onboarding_ready(
                 current_options=question.get("options", []),
                 current_question_text=question.get("text", ""),
                 current_question_image_url=question.get("image_url"),
+                language=language,
             )
 
             options = question.get("options", [])
@@ -1236,6 +1244,14 @@ async def _dispatch_one(
             mark_push_failed(push_id, f"Delivery failed for {push_type} to player {player_id}")
             logger.warning("[PUSH] Failed to deliver #%d", push_id)
             return False
+    except TelegramForbiddenError:
+        logger.warning(
+            "[PUSH] Player %d blocked the bot (forbidden, caught in _dispatch_one), auto-kicking",
+            player_id,
+        )
+        asyncio.create_task(_auto_kick_blocked_player(player_id))
+        mark_push_sent(push_id)  # Don't retry
+        return True
     except TelegramBadRequest as e:
         err_str = str(e)
         if "USER_IS_BLOCKED" in err_str:
