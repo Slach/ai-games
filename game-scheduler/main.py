@@ -237,7 +237,6 @@ class GameScheduler:
 
         logger.info(f"Loaded {len(self._games)} game schedule(s) from DB")
 
-
     # ── Game management ──
 
     def register_game(self, game_id: str, schedule_raw: str | None = None) -> GameScheduleState:
