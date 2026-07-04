@@ -155,10 +155,7 @@ def init_db():
         status TEXT DEFAULT 'active',
         ship_alive INTEGER DEFAULT 1,
         crew_health INTEGER DEFAULT 100,
-        last_updated TEXT NOT NULL,
-        finale_narrative TEXT DEFAULT '',
-        finale_outcome_type TEXT DEFAULT '',
-        finale_image_url TEXT DEFAULT ''
+        last_updated TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS onboarding_sessions (
         session_id TEXT PRIMARY KEY,
