@@ -1057,6 +1057,11 @@ def end_game(reason: str = "game_over", game_id: str = "default_game") -> dict[s
         (reason, datetime.now().isoformat(), game_id),
     )
 
+    cursor.execute(
+        "UPDATE games SET status = 'ended' WHERE game_id = ?",
+        (game_id,),
+    )
+
     conn.commit()
     conn.close()
 

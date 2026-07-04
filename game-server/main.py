@@ -4885,9 +4885,9 @@ async def admin_reset_player(request: ResetPlayerRequest):
 
 
 @app.get("/admin/list-games")
-async def admin_list_games():
-    """List all active games with player counts."""
-    games = get_available_games()
+async def admin_list_games(include_ended: bool = False):
+    """List games with player counts."""
+    games = get_all_games() if include_ended else get_available_games()
     result = []
     for game in games:
         game_id = game["game_id"]
@@ -4910,7 +4910,6 @@ async def admin_list_games():
             }
         )
     return {"games": result}
-
 
 @app.post("/admin/analyze-turn")
 async def admin_analyze_turn(
