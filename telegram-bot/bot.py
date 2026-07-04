@@ -2835,7 +2835,7 @@ async def cmd_gm_list(message: types.Message):
 
             if game_status != "active":
                 # Ended game — collect separately
-                ended_lines.append(f"{idx}. `{game_id}` — {title} (🏁 {gm_msgs['game_ended_label']}, 🎯 Turn: {turn}) {lang_flag}")
+                ended_lines.append(f"{idx}. `{game_id}` — {title} ({gm_msgs['game_ended_label']}, 🎯 Turn: {turn}) {lang_flag}")
             else:
                 active_count += 1
                 started = game.get("started", False)
@@ -2879,7 +2879,7 @@ async def cmd_gm_list(message: types.Message):
         # Append ended games section if any
         if ended_lines:
             lines.append("")
-            lines.append(f"🏁 **{gm_msgs['game_ended_label']}:**")
+            lines.append(f"**{gm_msgs['game_ended_label']}:**")
             lines.extend(ended_lines)
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
