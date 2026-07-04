@@ -149,14 +149,97 @@ GAME_SCHEDULER_MODE=single docker compose run --rm game-scheduler
 
 ## Turn Game Loop
 
-```text
-08:00  - Game Master generates turn episode
-08:30  - Players receive notification with setup
-08:00-20:00 - Players vote on actions
-20:00  - Outcome determination
-20:30  - Content generation (comics, images)
-21:00  - Publish results and teaser for tomorrow
+A turn is driven by `game-scheduler` (the timer), produced by `game-server`
+(LLM + image orchestration), and delivered to players by `telegram-bot` (its
+push server on port 9090). There is no fixed daily clock — turns are generated
+on a configurable interval (`GAME_SCHEDULE`, default `8h`), and the previous
+turn's outcome is published the moment all live players have chosen their
+actions.
+
+```mermaid
+sequenceDiagram
+    participant S as game-scheduler
+    participant GS as game-server
+    participant TB as telegram-bot
+    participant P as Players
+
+    Note over S: interval elapses (GAME_SCHEDULE)
+    S->>GS: GET /game/started   (need >= 3 players)
+    S->>GS: GET /game/state     (active? current turn N)
+    Note over S: if N>1: auto-pick actions for<br/>absentee players on turn N-1
+    S->>GS: POST /admin/continue-game?game_id=...&language=en
+    GS-->>S: 202 accepted (generation runs in background)
+
+    Note over GS: background: LLM global circumstances -><br/>ComfyUI scene image -><br/>per-player briefings + 5 choices -><br/>NPC choices auto-selected -><br/>character/NPC images -> crew dialogues
+
+    opt turn N > 1
+        Note over GS: resolve & push turn N-1 outcome
+        GS->>GS: _analyze_turn_outcome(N-1)
+        GS->>TB: POST /push/outcome   (results of last turn)
+        opt mission done / ship destroyed / crew wiped
+            GS->>TB: POST /push/game-over  (finale)
+        end
+    end
+
+    GS->>TB: POST /push/briefings  (new turn intro + choices)
+    TB->>P: deliver outcome (N-1), then briefing (N)
+
+    P->>TB: select an action
+    TB->>GS: POST /game/actions
+    Note over GS: record choice -> generate player comic panel
+    opt all live players have chosen
+        GS->>GS: _analyze_turn_outcome(N) immediately
+        GS->>TB: POST /push/outcome
+    end
 ```
+
+### Per-turn sequence (on `game-server`)
+
+1. **Trigger** — `game-scheduler` fires `POST /admin/continue-game`. The
+   endpoint returns `202` immediately; all generation runs in the background.
+2. **Global circumstances** — LLM produces the turn's setting, narrative,
+   conflict and a scene prompt.
+3. **Scene image** — ComfyUI renders the turn's scene from that prompt.
+4. **Briefings & choices** — every live player and NPC gets a personalized
+   briefing with **5 action choices** (3 good / 1 neutral / 1 bad, configurable
+   via `GAME_TURN_GOOD/BAD/NEUTRAL_ACTIONS`). NPC choices are auto-selected by
+   the LLM; players' choices stay open.
+5. **Character & NPC images** — ComfyUI renders per-player character images
+   (each player's avatar as reference) and NPC action images.
+6. **Crew dialogues** — LLM generates NPC banter for the turn.
+7. **Game state advances** — the turn record is created, state moves to turn
+   `N+1`.
+8. **Previous turn outcome** (turn `N > 1`) — `_analyze_turn_outcome(N-1)`
+   combines every player + NPC decision into one outcome narrative, updates ship
+   hull / shields / systems and crew health, generates an outcome scene image,
+   then pushes `/push/outcome`. If the mission is complete or the ship/crew is
+   lost, a finale is generated and pushed via `/push/game-over`.
+9. **New turn delivery** — `/push/briefings` sends the new turn's intro and
+   choices to each player. (Outcomes of `N-1` are always delivered *before* the
+   briefing for `N`.)
+
+### Action selection & outcome resolution
+
+- Players pick an action in the bot → `POST /game/actions`. The server records
+  the choice and kicks off a **comic panel** of that player performing the
+  action (avatar as reference).
+- The moment **all live players** have chosen, the outcome is analyzed
+  immediately — it does not wait for the next scheduled tick. (The per-turn
+  outcome analysis is idempotent, so a turn already resolved on time is a no-op
+  at the start of the next turn.)
+- Absentee players are handled by `game-scheduler`: at the start of turn `N` it
+  auto-selects an action for anyone who did not choose on turn `N-1`
+  (`POST /game/auto-action/{player}/{turn}`, LLM-picked) before triggering the
+  next turn.
+
+### Manual control (Game Master)
+
+- `/gm_start <game_id>` — generate the **first** turn (`POST /admin/start-game`).
+- `/gm_continue <game_id>` — generate the **next** turn immediately
+  (`POST /admin/continue-game`), bypassing the scheduler.
+- `/gm_turn <game_id>` — regenerate the current turn (`/admin/regenerate-turn`).
+- `/gm_restart <game_id>`, `/gm_pause`, `/gm_schedule`, `/gm_status`,
+  `/gm_kick`, `/gm_list`, `/gm_lang` — additional game management commands.
 
 ## NPC System
 
