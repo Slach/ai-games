@@ -1243,6 +1243,52 @@ async def player_language_selection_callback(callback: types.CallbackQuery, stat
     await show_game_selection(message, state, language=lang_code)
 
 
+async def lang_set_callback(callback: types.CallbackQuery):
+    """Handle language selection from /lang command, confirm and show game language if in game."""
+    await callback.answer()
+
+    data = callback.data or ""
+    if not data.startswith("lang_set:"):
+        return
+
+    lang_code = data.split(":", 1)[1]
+    if lang_code not in ("ru", "en"):
+        return
+
+    player_id = callback.from_user.id
+    logger.info("[HANDLER] lang_set_callback")
+    message = callback.message
+
+    if not isinstance(message, types.Message):
+        return
+
+    # Store player's language preference
+    update_player_state(player_id, language=lang_code)
+
+    # Remove language keyboard
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.error(f"Failed to remove language keyboard: {e}", exc_info=True)
+
+    # Confirm language selection
+    player_lang_msgs = lang.get_player_lang(lang_code)
+    lang_flag = lang.get_language_flag(lang_code)
+    lang_name = lang.get_language_name(lang_code, lang_code)
+    lines = [player_lang_msgs["language_set"].format(language=lang_name, flag=lang_flag)]
+
+    # If player is in a game, also show game language
+    profile = await check_player_game_status(player_id)
+    if profile and profile.get("game_id"):
+        game_lang = await get_game_language(profile["game_id"], lang_code)
+        game_flag = lang.get_language_flag(game_lang)
+        game_lang_name = lang.get_language_name(game_lang, lang_code)
+        lines.append(player_lang_msgs["player_language"].format(language=lang_name, flag=lang_flag))
+        lines.append(player_lang_msgs["game_language"].format(language=game_lang_name, flag=game_flag))
+
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
 async def show_game_selection(message: types.Message, state: FSMContext, language: str = ""):
     """Show available games or option to create a new one."""
     effective_lang = language or DEFAULT_LANGUAGE
@@ -2575,6 +2621,35 @@ async def cmd_help(message: types.Message):
 
     await message.answer(
         help_text,
+    )
+
+
+async def cmd_lang(message: types.Message):
+    """Show language selection and change player language.
+    Usage: /lang
+    """
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_lang")
+
+    lang_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{lang.HELLO['ru']} {lang.get_language_flag('ru')}",
+                    callback_data="lang_set:ru",
+                ),
+                InlineKeyboardButton(
+                    text=f"{lang.HELLO['en']} {lang.get_language_flag('en')}",
+                    callback_data="lang_set:en",
+                ),
+            ],
+        ]
+    )
+    await message.answer(
+        "> " * 5 + "🌐" + " <" * 5 + "\n\n",
+        reply_markup=lang_keyboard,
     )
 
 
@@ -3975,6 +4050,7 @@ async def main():
     dp.message.register(cmd_team, Command("team"))
     dp.message.register(cmd_invite, Command("invite"))
     dp.message.register(cmd_reset, Command("reset"))
+    dp.message.register(cmd_lang, Command("lang"))
     dp.message.register(cmd_gm_start, Command("gm_start"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list, Command("gm_list"))
@@ -4001,6 +4077,7 @@ async def main():
     # Callback query handlers
     dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
     dp.callback_query.register(player_language_selection_callback, F.data.startswith("player_lang:"))
+    dp.callback_query.register(lang_set_callback, F.data.startswith("lang_set:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
     dp.callback_query.register(reset_confirm_callback, F.data.startswith("reset_confirm:"))
