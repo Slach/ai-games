@@ -161,6 +161,7 @@ _PLAYER_STATE_COLUMNS: dict[str, str] = {
     "last_poll": "last_poll = ?",
     "pending_updates": "pending_updates = ?",
     "last_briefing_turn_sent": "last_briefing_turn_sent = ?",
+    "last_outcome_turn_sent": "last_outcome_turn_sent = ?",
     "language": "language = ?",
 }
 
@@ -213,6 +214,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
                 last_poll = CASE WHEN ? THEN ? ELSE last_poll END,
                 pending_updates = CASE WHEN ? THEN ? ELSE pending_updates END,
                 last_briefing_turn_sent = CASE WHEN ? THEN ? ELSE last_briefing_turn_sent END,
+                last_outcome_turn_sent = CASE WHEN ? THEN ? ELSE last_outcome_turn_sent END,
                 language = CASE WHEN ? THEN ? ELSE language END,
                 updated_at = datetime('now')
             WHERE player_id = ?""",
@@ -231,6 +233,19 @@ def get_all_briefing_turns() -> dict[int, int]:
         result: dict[int, int] = {}
         for row in conn.execute("SELECT player_id, last_briefing_turn_sent FROM player_states WHERE last_briefing_turn_sent IS NOT NULL"):
             result[row["player_id"]] = int(row["last_briefing_turn_sent"])
+        return result
+    finally:
+        conn.close()
+
+
+def get_all_outcome_turns() -> dict[int, int]:
+    """Return a dict of {player_id: last_outcome_turn_sent} for all players
+    that have a non-NULL value. Single query — avoids N+1 on startup."""
+    conn = _conn()
+    try:
+        result: dict[int, int] = {}
+        for row in conn.execute("SELECT player_id, last_outcome_turn_sent FROM player_states WHERE last_outcome_turn_sent IS NOT NULL"):
+            result[row["player_id"]] = int(row["last_outcome_turn_sent"])
         return result
     finally:
         conn.close()

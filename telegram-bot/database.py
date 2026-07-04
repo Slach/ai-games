@@ -53,6 +53,7 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (7, "ALTER TABLE player_states ADD COLUMN last_outcome_turn_sent INTEGER DEFAULT NULL;"),
 ]
 
 
@@ -97,6 +98,7 @@ def init_db(db_path: str = DB_PATH) -> None:
         last_poll                TEXT,
         pending_updates          TEXT     DEFAULT '[]',
         last_briefing_turn_sent   INTEGER  DEFAULT NULL,
+        last_outcome_turn_sent   INTEGER  DEFAULT NULL,
         language                 TEXT     DEFAULT 'en',
         created_at               TEXT     DEFAULT (datetime('now')),
         updated_at               TEXT     DEFAULT (datetime('now'))

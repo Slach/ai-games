@@ -546,6 +546,7 @@ async def _deliver_outcome(
     language: str,
     last_sent_per_player: dict[int, int],
     current_player_id: int = 0,
+    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
 ) -> bool:
     """Deliver a /push/outcome message to all alive players.
 
@@ -778,6 +779,8 @@ async def _deliver_outcome(
             )
 
             last_sent_per_player[player_id] = turn
+            if mark_outcome_sent_fn is not None:
+                mark_outcome_sent_fn(player_id, turn)
             if player_id == current_player_id:
                 current_player_delivered = True
         except TelegramForbiddenError:
@@ -1174,6 +1177,7 @@ async def _dispatch_one(
     last_sent_briefing: dict[int, int],
     last_sent_outcome: dict[int, int],
     last_sent_game_over: dict[int, str],
+    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
 ) -> bool:
     """Try to deliver a single push_queue row. Returns True on success."""
     push_type = row["push_type"]
@@ -1204,7 +1208,7 @@ async def _dispatch_one(
                 last_sent_briefing,
             )
         elif push_type == "outcome":
-            success = await deliver_fn(payload, bot, language, last_sent_outcome, player_id)
+            success = await deliver_fn(payload, bot, language, last_sent_outcome, player_id, mark_outcome_sent_fn)
         elif push_type == "action":
             success = await deliver_fn(payload, bot, language)
         elif push_type == "game_over":
@@ -1262,8 +1266,9 @@ async def _sender_loop(
     last_sent_briefing: dict[int, int],
     last_sent_outcome: dict[int, int],
     last_sent_game_over: dict[int, str],
+    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
     poll_interval: float = 1.0,
-):
+) -> None:
     """Background task that drains push_queue in per-player order."""
     logger.info("[PUSH_SENDER] Background sender started")
     while True:
@@ -1296,6 +1301,7 @@ async def _sender_loop(
                             last_sent_briefing,
                             last_sent_outcome,
                             last_sent_game_over,
+                            mark_outcome_sent_fn,
                         )
                         if not ok:
                             # Stop processing this player — order preserved
@@ -1321,6 +1327,7 @@ async def _startup_flush(
     last_sent_briefing: dict[int, int],
     last_sent_outcome: dict[int, int],
     last_sent_game_over: dict[int, str],
+    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
 ) -> None:
     """Synchronously drain all pending messages before starting HTTP."""
     logger.info("[PUSH_STARTUP] Fetching current turns from game-server...")
@@ -1365,6 +1372,7 @@ async def _startup_flush(
                 last_sent_briefing,
                 last_sent_outcome,
                 last_sent_game_over,
+                mark_outcome_sent_fn,
             )
             if not ok:
                 logger.warning(
@@ -1598,6 +1606,8 @@ async def start_push_server(
     language: str = "ru",
     last_sent_briefing_turn: dict[int, int] | None = None,
     mark_sent_fn: Callable[[int, int], None] | None = None,
+    last_sent_outcome_turn: dict[int, int] | None = None,
+    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
     create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None) = None,
 ) -> web.AppRunner:
     """Start the push HTTP server with persistent delivery queue.
@@ -1612,6 +1622,8 @@ async def start_push_server(
         language: Default bot language
         last_sent_briefing_turn: Shared dict for briefing dedup
         mark_sent_fn: Function to mark briefing as sent
+        last_sent_outcome_turn: Shared dict for outcome dedup (loaded from DB)
+        mark_outcome_sent_fn: Function to mark outcome as sent
         create_keyboard_fn: Function to create action keyboard
 
     Returns:
@@ -1632,8 +1644,8 @@ async def start_push_server(
 
         create_keyboard_fn = _noop_keyboard
 
-    # Per-player outcome dedup dict
-    last_sent_outcome: dict[int, int] = {}
+    # Per-player outcome dedup dict (pre-populated from DB)
+    last_sent_outcome: dict[int, int] = last_sent_outcome_turn.copy() if last_sent_outcome_turn else {}
     # Per-player game-over dedup dict (player_id → game_id)
     last_sent_game_over: dict[int, str] = {}
 
@@ -1647,6 +1659,7 @@ async def start_push_server(
         last_sent_briefing_turn,
         last_sent_outcome,
         last_sent_game_over,
+        mark_outcome_sent_fn,
     )
 
     # Start background sender
@@ -1660,6 +1673,7 @@ async def start_push_server(
             last_sent_briefing_turn,
             last_sent_outcome,
             last_sent_game_over,
+            mark_outcome_sent_fn,
         )
     )
 

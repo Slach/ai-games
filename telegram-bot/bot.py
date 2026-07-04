@@ -48,6 +48,7 @@ from aiohttp_socks import ProxyConnector
 from player_store import (
     delete_player_state,
     get_all_briefing_turns,
+    get_all_outcome_turns,
     get_player_state,
     record_reference,
     update_player_state,
@@ -178,6 +179,17 @@ def _mark_briefing_sent(player_id: int, turn_num: int) -> None:
     """Record that a briefing was sent — updates both in-memory cache and DB."""
     _last_sent_briefing_turn[player_id] = turn_num
     update_player_state(player_id, last_briefing_turn_sent=turn_num)
+
+
+# Track last outcome turn sent per player to avoid duplicate outcome messages
+# on bot restart. Persisted to player_states.last_outcome_turn_sent.
+_last_sent_outcome_turn: dict[int, int] = {}
+
+
+def _mark_outcome_sent(player_id: int, turn_num: int) -> None:
+    """Record that an outcome was sent — updates both in-memory cache and DB."""
+    _last_sent_outcome_turn[player_id] = turn_num
+    update_player_state(player_id, last_outcome_turn_sent=turn_num)
 
 
 async def _download_image(url: str, timeout: int = 30) -> bytes | None:
@@ -2510,6 +2522,13 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
     except Exception as e:
         logger.error(f"Failed to clear briefing turn for player {player_id}: {e}", exc_info=True)
 
+    # Clear the outcome-dedup cache too so a fresh game can deliver outcomes.
+    _last_sent_outcome_turn.pop(player_id, None)
+    try:
+        update_player_state(player_id, last_outcome_turn_sent=None)
+    except Exception as e:
+        logger.error(f"Failed to clear outcome turn for player {player_id}: {e}", exc_info=True)
+
     # Wipe FSM + business state, then restart from language selection.
     await state.clear()
     delete_player_state(player_id)
@@ -3114,6 +3133,10 @@ async def cmd_gm_restart(message: types.Message):
                             del _last_sent_briefing_turn[pid]
                             update_player_state(pid, last_briefing_turn_sent=None)
                             logger.info(f"[DEDUP] Reset briefing cache for player {pid} (game restart)")
+                        if pid is not None and pid in _last_sent_outcome_turn:
+                            del _last_sent_outcome_turn[pid]
+                            update_player_state(pid, last_outcome_turn_sent=None)
+                            logger.info(f"[DEDUP] Reset outcome cache for player {pid} (game restart)")
         except Exception as e:
             logger.warning(f"Failed to reset dedup cache for restart: {e}")
 
@@ -3991,6 +4014,14 @@ async def main():
         len(_last_sent_briefing_turn),
     )
 
+    # Load last_outcome_turn_sent from DB so outcome dedup survives bot restarts
+    global _last_sent_outcome_turn
+    _last_sent_outcome_turn = get_all_outcome_turns()
+    logger.info(
+        "Loaded _last_sent_outcome_turn for %d player(s) from persistent storage",
+        len(_last_sent_outcome_turn),
+    )
+
     logger.info("Starting Telegram Bot")
 
     # Start push HTTP server (replaces old polling loop)
@@ -4001,6 +4032,8 @@ async def main():
         language=DEFAULT_LANGUAGE,
         last_sent_briefing_turn=_last_sent_briefing_turn,
         mark_sent_fn=_mark_briefing_sent,
+        last_sent_outcome_turn=_last_sent_outcome_turn,
+        mark_outcome_sent_fn=_mark_outcome_sent,
         create_keyboard_fn=create_action_keyboard,
     )
 
