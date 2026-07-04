@@ -47,13 +47,15 @@ class TestEndGameMarksGamesTable(unittest.TestCase):
     def test_end_game_marks_games_status_ended(self):
         self._make_game("g1")
         before = db.get_game("g1")
-        assert before is not None
+        if before is None:
+            self.fail("game g1 was not created")
         self.assertEqual(before["status"], "active")
 
         db.end_game("mission_complete", "g1")
 
         after = db.get_game("g1")
-        assert after is not None
+        if after is None:
+            self.fail("game g1 was not persisted")
         self.assertEqual(after["status"], "ended")
 
     def test_end_game_sets_game_state_reason(self):

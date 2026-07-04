@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import re
+from asyncio import CancelledError
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -464,10 +465,10 @@ class GameScheduler:
                         logger.info(f"Game '{gid}' has ended, marking as ended")
                         self.unregister_game(gid)
 
-            except asyncio.CancelledError:
+            except CancelledError:
                 break
-            except (OSError, aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.error(f"Error in scheduling loop: {e}", exc_info=True)
+            except (OSError, aiohttp.ClientError, asyncio.TimeoutError):
+                logger.error("Error in scheduling loop", exc_info=True)
                 await asyncio.sleep(60)
 
     async def run_single_generation(self, game_id: str | None = None):
