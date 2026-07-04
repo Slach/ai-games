@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import string
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -165,7 +166,8 @@ def _get_outcome_lock(turn: int, game_id: str) -> asyncio.Lock:
 def generate_game_id(length: int = 6) -> str:
     """Generate a unique alphanumeric game ID."""
     while True:
-        game_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+        alphabet = string.ascii_lowercase + string.digits
+        game_id = "".join(secrets.choice(alphabet) for _ in range(length))
         if not get_game(game_id):
             return game_id
 
@@ -959,7 +961,7 @@ async def start_onboarding(request: StartOnboardingRequest):
     logger.info(f"Generated {len(role_questions)} role questions")
 
     # Generate shuffle seed for deterministic question/option shuffling
-    shuffle_seed = random.randint(0, 2**31 - 1)
+    shuffle_seed = secrets.randbelow(2**31)
 
     # Species/gender questions are NOT pre-generated here. They are produced
     # one-at-a-time by the LLM during /onboarding/{session_id}/answer (fixed
@@ -3696,7 +3698,7 @@ def _get_crew_members(game_id: str) -> list[dict[str, Any]]:
 
 def _random_npc_species() -> str:
     """Pick a random species key for NPC generation."""
-    return random.choice(_NPC_SPECIES_OPTIONS)
+    return secrets.choice(_NPC_SPECIES_OPTIONS)
 
 
 def _random_npc_gender(language: str = "ru") -> str:
@@ -3705,7 +3707,7 @@ def _random_npc_gender(language: str = "ru") -> str:
     Returns a display name (e.g. "Мужской" or "Male") rather than a key.
     """
     lang_key = LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN
-    gender_key = random.choice(list(_NPC_GENDER_OPTIONS[lang_key].keys()))
+    gender_key = secrets.choice(list(_NPC_GENDER_OPTIONS[lang_key].keys()))
     return _NPC_GENDER_OPTIONS[lang_key][gender_key]
 
 
