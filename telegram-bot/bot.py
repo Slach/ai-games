@@ -1761,6 +1761,134 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
     await start_onboarding_flow(message, state, player_id, game_id, player_name, language=game_language)
 
 
+async def _enter_name_for_game(
+    message: types.Message,
+    state: FSMContext,
+    game_id: str,
+    fallback_lang: str = DEFAULT_LANGUAGE,
+) -> None:
+    """Ask for the player's name to begin onboarding for a specific game.
+
+    Looks up the game's language and name, announces the selected game, then
+    sets the FSM into ``waiting_for_name``. Shared by the new-player deep-link
+    path and the deep-link conflict "Join" button.
+    """
+    game_lang = fallback_lang
+    game_name = ""
+    try:
+        result = await api_request("GET", "/admin/list-games")
+        games = result.get("games", []) if result else []
+        for g in games:
+            if g.get("game_id") == game_id:
+                game_lang = g.get("language", fallback_lang)
+                game_name = g.get("name", "")
+                break
+    except Exception as e:
+        logger.warning(f"Failed to fetch language for game {game_id}: {e}")
+
+    onboarding_msgs = lang.get_onboarding(game_lang)
+    if game_name:
+        await message.answer(
+            onboarding_msgs["selected_game"].format(game_name=game_name),
+            parse_mode="Markdown",
+        )
+    await message.answer(
+        onboarding_msgs["name_question"],
+        parse_mode="Markdown",
+    )
+    await state.update_data(
+        game_id=game_id,
+        game_language=game_lang,
+    )
+    await state.set_state(OnboardingState.waiting_for_name)
+
+
+async def _show_deeplink_game_conflict(
+    message: types.Message,
+    player_lang: str,
+    new_game_id: str,
+    current_game_id: str,
+) -> None:
+    """Ask the player whether to switch to a new game or stay in the current one.
+
+    Shown when a deep link points to a game other than the player's existing
+    profile's game.
+    """
+    new_name = new_game_id
+    current_name = current_game_id
+    try:
+        result = await api_request("GET", "/admin/list-games")
+        games = result.get("games", []) if result else []
+        names = {g.get("game_id"): g.get("name", "") for g in games}
+        if names.get(new_game_id):
+            new_name = names[new_game_id]
+        if names.get(current_game_id):
+            current_name = names[current_game_id]
+    except Exception as e:
+        logger.warning(f"Failed to fetch game names for deeplink conflict: {e}")
+
+    msgs = lang.get_onboarding(player_lang)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=msgs["deeplink_join_button"].format(new_game=new_name),
+                    callback_data=f"dlconf:join:{new_game_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=msgs["deeplink_back_button"].format(current_game=current_name),
+                    callback_data=f"dlconf:back:{current_game_id}",
+                )
+            ],
+        ]
+    )
+    await message.answer(
+        msgs["deeplink_conflict"].format(new_game=new_name, current_game=current_name),
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+async def deeplink_conflict_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Handle Join / Stay choice when a deep link targets a different game."""
+    await callback.answer()
+
+    data = callback.data or ""
+    if not data.startswith("dlconf:"):
+        return
+
+    message = callback.message
+    if not isinstance(message, types.Message):
+        logger.warning(f"Callback message not accessible for player {callback.from_user.id}, data={data}")
+        return
+
+    player_id = callback.from_user.id
+    player_lang = get_player_language(player_id)
+
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.error(f"Failed to remove deeplink conflict keyboard: {e}", exc_info=True)
+
+    parts = data.split(":", 2)
+    if len(parts) < 3:
+        return
+    action, game_id = parts[1], parts[2]
+
+    if action == "join":
+        logger.info(f"Player {player_id} chose to join new game {game_id} via deeplink conflict")
+        await _enter_name_for_game(message, state, game_id, fallback_lang=player_lang)
+    elif action == "back":
+        msgs = lang.get_onboarding(player_lang)
+        await message.answer(
+            msgs["deeplink_back_done"],
+            parse_mode="Markdown",
+            reply_markup=create_main_menu_keyboard(),
+        )
+
+
 async def cmd_start(message: types.Message, command: CommandObject, state: FSMContext):
     """Handle /start command - Begin onboarding or join existing game"""
     if message.from_user is None:
@@ -1897,6 +2025,14 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
         profile = await check_player_game_status(player_id)
 
         if profile:
+            # Deep link points to a different game than the player's current
+            # profile — ask whether to switch to the new game or stay.
+            existing_game_id = profile.get("game_id", "")
+            if game_id and existing_game_id and game_id != existing_game_id:
+                logger.info(f"Player {player_id} deep-linked to game {game_id} but has profile in {existing_game_id}; asking to switch")
+                await _show_deeplink_game_conflict(message, player_lang, game_id, existing_game_id)
+                return
+
             # Check if player is dead (spectator)
             if profile.get("is_dead") or profile.get("is_spectator"):
                 spectator_msgs = lang.get_spectator(player_lang)
@@ -2012,34 +2148,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
         else:
             if game_id:
                 # Deep link to a specific game — ask for player name before onboarding
-                game_lang = DEFAULT_LANGUAGE
-                game_name = ""
-                try:
-                    result = await api_request("GET", "/admin/list-games")
-                    games = result.get("games", []) if result else []
-                    for g in games:
-                        if g.get("game_id") == game_id:
-                            game_lang = g.get("language", DEFAULT_LANGUAGE)
-                            game_name = g.get("name", "")
-                            break
-                except Exception as e:
-                    logger.warning(f"Failed to fetch language for game {game_id}: {e}")
-
-                onboarding_msgs = lang.get_onboarding(game_lang)
-                if game_name:
-                    await message.answer(
-                        onboarding_msgs["selected_game"].format(game_name=game_name),
-                        parse_mode="Markdown",
-                    )
-                await message.answer(
-                    onboarding_msgs["name_question"],
-                    parse_mode="Markdown",
-                )
-                await state.update_data(
-                    game_id=game_id,
-                    game_language=game_lang,
-                )
-                await state.set_state(OnboardingState.waiting_for_name)
+                await _enter_name_for_game(message, state, game_id, fallback_lang=DEFAULT_LANGUAGE)
             else:
                 # New player — ask for language preference first
                 await show_player_language_selection(message, state)
@@ -4261,6 +4370,7 @@ async def main():
 
     # Callback query handlers
     dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
+    dp.callback_query.register(deeplink_conflict_callback, F.data.startswith("dlconf:"))
     dp.callback_query.register(new_game_schedule_callback, F.data.startswith("new_game_sched:"))
     dp.callback_query.register(player_language_selection_callback, F.data.startswith("player_lang:"))
     dp.callback_query.register(lang_set_callback, F.data.startswith("lang_set:"))

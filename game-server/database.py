@@ -786,6 +786,40 @@ def delete_player_profile(player_id: int) -> bool:
     return deleted
 
 
+def should_reset_profile_for_reonboarding(
+    existing_profile: dict[str, Any],
+    requested_game_id: str,
+) -> tuple[bool, str]:
+    """Decide whether ``existing_profile`` should be deleted to allow re-onboarding.
+
+    A player may re-onboard when joining a DIFFERENT game than their current
+    profile's game, when their previous game has ended, or when they are dead /
+    a spectator. They are blocked only when re-onboarding into the SAME
+    still-active game while alive (prevents accidental loss of an in-progress
+    character). Returns ``(allow_reset, reason)``.
+    """
+    old_game_id = existing_profile.get("game_id", "")
+    is_dead = existing_profile.get("is_dead") or existing_profile.get("is_spectator")
+    if old_game_id and old_game_id != requested_game_id:
+        return (True, "different_game")
+    game_ended = False
+    if old_game_id:
+        try:
+            game_ended = get_game_state(old_game_id).get("status") != "active"
+        except Exception:
+            logger.warning(
+                "Could not check game state for %s during re-onboarding check",
+                old_game_id,
+                exc_info=True,
+            )
+            game_ended = False
+    if game_ended:
+        return (True, "ended")
+    if is_dead:
+        return (True, "dead_spectator")
+    return (False, "active_same_game")
+
+
 # ============== Game Turns ==============
 
 

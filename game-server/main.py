@@ -65,6 +65,7 @@ from database import (
     get_player_briefing,
     get_player_count_in_game,
     get_player_profile,
+    should_reset_profile_for_reonboarding,
     get_players_in_game,
     get_players_who_need_to_choose,
     get_random_game_image,
@@ -960,23 +961,16 @@ async def start_onboarding(request: StartOnboardingRequest):
     logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
 
     # Check if player already has a profile.
-    # If their previous game has ended or they are dead/spectator,
-    # delete the old profile and allow re-onboarding.
+    # Allow re-onboarding when joining a different game, when their previous
+    # game has ended, or when they are dead/spectator. Block only when
+    # re-onboarding into the same still-active game while alive.
     existing_profile = get_player_profile(request.player_id)
 
     if existing_profile:
         old_game_id = existing_profile.get("game_id", "")
-        is_dead = existing_profile.get("is_dead") or existing_profile.get("is_spectator")
-        game_ended = False
-        if old_game_id:
-            try:
-                game_state = get_game_state(old_game_id)
-                game_ended = game_state.get("status") != "active"
-            except Exception:
-                logger.warning(f"Could not check game state for {old_game_id}", exc_info=True)
-
-        if game_ended or is_dead:
-            logger.info(f"Player {request.player_id} has a profile from {'ended' if game_ended else 'dead/spectator'} game {old_game_id}. Deleting old profile and allowing re-onboarding.")
+        allow_reset, reason = should_reset_profile_for_reonboarding(existing_profile, request.game_id)
+        if allow_reset:
+            logger.info(f"Player {request.player_id} has a profile from {reason} game {old_game_id}. Deleting old profile and allowing re-onboarding.")
             delete_player_profile(request.player_id)
         else:
             logger.warning(f"Player {request.player_id} already has an active profile in game {old_game_id}")
