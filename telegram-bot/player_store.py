@@ -225,28 +225,137 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
         conn.close()
 
 
-def get_all_briefing_turns() -> dict[int, int]:
-    """Return a dict of {player_id: last_briefing_turn_sent} for all players
-    that have a non-NULL value. Single query — avoids N+1 on startup."""
+def get_all_briefing_dedup() -> dict[tuple[int, str], int]:
+    """Return {（player_id, game_id): last_briefing_turn} for every entry that
+    has a non-NULL briefing turn. Loaded once at startup into the in-memory
+    dedup cache. Keyed per-(player, game) so different games never collide.
+    """
     conn = _conn()
     try:
-        result: dict[int, int] = {}
-        for row in conn.execute("SELECT player_id, last_briefing_turn_sent FROM player_states WHERE last_briefing_turn_sent IS NOT NULL"):
-            result[row["player_id"]] = int(row["last_briefing_turn_sent"])
+        result: dict[tuple[int, str], int] = {}
+        for row in conn.execute("SELECT player_id, game_id, last_briefing_turn FROM delivery_dedup WHERE last_briefing_turn IS NOT NULL"):
+            result[(int(row["player_id"]), str(row["game_id"]))] = int(row["last_briefing_turn"])
         return result
     finally:
         conn.close()
 
 
-def get_all_outcome_turns() -> dict[int, int]:
-    """Return a dict of {player_id: last_outcome_turn_sent} for all players
-    that have a non-NULL value. Single query — avoids N+1 on startup."""
+def get_all_outcome_dedup() -> dict[tuple[int, str], int]:
+    """Return {(player_id, game_id): last_outcome_turn} for every entry that
+    has a non-NULL outcome turn. Loaded once at startup into the in-memory
+    dedup cache.
+    """
     conn = _conn()
     try:
-        result: dict[int, int] = {}
-        for row in conn.execute("SELECT player_id, last_outcome_turn_sent FROM player_states WHERE last_outcome_turn_sent IS NOT NULL"):
-            result[row["player_id"]] = int(row["last_outcome_turn_sent"])
+        result: dict[tuple[int, str], int] = {}
+        for row in conn.execute("SELECT player_id, game_id, last_outcome_turn FROM delivery_dedup WHERE last_outcome_turn IS NOT NULL"):
+            result[(int(row["player_id"]), str(row["game_id"]))] = int(row["last_outcome_turn"])
         return result
+    finally:
+        conn.close()
+
+
+def set_briefing_dedup(player_id: int, game_id: str, turn: int) -> None:
+    """Record that the briefing for *turn* of *game_id* was delivered to
+    *player_id*. Per-(player, game) so it survives bot restarts without
+    cross-game or cross-epoch bleed.
+    """
+    conn = _conn()
+    try:
+        conn.execute(
+            """INSERT INTO delivery_dedup (player_id, game_id, last_briefing_turn, updated_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(player_id, game_id) DO UPDATE SET
+                 last_briefing_turn = excluded.last_briefing_turn,
+                 updated_at = datetime('now')""",
+            (player_id, game_id, turn),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_outcome_dedup(player_id: int, game_id: str, turn: int) -> None:
+    """Record that the outcome for *turn* of *game_id* was delivered to
+    *player_id*.
+    """
+    conn = _conn()
+    try:
+        conn.execute(
+            """INSERT INTO delivery_dedup (player_id, game_id, last_outcome_turn, updated_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(player_id, game_id) DO UPDATE SET
+                 last_outcome_turn = excluded.last_outcome_turn,
+                 updated_at = datetime('now')""",
+            (player_id, game_id, turn),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_all_game_over_dedup() -> dict[tuple[int, str], str]:
+    """Return {(player_id, game_id): last_game_over} for every entry that has
+    a non-NULL game-over marker. Loaded once at startup so the game-over dedup
+    survives bot restarts (previously it was an in-memory-only dict that reset
+    on every restart, allowing duplicate finales).
+    """
+    conn = _conn()
+    try:
+        result: dict[tuple[int, str], str] = {}
+        for row in conn.execute("SELECT player_id, game_id, last_game_over FROM delivery_dedup WHERE last_game_over IS NOT NULL"):
+            result[(int(row["player_id"]), str(row["game_id"]))] = str(row["last_game_over"])
+        return result
+    finally:
+        conn.close()
+
+
+def set_game_over_dedup(player_id: int, game_id: str) -> None:
+    """Record that the game-over finale for *game_id* was delivered to
+    *player_id*. Per-(player, game) so it survives bot restarts and never
+    blocks a different game's finale.
+    """
+    conn = _conn()
+    try:
+        conn.execute(
+            """INSERT INTO delivery_dedup (player_id, game_id, last_game_over, updated_at)
+               VALUES (?, ?, datetime('now'), datetime('now'))
+               ON CONFLICT(player_id, game_id) DO UPDATE SET
+                 last_game_over = datetime('now'),
+                 updated_at = datetime('now')""",
+            (player_id, game_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_dedup_for_game(game_id: str) -> int:
+    """Delete every delivery_dedup row for *game_id*.
+
+    Used at a game-restart epoch boundary so the new epoch delivers briefings
+    and outcomes fresh (the per-turn dedup would otherwise skip regenerated
+    turns). Returns the number of rows deleted.
+    """
+    conn = _conn()
+    try:
+        cur = conn.execute("DELETE FROM delivery_dedup WHERE game_id = ?", (game_id,))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def clear_dedup_for_player(player_id: int) -> int:
+    """Delete every delivery_dedup row for *player_id* (across all games).
+
+    Used on /reset so a wiped profile starts clean. Returns rows deleted.
+    """
+    conn = _conn()
+    try:
+        cur = conn.execute("DELETE FROM delivery_dedup WHERE player_id = ?", (player_id,))
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 

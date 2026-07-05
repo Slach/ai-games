@@ -54,6 +54,20 @@ MIGRATIONS: list[tuple[int, str]] = [
         """,
     ),
     (7, "ALTER TABLE player_states ADD COLUMN last_outcome_turn_sent INTEGER DEFAULT NULL;"),
+    (
+        8,
+        """
+        CREATE TABLE IF NOT EXISTS delivery_dedup (
+            player_id          INTEGER NOT NULL,
+            game_id            TEXT    NOT NULL,
+            last_briefing_turn INTEGER DEFAULT NULL,
+            last_outcome_turn  INTEGER DEFAULT NULL,
+            updated_at         TEXT    DEFAULT (datetime('now')),
+            PRIMARY KEY (player_id, game_id)
+        );
+        """,
+    ),
+    (9, "ALTER TABLE delivery_dedup ADD COLUMN last_game_over TEXT DEFAULT NULL;"),
 ]
 
 
@@ -230,6 +244,27 @@ def reset_failed_for_current_turn(game_id: str, turn: int, db_path: str = DB_PAT
     cursor.execute(
         "UPDATE push_queue SET status = 'pending', error = NULL WHERE status = 'failed' AND game_id = ? AND turn = ?",
         (game_id, turn),
+    )
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return count
+
+
+def expire_game_push_messages(game_id: str, db_path: str = DB_PATH) -> int:
+    """Mark all not-yet-sent push_queue rows for *game_id* as expired.
+
+    Called at a game-restart epoch boundary (see bot.cmd_gm_restart) so that
+    pending/failed briefings/outcomes from the dead epoch are never delivered
+    to players — and never resurrected by reset_failed_for_current_turn on the
+    next bot startup.  Already-'sent' rows are left untouched as a delivery
+    log.  Returns the number of rows expired.
+    """
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE push_queue SET status = 'expired', sent_at = ? WHERE game_id = ? AND status != 'sent'",
+        (datetime.now().isoformat(), game_id),
     )
     count = cursor.rowcount
     conn.commit()

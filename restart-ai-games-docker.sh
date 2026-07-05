@@ -1,0 +1,2 @@
+CUR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+time bash -c "docker compose -f ${CUR_DIR}/docker-compose.yaml --progress=plain stop telegram-bot game-scheduler game-server --timeout=1 && docker compose --progress=plain up -d --force-recreate telegram-bot game-scheduler game-server && docker compose -f ${CUR_DIR}/docker-compose.yaml logs -f -t telegram-bot game-server game-scheduler"

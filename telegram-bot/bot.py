@@ -45,12 +45,19 @@ from aiogram.utils.deep_linking import create_start_link, decode_payload
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiohttp_socks import ProxyConnector
+from database import expire_game_push_messages
 from player_store import (
+    clear_dedup_for_game,
+    clear_dedup_for_player,
     delete_player_state,
-    get_all_briefing_turns,
-    get_all_outcome_turns,
+    get_all_briefing_dedup,
+    get_all_game_over_dedup,
+    get_all_outcome_dedup,
     get_player_state,
     record_reference,
+    set_briefing_dedup,
+    set_game_over_dedup,
+    set_outcome_dedup,
     update_player_state,
 )
 
@@ -172,26 +179,38 @@ class GameSelectionState(StatesGroup):
 # flow can resume where they left off.
 
 
-# Track last briefing turn sent per player to avoid duplicate messages on poll.
-# Persisted to player_states.last_briefing_turn_sent so it survives bot restarts.
-_last_sent_briefing_turn: dict[int, int] = {}
+# Track last briefing turn delivered per (player_id, game_id) to avoid
+# duplicate messages across bot restarts and across different games.
+# Persisted to the delivery_dedup table so it survives sudden restarts/SIGKILL.
+_last_sent_briefing_turn: dict[tuple[int, str], int] = {}
 
 
-def _mark_briefing_sent(player_id: int, turn_num: int) -> None:
+def _mark_briefing_sent(player_id: int, game_id: str, turn_num: int) -> None:
     """Record that a briefing was sent — updates both in-memory cache and DB."""
-    _last_sent_briefing_turn[player_id] = turn_num
-    update_player_state(player_id, last_briefing_turn_sent=turn_num)
+    _last_sent_briefing_turn[(player_id, game_id)] = turn_num
+    set_briefing_dedup(player_id, game_id, turn_num)
 
 
-# Track last outcome turn sent per player to avoid duplicate outcome messages
-# on bot restart. Persisted to player_states.last_outcome_turn_sent.
-_last_sent_outcome_turn: dict[int, int] = {}
+# Track last outcome turn delivered per (player_id, game_id).
+_last_sent_outcome_turn: dict[tuple[int, str], int] = {}
 
 
-def _mark_outcome_sent(player_id: int, turn_num: int) -> None:
+def _mark_outcome_sent(player_id: int, game_id: str, turn_num: int) -> None:
     """Record that an outcome was sent — updates both in-memory cache and DB."""
-    _last_sent_outcome_turn[player_id] = turn_num
-    update_player_state(player_id, last_outcome_turn_sent=turn_num)
+    _last_sent_outcome_turn[(player_id, game_id)] = turn_num
+    set_outcome_dedup(player_id, game_id, turn_num)
+
+
+# Track which (player_id, game_id) have already received the game-over finale.
+# Persisted to delivery_dedup.last_game_over so it survives bot restarts
+# (previously this was in-memory-only and a restart re-sent the finale).
+_last_sent_game_over: dict[tuple[int, str], str] = {}
+
+
+def _mark_game_over_sent(player_id: int, game_id: str) -> None:
+    """Record that a game-over finale was sent — updates cache and DB."""
+    _last_sent_game_over[(player_id, game_id)] = game_id
+    set_game_over_dedup(player_id, game_id)
 
 
 async def _download_image(url: str, timeout: int = 30) -> bytes | None:
@@ -1117,6 +1136,47 @@ def create_onboarding_keyboard(options: list, question_id: int, selected_index: 
     return builder.as_markup()
 
 
+def _options_have_sg_tags(options: list | None) -> bool:
+    """True if any option carries species_tags or gender_tags (species/gender phase)."""
+    return any(opt.get("species_tags") or opt.get("gender_tags") for opt in (options or []))
+
+
+async def _maybe_show_sg_progress_message(
+    message: types.Message,
+    state_data: dict,
+    language: str,
+) -> None:
+    """Show a 'please wait' heads-up before the slow species/gender question generation.
+
+    The next species/gender question is built on demand by the LLM (30-60s) inside
+    the /onboarding/answer call, so feedback must appear BEFORE that blocking call.
+
+    - Transitioning from role questions into the species/gender phase (just answered
+      the last role question): send a loading image explaining the 5 upcoming questions.
+    - Already answering a species/gender question (and not the final one): send a
+      short 'generating next question' message.
+    """
+    current_options = state_data.get("current_options")
+    current_question_id = state_data.get("current_question_id")
+    role_count = state_data.get("role_question_count")
+    sg_count = state_data.get("species_gender_question_count")
+
+    if not _options_have_sg_tags(current_options):
+        # Role question — the species/gender phase starts right after the last one.
+        if role_count and current_question_id == role_count:
+            await send_random_loading_image(message, caption_key="sg_intro_caption", language=language)
+        return
+
+    # Answering a species/gender question: skip the 'generating next question' line
+    # on the final question (onboarding completes instead of producing a next one).
+    last_sg_id = (role_count + sg_count) if (role_count and sg_count) else None
+    if last_sg_id and current_question_id == last_sg_id:
+        return
+
+    msgs = lang.get_onboarding(language)
+    await message.answer(msgs["generating_next_question"])
+
+
 def create_main_menu_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     """Create compact main menu keyboard with horizontal button layout"""
     menu = lang.get_menu(language)
@@ -1420,6 +1480,8 @@ async def start_onboarding_flow(
             game_id=resolved_game_id,
             current_question_id=question["id"],
             current_options=question["options"],
+            role_question_count=result.get("role_question_count"),
+            species_gender_question_count=result.get("species_gender_question_count"),
         )
         update_player_state(
             player_id,
@@ -2679,22 +2741,18 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
         await message.answer(reset_msgs["error"].format(error=error_detail))
         return
 
-    # Clear the local briefing-dedup cache so a fresh game can deliver briefings.
+    # Clear per-(player, game) delivery dedup so a wiped profile delivers
+    # briefings and outcomes from scratch in whatever game it joins next.
+    for key in [k for k in _last_sent_briefing_turn if k[0] == player_id]:
+        _last_sent_briefing_turn.pop(key, None)
+    for key in [k for k in _last_sent_outcome_turn if k[0] == player_id]:
+        _last_sent_outcome_turn.pop(key, None)
+    for key in [k for k in _last_sent_game_over if k[0] == player_id]:
+        _last_sent_game_over.pop(key, None)
     try:
-        _last_sent_briefing_turn.pop(player_id, None)
-    except KeyError:
-        pass  # Not in cache — fine, nothing to clear
-    try:
-        update_player_state(player_id, last_briefing_turn_sent=None)
+        clear_dedup_for_player(player_id)
     except Exception as e:
-        logger.error(f"Failed to clear briefing turn for player {player_id}: {e}", exc_info=True)
-
-    # Clear the outcome-dedup cache too so a fresh game can deliver outcomes.
-    _last_sent_outcome_turn.pop(player_id, None)
-    try:
-        update_player_state(player_id, last_outcome_turn_sent=None)
-    except Exception as e:
-        logger.error(f"Failed to clear outcome turn for player {player_id}: {e}", exc_info=True)
+        logger.error(f"Failed to clear delivery dedup for player {player_id}: {e}", exc_info=True)
 
     # Wipe FSM + business state, then restart from language selection.
     await state.clear()
@@ -3315,25 +3373,24 @@ async def cmd_gm_restart(message: types.Message):
             await message.answer(gm_msgs["restart_game_error"].format(error=result))
             return
 
-        # Reset dedup cache for all players in this game — otherwise push_server
-        # will skip delivery because _last_sent_briefing_turn still has the old turn 1
-        # from the previous game session (loaded from persistent DB at startup).
+        # F2: epoch-boundary cleanup for a game restart.
+        # (1) Expire pending/failed push_queue rows from the dead epoch so
+        #     reset_failed_for_current_turn never resurrects them on the next
+        #     startup (this is what re-delivered "итоги хода 10" twice).
+        # (2) Clear per-(player, game) delivery dedup so the new epoch's
+        #     regenerated turns deliver fresh instead of being skipped.
         try:
-            players_result = await api_request("GET", "/players", params={"game_id": game_id})
-            if players_result:
-                for p in players_result:
-                    if isinstance(p, dict):
-                        pid = p.get("player_id")
-                        if pid is not None and pid in _last_sent_briefing_turn:
-                            del _last_sent_briefing_turn[pid]
-                            update_player_state(pid, last_briefing_turn_sent=None)
-                            logger.info(f"[DEDUP] Reset briefing cache for player {pid} (game restart)")
-                        if pid is not None and pid in _last_sent_outcome_turn:
-                            del _last_sent_outcome_turn[pid]
-                            update_player_state(pid, last_outcome_turn_sent=None)
-                            logger.info(f"[DEDUP] Reset outcome cache for player {pid} (game restart)")
+            expired = expire_game_push_messages(game_id)
+            cleared = clear_dedup_for_game(game_id)
+            for key in [k for k in _last_sent_briefing_turn if k[1] == game_id]:
+                _last_sent_briefing_turn.pop(key, None)
+            for key in [k for k in _last_sent_outcome_turn if k[1] == game_id]:
+                _last_sent_outcome_turn.pop(key, None)
+            for key in [k for k in _last_sent_game_over if k[1] == game_id]:
+                _last_sent_game_over.pop(key, None)
+            logger.info(f"[RESTART] game={game_id}: expired {expired} stale push row(s), cleared {cleared} dedup row(s)")
         except Exception as e:
-            logger.warning(f"Failed to reset dedup cache for restart: {e}")
+            logger.warning(f"Failed to clean push_queue/dedup for restart of {game_id}: {e}", exc_info=True)
 
         # Step 2: Start background game generation (async, returns immediately)
         start_result = await api_request(
@@ -3738,6 +3795,9 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     except Exception as kb_err:
         logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
 
+    # Show a 'please wait' message before the (slow) species/gender question generation.
+    await _maybe_show_sg_progress_message(msg, state_data, player_lang)
+
     try:
         logger.info(f"Submitting onboarding answer (inline): session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
@@ -3928,6 +3988,9 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             )
         except Exception as reaction_err:
             logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
+
+    # Show a 'please wait' message before the (slow) species/gender question generation.
+    await _maybe_show_sg_progress_message(message, state_data, get_player_language(player_id))
 
     try:
         logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
@@ -4206,20 +4269,28 @@ async def main():
     dp.callback_query.register(reset_confirm_callback, F.data.startswith("reset_confirm:"))
     dp.callback_query.register(clear_onboarding_callback, F.data.startswith("onb_clear:"))
 
-    # Load last_briefing_turn_sent from DB so dedup survives bot restarts
+    # Load per-(player, game) briefing dedup from DB so it survives bot restarts
     global _last_sent_briefing_turn
-    _last_sent_briefing_turn = get_all_briefing_turns()
+    _last_sent_briefing_turn = get_all_briefing_dedup()
     logger.info(
-        "Loaded _last_sent_briefing_turn for %d player(s) from persistent storage",
+        "Loaded _last_sent_briefing_turn: %d (player, game) entr(y/ies) from persistent storage",
         len(_last_sent_briefing_turn),
     )
 
-    # Load last_outcome_turn_sent from DB so outcome dedup survives bot restarts
+    # Load per-(player, game) outcome dedup from DB so it survives bot restarts
     global _last_sent_outcome_turn
-    _last_sent_outcome_turn = get_all_outcome_turns()
+    _last_sent_outcome_turn = get_all_outcome_dedup()
     logger.info(
-        "Loaded _last_sent_outcome_turn for %d player(s) from persistent storage",
+        "Loaded _last_sent_outcome_turn: %d (player, game) entr(y/ies) from persistent storage",
         len(_last_sent_outcome_turn),
+    )
+
+    # Load per-(player, game) game-over dedup from DB so it survives bot restarts
+    global _last_sent_game_over
+    _last_sent_game_over = get_all_game_over_dedup()
+    logger.info(
+        "Loaded _last_sent_game_over: %d (player, game) entr(y/ies) from persistent storage",
+        len(_last_sent_game_over),
     )
 
     logger.info("Starting Telegram Bot")
@@ -4234,6 +4305,8 @@ async def main():
         mark_sent_fn=_mark_briefing_sent,
         last_sent_outcome_turn=_last_sent_outcome_turn,
         mark_outcome_sent_fn=_mark_outcome_sent,
+        last_sent_game_over_turn=_last_sent_game_over,
+        mark_game_over_sent_fn=_mark_game_over_sent,
         create_keyboard_fn=create_action_keyboard,
     )
 

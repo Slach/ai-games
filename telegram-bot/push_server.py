@@ -257,7 +257,7 @@ async def _deliver_briefing(
     language: str,
     create_keyboard_fn: Callable,
     mark_sent_fn: Callable,
-    last_sent: dict[int, int],
+    last_sent: dict[tuple[int, str], int],
 ) -> bool:
     """Deliver a /push/briefings message to all players in the payload."""
     turn = payload.get("turn")
@@ -283,7 +283,7 @@ async def _deliver_briefing(
             continue
 
         # Dedup: skip if already sent for this turn
-        if not force_resend and last_sent.get(player_id) == turn:
+        if not force_resend and last_sent.get((player_id, game_id)) == turn:
             continue
 
         try:
@@ -449,7 +449,7 @@ async def _deliver_briefing(
                     )
 
             # Mark as sent (track dedup across bot restarts)
-            mark_sent_fn(player_id, turn)
+            mark_sent_fn(player_id, game_id, turn)
 
         except TelegramForbiddenError:
             logger.warning(
@@ -551,9 +551,9 @@ async def _deliver_outcome(
     payload: dict[str, Any],
     bot: Bot,
     language: str,
-    last_sent_per_player: dict[int, int],
+    last_sent_per_player: dict[tuple[int, str], int],
     current_player_id: int = 0,
-    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
 ) -> bool:
     """Deliver a /push/outcome message to all alive players.
 
@@ -577,6 +577,7 @@ async def _deliver_outcome(
     alive_crew_count = payload.get("alive_crew_count")
     action_images = payload.get("action_images", [])
     language = payload.get("language", language)
+    game_id = payload.get("game_id", "default_game")
 
     if not turn or not alive_players:
         return True
@@ -585,11 +586,7 @@ async def _deliver_outcome(
     # don't exist yet were never pushed (e.g. after restart or if the
     # game server skipped action delivery), so creating and waiting for
     # them would always time out.
-    wait_events = [
-        ev
-        for pid in alive_players
-        if (ev := _pending_action_events.get((pid, turn))) is not None
-    ]
+    wait_events = [ev for pid in alive_players if (ev := _pending_action_events.get((pid, turn))) is not None]
 
     if wait_events:
         logger.info(
@@ -758,7 +755,7 @@ async def _deliver_outcome(
 
     current_player_delivered = False
     for player_id in alive_players:
-        if last_sent_per_player.get(player_id) == turn:
+        if last_sent_per_player.get((player_id, game_id)) == turn:
             if player_id == current_player_id:
                 current_player_delivered = True
             continue
@@ -783,9 +780,9 @@ async def _deliver_outcome(
                 )
             )
 
-            last_sent_per_player[player_id] = turn
+            last_sent_per_player[(player_id, game_id)] = turn
             if mark_outcome_sent_fn is not None:
-                mark_outcome_sent_fn(player_id, turn)
+                mark_outcome_sent_fn(player_id, game_id, turn)
             if player_id == current_player_id:
                 current_player_delivered = True
         except TelegramForbiddenError:
@@ -868,7 +865,8 @@ async def _deliver_game_over(
     payload: dict[str, Any],
     bot: Bot,
     current_player_id: int = 0,
-    last_sent: dict[int, str] | None = None,
+    last_sent: dict[tuple[int, str], str] | None = None,
+    mark_fn: Callable[[int, str], None] | None = None,
 ) -> bool:
     """Deliver a /push/game-over message to all alive players.
 
@@ -876,8 +874,10 @@ async def _deliver_game_over(
     triggered this call) received the finale. Errors for other players are
     logged and skipped — one failing player never blocks the rest.
 
-    Uses last_sent dict (player_id → game_id) to avoid sending the same
-    game-over to a player multiple times.
+    Uses last_sent dict keyed by (player_id, game_id) to avoid sending the
+    same game-over to a player multiple times. Persisted via mark_fn so the
+    dedup survives bot restarts (previously in-memory-only → duplicate
+    finales after a restart).
     """
     game_id = payload.get("game_id", "")
     if last_sent is None:
@@ -930,7 +930,8 @@ async def _deliver_game_over(
     current_player_delivered = False
     for player_id in alive_players:
         # Dedup: skip if this game-over was already sent to this player
-        if last_sent.get(player_id) == game_id:
+        # (keyed per-(player, game), persisted to delivery_dedup).
+        if (player_id, game_id) in last_sent:
             if player_id == current_player_id:
                 current_player_delivered = True
             continue
@@ -968,7 +969,9 @@ async def _deliver_game_over(
 
             if player_id == current_player_id:
                 current_player_delivered = True
-            last_sent[player_id] = game_id
+            last_sent[(player_id, game_id)] = game_id
+            if mark_fn is not None:
+                mark_fn(player_id, game_id)
         except TelegramForbiddenError:
             logger.warning(
                 "[PUSH_GAME_OVER] Player %d blocked the bot, auto-kicking",
@@ -1180,10 +1183,11 @@ async def _dispatch_one(
     language: str,
     create_keyboard_fn: Callable,
     mark_sent_fn: Callable,
-    last_sent_briefing: dict[int, int],
-    last_sent_outcome: dict[int, int],
-    last_sent_game_over: dict[int, str],
-    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
+    last_sent_briefing: dict[tuple[int, str], int],
+    last_sent_outcome: dict[tuple[int, str], int],
+    last_sent_game_over: dict[tuple[int, str], str],
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
 ) -> bool:
     """Try to deliver a single push_queue row. Returns True on success."""
     push_type = row["push_type"]
@@ -1218,7 +1222,7 @@ async def _dispatch_one(
         elif push_type == "action":
             success = await deliver_fn(payload, bot, language)
         elif push_type == "game_over":
-            success = await deliver_fn(payload, bot, player_id, last_sent_game_over)
+            success = await deliver_fn(payload, bot, player_id, last_sent_game_over, mark_game_over_sent_fn)
         else:
             success = await deliver_fn(payload, bot)
 
@@ -1277,10 +1281,11 @@ async def _sender_loop(
     language: str,
     create_keyboard_fn: Callable,
     mark_sent_fn: Callable,
-    last_sent_briefing: dict[int, int],
-    last_sent_outcome: dict[int, int],
-    last_sent_game_over: dict[int, str],
-    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
+    last_sent_briefing: dict[tuple[int, str], int],
+    last_sent_outcome: dict[tuple[int, str], int],
+    last_sent_game_over: dict[tuple[int, str], str],
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
     poll_interval: float = 1.0,
 ) -> None:
     """Background task that drains push_queue in per-player order."""
@@ -1316,6 +1321,7 @@ async def _sender_loop(
                             last_sent_outcome,
                             last_sent_game_over,
                             mark_outcome_sent_fn,
+                            mark_game_over_sent_fn,
                         )
                         if not ok:
                             # Stop processing this player — order preserved
@@ -1338,10 +1344,11 @@ async def _startup_flush(
     language: str,
     create_keyboard_fn: Callable,
     mark_sent_fn: Callable,
-    last_sent_briefing: dict[int, int],
-    last_sent_outcome: dict[int, int],
-    last_sent_game_over: dict[int, str],
-    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
+    last_sent_briefing: dict[tuple[int, str], int],
+    last_sent_outcome: dict[tuple[int, str], int],
+    last_sent_game_over: dict[tuple[int, str], str],
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
 ) -> None:
     """Synchronously drain all pending messages before starting HTTP."""
     logger.info("[PUSH_STARTUP] Fetching current turns from game-server...")
@@ -1387,6 +1394,7 @@ async def _startup_flush(
                 last_sent_outcome,
                 last_sent_game_over,
                 mark_outcome_sent_fn,
+                mark_game_over_sent_fn,
             )
             if not ok:
                 logger.warning(
@@ -1618,10 +1626,12 @@ async def handle_health(request: web.Request) -> web.Response:
 async def start_push_server(
     bot: Bot,
     language: str = "ru",
-    last_sent_briefing_turn: dict[int, int] | None = None,
-    mark_sent_fn: Callable[[int, int], None] | None = None,
-    last_sent_outcome_turn: dict[int, int] | None = None,
-    mark_outcome_sent_fn: Callable[[int, int], None] | None = None,
+    last_sent_briefing_turn: dict[tuple[int, str], int] | None = None,
+    mark_sent_fn: Callable[[int, str, int], None] | None = None,
+    last_sent_outcome_turn: dict[tuple[int, str], int] | None = None,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
+    last_sent_game_over_turn: dict[tuple[int, str], str] | None = None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
     create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None) = None,
 ) -> web.AppRunner:
     """Start the push HTTP server with persistent delivery queue.
@@ -1647,7 +1657,7 @@ async def start_push_server(
         last_sent_briefing_turn = {}
     if mark_sent_fn is None:
 
-        def _noop_mark_sent(pid: int, turn: int) -> None:
+        def _noop_mark_sent(pid: int, game_id: str, turn: int) -> None:
             pass
 
         mark_sent_fn = _noop_mark_sent
@@ -1659,9 +1669,9 @@ async def start_push_server(
         create_keyboard_fn = _noop_keyboard
 
     # Per-player outcome dedup dict (pre-populated from DB)
-    last_sent_outcome: dict[int, int] = last_sent_outcome_turn.copy() if last_sent_outcome_turn else {}
-    # Per-player game-over dedup dict (player_id → game_id)
-    last_sent_game_over: dict[int, str] = {}
+    last_sent_outcome: dict[tuple[int, str], int] = last_sent_outcome_turn.copy() if last_sent_outcome_turn else {}
+    # Per-(player, game) game-over dedup dict (pre-populated from DB)
+    last_sent_game_over: dict[tuple[int, str], str] = last_sent_game_over_turn.copy() if last_sent_game_over_turn else {}
 
     # Startup flush — deliver any messages that were pending from a
     # previous run before we start accepting new ones.
@@ -1674,6 +1684,7 @@ async def start_push_server(
         last_sent_outcome,
         last_sent_game_over,
         mark_outcome_sent_fn,
+        mark_game_over_sent_fn,
     )
 
     # Start background sender
@@ -1688,6 +1699,7 @@ async def start_push_server(
             last_sent_outcome,
             last_sent_game_over,
             mark_outcome_sent_fn,
+            mark_game_over_sent_fn,
         )
     )
 

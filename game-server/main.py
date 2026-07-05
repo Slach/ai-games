@@ -1101,6 +1101,8 @@ async def start_onboarding(request: StartOnboardingRequest):
         "game_title": game_title_data.get("title", ""),
         "welcome_message": game_title_data.get("welcome_text", ""),
         "pending_images": True,
+        "role_question_count": len(dynamic_questions),
+        "species_gender_question_count": SPECIES_GENDER_QUESTIONS_TOTAL,
     }
     logger.info("=== START ONBOARDING COMPLETED (fast return) ===")
     return result
@@ -1822,15 +1824,24 @@ async def get_current_game_turn(game_id: str = Query("default_game")):
 
 @app.get("/games/current-turns")
 async def get_all_current_turns():
-    """Get current turn for every active game.
+    """Get current turn for every ACTIVE game.
 
     Returns a dict {game_id: current_turn} where current_turn is the
     latest completed turn (game_state.turn - 1, minimum 1).
+
+    Ended games (mission_complete / ship_destroyed / crew_wiped / ...) are
+    excluded: the telegram-bot uses this map to retry failed push_queue
+    deliveries for the *current* turn on startup (reset_failed_for_current_turn).
+    Including ended games here resurrected stale failed rows from a dead epoch
+    on every bot restart and re-delivered them (e.g. итоги хода 10 of a game
+    that had already ended).
     """
     games = get_all_games()
     result: dict[str, int] = {}
     for g in games:
         state = get_game_state(g["game_id"])
+        if state.get("status") != "active":
+            continue
         result[g["game_id"]] = max(1, state["turn"] - 1)
     return result
 
