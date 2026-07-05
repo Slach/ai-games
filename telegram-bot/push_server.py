@@ -580,18 +580,16 @@ async def _deliver_outcome(
 
     if not turn or not alive_players:
         return True
-
-    # Wait for pending action image deliveries
-    wait_events = []
-    for pid in alive_players:
-        event_key = (pid, turn)
-        ev = _pending_action_events.get(event_key)
-        if ev is not None:
-            wait_events.append(ev)
-        else:
-            _pending_action_events.setdefault(event_key, asyncio.Event())
-            ev = _pending_action_events[event_key]
-            wait_events.append(ev)
+    # Wait for pending action image deliveries — only for events that
+    # already exist (meaning an action push was initiated). Events that
+    # don't exist yet were never pushed (e.g. after restart or if the
+    # game server skipped action delivery), so creating and waiting for
+    # them would always time out.
+    wait_events = [
+        ev
+        for pid in alive_players
+        if (ev := _pending_action_events.get((pid, turn))) is not None
+    ]
 
     if wait_events:
         logger.info(
