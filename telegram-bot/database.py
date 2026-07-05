@@ -68,6 +68,10 @@ MIGRATIONS: list[tuple[int, str]] = [
         """,
     ),
     (9, "ALTER TABLE delivery_dedup ADD COLUMN last_game_over TEXT DEFAULT NULL;"),
+    # current_question was a vestigial column: bot.py only ever tracked
+    # progress via current_question_id, so current_question stayed 0 forever
+    # and only caused confusion. Drop it. (Fresh DBs already omit it.)
+    (10, "ALTER TABLE player_states DROP COLUMN current_question;"),
 ]
 
 
@@ -104,7 +108,6 @@ def init_db(db_path: str = DB_PATH) -> None:
         player_id                INTEGER  PRIMARY KEY,
         game_id                  TEXT,
         onboarding_session_id    TEXT,
-        current_question         INTEGER  DEFAULT 0,
         current_question_id      INTEGER,
         current_options          TEXT,
         current_question_text    TEXT     DEFAULT NULL,

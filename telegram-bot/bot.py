@@ -61,10 +61,16 @@ from player_store import (
     update_player_state,
 )
 
-# Configure logging
+# Configure logging.
+# A daily file handler mirrors logs to /app/YYYY-MM-DD.log so they survive
+# container restarts/recreates (docker json-logs are wiped on recreate).
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(f"/app/{datetime.now().strftime('%Y-%m-%d')}.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -576,9 +582,9 @@ async def send_question_with_image(
                     )
                     return question_text
                 else:
-                    logger.warning(f"Failed to download question image: {resp.status}")
+                    logger.warning(f"Failed to download question image (question_id={question['id']}): {resp.status}")
         except Exception as e:
-            logger.warning(f"Failed to send question image: {e}")
+            logger.warning(f"Failed to send question image (question_id={question['id']}): {e}")
 
     # Check for option-level images (species/gender questions)
     has_option_images = any(opt.get("image_url") for opt in options)
@@ -615,8 +621,9 @@ async def send_question_with_image(
         if media_group:
             try:
                 await bot_or_message.answer_media_group(media=media_group)
+                logger.info(f"Sent onboarding question media group (question_id={question['id']}, images={len(media_group)})")
             except Exception as e:
-                logger.warning(f"Failed to send option media group: {e}")
+                logger.warning(f"Failed to send option media group (question_id={question['id']}): {e}")
 
         # Send question text + inline keyboard as separate message
         await bot_or_message.answer(
@@ -1894,6 +1901,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
     if message.from_user is None:
         return
     player_id = message.from_user.id
+    logger.info(f"[/start] player_id={player_id} args={command.args!r}")
 
     player_lang = get_player_language(player_id)
     msgs = lang.get_onboarding(player_lang)
@@ -4403,7 +4411,11 @@ async def main():
         len(_last_sent_game_over),
     )
 
-    logger.info("Starting Telegram Bot")
+    logger.info(
+        "Starting Telegram Bot | proxy=%s | drop_pending_updates=False | fsm_db=%s",
+        TELEGRAM_SOCKS_PROXY or "disabled (direct connection)",
+        db_path,
+    )
 
     # Start push HTTP server (replaces old polling loop)
     from push_server import start_push_server

@@ -127,10 +127,16 @@ from prompts import (
 from push_client import push_briefings, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action
 from pydantic import BaseModel, Field, TypeAdapter
 
-# Configure logging
+# Configure logging.
+# A daily file handler mirrors logs to /app/YYYY-MM-DD.log so they survive
+# container restarts/recreates (docker json-logs are wiped on recreate).
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(f"/app/{datetime.now().strftime('%Y-%m-%d')}.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 

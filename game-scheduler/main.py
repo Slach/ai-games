@@ -25,10 +25,16 @@ from database import (
     list_game_schedules,
 )
 
-# Configure logging
+# Configure logging.
+# A daily file handler mirrors logs to /app/YYYY-MM-DD.log so they survive
+# container restarts/recreates (docker json-logs are wiped on recreate).
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(f"/app/{datetime.now().strftime('%Y-%m-%d')}.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 

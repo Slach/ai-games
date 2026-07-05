@@ -41,7 +41,6 @@ class DateTimeEncoder(json.JSONEncoder):
 DEFAULT_STATE: dict[str, Any] = {
     "game_id": None,
     "onboarding_session_id": None,
-    "current_question": 0,
     "current_question_id": None,
     "current_options": None,
     "current_question_text": None,
@@ -71,7 +70,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
     """Get or create player state.
 
     Returns a dict with the same keys as the old in-memory dict:
-      game_id, onboarding_session_id, current_question,
+      game_id, onboarding_session_id,
       current_question_id, current_options, last_poll, pending_updates
     """
     conn = _conn()
@@ -84,16 +83,15 @@ def get_player_state(player_id: int) -> dict[str, Any]:
             conn.execute(
                 """
                 INSERT INTO player_states
-                    (player_id, game_id, onboarding_session_id, current_question,
+                    (player_id, game_id, onboarding_session_id,
                      current_question_id, current_options, current_question_text,
                      current_question_image_url, last_poll, pending_updates, language)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     player_id,
                     DEFAULT_STATE["game_id"],
                     DEFAULT_STATE["onboarding_session_id"],
-                    DEFAULT_STATE["current_question"],
                     DEFAULT_STATE["current_question_id"],
                     json.dumps(DEFAULT_STATE["current_options"]) if DEFAULT_STATE["current_options"] else None,
                     DEFAULT_STATE["current_question_text"],
@@ -108,7 +106,6 @@ def get_player_state(player_id: int) -> dict[str, Any]:
                 "player_id": player_id,
                 "game_id": None,
                 "onboarding_session_id": None,
-                "current_question": 0,
                 "current_question_id": None,
                 "current_options": None,
                 "current_question_text": None,
@@ -133,7 +130,6 @@ def get_player_state(player_id: int) -> dict[str, Any]:
             "player_id": row["player_id"],
             "game_id": row["game_id"],
             "onboarding_session_id": row["onboarding_session_id"],
-            "current_question": row["current_question"] or 0,
             "current_question_id": row["current_question_id"],
             "current_options": current_options,
             "current_question_text": row["current_question_text"],
@@ -153,7 +149,6 @@ def get_player_state(player_id: int) -> dict[str, Any]:
 _PLAYER_STATE_COLUMNS: dict[str, str] = {
     "game_id": "game_id = ?",
     "onboarding_session_id": "onboarding_session_id = ?",
-    "current_question": "current_question = ?",
     "current_question_id": "current_question_id = ?",
     "current_options": "current_options = ?",
     "current_question_text": "current_question_text = ?",
@@ -206,7 +201,6 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
             """UPDATE player_states SET
                 game_id = CASE WHEN ? THEN ? ELSE game_id END,
                 onboarding_session_id = CASE WHEN ? THEN ? ELSE onboarding_session_id END,
-                current_question = CASE WHEN ? THEN ? ELSE current_question END,
                 current_question_id = CASE WHEN ? THEN ? ELSE current_question_id END,
                 current_options = CASE WHEN ? THEN ? ELSE current_options END,
                 current_question_text = CASE WHEN ? THEN ? ELSE current_question_text END,
@@ -218,7 +212,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
                 language = CASE WHEN ? THEN ? ELSE language END,
                 updated_at = datetime('now')
             WHERE player_id = ?""",
-            params,
+            (*params,),
         )
         conn.commit()
     finally:
