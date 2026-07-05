@@ -158,6 +158,8 @@ class GameSessionState(StatesGroup):
 class GameSelectionState(StatesGroup):
     """State machine for game selection before onboarding"""
 
+    waiting_for_schedule = State()
+
     waiting_for_game_selection = State()
 
 
@@ -1159,15 +1161,15 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 # ============== Handlers ==============
 
 
-async def create_new_game(player_id: int, language: str = "ru") -> tuple[str, str]:
-    """Create a new game with the given language.
+async def create_new_game(player_id: int, language: str = "ru", schedule: str = "8h") -> tuple[str, str]:
+    """Create a new game with the given language and turn schedule.
 
     Returns (game_id, game_name).
     """
     result = await api_request(
         "POST",
         "/admin/create-game",
-        data={"name": f"Game by {player_id}", "language": language},
+        data={"name": f"Game by {player_id}", "language": language, "schedule": schedule},
     )
     if not result:
         raise Exception("No response from /admin/create-game")
@@ -1176,6 +1178,32 @@ async def create_new_game(player_id: int, language: str = "ru") -> tuple[str, st
         raise Exception("No game_id returned from /admin/create-game")
     game_name = result.get("name", "") or game_id
     return game_id, game_name
+
+
+# Preset turn schedules offered when a player creates a new game.
+# (onboarding language-string key, raw schedule value understood by the scheduler)
+NEW_GAME_SCHEDULE_PRESETS = [
+    ("schedule_btn_6h", "6h"),
+    ("schedule_btn_8h", "8h"),
+    ("schedule_btn_12h", "12h"),
+    ("schedule_btn_24h", "24h"),
+]
+
+
+def _validate_schedule_format(raw: str) -> bool:
+    """Boundary validation of a player-entered schedule string.
+
+    Mirrors the formats accepted by game-scheduler's parse_schedule
+    (Nh/Nm/Ns, HH:MM[,HH:MM], day-HH:MM,...). The scheduler remains the
+    authority; this only gives the player instant feedback and avoids
+    creating orphan games on invalid input.
+    """
+    s = (raw or "").strip().lower()
+    if re.match(r"^[a-z]{3}-\d{1,2}:\d{2}(,[a-z]{3}-\d{1,2}:\d{2})*$", s):
+        return all(p.split("-", 1)[0] in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"} for p in s.split(","))
+    if re.match(r"^\d{1,2}:\d{2}(,\d{1,2}:\d{2})*$", s):
+        return True
+    return bool(re.match(r"^\d+[hms]$", s))
 
 
 async def show_player_language_selection(message: types.Message, state: FSMContext):
@@ -1468,31 +1496,8 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
 
     try:
         if game_id_or_new == "new":
-            # Create game with player's language
-            game_id, game_name = await create_new_game(player_id, language=player_lang)
-
-            if not game_id:
-                raise Exception("No game_id returned from create_new_game")
-
-            onboarding_msgs = lang.get_onboarding(player_lang)
-
-            # Show game name confirmation
-            await message.answer(
-                f"🎮 **{game_name}**",
-                parse_mode="Markdown",
-            )
-
-            # Ask for player name
-            await message.answer(
-                onboarding_msgs["name_question"],
-                parse_mode="Markdown",
-            )
-
-            await state.update_data(
-                game_id=game_id,
-                game_language=player_lang,
-            )
-            await state.set_state(OnboardingState.waiting_for_name)
+            # Ask the creator to pick the turn schedule before creating the game
+            await show_new_game_schedule_selection(message, player_lang)
         else:
             game_id = game_id_or_new
 
@@ -1535,6 +1540,115 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
 
     except Exception as e:
         logger.error(f"Failed to process game selection for player {player_id}: {e}", exc_info=True)
+        error_msgs = lang.get_errors(player_lang)
+        await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+
+
+async def show_new_game_schedule_selection(message: types.Message, language: str):
+    """Show the turn-schedule picker to the creator of a new game."""
+    msgs = lang.get_onboarding(language)
+    keyboard_rows = [
+        [InlineKeyboardButton(text=msgs[label_key], callback_data=f"new_game_sched:{raw}") for label_key, raw in NEW_GAME_SCHEDULE_PRESETS],
+        [InlineKeyboardButton(text=msgs["schedule_btn_custom"], callback_data="new_game_sched:custom")],
+    ]
+    await message.answer(
+        msgs["schedule_question"],
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+    )
+
+
+async def _finalize_new_game_creation(
+    message: types.Message,
+    state: FSMContext,
+    player_id: int,
+    language: str,
+    schedule: str,
+) -> None:
+    """Create the new game with the chosen schedule and proceed to name input."""
+    game_id, game_name = await create_new_game(player_id, language=language, schedule=schedule)
+    if not game_id:
+        raise Exception("No game_id returned from create_new_game")
+
+    onboarding_msgs = lang.get_onboarding(language)
+    await message.answer(f"🎮 **{game_name}**", parse_mode="Markdown")
+    await message.answer(
+        onboarding_msgs["schedule_set_confirm"].format(label=schedule),
+        parse_mode="Markdown",
+    )
+    await message.answer(onboarding_msgs["name_question"], parse_mode="Markdown")
+
+    await state.update_data(game_id=game_id, game_language=language)
+    await state.set_state(OnboardingState.waiting_for_name)
+
+
+async def new_game_schedule_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Handle the creator's turn-schedule choice for a new game."""
+    await callback.answer()
+
+    data = callback.data or ""
+    if not data.startswith("new_game_sched:"):
+        return
+
+    choice = data.split(":", 1)[1]
+    player_id = callback.from_user.id
+    message = callback.message
+    if not isinstance(message, types.Message):
+        logger.warning(f"Schedule callback message not accessible for player {player_id}")
+        return
+
+    state_data = await state.get_data()
+    player_lang = state_data.get("player_language", DEFAULT_LANGUAGE)
+    onboarding_msgs = lang.get_onboarding(player_lang)
+
+    # Custom format → switch to free-text input state
+    if choice == "custom":
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.error(f"Failed to remove schedule keyboard: {e}", exc_info=True)
+        await message.answer(onboarding_msgs["schedule_question"], parse_mode="Markdown")
+        await state.set_state(GameSelectionState.waiting_for_schedule)
+        return
+
+    # Preset button → create the game now with the chosen schedule
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.error(f"Failed to remove schedule keyboard: {e}", exc_info=True)
+
+    try:
+        await _finalize_new_game_creation(message, state, player_id, player_lang, choice)
+    except Exception as e:
+        logger.error(f"Failed to create new game with schedule '{choice}' for player {player_id}: {e}", exc_info=True)
+        error_msgs = lang.get_errors(player_lang)
+        await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+
+
+async def handle_custom_schedule_input(message: types.Message, state: FSMContext):
+    """Handle free-text schedule entry for a new game."""
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+    raw = (message.text or "").strip()
+    if not raw:
+        return
+
+    state_data = await state.get_data()
+    player_lang = state_data.get("player_language", DEFAULT_LANGUAGE)
+    onboarding_msgs = lang.get_onboarding(player_lang)
+
+    if not _validate_schedule_format(raw):
+        await message.answer(
+            onboarding_msgs["schedule_invalid_format"].format(value=raw),
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        await _finalize_new_game_creation(message, state, player_id, player_lang, raw.lower())
+    except Exception as e:
+        logger.error(f"Failed to create new game with custom schedule '{raw}' for player {player_id}: {e}", exc_info=True)
         error_msgs = lang.get_errors(player_lang)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
@@ -4064,6 +4178,8 @@ async def main():
 
     # Onboarding name input handler — before general text handlers
     dp.message.register(handle_onboarding_name, OnboardingState.waiting_for_name)
+    # Custom schedule input (new-game creator) — before general text handlers
+    dp.message.register(handle_custom_schedule_input, GameSelectionState.waiting_for_schedule)
 
     # Onboarding answer handler - inline keyboard callback
     dp.callback_query.register(handle_onboarding_inline_answer, F.data.startswith("onb_ans:"))
@@ -4075,6 +4191,7 @@ async def main():
 
     # Callback query handlers
     dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
+    dp.callback_query.register(new_game_schedule_callback, F.data.startswith("new_game_sched:"))
     dp.callback_query.register(player_language_selection_callback, F.data.startswith("player_lang:"))
     dp.callback_query.register(lang_set_callback, F.data.startswith("lang_set:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))

@@ -260,6 +260,7 @@ class CreateGameRequest(BaseModel):
     name: str = "New Game"
     description: str = ""
     language: str = "ru"
+    schedule: str | None = None
 
 
 class SetLanguageRequest(BaseModel):
@@ -786,12 +787,17 @@ async def _notify_scheduler(action: str) -> None:
         logger.warning(f"Failed to notify scheduler ({action}): {e}")
 
 
-async def _register_game_in_scheduler(game_id: str) -> None:
-    """Register a newly started game with the scheduler."""
+async def _register_game_in_scheduler(game_id: str, schedule: str | None = None) -> None:
+    """Register a game with the scheduler, optionally with a specific schedule.
+
+    When ``schedule`` is omitted the scheduler falls back to its env default.
+    """
     try:
+        body = {"schedule": schedule} if schedule else None
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{GAME_SCHEDULER_URL}/scheduler/register/{game_id}",
+                json=body,
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 if resp.status == 200:
@@ -799,7 +805,7 @@ async def _register_game_in_scheduler(game_id: str) -> None:
                 else:
                     logger.warning(f"Scheduler register returned {resp.status}")
     except Exception as e:
-        logger.warning(f"Failed to register game '{game_id}' with scheduler: {e}")
+        logger.warning(f"Failed to register game '{game_id}' with scheduler: {e}", exc_info=True)
 
 
 app = FastAPI(
@@ -3265,6 +3271,11 @@ async def admin_create_game(request: CreateGameRequest):
     if not game:
         raise HTTPException(status_code=500, detail="Failed to create game")
 
+    # Register the game with the scheduler using the schedule chosen at
+    # creation (falls back to the scheduler env default when not provided).
+    if request.schedule:
+        await _register_game_in_scheduler(game_id, request.schedule)
+
     # Generate and persist title + welcome text once, at game creation.
     # These describe the ship shared by all players and must stay stable across onboardings.
     try:
@@ -4910,6 +4921,7 @@ async def admin_list_games(include_ended: bool = False):
             }
         )
     return {"games": result}
+
 
 @app.post("/admin/analyze-turn")
 async def admin_analyze_turn(
