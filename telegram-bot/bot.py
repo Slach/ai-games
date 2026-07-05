@@ -2080,8 +2080,15 @@ async def cmd_turn(message: types.Message):
     try:
         msgs = lang.get_current_turn(player_lang)
 
+        # ── Get player's game ID ────────────────────────────────────
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        if not profile or not profile.get("game_id"):
+            await message.answer(msgs["error"].format(error="No active game found"))
+            return
+        game_id = profile["game_id"]
+
         # ── Check game state ────────────────────────────────────────
-        state = await api_request("GET", "/game/state")
+        state = await api_request("GET", "/game/state", params={"game_id": game_id})
         if not state:
             await message.answer(lang.get_errors(player_lang)["api_error"])
             return
@@ -2101,7 +2108,7 @@ async def cmd_turn(message: types.Message):
             reason = reason_map.get(game_status, game_status)
 
             try:
-                finale = await api_request("GET", "/game/finale", ignore_codes=(404,))
+                finale = await api_request("GET", "/game/finale", params={"game_id": game_id}, ignore_codes=(404,))
             except Exception:
                 logger.error(f"Failed to fetch finale for player {player_id}", exc_info=True)
                 finale = None
@@ -2237,7 +2244,7 @@ async def cmd_turn(message: types.Message):
                     )
         else:
             # Legacy system: show global story — split into parts
-            turn_data = await api_request("GET", "/game/current-turn")
+            turn_data = await api_request("GET", "/game/current-turn", params={"game_id": game_id})
             if turn_data is None:
                 await message.answer(lang.get_errors(player_lang)["api_error"])
                 return
