@@ -3133,10 +3133,12 @@ async def cmd_gm_list(message: types.Message):
             turn = game.get("current_turn", 0)
             game_status = game.get("status", "active")
             lang_flag = lang.get_language_flag(game.get("language", "ru"))
+            archetype = game.get("archetype", "")
+            arch_tag = f" 🎭 {archetype}" if archetype else ""
 
             if game_status != "active":
                 # Ended game — collect separately
-                ended_lines.append(f"{idx}. `{game_id}` — {title} ({gm_msgs['game_ended_label']}, 🎯 Turn: {turn}) {lang_flag}")
+                ended_lines.append(f"{idx}. `{game_id}` — {title} ({gm_msgs['game_ended_label']}, 🎯 Turn: {turn}){arch_tag} {lang_flag}")
             else:
                 active_count += 1
                 started = game.get("started", False)
@@ -3153,6 +3155,7 @@ async def cmd_gm_list(message: types.Message):
                         status_icon=status_icon,
                         status=status,
                     )
+                    + arch_tag
                     + f" {lang_flag}"
                 )
 

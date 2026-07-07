@@ -168,11 +168,41 @@ After running this, you must generate a new turn via Telegram:
 `/gm_start <game_id>` (first turn) then `/gm_continue <game_id>`
 for subsequent turns, since all sessions/game state is deleted.
 
-### Run all service logs for analysis (e.g. attach to an LLM)
+### Reading service logs (two sources — use the right one)
 
-```bash
-docker compose logs -t > /tmp/compose.logs
-```
+Logs live in **two places** with different coverage. When debugging an event,
+pick the source that actually contains it:
+
+1. **`docker compose logs`** — container stdout, **only since the last
+   container restart**. Fine for live/recent activity, but useless for
+   anything older than the last `up --force-recreate` (game creation, NPC
+   creation, events from previous days).
+
+   ```bash
+   docker compose logs -t > /tmp/compose.logs             # all services, dump to file
+   docker compose logs -t telegram-bot | grep cmd_team    # one service, filtered
+   ```
+
+2. **Daily `YYYY-MM-DD.log` files** — each service mirrors its full log to a
+   date-stamped file that **survives restarts and spans days**. This is where
+   the real history lives. Files are written into each service directory:
+
+   - `telegram-bot/YYYY-MM-DD.log`
+   - `game-server/YYYY-MM-DD.log`
+   - `game-scheduler/YYYY-MM-DD.log`
+   - ComfyUI: `comfyui/user/comfyui.log` (current) plus `comfyui.prev.log`,
+     `comfyui.prev2.log` (rotated)
+
+   ```bash
+   # Search one service's full history for a specific day
+   grep -nE "cmd_team|NPC_AVATAR|1553177251" game-server/2026-07-06.log
+   # All services, today's files, errors only
+   grep -Hn "ERROR" */"$(date +%F)".log
+   ```
+
+Rule of thumb: first locate the event's timestamp in the daily `.log` file
+(full history), then optionally cross-reference `docker compose logs` for the
+current session's detail.
 
 ### Run tests
 

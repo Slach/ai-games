@@ -1198,6 +1198,58 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
 
 
 @app.post("/onboarding/{session_id}/complete")
+async def _generate_mission_for_started_game(game_id: str, language: str) -> None:
+    """Generate and persist a mission for an auto-started game.
+
+    The manual /admin/start-game flow (_original_start_game) creates NPCs, a
+    bridge image and the mission. The onboarding auto-start path is lighter —
+    it only flips the started flag and registers the scheduler — so without
+    this the game proceeds with no mission (and thus no archetype) record.
+    Safe to call repeatedly: a no-op when a mission already exists.
+    """
+    try:
+        if get_mission(game_id=game_id):
+            return
+        all_participants = []
+        for pid in get_players_in_game(game_id):
+            p = get_player_profile(pid)
+            if p:
+                all_participants.append(
+                    {
+                        "type": "player",
+                        "player_id": pid,
+                        "player_name": p.get("player_name", "") or "",
+                        "role": p["role"],
+                        "species": p.get("species", ""),
+                        "personality_traits": p.get("personality_traits", []),
+                        "role_description": p.get("role_description", ""),
+                        "avatar_description": _extract_avatar_prompt(p.get("avatar_description", "") or ""),
+                        "species_description": p.get("species_description", "") or "",
+                    }
+                )
+        for npc in get_all_active_npcs(game_id):
+            all_participants.append(
+                {
+                    "type": "npc",
+                    "npc_key": npc["npc_key"],
+                    "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
+                    "role": npc["role"],
+                    "species": npc.get("species", ""),
+                    "personality_traits": npc.get("personality_traits", []),
+                    "role_description": npc.get("role_description", ""),
+                    "avatar_description": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
+                }
+            )
+        if not all_participants:
+            return
+        gm = create_game_server(language=language)
+        mission_data = gm.generate_mission(all_participants)
+        create_mission(mission_data, game_id)
+        logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
+    except Exception:
+        logger.error(f"[MISSION] Failed to generate mission for auto-started game {game_id}", exc_info=True)
+
+
 async def complete_onboarding(session_id: str):
     """Complete onboarding and trigger avatar generation"""
     session = get_onboarding_session(session_id)
@@ -1391,6 +1443,11 @@ async def complete_onboarding(session_id: str):
         if game_was_started:
             # Register this game with the scheduler
             asyncio.create_task(_register_game_in_scheduler(game_id))
+            # Auto-start skips _original_start_game, so generate the mission
+            # (archetype + objectives) explicitly — otherwise the game runs
+            # with no mission/archetype record.
+            game_lang = get_game_language(game_id) or "ru"
+            asyncio.create_task(_generate_mission_for_started_game(game_id, game_lang))
 
     game_started = is_game_started(game_id)
 
@@ -4625,6 +4682,13 @@ def _replace_player_with_npc(
     npc_avatar_desc = kicked_profile.get("avatar_description", "") if kicked_profile else role_data.get("avatar_description", "")
     npc_role_description = kicked_profile.get("role_description", "") if kicked_profile else role_data.get("role_description", "")
 
+    # Preserve the replaced player's existing avatar image so the NPC shows up
+    # in the team roster without regeneration. NPCs store the URL inside
+    # avatar_description as "avatar_url=<url>;<prompt>" (see _extract_avatar_url).
+    player_avatar_url = (kicked_profile.get("avatar_url") if kicked_profile else None) or None
+    if player_avatar_url:
+        npc_avatar_desc = f"avatar_url={player_avatar_url};{npc_avatar_desc}"
+
     # Release ONLY the target role (reset_roles() here nuked every assignment).
     release_role(role_key, game_id)
 
@@ -4848,7 +4912,8 @@ async def admin_auto_kick_blocked(request: AutoKickBlockedRequest):
     conn.close()
 
     # Skip notification — user blocked the bot, they won't see it anyway.
-    # Skip NPC avatar generation — kick was automatic, not manual.
+    # NPC avatar is reused from the player in _replace_player_with_npc;
+    # no regeneration needed for an automatic kick.
 
     logger.info("=== AUTO KICK BLOCKED COMPLETED ===")
     logger.info(f"Kicked blocked player {request.player_id} from game {game_id}, replaced with NPC {replaced['npc_name']} ({role_key})")
@@ -4924,6 +4989,7 @@ async def admin_list_games(include_ended: bool = False):
         if is_game_started(game_id):
             state = get_game_state(game_id)
             current_turn = state.get("turn", 0)
+        mission = get_mission(game_id=game_id)
         result.append(
             {
                 "game_id": game_id,
@@ -4935,6 +5001,7 @@ async def admin_list_games(include_ended: bool = False):
                 "started": is_game_started(game_id),
                 "language": get_game_language(game_id),
                 "current_turn": current_turn,
+                "archetype": mission.get("archetype", "") if mission else "",
             }
         )
     return {"games": result}
