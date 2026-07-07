@@ -51,7 +51,7 @@ class TestEndGameMarksGamesTable(unittest.TestCase):
             self.fail("game g1 was not created")
         self.assertEqual(before["status"], "active")
 
-        db.end_game("mission_complete", "g1")
+        db.end_game("mission_complete", game_id="g1")
 
         after = db.get_game("g1")
         if after is None:
@@ -60,7 +60,7 @@ class TestEndGameMarksGamesTable(unittest.TestCase):
 
     def test_end_game_sets_game_state_reason(self):
         self._make_game("g2")
-        db.end_game("ship_destroyed", "g2")
+        db.end_game("ship_destroyed", game_id="g2")
 
         state = db.get_game_state("g2")
         self.assertEqual(state["status"], "ship_destroyed")

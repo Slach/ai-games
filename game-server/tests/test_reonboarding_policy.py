@@ -70,7 +70,7 @@ class TestReonboardingPolicy(unittest.TestCase):
 
     def test_allows_same_game_after_it_ended(self):
         # default_game was finished -> player must be able to re-onboard into it.
-        db.end_game("mission_complete", "gameA")
+        db.end_game("mission_complete", game_id="gameA")
         allow, reason = db.should_reset_profile_for_reonboarding(_profile("gameA"), "gameA")
         self.assertTrue(allow)
         self.assertEqual(reason, "ended")
@@ -81,7 +81,7 @@ class TestReonboardingPolicy(unittest.TestCase):
         self.assertEqual(reason, "dead_spectator")
 
     def test_different_game_takes_priority_over_ended(self):
-        db.end_game("mission_complete", "gameA")
+        db.end_game("mission_complete", game_id="gameA")
         allow, reason = db.should_reset_profile_for_reonboarding(_profile("gameA"), "gameB")
         self.assertTrue(allow)
         self.assertEqual(reason, "different_game")

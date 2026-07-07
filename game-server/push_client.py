@@ -185,7 +185,7 @@ async def push_player_chosen_action(
     player_id: int,
     turn: int,
     chosen_action_url: str,
-    game_id: str = "default_game",
+    game_id: str,
     action_text: str = "",
     language: str = "ru",
 ) -> bool:

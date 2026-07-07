@@ -62,14 +62,19 @@ from player_store import (
 )
 
 # Configure logging.
-# A daily file handler mirrors logs to /app/YYYY-MM-DD.log so they survive
-# container restarts/recreates (docker json-logs are wiped on recreate).
+# A daily file handler mirrors logs to <script dir>/YYYY-MM-DD.log so they
+# survive container restarts/recreates (docker json-logs are wiped on
+# recreate). The path is relative to this file (=/app inside containers).
+_LOG_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    f"{datetime.now().strftime('%Y-%m-%d')}.log",
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(f"/app/{datetime.now().strftime('%Y-%m-%d')}.log", encoding="utf-8"),
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -4209,8 +4214,14 @@ async def action_selection(callback: types.CallbackQuery):
     await callback.answer()
 
     try:
+        # Resolve the player's game so the current turn matches their game
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        if not profile or not profile.get("game_id"):
+            raise Exception("No active game found")
+        game_id = profile["game_id"]
+
         # Get current turn to validate
-        turn_data = await api_request("GET", "/game/current-turn")
+        turn_data = await api_request("GET", "/game/current-turn", params={"game_id": game_id})
         if turn_data is None:
             raise Exception("No current turn data from API")
 
@@ -4271,8 +4282,14 @@ async def refresh_game(callback: types.CallbackQuery):
     await callback.answer()
 
     try:
+        # Resolve the player's game so the current turn matches their game
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        if not profile or not profile.get("game_id"):
+            raise Exception("No active game found")
+        game_id = profile["game_id"]
+
         # Refresh current turn
-        turn_data = await api_request("GET", "/game/current-turn")
+        turn_data = await api_request("GET", "/game/current-turn", params={"game_id": game_id})
         if turn_data is None:
             raise Exception("No current turn data from API")
 

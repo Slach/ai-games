@@ -114,6 +114,7 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE game_state ADD COLUMN finale_image_url TEXT DEFAULT '';
         """.strip(),
     ),
+    (11, "ALTER TABLE player_kicks ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game';"),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -311,7 +312,7 @@ def init_db():
     logger.info("Database initialized successfully")
 
 
-def _init_ship_roles(game_id: str = "default_game"):
+def _init_ship_roles(game_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM ship_roles WHERE game_id = ?", (game_id,))
@@ -358,7 +359,7 @@ def _enrich_role_with_i18n(role_key: str, taken_by: int | None = None, language:
     }
 
 
-def get_available_roles(game_id: str = "default_game", language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
+def get_available_roles(game_id: str, language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -370,7 +371,7 @@ def get_available_roles(game_id: str = "default_game", language: str = LANGUAGE_
     return [_enrich_role_with_i18n(row["role_key"], language=language) for row in rows]
 
 
-def get_all_roles(game_id: str = "default_game", language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
+def get_all_roles(game_id: str, language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT role_key, taken_by FROM ship_roles WHERE game_id = ?", (game_id,))
@@ -379,7 +380,7 @@ def get_all_roles(game_id: str = "default_game", language: str = LANGUAGE_RU) ->
     return [_enrich_role_with_i18n(row["role_key"], row["taken_by"], language) for row in rows]
 
 
-def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> bool:
+def take_role(role_key: str, player_id: int, game_id: str) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -406,7 +407,7 @@ def take_role(role_key: str, player_id: int, game_id: str = "default_game") -> b
     return updated
 
 
-def get_role_key_for_player(player_id: int, game_id: str = "default_game") -> str | None:
+def get_role_key_for_player(player_id: int, game_id: str) -> str | None:
     """Return the role_key currently held by player_id in a game, or None."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -419,7 +420,7 @@ def get_role_key_for_player(player_id: int, game_id: str = "default_game") -> st
     return row["role_key"] if row else None
 
 
-def release_role(role_key: str, game_id: str = "default_game") -> bool:
+def release_role(role_key: str, game_id: str) -> bool:
     """Release a single role (set taken_by = NULL). Returns True if a row changed."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -436,7 +437,8 @@ def release_role(role_key: str, game_id: str = "default_game") -> bool:
 def get_role_by_key(
     role_key: str,
     language: str = LANGUAGE_RU,
-    game_id: str = "default_game",
+    *,
+    game_id: str,
 ) -> dict[str, Any] | None:
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -451,7 +453,7 @@ def get_role_by_key(
     return _enrich_role_with_i18n(row["role_key"], row["taken_by"], language)
 
 
-def reset_roles(game_id: str = "default_game"):
+def reset_roles(game_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE ship_roles SET taken_by = NULL WHERE game_id = ?", (game_id,))
@@ -459,7 +461,7 @@ def reset_roles(game_id: str = "default_game"):
     conn.close()
 
 
-def reset_active_npcs(game_id: str = "default_game"):
+def reset_active_npcs(game_id: str):
     """Deactivate all NPCs for a game so fresh ones are generated on next start."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -632,7 +634,7 @@ def update_onboarding_role_scores(
 
 
 def get_recent_role_score_history(
-    game_id: str = "default_game",
+    game_id: str,
     limit: int = 10,
 ) -> list[dict[str, int]]:
     """Get the last N completed onboarding sessions' role_score_history for a game.
@@ -668,7 +670,7 @@ def get_recent_role_score_history(
 
 
 def get_underrepresented_roles(
-    game_id: str = "default_game",
+    game_id: str,
     n_last: int = 10,
 ) -> list[str]:
     """Find roles that received the least total points across recent onboarding sessions.
@@ -823,7 +825,7 @@ def should_reset_profile_for_reonboarding(
 # ============== Game Turns ==============
 
 
-def create_game_turn(turn_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
+def create_game_turn(turn_data: dict[str, Any], game_id: str) -> dict[str, Any] | None:
     """Create a new game turn"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -855,7 +857,7 @@ def create_game_turn(turn_data: dict[str, Any], game_id: str = "default_game") -
     return get_game_turn(turn_data["turn"], game_id)
 
 
-def get_game_turn(turn: int, game_id: str = "default_game") -> dict[str, Any] | None:
+def get_game_turn(turn: int, game_id: str) -> dict[str, Any] | None:
     """Get a game turn by number"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1002,7 +1004,7 @@ def get_game_messages(player_id: int, limit: int = 10) -> list[dict[str, Any]]:
 # ============== Game State ==============
 
 
-def get_game_state(game_id: str = "default_game") -> dict[str, Any]:
+def get_game_state(game_id: str) -> dict[str, Any]:
     """Get current game state"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1030,7 +1032,8 @@ def update_game_state(
     status: str = "active",
     ship_alive: bool = True,
     crew_health: int = 100,
-    game_id: str = "default_game",
+    *,
+    game_id: str,
 ) -> dict[str, Any]:
     """Update game state"""
     _ensure_game_state(game_id)
@@ -1057,7 +1060,7 @@ def update_game_state(
     return get_game_state(game_id)
 
 
-def set_last_death_turn(game_id: str = "default_game", turn: int = 0) -> bool:
+def set_last_death_turn(game_id: str, turn: int = 0) -> bool:
     """Record the turn of the most recent crew death (death cooldown tracking)."""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1072,13 +1075,13 @@ def set_last_death_turn(game_id: str = "default_game", turn: int = 0) -> bool:
     return updated
 
 
-def is_game_active(game_id: str = "default_game") -> bool:
+def is_game_active(game_id: str) -> bool:
     """Check if game is still active (ship and crew alive)"""
     state = get_game_state(game_id)
     return state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
 
 
-def end_game(reason: str = "game_over", game_id: str = "default_game") -> dict[str, Any]:
+def end_game(reason: str = "game_over", *, game_id: str) -> dict[str, Any]:
     """End the game by setting ship destroyed and crew health to 0"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1359,7 +1362,7 @@ def set_game_language(game_id: str, language: str) -> bool:
     return updated
 
 
-def is_game_started(game_id: str = "default_game") -> bool:
+def is_game_started(game_id: str) -> bool:
     """Check if the game has officially started (>= 3 players)"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1371,7 +1374,7 @@ def is_game_started(game_id: str = "default_game") -> bool:
     return bool(row["started"])
 
 
-def start_game(game_id: str = "default_game") -> bool:
+def start_game(game_id: str) -> bool:
     """Mark the game as started (when >= 3 players join)"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1385,7 +1388,7 @@ def start_game(game_id: str = "default_game") -> bool:
     return updated
 
 
-def get_player_count_in_game(game_id: str = "default_game") -> int:
+def get_player_count_in_game(game_id: str) -> int:
     """Get the number of players in a game"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1401,7 +1404,7 @@ def get_player_count_in_game(game_id: str = "default_game") -> int:
 def save_game_image(
     type: str,
     image_url: str,
-    game_id: str = "default_game",
+    game_id: str,
     turn: int | None = None,
     prompt: str = "",
 ) -> int | None:
@@ -1437,7 +1440,7 @@ def save_game_image(
 
 def get_random_game_image(
     type: str,
-    game_id: str = "default_game",
+    game_id: str,
     turn: int | None = None,
 ) -> str | None:
     """Get a random game image URL by type.
@@ -1477,7 +1480,7 @@ def get_random_game_image(
 
 def get_game_image_count(
     type: str,
-    game_id: str = "default_game",
+    game_id: str,
     turn: int | None = None,
 ) -> int:
     """Count images of a given type."""
@@ -1561,7 +1564,7 @@ def get_npc_profile(npc_key: str) -> dict[str, Any] | None:
     }
 
 
-def get_all_active_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
+def get_all_active_npcs(game_id: str) -> list[dict[str, Any]]:
     """Get all active NPCs in a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1591,7 +1594,7 @@ def get_all_active_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
     ]
 
 
-def get_all_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
+def get_all_npcs(game_id: str) -> list[dict[str, Any]]:
     """Get ALL NPCs (active and inactive) in a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1620,7 +1623,7 @@ def get_all_npcs(game_id: str = "default_game") -> list[dict[str, Any]]:
     ]
 
 
-def get_npc_by_role(role_key: str, game_id: str = "default_game") -> dict[str, Any] | None:
+def get_npc_by_role(role_key: str, game_id: str) -> dict[str, Any] | None:
     """Find an active NPC by role key."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1666,14 +1669,14 @@ def deactivate_npc(npc_key: str) -> bool:
 # ============== Player Kicks ==============
 
 
-def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "") -> dict[str, Any]:
-    """Record a player kick."""
+def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "", *, game_id: str) -> dict[str, Any]:
+    """Record a player kick scoped to a specific game."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """INSERT INTO player_kicks (kicked_player_id, replaced_by_npc_key, reason, kicked_at)
-           VALUES (?, ?, ?, ?)""",
-        (kicked_player_id, replaced_by_npc_key, reason, datetime.now().isoformat()),
+        """INSERT INTO player_kicks (kicked_player_id, replaced_by_npc_key, reason, game_id, kicked_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (kicked_player_id, replaced_by_npc_key, reason, game_id, datetime.now().isoformat()),
     )
     kick_id = cursor.lastrowid
     conn.commit()
@@ -1683,6 +1686,7 @@ def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "
         "kicked_player_id": kicked_player_id,
         "replaced_by_npc_key": replaced_by_npc_key,
         "reason": reason,
+        "game_id": game_id,
     }
 
 
@@ -1696,13 +1700,13 @@ def get_kicked_players() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def is_player_kicked(player_id: int) -> bool:
-    """Check if a player has been kicked."""
+def is_player_kicked(player_id: int, game_id: str) -> bool:
+    """Check if a player has been kicked in a specific game."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT COUNT(*) as cnt FROM player_kicks WHERE kicked_player_id = ?",
-        (player_id,),
+        "SELECT COUNT(*) as cnt FROM player_kicks WHERE kicked_player_id = ? AND game_id = ?",
+        (player_id, game_id),
     )
     row = cursor.fetchone()
     conn.close()
@@ -1712,7 +1716,7 @@ def is_player_kicked(player_id: int) -> bool:
 # ============== Player Briefings (per-player game turn content) ==============
 
 
-def save_player_briefing(briefing_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
+def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[str, Any] | None:
     """Save a per-player daily briefing with choices and consequences."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1744,7 +1748,7 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str = "default_
     return briefing_data
 
 
-def get_player_briefing(turn: int, player_id: int, game_id: str = "default_game") -> dict[str, Any] | None:
+def get_player_briefing(turn: int, player_id: int, game_id: str) -> dict[str, Any] | None:
     """Get a player's briefing for a specific turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1778,7 +1782,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
     }
 
 
-def get_all_briefings_for_turn(turn: int, game_id: str = "default_game") -> list[dict[str, Any]]:
+def get_all_briefings_for_turn(turn: int, game_id: str) -> list[dict[str, Any]]:
     """Get all briefings (player + NPC) for a specific turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1834,7 +1838,7 @@ def update_briefing_chosen_action_url(briefing_id: int, chosen_action_url: str |
     return updated
 
 
-def get_players_who_need_to_choose(turn: int, game_id: str = "default_game") -> list[dict[str, Any]]:
+def get_players_who_need_to_choose(turn: int, game_id: str) -> list[dict[str, Any]]:
     """Get real players who haven't made their choice for the turn yet."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1861,7 +1865,7 @@ def get_players_who_need_to_choose(turn: int, game_id: str = "default_game") -> 
     return result
 
 
-def update_game_turn_outcome(turn: int, combined_outcome: str, game_id: str = "default_game") -> bool:
+def update_game_turn_outcome(turn: int, combined_outcome: str, game_id: str) -> bool:
     """Update the combined outcome for a game turn after all choices are analyzed."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1875,7 +1879,7 @@ def update_game_turn_outcome(turn: int, combined_outcome: str, game_id: str = "d
     return updated
 
 
-def update_game_turn_global_circumstances(turn: int, circumstances: str, game_id: str = "default_game") -> bool:
+def update_game_turn_global_circumstances(turn: int, circumstances: str, game_id: str) -> bool:
     """Update global circumstances for a game turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1892,7 +1896,7 @@ def update_game_turn_global_circumstances(turn: int, circumstances: str, game_id
 # ============== Mission Management ==============
 
 
-def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") -> dict[str, Any] | None:
+def create_mission(mission_data: dict[str, Any], game_id: str) -> dict[str, Any] | None:
     """Create a mission for a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1917,10 +1921,10 @@ def create_mission(mission_data: dict[str, Any], game_id: str = "default_game") 
     mission_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return get_mission(mission_id, game_id)
+    return get_mission(mission_id, game_id=game_id)
 
 
-def get_mission(mission_id: int | None = None, game_id: str = "default_game") -> dict[str, Any] | None:
+def get_mission(mission_id: int | None = None, *, game_id: str) -> dict[str, Any] | None:
     """Get the latest mission for a game, or a specific mission by ID."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1960,7 +1964,7 @@ def get_mission(mission_id: int | None = None, game_id: str = "default_game") ->
 def update_mission_stage_progress(
     stage_progress: dict[str, Any],
     current_stage: int,
-    game_id: str = "default_game",
+    game_id: str,
     completed: bool = False,
 ) -> bool:
     """Update stage progress for a mission."""
@@ -1984,7 +1988,7 @@ def update_mission_stage_progress(
     return updated
 
 
-def mark_player_dead(player_id: int, game_id: str = "default_game") -> bool:
+def mark_player_dead(player_id: int, game_id: str) -> bool:
     """Mark a player as dead (crew member died)."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2000,7 +2004,7 @@ def mark_player_dead(player_id: int, game_id: str = "default_game") -> bool:
     return updated
 
 
-def get_dead_players(game_id: str = "default_game") -> list[int]:
+def get_dead_players(game_id: str) -> list[int]:
     """Get IDs of dead players in a game (spectators)."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2013,7 +2017,7 @@ def get_dead_players(game_id: str = "default_game") -> list[int]:
     return [row["player_id"] for row in rows]
 
 
-def get_live_players(game_id: str = "default_game") -> list[int]:
+def get_live_players(game_id: str) -> list[int]:
     """Get IDs of live (non-dead, non-spectator) players in a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2054,13 +2058,13 @@ def delete_game_state_for_game(game_id: str) -> bool:
     return deleted > 0
 
 
-def reset_game_state_to_turn1(game_id: str = "default_game") -> dict[str, Any]:
+def reset_game_state_to_turn1(game_id: str) -> dict[str, Any]:
     """Reset game state back to turn 1."""
     _ensure_game_state(game_id)
-    return update_game_state(1, "active", True, 100, game_id)
+    return update_game_state(1, "active", True, 100, game_id=game_id)
 
 
-def delete_game_turn(turn: int, game_id: str = "default_game") -> bool:
+def delete_game_turn(turn: int, game_id: str) -> bool:
     """Delete a specific game turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2071,7 +2075,7 @@ def delete_game_turn(turn: int, game_id: str = "default_game") -> bool:
     return deleted > 0
 
 
-def delete_all_game_turns(game_id: str = "default_game") -> int:
+def delete_all_game_turns(game_id: str) -> int:
     """Delete all game turns for a specific game. Returns count deleted."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2082,7 +2086,7 @@ def delete_all_game_turns(game_id: str = "default_game") -> int:
     return deleted
 
 
-def delete_player_briefings_for_turn(turn: int, game_id: str = "default_game") -> int:
+def delete_player_briefings_for_turn(turn: int, game_id: str) -> int:
     """Delete all briefings (player + NPC) for a specific game turn."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2093,7 +2097,7 @@ def delete_player_briefings_for_turn(turn: int, game_id: str = "default_game") -
     return deleted
 
 
-def delete_all_player_briefings(game_id: str = "default_game") -> int:
+def delete_all_player_briefings(game_id: str) -> int:
     """Delete all player briefings for a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2104,7 +2108,7 @@ def delete_all_player_briefings(game_id: str = "default_game") -> int:
     return deleted
 
 
-def delete_player_actions_for_turn(turn: int, game_id: str = "default_game") -> int:
+def delete_player_actions_for_turn(turn: int, game_id: str) -> int:
     """Delete player actions for a specific turn.
 
     This is tricky because player_actions doesn't have a game_id column.
@@ -2124,7 +2128,7 @@ def delete_player_actions_for_turn(turn: int, game_id: str = "default_game") -> 
     return deleted
 
 
-def delete_all_player_actions(game_id: str = "default_game") -> int:
+def delete_all_player_actions(game_id: str) -> int:
     """Delete all player actions for a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2140,7 +2144,7 @@ def delete_all_player_actions(game_id: str = "default_game") -> int:
     return deleted
 
 
-def delete_all_game_messages(game_id: str = "default_game") -> int:
+def delete_all_game_messages(game_id: str) -> int:
     """Delete all game messages for players in a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2156,7 +2160,7 @@ def delete_all_game_messages(game_id: str = "default_game") -> int:
     return deleted
 
 
-def clear_game_started(game_id: str = "default_game") -> bool:
+def clear_game_started(game_id: str) -> bool:
     """Mark the game as not started anymore."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2170,7 +2174,7 @@ def clear_game_started(game_id: str = "default_game") -> bool:
     return updated
 
 
-def delete_mission(game_id: str = "default_game") -> bool:
+def delete_mission(game_id: str) -> bool:
     """Delete the mission for a game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2181,7 +2185,7 @@ def delete_mission(game_id: str = "default_game") -> bool:
     return deleted > 0
 
 
-def get_onboarding_count_in_game(game_id: str = "default_game") -> int:
+def get_onboarding_count_in_game(game_id: str) -> int:
     """Count players who started onboarding but haven't completed it for a game.
 
     The game_id is stored in the onboarding_sessions.answers JSON as key "-1".
@@ -2206,7 +2210,7 @@ def get_onboarding_count_in_game(game_id: str = "default_game") -> int:
         conn.close()
 
 
-def delete_game_images(game_id: str = "default_game") -> int:
+def delete_game_images(game_id: str) -> int:
     """Delete all images associated with a game (splash, bridge, etc.),
     but preserve loading images since they are shared."""
     conn = get_db_connection()

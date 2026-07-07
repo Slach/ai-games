@@ -299,7 +299,8 @@ _onboarding_questions_cache: dict[tuple[str, str], list[OnboardingQuestion]] = {
 
 async def generate_dynamic_onboarding_questions(
     language: str = "en",
-    game_id: str = "default_game",
+    *,
+    game_id: str,
     skip_images: bool = False,
 ) -> list[OnboardingQuestion]:
     """Generate dynamic onboarding questions using LLM with json_schema.
@@ -384,7 +385,7 @@ async def generate_dynamic_onboarding_questions(
 
 async def generate_onboarding_question_images(
     questions: list[OnboardingQuestion],
-    game_id: str = "default_game",
+    game_id: str,
 ) -> list[OnboardingQuestion]:
     """Generate ComfyUI images for each onboarding question (in parallel).
 
@@ -598,7 +599,7 @@ async def generate_dynamic_species_gender_question(
 def generate_player_profile_from_answers(
     player_id: int,
     answers: dict[int, str],
-    game_id: str = "default_game",
+    game_id: str,
     language: str = "ru",
     questions: list[dict[str, Any]] | None = None,
     player_name: str = "",
@@ -739,7 +740,7 @@ def generate_player_profile_from_answers(
 async def _generate_loading_images():
     """Generate loading images in background at startup."""
     try:
-        existing = get_game_image_count("loading")
+        existing = get_game_image_count("loading", game_id="default_game")
         total_needed = 5
         if existing >= total_needed:
             logger.info(f"[LOADING] {existing} loading images already in DB, skipping gen")
@@ -753,7 +754,7 @@ async def _generate_loading_images():
         saved = 0
         for url in urls:
             if url:
-                save_game_image(type="loading", image_url=url)
+                save_game_image(type="loading", image_url=url, game_id="default_game")
                 saved += 1
 
         logger.info(f"[LOADING] Background gen: saved {saved}/{remaining} images")
@@ -1670,7 +1671,7 @@ async def get_player_profile_endpoint(player_id: int):
 
 
 @app.get("/game/title")
-async def get_game_title_endpoint(game_id: str = "default_game"):
+async def get_game_title_endpoint(game_id: str):
     """Get game title"""
     title = get_game_title(game_id)
     if not title:
@@ -1679,13 +1680,13 @@ async def get_game_title_endpoint(game_id: str = "default_game"):
 
 
 @app.get("/game/state")
-async def get_game_state_endpoint(game_id: str = "default_game"):
+async def get_game_state_endpoint(game_id: str):
     """Get current game state"""
     return get_game_state(game_id)
 
 
 @app.get("/game/finale")
-async def get_game_finale_endpoint(game_id: str = "default_game"):
+async def get_game_finale_endpoint(game_id: str):
     """Get the game-over finale narrative (if game ended).
 
     Returns 404 if the game is still active or no finale was generated.
@@ -1705,7 +1706,7 @@ async def get_game_finale_endpoint(game_id: str = "default_game"):
 
 
 @app.get("/game/started")
-async def get_game_started_endpoint(game_id: str = "default_game"):
+async def get_game_started_endpoint(game_id: str):
     """Check if game has started (>= 3 players joined)"""
     started = is_game_started(game_id)
     player_count = get_player_count_in_game(game_id)
@@ -1714,7 +1715,7 @@ async def get_game_started_endpoint(game_id: str = "default_game"):
 
 
 @app.get("/game/status")
-async def get_game_status_endpoint(game_id: str = "default_game"):
+async def get_game_status_endpoint(game_id: str):
     """Get game status: players, NPCs, their current choices, alive/dead."""
     state = get_game_state(game_id)
     title = get_game_title(game_id) or ""
@@ -1797,7 +1798,7 @@ async def get_game_status_endpoint(game_id: str = "default_game"):
 
 
 @app.get("/game/turn/{turn_num}")
-async def get_game_turn_endpoint(turn_num: int, game_id: str = "default_game"):
+async def get_game_turn_endpoint(turn_num: int, game_id: str):
     """Get specific turn's episode"""
     turn_data = get_game_turn(turn_num, game_id=game_id)
     if not turn_data:
@@ -1806,7 +1807,7 @@ async def get_game_turn_endpoint(turn_num: int, game_id: str = "default_game"):
 
 
 @app.get("/game/current-turn")
-async def get_current_game_turn(game_id: str = Query("default_game")):
+async def get_current_game_turn(game_id: str):
     """Get current game turn
 
     Game state tracks the NEXT turn to generate, so the latest
@@ -2011,7 +2012,8 @@ async def auto_select_action(
     player_id: int,
     turn: int,
     language: str = "en",
-    game_id: str = "default_game",
+    *,
+    game_id: str,
 ):
     """Auto-select an action for a player who hasn't chosen in time.
 
@@ -2298,7 +2300,7 @@ async def get_current_briefing_endpoint(player_id: int):
 
 
 @app.get("/players")
-async def get_all_players(game_id: str = "default_game"):
+async def get_all_players(game_id: str):
     """Get all players in the current game"""
     players = get_players_in_game(game_id)
     return [{"player_id": pid, "game_id": game_id} for pid in players]
@@ -2315,7 +2317,7 @@ async def get_game_messages_endpoint(player_id: int, limit: int = 10):
 
 
 @app.get("/content/loading-image")
-async def get_loading_image(game_id: str = "default_game"):
+async def get_loading_image(game_id: str):
     """Get a random loading screen image URL.
 
     Falls back to a manually-placed default image in ComfyUI output
@@ -2333,7 +2335,7 @@ async def get_loading_image(game_id: str = "default_game"):
 
 
 @app.get("/content/splash-image")
-async def get_splash_image(game_id: str = "default_game"):
+async def get_splash_image(game_id: str):
     """Get a random splash image URL for the game.
 
     Falls back to a manually-placed default image in ComfyUI output
@@ -2650,7 +2652,8 @@ def _build_turn_summary(combined_outcome_str: str, language: str = "ru") -> str:
 def _build_cumulative_story_summary(
     current_turn: int,
     language: str = "ru",
-    game_id: str = "default_game",
+    *,
+    game_id: str,
 ) -> str:
     """Build a cumulative story summary from ALL previous turns.
 
@@ -2704,7 +2707,8 @@ def _build_cumulative_story_summary(
 async def _analyze_turn_outcome(
     turn: int,
     language: str = "ru",
-    game_id: str = "default_game",
+    *,
+    game_id: str,
     force: bool = False,
 ):
     """Analyze all decisions for a turn (player + NPC) to produce combined outcome.
@@ -2810,7 +2814,7 @@ async def _analyze_turn_outcome(
             )
 
             # Get mission context for progress tracking
-            mission = get_mission(None, game_id)
+            mission = get_mission(None, game_id=game_id)
 
             # Build full crew roster from all briefings — prevents LLM from inventing members
             crew_roster = []
@@ -2865,7 +2869,7 @@ async def _analyze_turn_outcome(
                     logger.info(f"[MISSION] Stage {stage_key} progress now {pts}")
                 if updated_mission["completed"]:
                     mission_completed = True
-                    end_game("mission_complete", game_id)
+                    end_game("mission_complete", game_id=game_id)
                     logger.info("[MISSION] MISSION COMPLETE! Game ended.")
                 mission = updated_mission
 
@@ -2943,7 +2947,7 @@ async def _analyze_turn_outcome(
 
             # Handle ship destruction
             if ship_destroyed:
-                end_game("ship_destroyed", game_id)
+                end_game("ship_destroyed", game_id=game_id)
                 logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
 
             # Handle crew wiped — all crew members dead
@@ -2951,7 +2955,7 @@ async def _analyze_turn_outcome(
             active_npcs = get_all_active_npcs(game_id)
             crew_wiped = len(live_players) == 0 and len(active_npcs) == 0
             if crew_wiped and not ship_destroyed:
-                end_game("crew_wiped", game_id)
+                end_game("crew_wiped", game_id=game_id)
                 logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
 
             # Also update game state with computed crew_health.
@@ -3427,7 +3431,7 @@ def _build_player_briefings_for_push(
     all_briefings: list[dict],
     crew_dialogues: list[dict],
     turn_num: int,
-    game_id: str = "default_game",
+    game_id: str,
 ) -> list[dict]:
     """Build per-player briefing dicts for push payload from stored briefings.
 
@@ -3444,7 +3448,7 @@ def _build_player_briefings_for_push(
         if not player_id:
             continue
         # Skip kicked players — they were replaced by NPCs
-        if is_player_kicked(player_id):
+        if is_player_kicked(player_id, game_id):
             continue
         # Get player_name from profile
         p = get_player_profile(player_id)
@@ -3470,7 +3474,8 @@ def _build_player_briefings_for_push(
 @app.post("/admin/generate-turn")
 async def generate_turn_episode(
     language: str = "en",
-    game_id: str = "default_game",
+    *,
+    game_id: str,
     previous_actions: list[dict[str, Any]] | None = None,
     previous_summary: str | None = None,
     team_assembly_status: dict[str, Any] | None = None,
@@ -3540,7 +3545,8 @@ async def generate_turn_episode(
 async def generate_chosen_action_image(
     player_id: int,
     turn: int | None = None,
-    game_id: str = "default_game",
+    *,
+    game_id: str,
 ):
     """Generate a chosen action image for a player (admin endpoint)."""
     profile = get_player_profile(player_id)
@@ -3601,7 +3607,7 @@ async def generate_chosen_action_image(
 
 
 @app.post("/admin/generate-loading-images")
-async def admin_generate_loading_images(count: int = 10, game_id: str = "default_game"):
+async def admin_generate_loading_images(count: int = 10, *, game_id: str):
     """Manually trigger generation of loading screen images."""
     logger.info(f"[ADMIN] Generating {count} loading images for game {game_id}")
 
@@ -3631,7 +3637,7 @@ async def admin_generate_loading_images(count: int = 10, game_id: str = "default
 
 
 @app.post("/admin/generate-splash-images")
-async def admin_generate_splash_images(game_id: str = "default_game", lang: str = "ru"):
+async def admin_generate_splash_images(game_id: str, lang: str = "ru"):
     """Generate 3 splash images for the game using current game title.
 
     If the game has no title yet, uses a fallback.
@@ -4464,9 +4470,9 @@ async def _original_start_game(request: StartGameRequest):
 
 
 @app.get("/game/mission")
-async def get_mission_endpoint(game_id: str = "default_game"):
+async def get_mission_endpoint(game_id: str):
     """Get the current mission for a game."""
-    mission = get_mission(None, game_id)
+    mission = get_mission(None, game_id=game_id)
     if not mission:
         raise HTTPException(status_code=404, detail="No mission found for this game")
     return mission
@@ -4474,7 +4480,7 @@ async def get_mission_endpoint(game_id: str = "default_game"):
 
 @app.get("/game/bridge-image")
 async def get_bridge_image_endpoint(
-    game_id: str = "default_game",
+    game_id: str,
     turn: int | None = Query(None),
 ):
     """Get the bridge image for a game.
@@ -4491,7 +4497,7 @@ async def get_bridge_image_endpoint(
 
 
 @app.get("/game/team")
-async def get_team_endpoint(game_id: str = "default_game"):
+async def get_team_endpoint(game_id: str):
     """Get the full team roster with avatar URLs and status.
 
     Returns all participants (players + NPCs) without distinguishing
@@ -4559,7 +4565,7 @@ async def get_team_endpoint(game_id: str = "default_game"):
 
 
 @app.post("/player/{player_id}/die")
-async def mark_player_dead_endpoint(player_id: int, game_id: str = "default_game"):
+async def mark_player_dead_endpoint(player_id: int, game_id: str):
     """Mark a player as dead (crew member died in the story)."""
     result = mark_player_dead(player_id, game_id)
     if not result:
@@ -4573,14 +4579,14 @@ async def mark_player_dead_endpoint(player_id: int, game_id: str = "default_game
 
 
 @app.get("/players/{game_id}/spectators")
-async def get_spectator_ids_endpoint(game_id: str = "default_game"):
+async def get_spectator_ids_endpoint(game_id: str):
     """Get IDs of dead players (spectators) in a game."""
     dead = get_dead_players(game_id)
     return {"spectator_ids": dead, "count": len(dead)}
 
 
 @app.get("/players/{game_id}/live")
-async def get_live_player_ids_endpoint(game_id: str = "default_game"):
+async def get_live_player_ids_endpoint(game_id: str):
     """Get IDs of live players in a game."""
     live = get_live_players(game_id)
     return {"live_player_ids": live, "count": len(live)}
@@ -4641,7 +4647,7 @@ def _replace_player_with_npc(
     if not npc:
         raise HTTPException(status_code=500, detail="Failed to create NPC replacement")
 
-    record_kick(player_id, npc["npc_key"], reason)
+    record_kick(player_id, npc["npc_key"], reason, game_id=game_id)
     logger.info(f"[REPLACE] Player {player_id} replaced by NPC {npc_name} for role {role_key} in game {game_id}")
     return {
         "role_name": role_data["role_name"],
@@ -4938,7 +4944,8 @@ async def admin_list_games(include_ended: bool = False):
 async def admin_analyze_turn(
     turn: int | None = None,
     language: str = "ru",
-    game_id: str = "default_game",
+    *,
+    game_id: str,
 ):
     """Manually trigger combined outcome analysis for a specific turn.
 
@@ -5003,7 +5010,7 @@ async def _background_continue_wrapper(
 
 @app.post("/admin/continue-game")
 async def admin_continue_game(
-    game_id: str = "default_game",
+    game_id: str,
     language: str = "ru",
     force_resend: bool = False,
 ):
@@ -5047,7 +5054,7 @@ async def admin_continue_game(
 
 
 async def _original_continue_game(
-    game_id: str = "default_game",
+    game_id: str,
     language: str = "ru",
     force_resend: bool = False,
 ):
@@ -5127,7 +5134,7 @@ async def _original_continue_game(
     gm = create_game_server(language=language)
 
     # Fetch mission data for story consistency
-    mission_data = get_mission(None, game_id) or {}
+    mission_data = get_mission(None, game_id=game_id) or {}
 
     # Step A: Generate global circumstances (with mission context for story consistency)
     global_circ = gm.generate_global_circumstances(
@@ -5476,7 +5483,7 @@ async def _original_continue_game(
 
 @app.post("/admin/regenerate-turn")
 async def admin_regenerate_turn(
-    game_id: str = "default_game",
+    game_id: str,
     language: str = "ru",
 ):
     """Regenerate the current turn with state reset.
@@ -5525,7 +5532,7 @@ async def admin_regenerate_turn(
 
 @app.post("/admin/restart-game")
 async def admin_restart_game(
-    game_id: str = "default_game",
+    game_id: str,
     language: str = "ru",
 ):
     """Reset game state and restart from the first turn.

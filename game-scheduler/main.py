@@ -26,14 +26,19 @@ from database import (
 )
 
 # Configure logging.
-# A daily file handler mirrors logs to /app/YYYY-MM-DD.log so they survive
-# container restarts/recreates (docker json-logs are wiped on recreate).
+# A daily file handler mirrors logs to <script dir>/YYYY-MM-DD.log so they
+# survive container restarts/recreates (docker json-logs are wiped on
+# recreate). The path is relative to this file (=/app inside containers).
+_LOG_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    f"{datetime.now().strftime('%Y-%m-%d')}.log",
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(f"/app/{datetime.now().strftime('%Y-%m-%d')}.log", encoding="utf-8"),
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
     ],
 )
 logger = logging.getLogger(__name__)

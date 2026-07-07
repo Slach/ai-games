@@ -115,6 +115,23 @@ comments for removed code, etc. If you are certain that something is unused, you
   databases in sync with fresh ones. See comment at the `MIGRATIONS`
   definition for the rationale.
 
+- **`game_id` is always passed explicitly, never defaulted.** Never give
+  `game_id` a default value — no `game_id: str = "default_game"` (or any
+  other default) in a function signature, and no `Query("default_game")`
+  default on an endpoint. Every function that takes `game_id` and every
+  call site (bot, scheduler, internal) must pass it explicitly,
+  positionally or as a keyword argument. A silent `default_game` default
+  once routed a player's action to the wrong game's turn: the bot fetched
+  the current turn for `default_game` (a stale, completed game) but
+  submitted the action for the player's real game — 404 "No active game
+  turn". The only legitimate uses of the literal `"default_game"` are
+  seeding it in `init_db()` and the global shared bucket for loading/splash
+  images (`_generate_loading_images` / `_generate_splash_images`), and even
+  there it is passed explicitly as `game_id="default_game"`. When a
+  `game_id` parameter would otherwise sit after an optional parameter,
+  make it keyword-only (`*, game_id: str`) instead of reordering — this
+  keeps existing positional callers valid.
+
 - **Format datetime with `strftime`, never string concatenation.**
   When displaying a datetime with a timezone label, use `dt.strftime("%Y-%m-%d %H:%M %Z")` —
   `%Z` produces `UTC`, `MSK`, etc. directly from the `tzinfo` object.

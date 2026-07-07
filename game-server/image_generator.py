@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import os
-import random
+import secrets
 import uuid
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -69,7 +69,7 @@ def _build_zimage_turbo_workflow(
       ConditioningZeroOut for negative (required by Z-Image Turbo)
     """
     if seed == 0:
-        seed = random.randint(0, 2**63)
+        seed = secrets.randbelow(2**63 + 1)
 
     return {
         # Load UNET model
@@ -345,7 +345,6 @@ class ImageGenerator:
         self,
         prompt: str,
         filename_prefix: str = "avatar",
-        game_id: str = "default_game",
         width: int = 768,
         height: int = 1024,
     ) -> str | None:
@@ -455,7 +454,7 @@ class ImageGenerator:
             ComfyUI workflow dict ready for /prompt API
         """
         if seed == 0:
-            seed = random.randint(0, 2**63)
+            seed = secrets.randbelow(2**63 + 1)
 
         return {
             # Load reference image (uploaded to ComfyUI input folder)
@@ -653,7 +652,8 @@ class ImageGenerator:
         count: int = 10,
         start_index: int = 0,
         filename_prefix: str = "loading",
-        game_id: str = "default_game",
+        *,
+        game_id: str,
         width: int = 768,
         height: int = 768,
     ) -> list[str]:
@@ -701,7 +701,8 @@ class ImageGenerator:
         crew_descriptions: list[dict[str, str]],
         avatar_urls: list[str | None] | None = None,
         filename_prefix: str = "bridge",
-        game_id: str = "default_game",
+        *,
+        game_id: str,
         width: int = 1024,
         height: int = 768,
     ) -> str | None:
@@ -746,7 +747,8 @@ class ImageGenerator:
         welcome_text: str,
         count: int = 3,
         filename_prefix: str = "splash",
-        game_id: str = "default_game",
+        *,
+        game_id: str,
         width: int = 1024,
         height: int = 768,
     ) -> list[str]:

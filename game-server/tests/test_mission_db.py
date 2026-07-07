@@ -52,7 +52,7 @@ class TestMissionPersistence(unittest.TestCase):
         raw["total_stages"] = 1
         raw["stage_progress"] = {"1": 5, "2": 5}
         db.create_mission(raw, "g2")
-        got = db.get_mission(None, "g2")
+        got = db.get_mission(None, game_id="g2")
         assert got is not None
         self.assertEqual(got["total_stages"], 2)
         self.assertEqual(got["current_stage"], 3)  # both stages >= threshold
@@ -63,7 +63,7 @@ class TestMissionPersistence(unittest.TestCase):
         raw["archetype"] = "first_contact"
         raw["seeds"] = {"setting": "orbital station", "complication": "pirates"}
         db.create_mission(raw, "g3")
-        got = db.get_mission(None, "g3")
+        got = db.get_mission(None, game_id="g3")
         assert got is not None
         self.assertEqual(got["archetype"], "first_contact")
         self.assertEqual(got["seeds"]["complication"], "pirates")
