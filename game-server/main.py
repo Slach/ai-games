@@ -582,7 +582,7 @@ async def generate_dynamic_species_gender_question(
     game_server._llm_kind = "sg_question"
     game_server._llm_player_id = str(session.get("player_id", "none"))
     accumulated = game_server._count_tags_from_answers(session_answers, tag_field, session_questions)
-    generated = game_server.generate_dynamic_species_gender_question(dimension, sg_step, accumulated, game_id=game_id, player_id=str(session.get("player_id", "none")))
+    generated = game_server.generate_dynamic_species_gender_question(dimension, sg_step, accumulated)
 
     prefix = "s" if dimension == "species" else "g"
     options = [
@@ -636,7 +636,7 @@ def generate_player_profile_from_answers(
 
     assigned_key = role_result.get("role_key", "")
 
-    role_data = get_role_by_key(assigned_key, language=language, game_id=game_id)
+    role_data = get_role_by_key(assigned_key, language=language)
     if not role_data or role_data.get("taken_by") is not None:
         logger.warning(f"[ROLE] Suggested taken/invalid role '{assigned_key}', re-assigning from available")
         available = get_available_roles(game_id, language=language)
@@ -644,7 +644,7 @@ def generate_player_profile_from_answers(
             raise ValueError("All crew positions are filled while re-assigning.")
         role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
         assigned_key = role_result.get("role_key", "")
-        role_data = get_role_by_key(assigned_key, language=language, game_id=game_id)
+        role_data = get_role_by_key(assigned_key, language=language)
 
     if not role_data:
         role_data = available[0]
@@ -665,7 +665,7 @@ def generate_player_profile_from_answers(
             role_data = available[0]
             take_role(role_data["role_key"], player_id, game_id)
         else:
-            role_data = get_role_by_key(fallback_key, language=language, game_id=game_id)
+            role_data = get_role_by_key(fallback_key, language=language)
 
     if not role_data:
         raise ValueError("Could not resolve an available role for player.")
@@ -952,7 +952,7 @@ async def _background_onboarding_images(
                     saved = 0
                     for url in urls:
                         if url:
-                            save_game_image(type="splash", image_url=url, game_id=game_id)
+                            save_game_image(type="splash", image_url=url)
                             saved += 1
                     logger.info(f"[ONBOARDING_BG] Saved {saved}/3 splash images")
                 except Exception as e:
@@ -1052,7 +1052,9 @@ async def start_onboarding(request: StartOnboardingRequest):
     else:
         try:
             gm = create_game_server(language=request.language)
-            game_title_data = gm.generate_game_title(game_id=game_id)
+            gm._llm_game_id = request.game_id
+            gm._llm_kind = "game_title"
+            game_title_data = gm.generate_game_title()
 
             if game_title_data.get("title"):
                 save_game_title_and_welcome(
@@ -1269,14 +1271,14 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
         # Mission (archetype + objectives)
         mission_data = get_mission(game_id=game_id)
         if not mission_data:
-            mission_data = gm.generate_mission(all_participants, game_id=game_id)
+            mission_data = gm.generate_mission(all_participants)
             create_mission(mission_data, game_id)
             logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
 
         # Bridge image (needs the mission for crew positioning context)
-        if not get_random_game_image(type="bridge", game_id=game_id):
+        if not get_random_game_image(type="bridge"):
             try:
-                bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=game_id)
+                bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants)
                 bridge_prompt = bridge_result.get("bridge_prompt", "")
                 if bridge_prompt:
                     image_gen = create_image_generator()
@@ -1284,7 +1286,7 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                         filename_prefix=f"{game_id}/bridge",
                         game_id=game_id, turn=turn, kind="bridge")
                     if bridge_url:
-                        save_game_image(type="bridge", image_url=bridge_url, game_id=game_id, prompt=bridge_prompt)
+                        save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt)
                         logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
             except Exception:
                 logger.error(f"[BRIDGE] Failed to generate bridge image for auto-started game {game_id}", exc_info=True)
@@ -1831,7 +1833,7 @@ async def get_game_status_endpoint(game_id: str):
         if not p:
             continue
         # Check if they have a pending choice for the current turn
-        briefing = get_player_briefing(current_turn_num, pid, game_id=game_id)
+        briefing = get_player_briefing(current_turn_num, pid)
         has_chosen = briefing is not None and briefing.get("selected_action_id") is not None
         chosen_action_text = ""
         if briefing and briefing.get("selected_action_id"):
@@ -1856,7 +1858,7 @@ async def get_game_status_endpoint(game_id: str):
     npcs_list = []
     for npc in get_all_npcs(game_id):
         npc_key = npc["npc_key"]
-        all_briefings = get_all_briefings_for_turn(current_turn_num, game_id=game_id)
+        all_briefings = get_all_briefings_for_turn(current_turn_num)
         chosen_action_text = ""
         for b in all_briefings:
             if b.get("npc_key") == npc_key and b.get("selected_action_id"):
@@ -1901,7 +1903,7 @@ async def get_game_status_endpoint(game_id: str):
 @app.get("/game/turn/{turn_num}")
 async def get_game_turn_endpoint(turn_num: int, game_id: str):
     """Get specific turn's episode"""
-    turn_data = get_game_turn(turn_num, game_id=game_id)
+    turn_data = get_game_turn(turn_num)
     if not turn_data:
         raise HTTPException(status_code=404, detail="Turn not found")
     return turn_data
@@ -1918,7 +1920,7 @@ async def get_current_game_turn(game_id: str):
     """
     state = get_game_state(game_id)
     current_turn_num = max(1, state["turn"] - 1)
-    turn_data = get_game_turn(current_turn_num, game_id=game_id)
+    turn_data = get_game_turn(current_turn_num)
     if not turn_data:
         raise HTTPException(status_code=404, detail="No game turn generated yet")
     return turn_data
@@ -1975,20 +1977,20 @@ async def poll_game_updates(player_id: int, since: str | None = None):
         current_turn_num = max(1, state["turn"] - 1)
 
         # First, check player_briefings for per-player content
-        briefing = get_player_briefing(current_turn_num, player_id, game_id=game_id)
+        briefing = get_player_briefing(current_turn_num, player_id)
 
         if briefing and briefing.get("choices"):
             # Safety check: only return briefing if game_turn record exists
             # (prevents race condition where briefings are saved before game_turn)
-            turn_record = get_game_turn(current_turn_num, game_id=game_id)
+            turn_record = get_game_turn(current_turn_num)
             if turn_record is None:
                 logger.debug(f"[POLL] Skipping briefing for player {player_id} turn {current_turn_num}: game_turn not yet created")
             elif not briefing.get("selected_action_id"):
                 # Player hasn't chosen yet — return their briefing
                 # Get scene image for this turn
-                scene_url = get_random_game_image(type="scene", turn=current_turn_num, game_id=game_id)
+                scene_url = get_random_game_image(type="scene", turn=current_turn_num)
                 # Also fetch NPC dialogues for crew behavior context
-                turn_record = get_game_turn(current_turn_num, game_id=game_id)
+                turn_record = get_game_turn(current_turn_num)
                 crew_dialogues = turn_record["crew_dialogues"] if turn_record else []
                 updates["personal_briefing"] = {
                     "briefing": briefing["briefing"],
@@ -2005,7 +2007,7 @@ async def poll_game_updates(player_id: int, since: str | None = None):
                 }
         else:
             # Fall back to legacy game_turns player_actions
-            turn_data = get_game_turn(current_turn_num, game_id=game_id)
+            turn_data = get_game_turn(current_turn_num)
             if turn_data and turn_data.get("player_actions"):
                 player_actions = get_player_actions(player_id, current_turn_num)
                 if not player_actions:
@@ -2041,7 +2043,7 @@ async def submit_player_action(request: PlayerActionRequest):
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
 
     # First check if player has a personal briefing (new system)
-    briefing = get_player_briefing(request.turn, request.player_id, game_id=game_id)
+    briefing = get_player_briefing(request.turn, request.player_id)
 
     if briefing and briefing.get("choices"):
         # New system: validate against briefing choices — does NOT require game_turn
@@ -2068,7 +2070,7 @@ async def submit_player_action(request: PlayerActionRequest):
         )
     else:
         # Legacy system: validate against game_turns.player_actions
-        current_turn = get_game_turn(request.turn, game_id=game_id)
+        current_turn = get_game_turn(request.turn)
         if not current_turn:
             raise HTTPException(status_code=404, detail="No active game turn")
         valid_actions = [a["id"] for a in current_turn.get("player_actions", [])]
@@ -2099,11 +2101,11 @@ async def submit_player_action(request: PlayerActionRequest):
 
     # Check if all real players have now chosen — if so, trigger combined outcome analysis
     try:
-        remaining = get_players_who_need_to_choose(request.turn, game_id=game_id)
+        remaining = get_players_who_need_to_choose(request.turn)
         if not remaining:
             # All players chose — analyze combined outcome
             logger.info(f"All players chose for turn {request.turn}, analyzing combined outcome")
-            asyncio.create_task(_analyze_turn_outcome(request.turn, game_id=game_id))
+            asyncio.create_task(_analyze_turn_outcome(request.turn))
     except Exception as e:
         logger.warning(f"Combined outcome check failed: {e}")
 
@@ -2128,7 +2130,7 @@ async def auto_select_action(
     logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, turn {turn}")
 
     # 1. Get player's briefing with choices
-    briefing = get_player_briefing(turn, player_id, game_id=game_id)
+    briefing = get_player_briefing(turn, player_id)
     if not briefing:
         raise HTTPException(
             status_code=404,
@@ -2155,7 +2157,7 @@ async def auto_select_action(
         raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
 
     # 3. Get global circumstances
-    game_turn = get_game_turn(turn, game_id=game_id)
+    game_turn = get_game_turn(turn)
     global_circ = {}
     if game_turn:
         gc_str = game_turn.get("global_circumstances", "{}")
@@ -2221,10 +2223,10 @@ async def auto_select_action(
 
     # 7. Check if all players have now chosen
     try:
-        remaining = get_players_who_need_to_choose(turn, game_id=game_id)
+        remaining = get_players_who_need_to_choose(turn)
         if not remaining:
             logger.info(f"All players chose for turn {turn} (after auto-select), analyzing combined outcome")
-            asyncio.create_task(_analyze_turn_outcome(turn, game_id=game_id))
+            asyncio.create_task(_analyze_turn_outcome(turn))
     except Exception as e:
         logger.warning(f"Combined outcome check after auto-select failed: {e}")
 
@@ -2277,7 +2279,7 @@ def _build_game_message_context(game_id: str, player_id: int, profile_data: dict
     # Previous turn data (current turn - 1, since game_state.turn is the NEXT turn to generate)
     current_turn = max(1, turn_num - 1)
     if current_turn >= 1:
-        prev_turn = get_game_turn(current_turn, game_id=game_id)
+        prev_turn = get_game_turn(current_turn)
         if prev_turn:
             # Use combined_outcome if available, else previous_turn_summary
             outcome = prev_turn.get("combined_outcome") or prev_turn.get("previous_turn_summary", "")
@@ -2368,11 +2370,11 @@ async def get_player_briefing_endpoint(player_id: int, turn: int):
     """Get a player's personal briefing and choices for a specific turn"""
     profile = get_player_profile(player_id)
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
-    briefing = get_player_briefing(turn, player_id, game_id=game_id)
+    briefing = get_player_briefing(turn, player_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found")
     # Scene image for this turn
-    briefing_image_url = get_random_game_image(type="scene", turn=turn, game_id=game_id)
+    briefing_image_url = get_random_game_image(type="scene", turn=turn)
     return {
         "briefing": briefing["briefing"],
         "choices": briefing["choices"],
@@ -2391,7 +2393,7 @@ async def get_current_briefing_endpoint(player_id: int):
     game_id = profile.get("game_id", "default_game") if profile else "default_game"
     state = get_game_state(game_id)
     turn_num = state["turn"]
-    briefing = get_player_briefing(turn_num, player_id, game_id=game_id)
+    briefing = get_player_briefing(turn_num, player_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found for current turn")
     return {
@@ -2427,7 +2429,7 @@ async def get_loading_image(game_id: str):
     Falls back to a manually-placed default image in ComfyUI output
     if no AI-generated loading images are available yet.
     """
-    url = get_random_game_image(type="loading", game_id=game_id)
+    url = get_random_game_image(type="loading")
     if not url:
         logger.info(f"[LOADING] No generated loading images, using fallback: {DEFAULT_LOADING_FALLBACK_URL}")
         return {
@@ -2445,7 +2447,7 @@ async def get_splash_image(game_id: str):
     Falls back to a manually-placed default image in ComfyUI output
     if no AI-generated splash images are available yet.
     """
-    url = get_random_game_image(type="splash", game_id=game_id)
+    url = get_random_game_image(type="splash")
     if not url:
         logger.info(f"[SPLASH] No generated splash images, using fallback: {DEFAULT_SPLASH_FALLBACK_URL}")
         return {
@@ -2476,7 +2478,7 @@ async def _generate_chosen_action_image(
             return
 
         # Get the briefing to find the action text
-        briefing = get_player_briefing(turn, player_id, game_id=game_id)
+        briefing = get_player_briefing(turn, player_id)
         if not briefing:
             logger.warning(f"[ACTION_IMAGE] Briefing not found for {player_id} turn {turn}")
             return
@@ -2491,7 +2493,7 @@ async def _generate_chosen_action_image(
             action_text = action_id
 
         # Get scene context from game_turn
-        turn_data = get_game_turn(turn, game_id=game_id)
+        turn_data = get_game_turn(turn)
         global_circ_str = turn_data.get("global_circumstances", "{}") if turn_data else "{}"
         try:
             global_circ = json.loads(global_circ_str)
@@ -2612,7 +2614,7 @@ async def _generate_npc_chosen_action_image(
             action_text = action_id
 
         # Get scene context from game_turn
-        turn_data = get_game_turn(turn, game_id=game_id)
+        turn_data = get_game_turn(turn)
         global_circ_str = turn_data.get("global_circumstances", "{}") if turn_data else "{}"
         try:
             global_circ = json.loads(global_circ_str)
@@ -2783,7 +2785,7 @@ def _build_cumulative_story_summary(
     turn_label = cs["turn_label"]
 
     for d in range(1, current_turn):
-        turn_record = get_game_turn(d, game_id=game_id)
+        turn_record = get_game_turn(d)
         if not turn_record:
             continue
 
@@ -2921,7 +2923,7 @@ async def _analyze_turn_outcome(
             )
 
             # Get mission context for progress tracking
-            mission = get_mission(None, game_id=game_id)
+            mission = get_mission(None)
 
             # Build full crew roster from all briefings — prevents LLM from inventing members
             crew_roster = []
@@ -3011,7 +3013,7 @@ async def _analyze_turn_outcome(
                     logger.info(f"[MISSION] Stage {stage_key} progress now {pts}")
                 if updated_mission["completed"]:
                     mission_completed = True
-                    end_game("mission_complete", game_id=game_id)
+                    end_game("mission_complete")
                     logger.info("[MISSION] MISSION COMPLETE! Game ended.")
                 mission = updated_mission
 
@@ -3089,7 +3091,7 @@ async def _analyze_turn_outcome(
 
             # Handle ship destruction
             if ship_destroyed:
-                end_game("ship_destroyed", game_id=game_id)
+                end_game("ship_destroyed")
                 logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
 
             # Handle crew wiped — all crew members dead
@@ -3097,7 +3099,7 @@ async def _analyze_turn_outcome(
             active_npcs = get_all_active_npcs(game_id)
             crew_wiped = len(live_players) == 0 and len(active_npcs) == 0
             if crew_wiped and not ship_destroyed:
-                end_game("crew_wiped", game_id=game_id)
+                end_game("crew_wiped")
                 logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
 
             # Also update game state with computed crew_health.
@@ -3583,7 +3585,7 @@ def _build_player_briefings_for_push(
     Also fetches player_name for each real player to include in the payload.
     """
     # Fetch scene image for this turn (if generated and saved)
-    scene_url = get_random_game_image(type="scene", turn=turn_num, game_id=game_id)
+    scene_url = get_random_game_image(type="scene", turn=turn_num)
     players_data = []
     for b in all_briefings:
         if b.get("is_npc"):
@@ -3678,7 +3680,7 @@ async def generate_turn_episode(
     }
 
     create_game_turn(new_turn, game_id)
-    update_game_state(turn_num + 1, "active", game_id=game_id)
+    update_game_state(turn_num + 1, "active")
 
     logger.info("=== GENERATE TURN COMPLETED ===")
     logger.info(f"Story: {story.narrative}...")
@@ -3746,7 +3748,7 @@ async def generate_chosen_action_image(
     game_id=game_id, player_id=str(player_id), kind="player_action")
 
     # Store chosen_action_url in player's briefing for this turn (if briefing exists)
-    briefing = get_player_briefing(turn_num_val, player_id, game_id=game_id)
+    briefing = get_player_briefing(turn_num_val, player_id)
     if briefing:
         update_briefing_chosen_action_url(briefing["id"], chosen_action_url)
 
@@ -3773,7 +3775,7 @@ async def admin_generate_loading_images(count: int = 10, *, game_id: str):
         saved = 0
         for url in urls:
             if url:
-                save_game_image(type="loading", image_url=url, game_id=game_id)
+                save_game_image(type="loading", image_url=url)
                 saved += 1
 
         return {
@@ -3812,7 +3814,7 @@ async def admin_generate_splash_images(game_id: str, lang: str = "ru"):
         saved = 0
         for url in urls:
             if url:
-                save_game_image(type="splash", image_url=url, game_id=game_id)
+                save_game_image(type="splash", image_url=url)
                 saved += 1
 
         return {
@@ -4227,7 +4229,7 @@ async def _original_start_game(request: StartGameRequest):
     if npc_roles_for_avatar:
         try:
             image_gen = create_image_generator()
-            avatar_prompts = gm.generate_npc_avatar_prompts(npc_roles_for_avatar, game_id=game_id)
+            avatar_prompts = gm.generate_npc_avatar_prompts(npc_roles_for_avatar)
             for prompt_entry in avatar_prompts:
                 role_key = prompt_entry.get("role_key", "")
                 prompt = prompt_entry.get("prompt", "")
@@ -4268,7 +4270,7 @@ async def _original_start_game(request: StartGameRequest):
 
     # 6c. Generate bridge image (resume: skip if already generated)
     try:
-        if get_random_game_image(type="bridge", game_id=game_id):
+        if get_random_game_image(type="bridge"):
             logger.info("[BRIDGE] Resume: bridge image already exists, skipping")
         else:
             gm._llm_kind = "bridge_image_prompt"
@@ -4330,7 +4332,7 @@ async def _original_start_game(request: StartGameRequest):
     )
 
     # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
-    scene_url = get_random_game_image(type="scene", turn=turn_num, game_id=game_id)
+    scene_url = get_random_game_image(type="scene", turn=turn_num)
     if scene_url:
         logger.info(f"[SCENE] Resume: scene image already exists for turn {turn_num}, skipping")
     else:
@@ -4392,7 +4394,7 @@ async def _original_start_game(request: StartGameRequest):
     # Resume support: map existing briefings for this turn (from an interrupted
     # run) by participant key so completed briefings are reused, not regenerated.
     existing_by_key: dict[str, dict[str, Any]] = {}
-    for _b in get_all_briefings_for_turn(turn_num, game_id=game_id):
+    for _b in get_all_briefings_for_turn(turn_num):
         if _b.get("is_npc") and _b.get("npc_key"):
             existing_by_key[f"npc:{_b['npc_key']}"] = _b
         elif _b.get("player_id"):
@@ -4700,7 +4702,7 @@ async def _original_start_game(request: StartGameRequest):
     create_game_turn(new_turn, game_id)
 
     # Advance game state to next turn
-    update_game_state(turn_num + 1, "active", game_id=game_id)
+    update_game_state(turn_num + 1, "active")
 
     # Build per-player briefing response
     briefings_for_response = []
@@ -4723,7 +4725,7 @@ async def _original_start_game(request: StartGameRequest):
     logger.info(f"Turn: {turn_num}, Participants: {len(all_participants)}, NPCs: {len(npcs_created)}")
 
     # Get bridge image URL if generated
-    bridge_url = get_random_game_image(type="bridge", game_id=game_id)
+    bridge_url = get_random_game_image(type="bridge")
 
     # Build mission info
     mission_info = {}
@@ -4736,7 +4738,7 @@ async def _original_start_game(request: StartGameRequest):
 
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
-        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id=game_id)
+        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num)
         if player_briefings:
             asyncio.create_task(
                 push_briefings(
@@ -4772,7 +4774,7 @@ async def _original_start_game(request: StartGameRequest):
 @app.get("/game/mission")
 async def get_mission_endpoint(game_id: str):
     """Get the current mission for a game."""
-    mission = get_mission(None, game_id=game_id)
+    mission = get_mission(None)
     if not mission:
         raise HTTPException(status_code=404, detail="No mission found for this game")
     return mission
@@ -4790,7 +4792,7 @@ async def get_bridge_image_endpoint(
         turn: If set, returns the scene image for that turn instead of bridge image.
     """
     img_type = "scene" if turn is not None else "bridge"
-    url = get_random_game_image(type=img_type, game_id=game_id, turn=turn)
+    url = get_random_game_image(type=img_type, turn=turn)
     if not url:
         raise HTTPException(status_code=404, detail=f"No {img_type} image found")
     return {"image_url": url, "game_id": game_id, "type": img_type}
@@ -4909,7 +4911,7 @@ def _replace_player_with_npc(
 
     Returns {"role_name", "npc_key", "npc_name"}. Raises HTTPException on failure.
     """
-    role_data = get_role_by_key(role_key, language="ru", game_id=game_id)
+    role_data = get_role_by_key(role_key, language="ru")
     if not role_data:
         raise HTTPException(status_code=404, detail=f"Role '{role_key}' not found")
 
@@ -4954,7 +4956,7 @@ def _replace_player_with_npc(
     if not npc:
         raise HTTPException(status_code=500, detail="Failed to create NPC replacement")
 
-    record_kick(player_id, npc["npc_key"], reason, game_id=game_id)
+    record_kick(player_id, npc["npc_key"], reason)
     logger.info(f"[REPLACE] Player {player_id} replaced by NPC {npc_name} for role {role_key} in game {game_id}")
     return {
         "role_name": role_data["role_name"],
@@ -5034,7 +5036,7 @@ async def admin_kick_player(request: KickPlayerRequest):
     role_key = request.role_key
 
     # Find who currently holds this role
-    role_data = get_role_by_key(role_key, language="ru", game_id=game_id)
+    role_data = get_role_by_key(role_key, language="ru")
     if not role_data:
         raise HTTPException(status_code=404, detail=f"Role '{role_key}' not found")
     taken_by = role_data.get("taken_by")
@@ -5268,7 +5270,7 @@ async def admin_analyze_turn(
         turn_num = turn
 
     logger.info(f"[ADMIN] Manual outcome analysis for Turn {turn_num}")
-    await _analyze_turn_outcome(turn_num, language=language, game_id=game_id, force=True)
+    await _analyze_turn_outcome(turn_num, language=language, force=True)
 
     game_turn = get_game_turn(turn_num, game_id)
     outcome_str = game_turn.get("combined_outcome", "{}") if game_turn else "{}"
@@ -5451,7 +5453,7 @@ async def _original_continue_game(
     gm._llm_turn = turn_num
 
     # Fetch mission data for story consistency
-    mission_data = get_mission(None, game_id=game_id) or {}
+    mission_data = get_mission(None) or {}
 
     # Step A: Generate global circumstances (resume: reuse if already stored)
     global_circ = None
@@ -5479,7 +5481,7 @@ async def _original_continue_game(
     )
 
     # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
-    scene_url = get_random_game_image(type="scene", turn=turn_num, game_id=game_id)
+    scene_url = get_random_game_image(type="scene", turn=turn_num)
     if scene_url:
         logger.info(f"[SCENE] Resume: scene image already exists for turn {turn_num}, skipping")
     else:
@@ -5536,7 +5538,7 @@ async def _original_continue_game(
     all_briefings = []
     # Resume support: reuse existing briefings from an interrupted run.
     existing_by_key: dict[str, dict[str, Any]] = {}
-    for _b in get_all_briefings_for_turn(turn_num, game_id=game_id):
+    for _b in get_all_briefings_for_turn(turn_num):
         if _b.get("is_npc") and _b.get("npc_key"):
             existing_by_key[f"npc:{_b['npc_key']}"] = _b
         elif _b.get("player_id"):
@@ -5586,7 +5588,7 @@ async def _original_continue_game(
                 player_name = p.get("player_name", "") or ""
         elif participant["type"] == "npc":
             player_name = participant.get("npc_name", "") or ""
-        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile, player_name, turn_num, game_id=game_id)
+        briefing_data = gm.generate_player_briefing_and_choices(global_circ, gm_profile, player_name, turn_num)
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])
         personal_title = briefing_data.get("personal_title", "")
@@ -5596,7 +5598,7 @@ async def _original_continue_game(
 
         if participant["type"] == "npc":
             npc_profile = get_npc_profile(participant["npc_key"]) or participant
-            npc_decision = gm.generate_npc_choice(choices, npc_profile, game_id=game_id, turn=turn_num)
+            npc_decision = gm.generate_npc_choice(choices, npc_profile)
             selected_id = npc_decision.get("action_id", "")
             rationale = npc_decision.get("rationale", "")
 
@@ -5806,7 +5808,7 @@ async def _original_continue_game(
     create_game_turn(new_turn, game_id)
 
     # Advance game state
-    update_game_state(turn_num + 1, "active", game_id=game_id)
+    update_game_state(turn_num + 1, "active")
 
     # ── Push previous turn outcome (if applicable) ──────────────
     # Must run BEFORE pushing new turn briefings so player sees:
@@ -5823,7 +5825,7 @@ async def _original_continue_game(
         # Build the global intro narrative from global circumstances
         global_narrative = global_circ.get("narrative", "")
 
-        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id=game_id)
+        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num)
         if player_briefings:
             asyncio.create_task(
                 push_briefings(
@@ -5882,7 +5884,7 @@ async def admin_regenerate_turn(
     # Roll back game state to before the deleted turn
     reset_game_state_to_turn1(game_id)
     # Restore to the correct turn (the turn being regenerated)
-    update_game_state(regenerate_turn, "active", game_id=game_id)
+    update_game_state(regenerate_turn, "active")
 
     # Now regenerate the turn using the continue-game logic
     # admin_continue_game now starts background processing and returns immediately
