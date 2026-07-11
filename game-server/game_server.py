@@ -52,6 +52,8 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from pydantic import BaseModel
 
+from verbalize_sampling import DIVERSITY_HINTS, VS_RESPONSE_SCHEMA, select_response, verbalize_prompt
+
 logger = logging.getLogger(__name__)
 
 
@@ -792,6 +794,11 @@ class GameServer:
         self.language = language
         self.npcs: dict[str, dict[str, Any]] = {}
 
+        # Verbalized Sampling config
+        self.vs_enabled = os.getenv("VS_ENABLED", "1") == "1"
+        self.vs_k = _safe_int_env("VS_K", 5)
+        self.vs_mode = os.getenv("VS_MODE", "full")
+
         self.client = OpenAI(
             api_key=self.llm_api_key,
             base_url=self.llm_base_url,
@@ -1239,14 +1246,25 @@ class GameServer:
         """Generate a creative game title and welcome message."""
         logger.info(f"[TITLE] Generating game title, language: {self.language}")
 
-        system, user = build_game_title_prompts(self.language)
+        system, user = build_game_title_prompts(self.language, use_vs=self.vs_enabled, vs_k=self.vs_k)
 
-        result = self._call_llm(
-            system_prompt=system,
-            user_prompt=user,
-            response_schema=GAME_TITLE_SCHEMA,
-            temperature=0.9,
-        )
+        if self.vs_enabled:
+            vs_result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=VS_RESPONSE_SCHEMA,
+                temperature=0.9,
+            )
+            chosen = select_response(vs_result["responses"], self.vs_mode)
+            logger.info("[VS-TITLE] Selected p=%.3f", chosen["probability"])
+            result = json.loads(chosen["text"])
+        else:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=GAME_TITLE_SCHEMA,
+                temperature=0.9,
+            )
 
         logger.info(f"[TITLE] Generated: {result.get('title', '')}")
         return result
@@ -1257,13 +1275,24 @@ class GameServer:
         """Generate daily story using LLM with json_schema."""
         logger.info(f"[STORY] Starting story generation for Turn {turn}, language: {self.language}")
 
-        system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role)
+        system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role, use_vs=self.vs_enabled, vs_k=self.vs_k)
 
-        parsed = self._call_llm(
-            system_prompt=system,
-            user_prompt=user,
-            response_schema=STORY_SCHEMA,
-            max_tokens=4096,
+        if self.vs_enabled:
+            vs_result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=VS_RESPONSE_SCHEMA,
+                max_tokens=8192,
+            )
+            chosen = select_response(vs_result["responses"], self.vs_mode)
+            logger.info("[VS-STORY] Selected p=%.3f", chosen["probability"])
+            parsed = json.loads(chosen["text"])
+        else:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=STORY_SCHEMA,
+                max_tokens=4096,
         )
 
         story = GameStory(
@@ -1433,19 +1462,32 @@ class GameServer:
             global_circumstances_conflict=ctx.get("global_circumstances_conflict", ""),
             global_circumstances_narrative=ctx.get("global_circumstances_narrative", ""),
             crew_context=ctx.get("crew_context", ""),
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=PLAYER_MESSAGE_SCHEMA,
-                max_tokens=1024,
-            )
-            return parsed.get("response", "Game Master received your message.")
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=2048,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info("[VS-PLAYERMSG] Selected p=%.3f", chosen["probability"])
+                parsed = json.loads(chosen["text"])
+                return parsed.get("response", "")
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=PLAYER_MESSAGE_SCHEMA,
+                    max_tokens=1024,
+                )
+                return parsed.get("response", "Game Master received your message.")
         except Exception as e:
             logger.error(f"Message processing failed: {e}", exc_info=True)
-            # Fallback to text-only call
             return self._call_llm_text(system, user)
 
     # ============== Avatar Prompt ==============
@@ -1543,14 +1585,26 @@ spatial presence\n"
             "Write the prompt in English."
         )
 
-        parsed = self._call_llm(
-            system_prompt=system,
-            user_prompt=user,
-            response_schema=AVATAR_PROMPT_SCHEMA,
-            max_tokens=self.llm_max_avatar_tokens,
-        )
-
-        avatar_prompt = parsed.get("avatar_prompt", "")
+        if self.vs_enabled:
+            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["avatar"], k=self.vs_k)
+            parsed = self._call_llm(
+                system_prompt=vs_system,
+                user_prompt=vs_user,
+                response_schema=VS_RESPONSE_SCHEMA,
+                max_tokens=self.llm_max_avatar_tokens,
+            )
+            chosen = select_response(parsed["responses"], self.vs_mode)
+            inner = json.loads(chosen["text"])
+            avatar_prompt = inner.get("avatar_prompt", "")
+            logger.info("[VS-AVATAR] Selected p=%.3f", chosen["probability"])
+        else:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=AVATAR_PROMPT_SCHEMA,
+                max_tokens=self.llm_max_avatar_tokens,
+            )
+            avatar_prompt = parsed.get("avatar_prompt", "")
         logger.info(f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}...")
         return avatar_prompt
 
@@ -1631,14 +1685,26 @@ spatial presence\n"
             "Do NOT add comic book effects, panel borders, speech bubbles, or halftone dots."
         )
 
-        parsed = self._call_llm(
-            system_prompt=system,
-            user_prompt=user,
-            response_schema=CHOSEN_ACTION_PROMPT_SCHEMA,
-            max_tokens=self.llm_max_avatar_tokens,
-        )
-
-        prompt = parsed.get("chosen_action_prompt", "")
+        if self.vs_enabled:
+            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["action_prompt"], k=self.vs_k)
+            parsed = self._call_llm(
+                system_prompt=vs_system,
+                user_prompt=vs_user,
+                response_schema=VS_RESPONSE_SCHEMA,
+                max_tokens=self.llm_max_avatar_tokens,
+            )
+            chosen = select_response(parsed["responses"], self.vs_mode)
+            inner = json.loads(chosen["text"])
+            prompt = inner.get("chosen_action_prompt", "")
+            logger.info("[VS-ACTION] Selected p=%.3f", chosen["probability"])
+        else:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=CHOSEN_ACTION_PROMPT_SCHEMA,
+                max_tokens=self.llm_max_avatar_tokens,
+            )
+            prompt = parsed.get("chosen_action_prompt", "")
         logger.info(f"[ACTION_PROMPT] Generated for {role}: {prompt[:120]}...")
         return prompt
 
@@ -1813,16 +1879,29 @@ spatial presence\n"
             gender_display,
             gender_secondary,
             gender_hybrid,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=SPECIES_GENDER_DESC_SCHEMA,
-                temperature=0.8,
-                max_tokens=1024,
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                parsed = json.loads(chosen["text"])
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=SPECIES_GENDER_DESC_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=1024,
+                )
             species_desc = parsed.get("species_description", "")
             logger.info(f"[SPECIES] Description generated: {species_desc}...")
             return species_desc
@@ -1989,16 +2068,27 @@ spatial presence\n"
         # Build the choice text for the NPC
         choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
 
-        system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text)
+        system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text, use_vs=self.vs_enabled, vs_k=self.vs_k)
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=NPC_CHOICE_SCHEMA,
-                temperature=0.8,
-                max_tokens=512,
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                parsed = json.loads(chosen["text"])
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=NPC_CHOICE_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=512,
+                )
             action_id = parsed.get("action_id", "")
             rationale = parsed.get("rationale", "")
 
@@ -2078,16 +2168,29 @@ spatial presence\n"
             personal_briefing,
             gc_settings,
             choices_text,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=NPC_CHOICE_SCHEMA,
-                temperature=0.8,
-                max_tokens=512,
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=2048,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                parsed = json.loads(chosen["text"])
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=NPC_CHOICE_SCHEMA,
+                    temperature=0.8,
+                    max_tokens=512,
+                )
             action_id = parsed.get("action_id", "")
             rationale = parsed.get("rationale", "")
 
@@ -2174,15 +2277,28 @@ spatial presence\n"
             previous_summary,
             player_descriptions,
             mission_str,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
-                max_tokens=4096,
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=8192,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info("[VS-CIRCUMSTANCES] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
+                parsed = json.loads(chosen["text"])
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
+                    max_tokens=4096,
+                )
             logger.info(f"[TURN] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'")
             return parsed
         except Exception as e:
@@ -2412,16 +2528,30 @@ spatial presence\n"
             mission_text=mission_text,
             decisions_text=decisions_text,
             roster_text=roster_text,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=COMBINED_OUTCOME_SCHEMA,
-                max_tokens=4096,
-                enable_thinking=True,  # reasoning budget for consequence generation
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=8192,
+                    enable_thinking=True,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info("[VS-OUTCOME] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
+                parsed = json.loads(chosen["text"])
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=COMBINED_OUTCOME_SCHEMA,
+                    max_tokens=4096,
+                    enable_thinking=True,
+                )
             logger.info(f"[TURN] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
             return parsed
         except Exception as e:
@@ -2466,16 +2596,30 @@ spatial presence\n"
             outcome_type=outcome_type,
             outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
 
         try:
-            parsed = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=GAME_OVER_SCHEMA,
-                max_tokens=2048,
-                enable_thinking=True,
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=4096,
+                    enable_thinking=True,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info("[VS-GAMEOVER] Selected p=%.3f", chosen["probability"])
+                parsed = json.loads(chosen["text"])
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=GAME_OVER_SCHEMA,
+                    max_tokens=2048,
+                    enable_thinking=True,
+                )
             logger.info(f"[GAME_OVER] Finale generated: {str(parsed.get('finale_narrative', ''))[:100]}...")
             return parsed
         except Exception as e:
@@ -2499,16 +2643,39 @@ spatial presence\n"
         crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')})" for p in all_participants])
 
         mission_seeds = select_mission_seeds(self.language)
-        system, user = build_mission_prompts(self.language, crew_desc, archetype=mission_seeds["archetype"], seeds=mission_seeds["seeds"])
+        system, user = build_mission_prompts(
+            self.language, crew_desc,
+            archetype=mission_seeds["archetype"],
+            seeds=mission_seeds["seeds"],
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
+        )
 
         try:
-            result = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=MISSION_SCHEMA,
-                max_tokens=4096,
-                temperature=0.8,
-            )
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=8192,
+                    temperature=0.8,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info(
+                    "[VS-MISSION] Selected %d/%d p=%.3f",
+                    vs_result["responses"].index(chosen) + 1,
+                    len(vs_result["responses"]),
+                    chosen["probability"],
+                )
+                result = json.loads(chosen["text"])
+            else:
+                result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=MISSION_SCHEMA,
+                    max_tokens=4096,
+                    temperature=0.8,
+                )
         except Exception as e:
             logger.error(f"[MISSION] Generation failed: {e}", exc_info=True)
             gs = get_game_strings(self.language)
@@ -2565,13 +2732,26 @@ spatial presence\n"
         )
 
         try:
-            result = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=BRIDGE_IMAGE_SCHEMA,
-                max_tokens=4096,
-                temperature=0.8,
-            )
+            if self.vs_enabled:
+                vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["bridge_image"], k=self.vs_k)
+                vs_result = self._call_llm(
+                    system_prompt=vs_system,
+                    user_prompt=vs_user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=8192,
+                    temperature=0.8,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info("[VS-BRIDGE] Selected p=%.3f", chosen["probability"])
+                result = json.loads(chosen["text"])
+            else:
+                result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=BRIDGE_IMAGE_SCHEMA,
+                    max_tokens=4096,
+                    temperature=0.8,
+                )
             logger.info(f"[BRIDGE] Prompt generated: {str(result.get('bridge_prompt', ''))[:100]}...")
             return result
         except Exception as e:
@@ -2695,14 +2875,28 @@ spatial presence\n"
         user += '\n~50 words per prompt. Cinematic lighting. Sci-fi/space opera aesthetic. 4K quality. Output as JSON array: [{"role_key": ..., "prompt": ...}]'
 
         try:
-            result = self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=NPC_AVATAR_PROMPT_SCHEMA,
-                max_tokens=4096,
-                temperature=0.9,
-            )
-            prompts_list = result.get("prompts", [])
+            if self.vs_enabled:
+                vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_avatars"], k=self.vs_k)
+                vs_result = self._call_llm(
+                    system_prompt=vs_system,
+                    user_prompt=vs_user,
+                    response_schema=VS_RESPONSE_SCHEMA,
+                    max_tokens=8192,
+                    temperature=0.9,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                logger.info("[VS-NPCAVATAR] Selected p=%.3f", chosen["probability"])
+                result = json.loads(chosen["text"])
+                prompts_list = result.get("prompts", [])
+            else:
+                result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=NPC_AVATAR_PROMPT_SCHEMA,
+                    max_tokens=4096,
+                    temperature=0.9,
+                )
+                prompts_list = result.get("prompts", [])
             logger.info(f"[NPC_AVATAR] Generated {len(prompts_list)} prompts")
             return prompts_list
         except Exception as e:

@@ -143,8 +143,22 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         }
 
     def test_generate_mission_normalizes_objectives_and_stages(self):
+        import os
+        import json
+        fake_inner = {
+            "name": "Echo Protocol",
+            "description": "A test mission.",
+            "objectives": [
+                {"stage": 3, "name": "C", "description": "c", "success_threshold": 1},
+                {"stage": 1, "name": "A", "description": "a", "success_threshold": 99},
+                {"stage": 2, "name": "B", "description": "b", "success_threshold": 4},
+            ],
+        }
+        fake_vs = {"responses": [{"probability": 1.0, "text": json.dumps(fake_inner)}]}
         agent = GameServer(language="en")
-        with patch.object(GameServer, "_call_llm", return_value=self._fake_llm_result()):
+        with patch.dict(os.environ, {"VS_ENABLED": "1"}):
+            agent.vs_enabled = True
+        with patch.object(GameServer, "_call_llm", return_value=fake_vs):
             result = agent.generate_mission([{"role": "Pilot", "type": "player"}])
         self.assertEqual([o["stage"] for o in result["objectives"]], [1, 2, 3])
         self.assertEqual([o["name"] for o in result["objectives"]], ["A", "B", "C"])
