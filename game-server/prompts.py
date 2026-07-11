@@ -14,6 +14,7 @@ from language import (
 )
 from game_rules import FORBIDDEN_OPENINGS, MISSION_ARCHETYPES
 from pydantic import BaseModel
+from verbalize_sampling import DIVERSITY_HINTS, verbalize_prompt
 
 
 class OnboardingQuestion(BaseModel):
@@ -362,6 +363,8 @@ def build_combined_outcome_prompts(
     mission_text: str,
     decisions_text: str,
     roster_text: str,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for combined outcome analysis.
 
@@ -390,6 +393,8 @@ def build_combined_outcome_prompts(
             decisions_text=decisions_text,
             roster_text=roster_text,
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["combined_outcome"], k=vs_k)
     return system, user
 
 
@@ -460,6 +465,8 @@ def build_game_over_prompts(
     outcome_type: str,
     outcome_narrative: str,
     mission_summary: str,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for finale/game-over generation.
 
@@ -480,6 +487,8 @@ def build_game_over_prompts(
             outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["combined_outcome"], k=vs_k)
     return system, user
 
 
@@ -579,7 +588,7 @@ def build_onboarding_prompts(
 # ── Game title generation prompts ──────────────────────────────────
 
 
-def build_game_title_prompts(language: str) -> tuple[str, str]:
+def build_game_title_prompts(language: str, *, use_vs: bool = False, vs_k: int = 5) -> tuple[str, str]:
     """Build system and user prompts for game title generation."""
     if language == LANGUAGE_RU:
         system = "Ты — креативный писатель-фантаст. Придумываешь названия и описания для космических приключений."
@@ -603,13 +612,15 @@ def build_game_title_prompts(language: str) -> tuple[str, str]:
             "they will break formatting when sent to the player. Use plain text only. "
             "All text in English."
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["game_title"], k=vs_k)
     return system, user
 
 
 # ── Daily story prompts ────────────────────────────────────────────
 
 
-def build_turn_story_prompts(language: str, turn: int, previous_summary: str, player_role: str) -> tuple[str, str]:
+def build_turn_story_prompts(language: str, turn: int, previous_summary: str, player_role: str, *, use_vs: bool = False, vs_k: int = 5) -> tuple[str, str]:
     """Build system and user prompts for daily story generation."""
     if language == LANGUAGE_RU:
         system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
@@ -636,6 +647,8 @@ def build_turn_story_prompts(language: str, turn: int, previous_summary: str, pl
             "2. A central conflict or mystery\n"
             "3. 3 decision points for the player with visible actions and hidden consequences\n"
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["turn_story"], k=vs_k)
     return system, user
 
 
@@ -679,6 +692,8 @@ def build_player_message_prompts(
     global_circumstances_conflict: str = "",
     global_circumstances_narrative: str = "",
     crew_context: str = "",
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for player message processing with full game context."""
     traits_str = ", ".join(player_traits) if player_traits else ""
@@ -786,9 +801,12 @@ def build_player_message_prompts(
             f"REFERENCE CONTEXT (use only to stay consistent with the game):\n{context_block}"
         )
 
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["player_message"], k=vs_k)
     return system, user
 
 
+# ── Species description prompts
 # ── Species description prompts ────────────────────────────────────
 
 
@@ -801,6 +819,9 @@ def build_species_description_prompts(
     gender_display: str,
     gender_secondary: str | None,
     gender_hybrid: bool,
+    *,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for species description generation."""
     if language == LANGUAGE_RU:
@@ -829,9 +850,12 @@ def build_species_description_prompts(
             f"3. A unified image — how species and gender traits merge into one personality\n\n"
             f"Text in English, 3-5 sentences, atmospheric and cinematic."
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["species_description"], k=vs_k)
     return system, user
 
 
+# ── NPC decision prompts
 # ── NPC decision prompts ───────────────────────────────────────────
 
 
@@ -841,6 +865,9 @@ def build_npc_decision_prompts(
     npc_role: str,
     traits: str | list[str],
     choices_text: str,
+    *,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for NPC decision making."""
     traits_str = ", ".join(traits) if isinstance(traits, list) else traits
@@ -850,9 +877,12 @@ def build_npc_decision_prompts(
     else:
         system = f"You are {npc_name}, {npc_role} aboard a starship. Your personality: {traits_str}. You see ONLY action descriptions with no consequences. Make a choice based on your personality and role."
         user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character and role. You don't know the consequences — act on instinct."
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_decision"], k=vs_k)
     return system, user
 
 
+# ── Auto-choice prompts
 # ── Auto-choice prompts ────────────────────────────────────────────
 
 
@@ -865,6 +895,9 @@ def build_auto_choice_prompts(
     personal_briefing: str,
     gc_settings: str,
     choices_text: str,
+    *,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for auto-choice when player doesn't respond."""
     traits_str = ", ".join(traits) if isinstance(traits, list) else str(traits)
@@ -899,9 +932,12 @@ def build_auto_choice_prompts(
             f"Choose the action that best matches the player's character and role. "
             f"You don't know the consequences — act based on personality."
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_decision"], k=vs_k)
     return system, user
 
 
+# ── Global circumstances prompts
 # ── Global circumstances prompts ───────────────────────────────────
 
 
@@ -911,6 +947,9 @@ def build_global_circumstances_prompts(
     previous_summary: str,
     player_descriptions: str,
     mission_str: str,
+    *,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for global circumstances generation."""
     if language == LANGUAGE_RU:
@@ -966,8 +1005,13 @@ def build_global_circumstances_prompts(
             "IMPORTANT: All circumstances must be consistent with the mission context. "
             "Do not invent an independent plot — develop events within the mission framework.\n"
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["global_circumstances"], k=vs_k)
     return system, user
 
+
+
+# ── Mission generation prompts ─────────────────────────────────────
 
 # ── Mission generation prompts ─────────────────────────────────────
 
@@ -977,6 +1021,9 @@ def build_mission_prompts(
     crew_desc: str,
     archetype: str | None = None,
     seeds: dict | None = None,
+    *,
+    use_vs: bool = False,
+    vs_k: int = 5,
 ) -> tuple[str, str]:
     """Build system and user prompts for mission generation.
 
@@ -1030,6 +1077,8 @@ def build_mission_prompts(
             "4. 2-4 stages with objectives, each with success_threshold in the range 3-5\n"
             "Stages should be sequential but achievable non-linearly."
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["mission"], k=vs_k)
     return system, user
 
 
