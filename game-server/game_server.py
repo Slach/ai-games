@@ -52,7 +52,7 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from pydantic import BaseModel
 
-from verbalize_sampling import DIVERSITY_HINTS, VS_RESPONSE_SCHEMA, select_response, verbalize_prompt
+from verbalize_sampling import DIVERSITY_HINTS, select_response, verbalize_prompt, vs_response_schema
 
 logger = logging.getLogger(__name__)
 
@@ -1252,12 +1252,12 @@ class GameServer:
             vs_result = self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=VS_RESPONSE_SCHEMA,
+                response_schema=vs_response_schema(GAME_TITLE_SCHEMA),
                 temperature=0.9,
             )
             chosen = select_response(vs_result["responses"], self.vs_mode)
             logger.info("[VS-TITLE] Selected p=%.3f", chosen["probability"])
-            result = vs_parse_json(chosen["text"])
+            result = chosen["text"]
         else:
             result = self._call_llm(
                 system_prompt=system,
@@ -1281,12 +1281,12 @@ class GameServer:
             vs_result = self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=VS_RESPONSE_SCHEMA,
+                response_schema=vs_response_schema(STORY_SCHEMA),
                 max_tokens=8192,
             )
             chosen = select_response(vs_result["responses"], self.vs_mode)
             logger.info("[VS-STORY] Selected p=%.3f", chosen["probability"])
-            parsed = vs_parse_json(chosen["text"])
+            parsed = chosen["text"]
         else:
             parsed = self._call_llm(
                 system_prompt=system,
@@ -1471,12 +1471,12 @@ class GameServer:
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(PLAYER_MESSAGE_SCHEMA),
                     max_tokens=2048,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-PLAYERMSG] Selected p=%.3f", chosen["probability"])
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
                 return parsed.get("response", "")
             else:
                 parsed = self._call_llm(
@@ -1590,11 +1590,11 @@ spatial presence\n"
             parsed = self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,
-                response_schema=VS_RESPONSE_SCHEMA,
+                response_schema=vs_response_schema(AVATAR_PROMPT_SCHEMA),
                 max_tokens=self.llm_max_avatar_tokens,
             )
             chosen = select_response(parsed["responses"], self.vs_mode)
-            inner = vs_parse_json(chosen["text"])
+            inner = chosen["text"]
             avatar_prompt = inner.get("avatar_prompt", "")
             logger.info("[VS-AVATAR] Selected p=%.3f", chosen["probability"])
         else:
@@ -1690,11 +1690,11 @@ spatial presence\n"
             parsed = self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,
-                response_schema=VS_RESPONSE_SCHEMA,
+                response_schema=vs_response_schema(CHOSEN_ACTION_PROMPT_SCHEMA),
                 max_tokens=self.llm_max_avatar_tokens,
             )
             chosen = select_response(parsed["responses"], self.vs_mode)
-            inner = vs_parse_json(chosen["text"])
+            inner = chosen["text"]
             prompt = inner.get("chosen_action_prompt", "")
             logger.info("[VS-ACTION] Selected p=%.3f", chosen["probability"])
         else:
@@ -1888,12 +1888,12 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(SPECIES_GENDER_DESC_SCHEMA),
                     temperature=0.8,
                     max_tokens=2048,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
             else:
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -2075,12 +2075,12 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
                     temperature=0.8,
                     max_tokens=2048,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
             else:
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -2177,12 +2177,12 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
                     temperature=0.8,
                     max_tokens=2048,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
             else:
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -2286,12 +2286,12 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(GLOBAL_CIRCUMSTANCES_SCHEMA),
                     max_tokens=8192,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-CIRCUMSTANCES] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
             else:
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -2537,13 +2537,13 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(COMBINED_OUTCOME_SCHEMA),
                     max_tokens=8192,
                     enable_thinking=True,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-OUTCOME] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
             else:
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -2605,13 +2605,13 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(GAME_OVER_SCHEMA),
                     max_tokens=4096,
                     enable_thinking=True,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-GAMEOVER] Selected p=%.3f", chosen["probability"])
-                parsed = vs_parse_json(chosen["text"])
+                parsed = chosen["text"]
             else:
                 parsed = self._call_llm(
                     system_prompt=system,
@@ -2657,7 +2657,7 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(MISSION_SCHEMA),
                     max_tokens=8192,
                     temperature=0.8,
                 )
@@ -2668,7 +2668,7 @@ spatial presence\n"
                     len(vs_result["responses"]),
                     chosen["probability"],
                 )
-                result = vs_parse_json(chosen["text"])
+                result = chosen["text"]
             else:
                 result = self._call_llm(
                     system_prompt=system,
@@ -2738,13 +2738,13 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=vs_system,
                     user_prompt=vs_user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(BRIDGE_IMAGE_SCHEMA),
                     max_tokens=8192,
                     temperature=0.8,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-BRIDGE] Selected p=%.3f", chosen["probability"])
-                result = vs_parse_json(chosen["text"])
+                result = chosen["text"]
             else:
                 result = self._call_llm(
                     system_prompt=system,
@@ -2881,13 +2881,13 @@ spatial presence\n"
                 vs_result = self._call_llm(
                     system_prompt=vs_system,
                     user_prompt=vs_user,
-                    response_schema=VS_RESPONSE_SCHEMA,
+                    response_schema=vs_response_schema(NPC_AVATAR_PROMPT_SCHEMA),
                     max_tokens=8192,
                     temperature=0.9,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-NPCAVATAR] Selected p=%.3f", chosen["probability"])
-                result = vs_parse_json(chosen["text"])
+                result = chosen["text"]
                 prompts_list = result.get("prompts", [])
             else:
                 result = self._call_llm(

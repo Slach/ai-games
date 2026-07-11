@@ -46,6 +46,41 @@ VS_RESPONSE_SCHEMA: dict = {
 }
 
 
+def vs_response_schema(inner_schema: dict) -> dict:
+    """Wrap an inner response schema into a VS distribution schema.
+
+    The inner schema becomes the type of the 'text' field, so the model
+    outputs structured objects directly — no JSON-inside-string needed.
+    """
+    inner = inner_schema["json_schema"]["schema"]
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "vs_responses",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "responses": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "probability": {"type": "number"},
+                                "text": inner,
+                            },
+                            "required": ["probability", "text"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["responses"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
 # Per-function diversity hints (axes of variation the model should explore)
 DIVERSITY_HINTS: dict[str, str] = {
     "mission": ("Vary across these axes:\n- Genre (diplomacy, combat, mystery, exploration, sabotage)\n- Tone (dark, heroic, absurd, tense, melancholic)\n- Scale (personal drama, ship crisis, galactic threat)\n"),
@@ -168,10 +203,7 @@ def verbalize_prompt(
         f"Include both high-probability (conventional) and low-probability "
         f"(creative, surprising) options.\n\n"
         f'Format: output as JSON with a "responses" array. Each entry has '
-        f'"probability" (float) and "text" (string). '
-        f'CRITICAL: the "text" field MUST be a valid JSON string '
-        f'(serialize the response object with double quotes, not single quotes).'
-        f'Never put raw text or unquoted content in "text".'
+        f'"probability" (float) and "text" (the response object).'
     )
 
     return vs_system, vs_user
