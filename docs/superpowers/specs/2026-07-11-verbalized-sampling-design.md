@@ -37,12 +37,12 @@ The model verbalizes its internal probability distribution over options. Selecti
 
 ---
 
-## Architecture: `game-server/vs.py`
+## Architecture: `game-server/verbalize_sampling.py`
 
 ### Components
 
 ```
-vs.py
+verbalize_sampling.py
 ├── VSConfig          # k (number of candidates), sampling_mode
 ├── DiversityHints    # Per-function hints for what to vary
 ├── verbalize_prompt() # Wraps instance-level prompt → distribution-level
@@ -98,6 +98,7 @@ Each prompt function gets its own diversity hints — specific axes of variation
 | `build_global_circumstances_prompts` | 5 | Threat type (external/internal/natural/technogenic), scene mood, location variety |
 | `build_turn_story_prompts` | 5 | Story direction (escalation/de-escalation/revelation/character moment), pacing |
 | `build_combined_outcome_prompts` | 5 | Outcome (success/partial/complication/twist), consequences, tone shift |
+
 ### 🟢 Independent (with full game context)
 
 | Function | k | Diversity Hints |
@@ -167,11 +168,12 @@ All VS prompts instruct the model to output in `<response>` / `<probability>` / 
 ```
 
 The `response_schema` passed to `_call_llm` will specify this structure so parsing is deterministic, while the XML format in the prompt guides the model's generation.
+
 ## Implementation Scope
 
 ### Phase 1: Core VS Module
 
-- [ ] `game-server/vs.py` — `VSConfig`, `verbalize_prompt()`, `select_response()`
+- [ ] `game-server/verbalize_sampling.py` — `VSConfig`, `verbalize_prompt()`, `select_response()`
 - [ ] Update shared `DiversityHints` config
 
 ### Phase 2: Prompt Functions
