@@ -1030,16 +1030,18 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
         player_name = profile.get("player_name", "") or str(new_player_id)
 
         # Fetch bridge image and mission info once for all players
+        game_id = profile.get("game_id", "")
         mission = None
         bridge = None
-        try:
-            mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
-        except Exception as e:
-            logger.error(f"Failed to fetch mission: {e}", exc_info=True)
-        try:
-            bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
-        except Exception as e:
-            logger.error(f"Failed to fetch bridge image: {e}", exc_info=True)
+        if game_id:
+            try:
+                mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
+            except Exception as e:
+                logger.error(f"Failed to fetch mission for game {game_id}: {e}", exc_info=True)
+            try:
+                bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
+            except Exception as e:
+                logger.error(f"Failed to fetch bridge image for game {game_id}: {e}", exc_info=True)
 
         # Notify ALL players (new + existing) that the game has started
         # Send to existing players AND the new player who triggered start
@@ -2516,25 +2518,33 @@ async def cmd_bridge(message: types.Message):
         return
     player_id = message.from_user.id
     logger.info("[HANDLER] cmd_bridge")
+    player_lang = get_player_language(player_id)
 
     try:
+        # Resolve the player's game before fetching game-scoped data
+        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        if not profile or not profile.get("game_id"):
+            await message.answer(lang.get_bridge(player_lang)["error"])
+            return
+        game_id = profile["game_id"]
+
+        # Use the game's language for bridge captions
+        bridge_lang = await get_game_language(game_id, fallback=player_lang)
+        bridge_msgs = lang.get_bridge(bridge_lang)
+
         # Get mission info
         mission = None
         try:
-            mission = await api_request("GET", "/game/mission", ignore_codes=(404,))
+            mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch mission: {e}", exc_info=True)
+            logger.error(f"Failed to fetch mission for game {game_id}: {e}", exc_info=True)
 
         # Get bridge image
         bridge = None
         try:
-            bridge = await api_request("GET", "/game/bridge-image", ignore_codes=(404,))
+            bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
         except Exception as e:
-            logger.error(f"Failed to fetch bridge image: {e}", exc_info=True)
-
-        # Use the game's language for bridge captions
-        bridge_lang = await get_game_language("default_game", fallback=get_player_language(player_id))
-        bridge_msgs = lang.get_bridge(bridge_lang)
+            logger.error(f"Failed to fetch bridge image for game {game_id}: {e}", exc_info=True)
 
         if bridge and bridge.get("image_url"):
             caption = bridge_msgs["title"]
