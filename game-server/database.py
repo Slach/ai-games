@@ -115,6 +115,7 @@ MIGRATIONS: list[tuple[int, str]] = [
         """.strip(),
     ),
     (11, "ALTER TABLE player_kicks ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game';"),
+    (12, "ALTER TABLE player_briefings ADD COLUMN personal_title TEXT DEFAULT '';"),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -278,6 +279,20 @@ def init_db():
         completed INTEGER DEFAULT 0,
         created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS generation_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id TEXT NOT NULL,
+        turn INTEGER NOT NULL,
+        job_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_step TEXT DEFAULT '',
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        finished_at TEXT DEFAULT NULL,
+        error TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_generation_jobs_status ON generation_jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_generation_jobs_lookup ON generation_jobs(game_id, turn);
     """
     )
     cursor.execute("SELECT MAX(version) FROM migrations")
@@ -1723,8 +1738,8 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[st
     cursor.execute(
         """INSERT OR REPLACE INTO player_briefings
            (turn, player_id, npc_key, is_npc, briefing, choices,
-            selected_action_id, choice_rationale, consequence_result, chosen_action_url, created_at, game_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            selected_action_id, choice_rationale, consequence_result, chosen_action_url, personal_title, created_at, game_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             briefing_data["turn"],
             briefing_data.get("player_id"),
@@ -1736,6 +1751,7 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[st
             briefing_data.get("choice_rationale", ""),
             json.dumps(briefing_data.get("consequence_result", {}), ensure_ascii=False),
             briefing_data.get("chosen_action_url"),
+            briefing_data.get("personal_title", ""),
             datetime.now().isoformat(),
             game_id,
         ),
@@ -1777,6 +1793,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
         "choice_rationale": row["choice_rationale"],
         "consequence_result": _safe_json_loads(row["consequence_result"], {}),
         "chosen_action_url": row["chosen_action_url"],
+        "personal_title": row["personal_title"] if "personal_title" in row.keys() else "",
         "created_at": row["created_at"],
         "game_id": row["game_id"],
     }
@@ -2220,3 +2237,117 @@ def delete_game_images(game_id: str) -> int:
     conn.commit()
     conn.close()
     return deleted
+
+
+# ── Generation job tracking (resumable turn generation) ────────────────
+# A generation job marks a start/continue run as in_progress so that an
+# interrupted run (process killed mid-generation) can be detected and
+# resumed on the next startup. Status lifecycle:
+#   in_progress -> done | failed
+
+JOB_IN_PROGRESS = "in_progress"
+JOB_DONE = "done"
+JOB_FAILED = "failed"
+
+
+def _generation_job_row_to_dict(row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "game_id": row["game_id"],
+        "turn": row["turn"],
+        "job_type": row["job_type"],
+        "status": row["status"],
+        "current_step": row["current_step"],
+        "started_at": row["started_at"],
+        "updated_at": row["updated_at"],
+        "finished_at": row["finished_at"],
+        "error": row["error"],
+    }
+
+
+def start_generation_job(game_id: str, turn: int, job_type: str) -> dict[str, Any]:
+    """Record that a generation job has started (status=in_progress)."""
+    now = datetime.now().isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO generation_jobs
+           (game_id, turn, job_type, status, current_step, started_at, updated_at)
+           VALUES (?, ?, ?, ?, '', ?, ?)""",
+        (game_id, turn, job_type, JOB_IN_PROGRESS, now, now),
+    )
+    job_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return {"id": job_id, "game_id": game_id, "turn": turn, "job_type": job_type, "status": JOB_IN_PROGRESS, "current_step": "", "started_at": now, "updated_at": now, "finished_at": None, "error": ""}
+
+
+def update_generation_job_step(job_id: int, step: str) -> bool:
+    """Advance the recorded current_step of an in_progress job (checkpoint)."""
+    now = datetime.now().isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE generation_jobs SET current_step = ?, updated_at = ? WHERE id = ? AND status = ?",
+        (step, now, job_id, JOB_IN_PROGRESS),
+    )
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def complete_generation_job(job_id: int) -> bool:
+    """Mark a generation job as done."""
+    now = datetime.now().isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE generation_jobs SET status = ?, updated_at = ?, finished_at = ? WHERE id = ?",
+        (JOB_DONE, now, now, job_id),
+    )
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def fail_generation_job(job_id: int, error: str) -> bool:
+    """Mark a generation job as failed with an error message."""
+    now = datetime.now().isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE generation_jobs SET status = ?, error = ?, updated_at = ?, finished_at = ? WHERE id = ?",
+        (JOB_FAILED, error[:2000], now, now, job_id),
+    )
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def get_active_generation_job(game_id: str) -> dict[str, Any] | None:
+    """Return the in_progress generation job for a game, if any (lock check)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM generation_jobs WHERE game_id = ? AND status = ? ORDER BY id DESC LIMIT 1",
+        (game_id, JOB_IN_PROGRESS),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return _generation_job_row_to_dict(row) if row else None
+
+
+def get_in_progress_generation_jobs() -> list[dict[str, Any]]:
+    """Return all in_progress generation jobs (used by the startup sweep)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM generation_jobs WHERE status = ? ORDER BY started_at ASC",
+        (JOB_IN_PROGRESS,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [_generation_job_row_to_dict(row) for row in rows]

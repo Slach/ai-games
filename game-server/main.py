@@ -20,6 +20,7 @@ from database import (
     GAME_START_MAX_PLAYERS,
     add_game_message,
     clear_game_started,
+    complete_generation_job,
     create_game,
     create_game_turn,
     create_mission,
@@ -38,6 +39,8 @@ from database import (
     delete_player_briefings_for_turn,
     delete_player_profile,
     end_game,
+    fail_generation_job,
+    get_active_generation_job,
     get_all_active_npcs,
     get_all_briefings_for_turn,
     get_all_games,
@@ -55,6 +58,7 @@ from database import (
     get_game_state,
     get_game_title,
     get_game_welcome_text,
+    get_in_progress_generation_jobs,
     get_live_players,
     get_mission,
     get_npc_by_role,
@@ -90,6 +94,7 @@ from database import (
     save_player_briefing,
     set_last_death_turn,
     start_game,
+    start_generation_job,
     take_role,
     update_briefing_choice,
     update_briefing_chosen_action_url,
@@ -772,6 +777,9 @@ async def lifespan(app: FastAPI):
     # Generate loading images in background (non-blocking)
     asyncio.create_task(_generate_loading_images())
 
+    # Resume any generation interrupted by a previous shutdown/crash.
+    asyncio.create_task(_resume_interrupted_generations())
+
     yield
     logger.info("Game Server API shutting down")
 
@@ -1198,18 +1206,16 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
 
 
 @app.post("/onboarding/{session_id}/complete")
-async def _generate_mission_for_started_game(game_id: str, language: str) -> None:
-    """Generate and persist a mission for an auto-started game.
+async def _generate_started_game_assets(game_id: str, language: str) -> None:
+    """Generate and persist mission + bridge image for an auto-started game.
 
     The manual /admin/start-game flow (_original_start_game) creates NPCs, a
     bridge image and the mission. The onboarding auto-start path is lighter —
     it only flips the started flag and registers the scheduler — so without
-    this the game proceeds with no mission (and thus no archetype) record.
-    Safe to call repeatedly: a no-op when a mission already exists.
+    this the game proceeds with no mission/archetype and no bridge image.
+    Safe to call repeatedly: each asset is generated only when missing.
     """
     try:
-        if get_mission(game_id=game_id):
-            return
         all_participants = []
         for pid in get_players_in_game(game_id):
             p = get_player_profile(pid)
@@ -1243,9 +1249,30 @@ async def _generate_mission_for_started_game(game_id: str, language: str) -> Non
         if not all_participants:
             return
         gm = create_game_server(language=language)
-        mission_data = gm.generate_mission(all_participants)
-        create_mission(mission_data, game_id)
-        logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
+
+        # Mission (archetype + objectives)
+        mission_data = get_mission(game_id=game_id)
+        if not mission_data:
+            mission_data = gm.generate_mission(all_participants)
+            create_mission(mission_data, game_id)
+            logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
+
+        # Bridge image (needs the mission for crew positioning context)
+        if not get_random_game_image(type="bridge", game_id=game_id):
+            try:
+                bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants)
+                bridge_prompt = bridge_result.get("bridge_prompt", "")
+                if bridge_prompt:
+                    image_gen = create_image_generator()
+                    bridge_url = await image_gen.generate_scene_image(
+                        prompt=bridge_prompt,
+                        filename_prefix=f"{game_id}/bridge",
+                    )
+                    if bridge_url:
+                        save_game_image(type="bridge", image_url=bridge_url, game_id=game_id, prompt=bridge_prompt)
+                        logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
+            except Exception:
+                logger.error(f"[BRIDGE] Failed to generate bridge image for auto-started game {game_id}", exc_info=True)
     except Exception:
         logger.error(f"[MISSION] Failed to generate mission for auto-started game {game_id}", exc_info=True)
 
@@ -1444,10 +1471,10 @@ async def complete_onboarding(session_id: str):
             # Register this game with the scheduler
             asyncio.create_task(_register_game_in_scheduler(game_id))
             # Auto-start skips _original_start_game, so generate the mission
-            # (archetype + objectives) explicitly — otherwise the game runs
-            # with no mission/archetype record.
+            # (archetype + objectives) and the bridge image explicitly —
+            # otherwise the game runs without them.
             game_lang = get_game_language(game_id) or "ru"
-            asyncio.create_task(_generate_mission_for_started_game(game_id, game_lang))
+            asyncio.create_task(_generate_started_game_assets(game_id, game_lang))
 
     game_started = is_game_started(game_id)
 
@@ -3833,10 +3860,85 @@ def _random_npc_gender(language: str = "ru") -> str:
     return _NPC_GENDER_OPTIONS[lang_key][gender_key]
 
 
+async def _run_generation_with_job(
+    game_id: str,
+    turn: int,
+    job_type: str,
+    coro,
+    *,
+    resume_job_id: int | None = None,
+):
+    """Run a generation coroutine under a generation-job lock.
+
+    Normal launch (resume_job_id is None): refuse to start if a generation is
+    already in progress for the game (lock), then record a new in_progress job.
+    Resume launch (resume_job_id set, used by the startup sweep): reuse the
+    existing in_progress job. The job is marked done on success or failed on
+    error. Returns the coroutine's result, or None if skipped due to the lock.
+    """
+    if resume_job_id is not None:
+        job_id = resume_job_id
+        logger.info(f"[GEN_JOB] Resuming generation job {job_id} for {game_id} turn {turn}")
+    else:
+        active = get_active_generation_job(game_id)
+        if active:
+            logger.warning(f"[GEN_JOB] Generation already in progress for {game_id} (job {active['id']} turn {active['turn']}), skipping new {job_type}")
+            return None
+        job = start_generation_job(game_id, turn, job_type)
+        job_id = job["id"]
+        logger.info(f"[GEN_JOB] Started {job_type} job {job_id} for {game_id} turn {turn}")
+    try:
+        result = await coro
+        complete_generation_job(job_id)
+        logger.info(f"[GEN_JOB] Completed job {job_id} for {game_id}")
+        return result
+    except Exception as e:
+        fail_generation_job(job_id, str(e))
+        logger.error(f"[GEN_JOB] Failed job {job_id} for {game_id}: {e}", exc_info=True)
+        raise
+
+
+async def _resume_interrupted_generations() -> None:
+    """Re-launch generation jobs left in_progress by a previous shutdown/crash.
+
+    Runs at startup. Relies on the per-step idempotency guards inside
+    _original_start_game / _original_continue_game to skip already-completed
+    work (mission, bridge, global circumstances, scene image, per-participant
+    briefings) and only finish what remains. Briefings are pushed to players by
+    the generation functions themselves once they complete.
+    """
+    try:
+        jobs = get_in_progress_generation_jobs()
+        if not jobs:
+            return
+        logger.info(f"[GEN_JOB] Found {len(jobs)} interrupted generation job(s); resuming")
+        for job in jobs:
+            game_id = job["game_id"]
+            turn = job["turn"]
+            job_type = job["job_type"]
+            language = get_game_language(game_id) or "ru"
+            logger.info(f"[GEN_JOB] Resuming {job_type} job {job['id']} for {game_id} turn {turn}")
+            if job_type == "start":
+                req = StartGameRequest(game_id=game_id, language=language)
+                asyncio.create_task(_run_generation_with_job(game_id, turn, "start", _original_start_game(req), resume_job_id=job["id"]))
+            elif job_type == "continue":
+                asyncio.create_task(
+                    _run_generation_with_job(
+                        game_id,
+                        turn,
+                        "continue",
+                        _original_continue_game(game_id=game_id, language=language, force_resend=False),
+                        resume_job_id=job["id"],
+                    )
+                )
+    except Exception:
+        logger.error("[GEN_JOB] Failed to resume interrupted generations", exc_info=True)
+
+
 async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
     """Run start-game in background, notify GM on completion."""
     try:
-        result = await _original_start_game(request)
+        result = await _run_generation_with_job(request.game_id, turn_num, "start", _original_start_game(request))
         if result and result.get("status") == "success":
             await _notify_scheduler("reset")
             await push_gm_notification(
@@ -4080,33 +4182,41 @@ async def _original_start_game(request: StartGameRequest):
         except Exception as e:
             logger.warning(f"[NPC_AVATAR] Batch generation failed: {e}")
 
-    # 6b. Generate mission
-    mission_data = gm.generate_mission(all_participants)
-    mission_result = create_mission(mission_data, game_id)
-    if mission_result:
-        logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages)")
+    # 6b. Generate mission (resume: reuse if already created)
+    mission_data = get_mission(game_id=game_id)
+    if mission_data:
+        logger.info(f"[MISSION] Resume: reusing existing mission '{mission_data.get('name', '')}'")
+        mission_result = mission_data
     else:
-        logger.error("[MISSION] Failed to create mission", stack_info=True)
-        mission_result = {}
+        mission_data = gm.generate_mission(all_participants)
+        mission_result = create_mission(mission_data, game_id)
+        if mission_result:
+            logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages)")
+        else:
+            logger.error("[MISSION] Failed to create mission", stack_info=True)
+            mission_result = {}
 
-    # 6c. Generate bridge image
+    # 6c. Generate bridge image (resume: skip if already generated)
     try:
-        bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants)
-        bridge_prompt = bridge_result.get("bridge_prompt", "")
-        if bridge_prompt:
-            image_gen = create_image_generator()
-            bridge_url = await image_gen.generate_scene_image(
-                prompt=bridge_prompt,
-                filename_prefix=f"{game_id}/bridge",
-            )
-            if bridge_url:
-                save_game_image(
-                    type="bridge",
-                    image_url=bridge_url,
-                    game_id=game_id,
+        if get_random_game_image(type="bridge", game_id=game_id):
+            logger.info("[BRIDGE] Resume: bridge image already exists, skipping")
+        else:
+            bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants)
+            bridge_prompt = bridge_result.get("bridge_prompt", "")
+            if bridge_prompt:
+                image_gen = create_image_generator()
+                bridge_url = await image_gen.generate_scene_image(
                     prompt=bridge_prompt,
+                    filename_prefix=f"{game_id}/bridge",
                 )
-                logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
+                if bridge_url:
+                    save_game_image(
+                        type="bridge",
+                        image_url=bridge_url,
+                        game_id=game_id,
+                        prompt=bridge_prompt,
+                    )
+                    logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
     except Exception as e:
         logger.warning(f"[BRIDGE] Image generation failed: {e}")
 
@@ -4121,13 +4231,22 @@ async def _original_start_game(request: StartGameRequest):
         game_id=game_id,
     )
 
-    # Step A: Generate global circumstances (with mission context for story consistency)
-    global_circ = gm.generate_global_circumstances(
-        turn=turn_num,
-        previous_summary=previous_summary,
-        player_profiles=all_participants,
-        mission_context=mission_data,
-    )
+    # Step A: Generate global circumstances (resume: reuse if already stored)
+    global_circ = None
+    _existing_turn = get_game_turn(turn_num, game_id)
+    if _existing_turn and _existing_turn.get("global_circumstances"):
+        try:
+            global_circ = json.loads(_existing_turn["global_circumstances"])
+            logger.info(f"[TURN] Resume: reusing global circumstances for turn {turn_num}")
+        except (json.JSONDecodeError, TypeError):
+            global_circ = None
+    if global_circ is None:
+        global_circ = gm.generate_global_circumstances(
+            turn=turn_num,
+            previous_summary=previous_summary,
+            player_profiles=all_participants,
+            mission_context=mission_data,
+        )
     global_narrative = global_circ.get("narrative", "")
 
     # Save global circumstances
@@ -4137,35 +4256,39 @@ async def _original_start_game(request: StartGameRequest):
         game_id,
     )
 
-    # Step A2: Generate scene image for this turn's briefing
-    # Uses LLM-generated scene_prompt if available (from global_circ), otherwise falls back to hardcoded prompt
-    scene_url = None
-    try:
-        # Prefer LLM-generated scene_prompt
-        scene_prompt = global_circ.get("scene_prompt", "")
-        if not scene_prompt:
-            # Fallback: build from setting + narrative
-            scene_prompt = f"Sci-fi scene: {global_circ.get('setting', '')}. {global_narrative[:500]} Cinematic starship interior, crew interacting with holographic displays, dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
-        # Remove [avatar: ...] markers before sending to image gen
-        import re
+    # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
+    scene_url = get_random_game_image(type="scene", turn=turn_num, game_id=game_id)
+    if scene_url:
+        logger.info(f"[SCENE] Resume: scene image already exists for turn {turn_num}, skipping")
+    else:
+        try:
+            # Prefer LLM-generated scene_prompt
+            scene_prompt = global_circ.get("scene_prompt", "")
+            if not scene_prompt:
+                # Fallback: build from setting + narrative
+                scene_prompt = (
+                    f"Sci-fi scene: {global_circ.get('setting', '')}. {global_narrative[:500]} Cinematic starship interior, crew interacting with holographic displays, dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+                )
+            # Remove [avatar: ...] markers before sending to image gen
+            import re
 
-        scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
-        image_gen = create_image_generator()
-        scene_url = await image_gen.generate_scene_image(
-            prompt=scene_prompt_clean,
-            filename_prefix=f"{game_id}/scene_turn{turn_num}",
-        )
-        if scene_url:
-            save_game_image(
-                type="scene",
-                image_url=scene_url,
-                game_id=game_id,
-                turn=turn_num,
+            scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
+            image_gen = create_image_generator()
+            scene_url = await image_gen.generate_scene_image(
                 prompt=scene_prompt_clean,
+                filename_prefix=f"{game_id}/scene_turn{turn_num}",
             )
-            logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
-    except Exception as e:
-        logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
+            if scene_url:
+                save_game_image(
+                    type="scene",
+                    image_url=scene_url,
+                    game_id=game_id,
+                    turn=turn_num,
+                    prompt=scene_prompt_clean,
+                )
+                logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
+        except Exception as e:
+            logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
 
     # Create game turn record EARLY to prevent race condition with polling loop.
     # Poll needs the game_turn record to exist before briefings are visible,
@@ -4192,11 +4315,44 @@ async def _original_start_game(request: StartGameRequest):
         llm_parallel = 2
     sem = asyncio.Semaphore(llm_parallel)
 
+    # Resume support: map existing briefings for this turn (from an interrupted
+    # run) by participant key so completed briefings are reused, not regenerated.
+    existing_by_key: dict[str, dict[str, Any]] = {}
+    for _b in get_all_briefings_for_turn(turn_num, game_id=game_id):
+        if _b.get("is_npc") and _b.get("npc_key"):
+            existing_by_key[f"npc:{_b['npc_key']}"] = _b
+        elif _b.get("player_id"):
+            existing_by_key[f"player:{_b['player_id']}"] = _b
+
     async def _process_participant(
         participant: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Generate briefing for one participant (player or NPC) under semaphore."""
         async with sem:
+            # Resume: reuse an existing briefing from an interrupted run
+            if participant["type"] == "npc":
+                _resume_key = f"npc:{participant['npc_key']}"
+            else:
+                _resume_key = f"player:{participant['player_id']}"
+            _existing = existing_by_key.get(_resume_key)
+            if _existing is not None:
+                logger.info(f"[BRIEFING] Resume: reusing existing briefing for {_resume_key}")
+                if participant["type"] == "npc":
+                    return {
+                        **_existing,
+                        "name": participant.get("npc_name", participant["npc_key"]),
+                        "role": participant["role"],
+                        "action_text": next(
+                            (c["text"] for c in _existing.get("choices", []) if c.get("id") == _existing.get("selected_action_id")),
+                            "",
+                        ),
+                    }
+                return {
+                    **_existing,
+                    "name": str(participant["player_id"]),
+                    "role": participant["role"],
+                    "personal_title": _existing.get("personal_title", ""),
+                }
             player_id = participant.get("player_id")
             # Get player_name from profile if available
             player_name = ""
@@ -4302,6 +4458,7 @@ async def _original_start_game(request: StartGameRequest):
                         "selected_action_id": None,
                         "choice_rationale": "",
                         "consequence_result": {},
+                        "personal_title": personal_title,
                     },
                     game_id,
                 )
@@ -5049,10 +5206,15 @@ async def _background_continue_wrapper(
 ):
     """Run continue-game in background, notify GM on completion."""
     try:
-        result = await _original_continue_game(
-            game_id=game_id,
-            language=language,
-            force_resend=force_resend,
+        result = await _run_generation_with_job(
+            game_id,
+            turn_num,
+            "continue",
+            _original_continue_game(
+                game_id=game_id,
+                language=language,
+                force_resend=force_resend,
+            ),
         )
         if result and result.get("status") == "success":
             await _notify_scheduler("reset")
@@ -5203,13 +5365,22 @@ async def _original_continue_game(
     # Fetch mission data for story consistency
     mission_data = get_mission(None, game_id=game_id) or {}
 
-    # Step A: Generate global circumstances (with mission context for story consistency)
-    global_circ = gm.generate_global_circumstances(
-        turn=turn_num,
-        previous_summary=previous_summary,
-        player_profiles=all_participants,
-        mission_context=mission_data,
-    )
+    # Step A: Generate global circumstances (resume: reuse if already stored)
+    global_circ = None
+    _existing_turn = get_game_turn(turn_num, game_id)
+    if _existing_turn and _existing_turn.get("global_circumstances"):
+        try:
+            global_circ = json.loads(_existing_turn["global_circumstances"])
+            logger.info(f"[TURN] Resume: reusing global circumstances for turn {turn_num}")
+        except (json.JSONDecodeError, TypeError):
+            global_circ = None
+    if global_circ is None:
+        global_circ = gm.generate_global_circumstances(
+            turn=turn_num,
+            previous_summary=previous_summary,
+            player_profiles=all_participants,
+            mission_context=mission_data,
+        )
 
     # Save global circumstances
     update_game_turn_global_circumstances(
@@ -5218,39 +5389,42 @@ async def _original_continue_game(
         game_id,
     )
 
-    # Step A2: Generate scene image for this turn's briefing
-    # Uses LLM-generated scene_prompt if available (from global_circ), otherwise falls back to hardcoded prompt
-    try:
-        # Prefer LLM-generated scene_prompt
-        scene_prompt = global_circ.get("scene_prompt", "")
-        if not scene_prompt:
-            # Fallback: build from setting + narrative
-            scene_prompt = (
-                f"Sci-fi scene: {global_circ.get('setting', '')}. "
-                f"{global_circ.get('narrative', '')[:500]} "
-                f"Cinematic starship interior, crew interacting with holographic displays, "
-                f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
-            )
-        # Remove [avatar: ...] markers before sending to image gen
-        import re
+    # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
+    scene_url = get_random_game_image(type="scene", turn=turn_num, game_id=game_id)
+    if scene_url:
+        logger.info(f"[SCENE] Resume: scene image already exists for turn {turn_num}, skipping")
+    else:
+        try:
+            # Prefer LLM-generated scene_prompt
+            scene_prompt = global_circ.get("scene_prompt", "")
+            if not scene_prompt:
+                # Fallback: build from setting + narrative
+                scene_prompt = (
+                    f"Sci-fi scene: {global_circ.get('setting', '')}. "
+                    f"{global_circ.get('narrative', '')[:500]} "
+                    f"Cinematic starship interior, crew interacting with holographic displays, "
+                    f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+                )
+            # Remove [avatar: ...] markers before sending to image gen
+            import re
 
-        scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
-        image_gen = create_image_generator()
-        scene_url = await image_gen.generate_scene_image(
-            prompt=scene_prompt_clean,
-            filename_prefix=f"{game_id}/scene_turn{turn_num}",
-        )
-        if scene_url:
-            save_game_image(
-                type="scene",
-                image_url=scene_url,
-                game_id=game_id,
-                turn=turn_num,
+            scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
+            image_gen = create_image_generator()
+            scene_url = await image_gen.generate_scene_image(
                 prompt=scene_prompt_clean,
+                filename_prefix=f"{game_id}/scene_turn{turn_num}",
             )
-            logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
-    except Exception as e:
-        logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
+            if scene_url:
+                save_game_image(
+                    type="scene",
+                    image_url=scene_url,
+                    game_id=game_id,
+                    turn=turn_num,
+                    prompt=scene_prompt_clean,
+                )
+                logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
+        except Exception as e:
+            logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
 
     # Create game turn record EARLY to prevent race condition with polling loop.
     # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
@@ -5270,7 +5444,44 @@ async def _original_continue_game(
 
     # Step B: Generate per-player briefings
     all_briefings = []
+    # Resume support: reuse existing briefings from an interrupted run.
+    existing_by_key: dict[str, dict[str, Any]] = {}
+    for _b in get_all_briefings_for_turn(turn_num, game_id=game_id):
+        if _b.get("is_npc") and _b.get("npc_key"):
+            existing_by_key[f"npc:{_b['npc_key']}"] = _b
+        elif _b.get("player_id"):
+            existing_by_key[f"player:{_b['player_id']}"] = _b
     for participant in all_participants:
+        # Resume: reuse an existing briefing instead of regenerating
+        if participant["type"] == "npc":
+            _resume_key = f"npc:{participant['npc_key']}"
+        else:
+            _resume_key = f"player:{participant['player_id']}"
+        _existing = existing_by_key.get(_resume_key)
+        if _existing is not None:
+            logger.info(f"[BRIEFING] Resume: reusing existing briefing for {_resume_key}")
+            if participant["type"] == "npc":
+                all_briefings.append(
+                    {
+                        **_existing,
+                        "name": participant.get("npc_name", participant["npc_key"]),
+                        "role": participant["role"],
+                        "action_text": next(
+                            (c["text"] for c in _existing.get("choices", []) if c.get("id") == _existing.get("selected_action_id")),
+                            "",
+                        ),
+                    }
+                )
+            else:
+                all_briefings.append(
+                    {
+                        **_existing,
+                        "name": str(participant["player_id"]),
+                        "role": participant["role"],
+                        "personal_title": _existing.get("personal_title", ""),
+                    }
+                )
+            continue
         gm_profile = {
             "player_id": participant.get("player_id"),
             "npc_key": participant.get("npc_key"),
@@ -5355,6 +5566,7 @@ async def _original_continue_game(
                     "selected_action_id": None,
                     "choice_rationale": "",
                     "consequence_result": {},
+                    "personal_title": personal_title,
                 },
                 game_id,
             )
