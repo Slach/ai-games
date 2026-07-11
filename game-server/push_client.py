@@ -125,7 +125,7 @@ async def push_briefings(
             ):
                 if resp.status == 200:
                     body = await resp.json()
-                    sent_count = len(body.get("queued", []))
+                    sent_count = body.get("queued", 0)
                     logger.info(f"[PUSH] Delivered turn {turn} for game {game_id}: {sent_count} players")
                     return True
                 else:
