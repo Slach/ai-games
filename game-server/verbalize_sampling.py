@@ -4,6 +4,7 @@ See: Zhang et al., "Verbalized Sampling: How to Mitigate Mode Collapse
 and Unlock LLM Diversity", ICLR 2026.
 """
 
+import json
 import logging
 import random
 from dataclasses import dataclass
@@ -47,55 +48,21 @@ VS_RESPONSE_SCHEMA: dict = {
 
 # Per-function diversity hints (axes of variation the model should explore)
 DIVERSITY_HINTS: dict[str, str] = {
-    "mission": (
-        "Vary across these axes:\n"
-        "- Genre (diplomacy, combat, mystery, exploration, sabotage)\n"
-        "- Tone (dark, heroic, absurd, tense, melancholic)\n"
-        "- Scale (personal drama, ship crisis, galactic threat)\n"
-    ),
-    "game_title": (
-        "Vary across these axes:\n"
-        "- Style (metaphorical, technical, ironic, epic)\n"
-        "- Length (short punchy, multi-word epic)\n"
-    ),
-    "turn_story": (
-        "Vary across these axes:\n"
-        "- Direction (escalation, de-escalation, revelation, character moment)\n"
-        "- Pacing (fast action, slow burn, sudden twist)\n"
-    ),
+    "mission": ("Vary across these axes:\n- Genre (diplomacy, combat, mystery, exploration, sabotage)\n- Tone (dark, heroic, absurd, tense, melancholic)\n- Scale (personal drama, ship crisis, galactic threat)\n"),
+    "game_title": ("Vary across these axes:\n- Style (metaphorical, technical, ironic, epic)\n- Length (short punchy, multi-word epic)\n"),
+    "turn_story": ("Vary across these axes:\n- Direction (escalation, de-escalation, revelation, character moment)\n- Pacing (fast action, slow burn, sudden twist)\n"),
     "global_circumstances": (
-        "Vary across these axes:\n"
-        "- Threat type (external, internal, natural phenomenon, technogenic)\n"
-        "- Scene mood (hopeful, tense, mysterious, catastrophic)\n"
-        "- Location variety (ship interior, planet surface, space anomaly, station)\n"
+        "Vary across these axes:\n- Threat type (external, internal, natural phenomenon, technogenic)\n- Scene mood (hopeful, tense, mysterious, catastrophic)\n- Location variety (ship interior, planet surface, space anomaly, station)\n"
     ),
     "combined_outcome": (
-        "Vary across these axes:\n"
-        "- Outcome (success, partial success, complication, unexpected twist)\n"
-        "- Consequences (immediate danger, long-term implication, moral dilemma)\n"
-        "- Tone shift (things get worse, silver lining, pyrrhic victory)\n"
+        "Vary across these axes:\n- Outcome (success, partial success, complication, unexpected twist)\n- Consequences (immediate danger, long-term implication, moral dilemma)\n- Tone shift (things get worse, silver lining, pyrrhic victory)\n"
     ),
-    "player_message": (
-        "Vary across these axes:\n"
-        "- GM tone (serious, ironic, mysterious, encouraging, ominous)\n"
-        "- Response length (terse and punchy, detailed and atmospheric)\n"
-        "- Mood must reflect the current scene circumstances.\n"
-    ),
-    "npc_decision": (
-        "Vary across these axes:\n"
-        "- Decision style (rational, emotional, risky, cautious, self-serving)\n"
-        "- Must reflect the current scene mood and circumstances.\n"
-    ),
+    "player_message": ("Vary across these axes:\n- GM tone (serious, ironic, mysterious, encouraging, ominous)\n- Response length (terse and punchy, detailed and atmospheric)\n- Mood must reflect the current scene circumstances.\n"),
+    "npc_decision": ("Vary across these axes:\n- Decision style (rational, emotional, risky, cautious, self-serving)\n- Must reflect the current scene mood and circumstances.\n"),
     "species_description": (
-        "Vary across these axes:\n"
-        "- Unusualness of appearance (subtle alien, radically non-humanoid)\n"
-        "- Textures (crystalline, biological, metallic, energy-based)\n"
-        "- Silhouette and body plan (bipedal, floating, amorphous, multi-limbed)\n"
+        "Vary across these axes:\n- Unusualness of appearance (subtle alien, radically non-humanoid)\n- Textures (crystalline, biological, metallic, energy-based)\n- Silhouette and body plan (bipedal, floating, amorphous, multi-limbed)\n"
     ),
-    "npc_name": (
-        "Vary across these axes:\n"
-        "- Name style (technical designation, poetic, alien phonetics, functional title)\n"
-    ),
+    "npc_name": ("Vary across these axes:\n- Name style (technical designation, poetic, alien phonetics, functional title)\n"),
     "avatar": (
         "Vary across these axes:\n"
         "- Body form (humanoid, alien, energy being, cybernetic, symbiotic)\n"
@@ -104,12 +71,7 @@ DIVERSITY_HINTS: dict[str, str] = {
         "- Mood (stoic, intense, serene, alien, unsettling)\n"
         "CRITICAL: For non-human species, at least 3 of 5 options MUST be non-humanoid forms.\n"
     ),
-    "npc_avatars": (
-        "Vary across these axes:\n"
-        "- Body form (humanoid, alien, energy being, cybernetic, symbiotic)\n"
-        "- Species-to-species visual diversity — no two NPCs look similar\n"
-        "- Camera angle, environment, mood as above\n"
-    ),
+    "npc_avatars": ("Vary across these axes:\n- Body form (humanoid, alien, energy being, cybernetic, symbiotic)\n- Species-to-species visual diversity — no two NPCs look similar\n- Camera angle, environment, mood as above\n"),
     "action_prompt": (
         "Vary across these axes:\n"
         "- Composition (wide shot, close-up, Dutch angle, overhead)\n"
@@ -123,12 +85,7 @@ DIVERSITY_HINTS: dict[str, str] = {
         "- Bridge lighting (alert red, calm blue, emergency flicker, nebula glow through viewport)\n"
         "- Overall mood (ready for action, tense standoff, routine calm, crisis)\n"
     ),
-    "scene_prompt": (
-        "Vary across these axes:\n"
-        "- Color palette (cold blues, warm ambers, sickly greens, stark monochrome)\n"
-        "- Atmosphere (fog, sparks, zero-g float, alien bioluminescence)\n"
-        "- Scene scale (intimate close-up, expansive epic wide shot)\n"
-    ),
+    "scene_prompt": ("Vary across these axes:\n- Color palette (cold blues, warm ambers, sickly greens, stark monochrome)\n- Atmosphere (fog, sparks, zero-g float, alien bioluminescence)\n- Scene scale (intimate close-up, expansive epic wide shot)\n"),
 }
 
 
@@ -211,7 +168,27 @@ def verbalize_prompt(
         f"Include both high-probability (conventional) and low-probability "
         f"(creative, surprising) options.\n\n"
         f'Format: output as JSON with a "responses" array. Each entry has '
-        f'"probability" (float) and "text" (string with the full response content).'
+        f'"probability" (float) and "text" (string). '
+        f'CRITICAL: the "text" field MUST be a valid JSON string '
+        f'(serialize the response object with double quotes, not single quotes).'
+        f'Never put raw text or unquoted content in "text".'
     )
 
     return vs_system, vs_user
+
+
+def vs_parse_json(text: str) -> dict:
+    """Parse VS text field as JSON with graceful fallback.
+
+    If the text is valid JSON, return the parsed dict.
+    If it's not valid JSON, wrap it in {"raw": text} and log a warning.
+    """
+    try:
+        result = json.loads(text)
+        if not isinstance(result, dict):
+            logger.warning("VS text parsed as non-dict %s, wrapping", type(result).__name__)
+            return {"raw": text}
+        return result
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning("VS text is not valid JSON: %s, using raw fallback", e)
+        return {"raw": text}
