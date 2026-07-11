@@ -359,7 +359,7 @@ async def generate_dynamic_onboarding_questions(
 
         raw_questions = game_server.generate_onboarding_questions(
             underrepresented_hint=hint,
-    game_id=game_id,
+            game_id=game_id,
         )
         logger.info(f"LLM returned {len(raw_questions)} questions")
 
@@ -503,11 +503,7 @@ async def _generate_option_images_for_question(
                 break
 
     # Generate LLM prompts for each option
-    prompts_dict = game_server.generate_species_option_prompts(
-        question=question.model_dump(),
-        accumulated_tags=accumulated_tags,
-        tag_type=tag_type,
-    game_id=game_id, player_id=str(session.get("player_id", "none")))
+    prompts_dict = game_server.generate_species_option_prompts(question=question.model_dump(), accumulated_tags=accumulated_tags, tag_type=tag_type)
 
     if not prompts_dict:
         logger.warning("[OPTION_IMAGES] No prompts generated, skipping images")
@@ -605,7 +601,7 @@ async def generate_dynamic_species_gender_question(
             question=question,
             session=session,
             language=language,
-    game_id=game_id,
+            game_id=game_id,
         )
     except Exception as img_err:
         logger.warning(f"[SG_Q] Option image generation failed for {dimension} step {sg_step}: {img_err}")
@@ -714,11 +710,7 @@ def generate_player_profile_from_answers(
     species_description = ""
     try:
         game_server._llm_kind = "species_description"
-        species_description = game_server.generate_species_gender_description(
-            species_result=species_result,
-            gender_result=gender_result,
-            role=role_data["role_name"],
-    game_id=game_id, player_id=str(player_id))
+        species_description = game_server.generate_species_gender_description(species_result=species_result, gender_result=gender_result, role=role_data["role_name"])
         logger.info(f"[SPECIES] Description generated for player {player_id}: {species_description}...")
     except Exception as e:
         logger.warning(f"[SPECIES] Failed to generate description for player {player_id}: {e}")
@@ -947,7 +939,8 @@ async def _background_onboarding_images(
                         game_title=title_for_prompt,
                         welcome_text=welcome_for_prompt,
                         count=3,
-    game_id=game_id, kind="splash",
+                        game_id=game_id,
+                        kind="splash",
                     )
                     saved = 0
                     for url in urls:
@@ -965,7 +958,7 @@ async def _background_onboarding_images(
 
                 success = await _push_ready(
                     player_id=player_id,
-    game_id=game_id,
+                    game_id=game_id,
                     session_id=session_id,
                     question=first_question,
                     game_title=game_title_data.get("title", ""),
@@ -1019,7 +1012,7 @@ async def start_onboarding(request: StartOnboardingRequest):
     logger.info("Generating dynamic onboarding questions (text-only)...")
     role_questions = await generate_dynamic_onboarding_questions(
         language=request.language,
-    game_id=request.game_id,
+        game_id=request.game_id,
         skip_images=True,
     )
     logger.info(f"Generated {len(role_questions)} role questions")
@@ -1111,7 +1104,7 @@ async def start_onboarding(request: StartOnboardingRequest):
         asyncio.create_task(
             _background_onboarding_images(
                 player_id=request.player_id,
-    game_id=request.game_id,
+                game_id=request.game_id,
                 session_id=session_id,
                 questions=dynamic_questions,
                 game_title_data=game_title_data,
@@ -1179,7 +1172,7 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
                     sg_step=sg_step,
                     session=session,
                     language=effective_language,
-    game_id=game_id,
+                    game_id=game_id,
                     existing_questions=dynamic_questions,
                 )
             except Exception as gen_err:
@@ -1210,7 +1203,7 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
         profile_data = generate_player_profile_from_answers(
             session["player_id"],
             profile_answers,
-    game_id=game_id,
+            game_id=game_id,
             language=effective_language,
             questions=session_questions,
             player_name=player_name,
@@ -1282,9 +1275,7 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                 bridge_prompt = bridge_result.get("bridge_prompt", "")
                 if bridge_prompt:
                     image_gen = create_image_generator()
-                    bridge_url = await image_gen.generate_scene_image(
-                        filename_prefix=f"{game_id}/bridge",
-                        game_id=game_id, turn=turn, kind="bridge")
+                    bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge")
                     if bridge_url:
                         save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt)
                         logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
@@ -1335,11 +1326,8 @@ async def complete_onboarding(session_id: str):
 
         game_server._llm_kind = "avatar_prompt"
         avatar_prompt = game_server.generate_avatar_prompt(
-            role=profile["role"],
-            traits=profile["personality_traits"],
-            avatar_description=avatar_description_combined,
-            species_category=profile.get("species_primary_key") or "",
-    game_id=game_id, player_id=str(player_id))
+            role=profile["role"], traits=profile["personality_traits"], avatar_description=avatar_description_combined, species_category=profile.get("species_primary_key") or ""
+        )
         logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
     except Exception as e:
         logger.warning(f"[AVATAR] LLM prompt generation failed for player {player_id}: {e}")
@@ -2090,8 +2078,8 @@ async def submit_player_action(request: PlayerActionRequest):
     action_task = asyncio.create_task(
         _generate_chosen_action_image(
             player_id=request.player_id,
-    game_id=game_id,
-    turn=request.turn,
+            game_id=game_id,
+            turn=request.turn,
             action_id=request.action_id,
             language=game_lang,
         )
@@ -2169,13 +2157,7 @@ async def auto_select_action(
     # 4. Generate LLM choice
     gm = create_game_server(language=language)
     player_name = profile.get("player_name", "") or ""
-    decision = gm.generate_player_auto_choice(
-        choices=choices,
-        player_profile=profile,
-        personal_briefing=briefing.get("briefing", ""),
-        global_circumstances=global_circ,
-        player_name=player_name,
-    game_id=game_id)
+    decision = gm.generate_player_auto_choice(choices=choices, player_profile=profile, personal_briefing=briefing.get("briefing", ""), global_circumstances=global_circ, player_name=player_name)
 
     action_id = decision.get("action_id", "")
     rationale = decision.get("rationale", "Auto-selected by Game Server")
@@ -2200,7 +2182,7 @@ async def auto_select_action(
 
     save_player_action(
         player_id=player_id,
-    turn=turn,
+        turn=turn,
         action_id=action_id,
         choice="auto_selected",
     )
@@ -2343,12 +2325,7 @@ async def submit_game_message(request: GameMessageRequest):
         language = get_game_language(game_id) if profile else "en"
         game_server = create_game_server(language=language)
 
-        response = game_server.process_player_message(
-            player_id=player_id,
-            message=message,
-            player_profile=profile_data,
-            game_context=game_context,
-    game_id=game_id)
+        response = game_server.process_player_message(player_id=player_id, message=message, player_profile=profile_data, game_context=game_context)
 
         add_game_message(player_id, response, "text_response")
 
@@ -2527,7 +2504,9 @@ async def _generate_chosen_action_image(
                 species_desc=species_desc,
                 species_type=species,
                 species_category=profile.get("species_primary_key") or "",
-    game_id=game_id, player_id=str(player_id))
+                game_id=game_id,
+                player_id=str(player_id),
+            )
             logger.info(f"[ACTION_IMAGE] LLM prompt for {role}: {prompt[:120]}...")
         except Exception as llm_err:
             logger.warning(f"[ACTION_IMAGE] LLM prompt failed for {role}: {llm_err}, using fallback prompt")
@@ -2560,9 +2539,9 @@ async def _generate_chosen_action_image(
             try:
                 await push_player_chosen_action(
                     player_id=player_id,
-    turn=turn,
+                    turn=turn,
                     chosen_action_url=chosen_action_url,
-    game_id=game_id,
+                    game_id=game_id,
                     action_text=action_text,
                     language=language,
                 )
@@ -2919,7 +2898,7 @@ async def _analyze_turn_outcome(
             previous_summary = _build_cumulative_story_summary(
                 current_turn=turn,
                 language=language,
-    game_id=game_id,
+                game_id=game_id,
             )
 
             # Get mission context for progress tracking
@@ -2952,23 +2931,13 @@ async def _analyze_turn_outcome(
             gm._llm_game_id = game_id
             gm._llm_turn = turn
             gm._llm_kind = "combined_outcome"
-            outcome = gm.analyze_combined_outcome(
-                global_circ,
-                all_decisions,
-                previous_summary,
-                mission_context=mission,
-                crew_roster=crew_roster,
-    game_id=game_id)
+            outcome = gm.analyze_combined_outcome(global_circ, all_decisions, previous_summary, mission_context=mission, crew_roster=crew_roster, game_id=game_id)
 
             # Detect and retry fallback outcomes (bland narrative, empty progress).
             # This happens when the LLM JSON can't be parsed and we got the generic
             # fallback dict. Retry once with a fresh GM to avoid stale state issues.
             narrative = outcome.get("outcome_narrative", "")
-            is_fallback = (
-                not outcome.get("mission_progress")
-                and ("passed without major incident" in narrative
-                     or "without major incident" in narrative)
-            )
+            is_fallback = not outcome.get("mission_progress") and ("passed without major incident" in narrative or "without major incident" in narrative)
             if is_fallback:
                 logger.warning("[OUTCOME] Got fallback outcome, retrying once...")
                 try:
@@ -2984,8 +2953,7 @@ async def _analyze_turn_outcome(
                         crew_roster=crew_roster,
                     )
                     retry_narrative = outcome.get("outcome_narrative", "")
-                    if (not outcome.get("mission_progress")
-                            and "without major incident" in retry_narrative):
+                    if not outcome.get("mission_progress") and "without major incident" in retry_narrative:
                         logger.error("[OUTCOME] Retry also returned fallback — giving up")
                     else:
                         logger.info("[OUTCOME] Retry succeeded")
@@ -3006,7 +2974,7 @@ async def _analyze_turn_outcome(
                 update_mission_stage_progress(
                     updated_mission["stage_progress"],
                     updated_mission["current_stage"],
-    game_id=game_id,
+                    game_id=game_id,
                     completed=updated_mission["completed"],
                 )
                 for stage_key, pts in updated_mission["stage_progress"].items():
@@ -3024,7 +2992,7 @@ async def _analyze_turn_outcome(
             alive_count = sum(1 for r in crew_roster if not r.get("is_dead"))
             outcome, new_last_death_turn = apply_death_limits(
                 outcome,
-    turn=turn,
+                turn=turn,
                 last_death_turn=int(state.get("last_death_turn", 0) or 0),
                 alive_count=alive_count,
             )
@@ -3114,7 +3082,7 @@ async def _analyze_turn_outcome(
                     "active" if ship_alive else "ship_destroyed",
                     ship_alive=ship_alive,
                     crew_health=crew_health,
-    game_id=game_id,
+                    game_id=game_id,
                 )
 
             # Log ship systems offline
@@ -3169,17 +3137,13 @@ async def _analyze_turn_outcome(
                     f"Star Trek aesthetic, 4K quality, cinematic composition."
                 )
                 image_gen = create_image_generator()
-                outcome_image_url = await image_gen.generate_scene_image(
-                    prompt=outcome_prompt,
-                    filename_prefix=f"{game_id}/outcome_turn{turn}",
-                
-    game_id=game_id, turn=turn_num, kind="outcome")
+                outcome_image_url = await image_gen.generate_scene_image(prompt=outcome_prompt, filename_prefix=f"{game_id}/outcome_turn{turn}", game_id=game_id, turn=turn_num, kind="outcome")
                 if outcome_image_url:
                     save_game_image(
                         type="outcome",
                         image_url=outcome_image_url,
-    game_id=game_id,
-    turn=turn,
+                        game_id=game_id,
+                        turn=turn,
                         prompt=outcome_prompt,
                     )
                     logger.info(f"[OUTCOME] Outcome image generated for turn {turn}: {outcome_image_url}")
@@ -3292,7 +3256,7 @@ async def _analyze_turn_outcome(
             try:
                 await push_turn_outcome(
                     game_id=game_id,
-    turn=turn,
+                    turn=turn,
                     outcome_text=outcome_text,
                     alive_players=alive_players,
                     outcome_image_url=outcome_image_url,
@@ -3338,11 +3302,7 @@ async def _analyze_turn_outcome(
                     outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
 
                     gm = create_game_server(language=language)
-                    game_over = gm.generate_game_over_outcome(
-                        outcome_type=outcome_label,
-                        outcome_narrative=outcome_text[:2000],
-                        mission_summary=mission_summary,
-    game_id=game_id)
+                    game_over = gm.generate_game_over_outcome(outcome_type=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary)
 
                     finale_narrative = game_over.get("finale_narrative", "")
                     finale_image_prompt = game_over.get("finale_image_prompt", "")
@@ -3360,8 +3320,8 @@ async def _analyze_turn_outcome(
                                 save_game_image(
                                     type="finale",
                                     image_url=finale_image_url,
-    game_id=game_id,
-    turn=turn,
+                                    game_id=game_id,
+                                    turn=turn,
                                     prompt=finale_image_prompt,
                                 )
                                 logger.info(f"[GAME_OVER] Finale image generated: {finale_image_url}")
@@ -3554,7 +3514,7 @@ async def admin_set_language(request: SetLanguageRequest):
                             save_game_image(
                                 type="bridge",
                                 image_url=bridge_url,
-    game_id=request.game_id,
+                                game_id=request.game_id,
                                 prompt=bridge_prompt,
                             )
                             logger.info(f"Regenerated bridge image: {bridge_url}")
@@ -3653,19 +3613,11 @@ async def generate_turn_episode(
             action_summaries.append(f"Turn {action.get('turn', 0)}: Player chose '{action.get('choice')}'")
         summary = " | ".join(action_summaries)
 
-    story = game_server.generate_turn_story(
-        turn=turn_num,
-        previous_summary=summary or state["last_updated"],
-        player_role=player_role,
-    game_id=game_id)
+    story = game_server.generate_turn_story(turn=turn_num, previous_summary=summary or state["last_updated"], player_role=player_role)
 
     logger.info("Generating NPC dialogues...")
     game_server._llm_kind = "crew_dialogue"
-    dialogues = game_server.generate_crew_dialogues(
-        story=story,
-        player_role=player_role,
-        crew_members=_get_crew_members(game_id),
-    game_id=game_id)
+    dialogues = game_server.generate_crew_dialogues(story=story, player_role=player_role, crew_members=_get_crew_members(game_id), game_id=game_id)
 
     new_turn = {
         "turn": turn_num,
@@ -3741,11 +3693,7 @@ async def generate_chosen_action_image(
             f"Cinematic space opera aesthetic, photorealistic quality, 4K."
         )
 
-    chosen_action_url = await image_generator.generate_scene_image(
-        prompt=prompt,
-        filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}",
-    
-    game_id=game_id, player_id=str(player_id), kind="player_action")
+    chosen_action_url = await image_generator.generate_scene_image(prompt=prompt, filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}", kind="player_action")
 
     # Store chosen_action_url in player's briefing for this turn (if briefing exists)
     briefing = get_player_briefing(turn_num_val, player_id)
@@ -3769,7 +3717,8 @@ async def admin_generate_loading_images(count: int = 10, *, game_id: str):
         image_generator = create_image_generator()
         urls = await image_generator.generate_loading_images(
             count=count,
-    game_id=game_id, kind="loading",
+            game_id=game_id,
+            kind="loading",
         )
 
         saved = 0
@@ -3808,7 +3757,7 @@ async def admin_generate_splash_images(game_id: str, lang: str = "ru"):
             game_title=game_title,
             welcome_text=welcome_text,
             count=3,
-    game_id=game_id,
+            game_id=game_id,
         )
 
         saved = 0
@@ -4013,7 +3962,7 @@ async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
             await _notify_scheduler("reset")
             await push_gm_notification(
                 game_id=request.game_id,
-    turn=turn_num,
+                turn=turn_num,
                 status="success",
                 players=result.get("player_count", 0),
                 npcs=result.get("npc_count", 0),
@@ -4023,7 +3972,7 @@ async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
         logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}", exc_info=True)
         await push_gm_notification(
             game_id=request.game_id,
-    turn=turn_num,
+            turn=turn_num,
             status="error",
             error=str(e),
             language=request.language,
@@ -4135,14 +4084,8 @@ async def _original_start_game(request: StartGameRequest):
 
         # Generate creative name via LLM (with fallback), avoid duplicates
         npc_name_attempt = gm.generate_npc_name(
-            role_key=role_key,
-            role_name=role_name,
-            species=npc_species,
-            gender=npc_gender,
-            avatar_description=role_data.get("avatar_description", ""),
-            personality_traits=role_data.get("personality_traits", []),
-            avoid_names=avoid_names,
-    game_id=game_id)
+            role_key=role_key, role_name=role_name, species=npc_species, gender=npc_gender, avatar_description=role_data.get("avatar_description", ""), personality_traits=role_data.get("personality_traits", []), avoid_names=avoid_names, game_id=game_id
+        )
         # If LLM returned a name WITH role prefix (e.g. "Инженер Дмитрий Волков"),
         # strip it — the role is already shown separately in UI
         if npc_name_attempt:
@@ -4234,11 +4177,7 @@ async def _original_start_game(request: StartGameRequest):
                 role_key = prompt_entry.get("role_key", "")
                 prompt = prompt_entry.get("prompt", "")
                 if role_key and prompt:
-                    url = await image_gen.generate_avatar_image(
-                        prompt=prompt,
-                        filename_prefix=f"{game_id}/avatar_{role_key}",
-                    
-    game_id=game_id, player_id=str(player_id))
+                    url = await image_gen.generate_avatar_image(prompt=prompt, filename_prefix=f"{game_id}/avatar_{role_key}")
                     if url:
                         # Update NPC profile with avatar URL
                         conn = get_db_connection()
@@ -4278,16 +4217,12 @@ async def _original_start_game(request: StartGameRequest):
             bridge_prompt = bridge_result.get("bridge_prompt", "")
             if bridge_prompt:
                 image_gen = create_image_generator()
-                bridge_url = await image_gen.generate_scene_image(
-                    prompt=bridge_prompt,
-                    filename_prefix=f"{game_id}/bridge",
-                
-    game_id=game_id, kind="bridge")
+                bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge", game_id=game_id, kind="bridge")
                 if bridge_url:
                     save_game_image(
                         type="bridge",
                         image_url=bridge_url,
-    game_id=game_id,
+                        game_id=game_id,
                         prompt=bridge_prompt,
                     )
                     logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
@@ -4302,7 +4237,7 @@ async def _original_start_game(request: StartGameRequest):
     previous_summary = _build_cumulative_story_summary(
         current_turn=turn_num,
         language=language,
-    game_id=game_id,
+        game_id=game_id,
     )
 
     # Step A: Generate global circumstances (resume: reuse if already stored)
@@ -4316,12 +4251,7 @@ async def _original_start_game(request: StartGameRequest):
             global_circ = None
     if global_circ is None:
         gm._llm_kind = "global_circumstances"
-        global_circ = gm.generate_global_circumstances(
-            turn=turn_num,
-            previous_summary=previous_summary,
-            player_profiles=all_participants,
-            mission_context=mission_data,
-    game_id=game_id)
+        global_circ = gm.generate_global_circumstances(turn=turn_num, previous_summary=previous_summary, player_profiles=all_participants, mission_context=mission_data)
     global_narrative = global_circ.get("narrative", "")
 
     # Save global circumstances
@@ -4349,17 +4279,13 @@ async def _original_start_game(request: StartGameRequest):
 
             scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
             image_gen = create_image_generator()
-            scene_url = await image_gen.generate_scene_image(
-                prompt=scene_prompt_clean,
-                filename_prefix=f"{game_id}/scene_turn{turn_num}",
-            
-    game_id=game_id, kind="scene")
+            scene_url = await image_gen.generate_scene_image(prompt=scene_prompt_clean, filename_prefix=f"{game_id}/scene_turn{turn_num}", game_id=game_id, kind="scene")
             if scene_url:
                 save_game_image(
                     type="scene",
                     image_url=scene_url,
-    game_id=game_id,
-    turn=turn_num,
+                    game_id=game_id,
+                    turn=turn_num,
                     prompt=scene_prompt_clean,
                 )
                 logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
@@ -4517,8 +4443,8 @@ async def _original_start_game(request: StartGameRequest):
                     npc_action_task = asyncio.create_task(
                         _generate_npc_chosen_action_image(
                             npc_key=participant["npc_key"],
-    game_id=game_id,
-    turn=turn_num,
+                            game_id=game_id,
+                            turn=turn_num,
                             action_id=selected_id,
                         )
                     )
@@ -4648,8 +4574,8 @@ async def _original_start_game(request: StartGameRequest):
             save_game_image(
                 type="character",
                 image_url=url,
-    game_id=game_id,
-    turn=turn_num,
+                game_id=game_id,
+                turn=turn_num,
                 prompt=prompt,
             )
         return url
@@ -4743,7 +4669,7 @@ async def _original_start_game(request: StartGameRequest):
             asyncio.create_task(
                 push_briefings(
                     game_id=game_id,
-    turn=turn_num,
+                    turn=turn_num,
                     players_briefings=player_briefings,
                     bridge_url=bridge_url,
                     mission=mission_info,
@@ -5047,7 +4973,7 @@ async def admin_kick_player(request: KickPlayerRequest):
     replaced = _replace_player_with_npc(
         player_id=kicked_player_id,
         role_key=role_key,
-    game_id=game_id,
+        game_id=game_id,
         reason=request.reason,
         language=request.language,
     )
@@ -5059,7 +4985,7 @@ async def admin_kick_player(request: KickPlayerRequest):
         role_name=replaced["role_name"],
         player_avatar_url=replaced.get("player_avatar_url"),
         player_avatar_desc=replaced.get("player_avatar_desc", ""),
-    game_id=game_id,
+        game_id=game_id,
     )
 
     # Notify the kicked player (via game_messages)
@@ -5141,7 +5067,7 @@ async def admin_auto_kick_blocked(request: AutoKickBlockedRequest):
     replaced = _replace_player_with_npc(
         player_id=request.player_id,
         role_key=role_key,
-    game_id=game_id,
+        game_id=game_id,
         reason=request.reason,
         language="en",
     )
@@ -5200,7 +5126,7 @@ async def admin_reset_player(request: ResetPlayerRequest):
         npc_replaced = _replace_player_with_npc(
             player_id=player_id,
             role_key=role_key,
-    game_id=game_id,
+            game_id=game_id,
             reason="Player reset",
             language=request.language,
         )
@@ -5308,7 +5234,7 @@ async def _background_continue_wrapper(
             await _notify_scheduler("reset")
             await push_gm_notification(
                 game_id=game_id,
-    turn=turn_num,
+                turn=turn_num,
                 status="success",
                 players=result.get("players", 0),
                 npcs=result.get("npcs", 0),
@@ -5318,7 +5244,7 @@ async def _background_continue_wrapper(
         logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}", exc_info=True)
         await push_gm_notification(
             game_id=game_id,
-    turn=turn_num,
+            turn=turn_num,
             status="error",
             error=str(e),
             language=language,
@@ -5445,7 +5371,7 @@ async def _original_continue_game(
     previous_summary = _build_cumulative_story_summary(
         current_turn=turn_num,
         language=language,
-    game_id=game_id,
+        game_id=game_id,
     )
 
     gm = create_game_server(language=language)
@@ -5501,17 +5427,13 @@ async def _original_continue_game(
 
             scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
             image_gen = create_image_generator()
-            scene_url = await image_gen.generate_scene_image(
-                prompt=scene_prompt_clean,
-                filename_prefix=f"{game_id}/scene_turn{turn_num}",
-            
-    game_id=game_id, kind="scene")
+            scene_url = await image_gen.generate_scene_image(prompt=scene_prompt_clean, filename_prefix=f"{game_id}/scene_turn{turn_num}", game_id=game_id, kind="scene")
             if scene_url:
                 save_game_image(
                     type="scene",
                     image_url=scene_url,
-    game_id=game_id,
-    turn=turn_num,
+                    game_id=game_id,
+                    turn=turn_num,
                     prompt=scene_prompt_clean,
                 )
                 logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
@@ -5630,8 +5552,8 @@ async def _original_continue_game(
                 npc_action_task = asyncio.create_task(
                     _generate_npc_chosen_action_image(
                         npc_key=participant["npc_key"],
-    game_id=game_id,
-    turn=turn_num,
+                        game_id=game_id,
+                        turn=turn_num,
                         action_id=selected_id,
                     )
                 )
@@ -5754,8 +5676,8 @@ async def _original_continue_game(
             save_game_image(
                 type="character",
                 image_url=url,
-    game_id=game_id,
-    turn=turn_num,
+                game_id=game_id,
+                turn=turn_num,
                 prompt=prompt,
             )
         return url
@@ -5817,7 +5739,7 @@ async def _original_continue_game(
         await _analyze_turn_outcome(
             turn=turn_num - 1,
             language=language,
-    game_id=game_id,
+            game_id=game_id,
         )
 
     # ── Push briefings to telegram-bot ─────────────────────────
@@ -5830,7 +5752,7 @@ async def _original_continue_game(
             asyncio.create_task(
                 push_briefings(
                     game_id=game_id,
-    turn=turn_num,
+                    turn=turn_num,
                     players_briefings=player_briefings,
                     crew_dialogues=crew_dialogues_list,
                     is_first_turn=False,
