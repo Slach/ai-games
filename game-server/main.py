@@ -421,6 +421,8 @@ async def generate_onboarding_question_images(
                 filename_prefix=f"{game_id}/onboarding_q_{q.id}",
                 width=768,
                 height=768,
+                game_id=game_id,
+                kind="onboarding_question",
             )
             return q, url
 
@@ -526,6 +528,8 @@ async def _generate_option_images_for_question(
                 filename_prefix=filename_prefix,
                 width=512,
                 height=512,
+                game_id=game_id,
+                kind="species_option",
             )
         )
         option_values.append(opt_value)
@@ -940,7 +944,6 @@ async def _background_onboarding_images(
                         welcome_text=welcome_for_prompt,
                         count=3,
                         game_id=game_id,
-                        kind="splash",
                     )
                     saved = 0
                     for url in urls:
@@ -1275,7 +1278,7 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                 bridge_prompt = bridge_result.get("bridge_prompt", "")
                 if bridge_prompt:
                     image_gen = create_image_generator()
-                    bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge")
+                    bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge", game_id=game_id, kind="bridge")
                     if bridge_url:
                         save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt)
                         logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
@@ -1325,9 +1328,7 @@ async def complete_onboarding(session_id: str):
             avatar_description_combined = profile.get("avatar_description", "")
 
         game_server._llm_kind = "avatar_prompt"
-        avatar_prompt = game_server.generate_avatar_prompt(
-            role=profile["role"], traits=profile["personality_traits"], avatar_description=avatar_description_combined, species_category=profile.get("species_primary_key") or ""
-        )
+        avatar_prompt = game_server.generate_avatar_prompt(role=profile["role"], traits=profile["personality_traits"], avatar_description=avatar_description_combined, species_category=profile.get("species_primary_key") or "")
         logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
     except Exception as e:
         logger.warning(f"[AVATAR] LLM prompt generation failed for player {player_id}: {e}")
@@ -1455,6 +1456,9 @@ async def complete_onboarding(session_id: str):
         avatar_url = await image_generator.generate_avatar_image(
             prompt=avatar_prompt,
             filename_prefix=f"{game_id}/avatar_{player_id}",
+            game_id=game_id,
+            player_id=str(player_id),
+            kind="avatar",
         )
 
         if avatar_url:
@@ -1676,6 +1680,9 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
         avatar_url = await image_generator.generate_avatar_image(
             prompt=avatar_prompt,
             filename_prefix=f"{game_id}/avatar_{player_id}",
+            game_id=game_id,
+            player_id=str(player_id),
+            kind="avatar",
         )
 
         if avatar_url:
@@ -2346,7 +2353,6 @@ async def get_player_actions_endpoint(player_id: int, turn: int):
 async def get_player_briefing_endpoint(player_id: int, turn: int):
     """Get a player's personal briefing and choices for a specific turn"""
     profile = get_player_profile(player_id)
-    game_id = profile.get("game_id", "default_game") if profile else "default_game"
     briefing = get_player_briefing(turn, player_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found")
@@ -2526,6 +2532,10 @@ async def _generate_chosen_action_image(
             reference_image_url=avatar_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/action_turn{turn}_p{player_id}",
+            game_id=game_id,
+            player_id=str(player_id),
+            turn=turn,
+            kind="player_action",
         )
 
         if chosen_action_url:
@@ -2643,6 +2653,9 @@ async def _generate_npc_chosen_action_image(
             reference_image_url=avatar_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/action_turn{turn}_{npc_key}",
+            game_id=game_id,
+            turn=turn,
+            kind="npc_action",
         )
 
         if chosen_action_url:
@@ -3137,7 +3150,7 @@ async def _analyze_turn_outcome(
                     f"Star Trek aesthetic, 4K quality, cinematic composition."
                 )
                 image_gen = create_image_generator()
-                outcome_image_url = await image_gen.generate_scene_image(prompt=outcome_prompt, filename_prefix=f"{game_id}/outcome_turn{turn}", game_id=game_id, turn=turn_num, kind="outcome")
+                outcome_image_url = await image_gen.generate_scene_image(prompt=outcome_prompt, filename_prefix=f"{game_id}/outcome_turn{turn}", game_id=game_id, turn=turn, kind="outcome")
                 if outcome_image_url:
                     save_game_image(
                         type="outcome",
@@ -3315,6 +3328,9 @@ async def _analyze_turn_outcome(
                             finale_image_url = await image_gen.generate_scene_image(
                                 prompt=finale_image_prompt,
                                 filename_prefix=f"{game_id}/finale_{outcome_type}",
+                                game_id=game_id,
+                                turn=turn,
+                                kind="finale",
                             )
                             if finale_image_url:
                                 save_game_image(
@@ -3509,6 +3525,8 @@ async def admin_set_language(request: SetLanguageRequest):
                         bridge_url = await image_gen.generate_scene_image(
                             prompt=bridge_prompt,
                             filename_prefix=f"{request.game_id}/bridge",
+                            game_id=request.game_id,
+                            kind="bridge",
                         )
                         if bridge_url:
                             save_game_image(
@@ -3693,7 +3711,7 @@ async def generate_chosen_action_image(
             f"Cinematic space opera aesthetic, photorealistic quality, 4K."
         )
 
-    chosen_action_url = await image_generator.generate_scene_image(prompt=prompt, filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}", kind="player_action")
+    chosen_action_url = await image_generator.generate_scene_image(prompt=prompt, filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}", game_id=game_id, player_id=str(player_id), turn=turn_num_val, kind="player_action")
 
     # Store chosen_action_url in player's briefing for this turn (if briefing exists)
     briefing = get_player_briefing(turn_num_val, player_id)
@@ -3718,7 +3736,6 @@ async def admin_generate_loading_images(count: int = 10, *, game_id: str):
         urls = await image_generator.generate_loading_images(
             count=count,
             game_id=game_id,
-            kind="loading",
         )
 
         saved = 0
@@ -4083,8 +4100,10 @@ async def _original_start_game(request: StartGameRequest):
         npc_gender = _random_npc_gender(language)
 
         # Generate creative name via LLM (with fallback), avoid duplicates
+        gm._llm_kind = "npc_name"
+        gm._llm_game_id = game_id
         npc_name_attempt = gm.generate_npc_name(
-            role_key=role_key, role_name=role_name, species=npc_species, gender=npc_gender, avatar_description=role_data.get("avatar_description", ""), personality_traits=role_data.get("personality_traits", []), avoid_names=avoid_names, game_id=game_id
+            role_key=role_key, role_name=role_name, species=npc_species, gender=npc_gender, avatar_description=role_data.get("avatar_description", ""), personality_traits=role_data.get("personality_traits", []), avoid_names=avoid_names
         )
         # If LLM returned a name WITH role prefix (e.g. "Инженер Дмитрий Волков"),
         # strip it — the role is already shown separately in UI
@@ -4177,7 +4196,7 @@ async def _original_start_game(request: StartGameRequest):
                 role_key = prompt_entry.get("role_key", "")
                 prompt = prompt_entry.get("prompt", "")
                 if role_key and prompt:
-                    url = await image_gen.generate_avatar_image(prompt=prompt, filename_prefix=f"{game_id}/avatar_{role_key}")
+                    url = await image_gen.generate_avatar_image(prompt=prompt, filename_prefix=f"{game_id}/avatar_{role_key}", game_id=game_id, kind="npc_avatar")
                     if url:
                         # Update NPC profile with avatar URL
                         conn = get_db_connection()
@@ -4569,6 +4588,10 @@ async def _original_start_game(request: StartGameRequest):
             reference_image_url=avatar_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/char_turn{turn_num}_p{pid}",
+            game_id=game_id,
+            player_id=str(pid),
+            turn=turn_num,
+            kind="character_scene",
         )
         if url:
             save_game_image(
@@ -4924,12 +4947,16 @@ async def _generate_replacement_npc_avatar(
                 width=768,
                 height=1024,
                 denoise=0.4,
+                game_id=game_id,
+                kind="npc_avatar",
             )
         else:
             # Fallback: text-to-image
             url = await image_gen.generate_avatar_image(
                 prompt=prompt,
                 filename_prefix=f"{game_id}/avatar_{role_key}",
+                game_id=game_id,
+                kind="npc_avatar",
             )
 
         if url:
@@ -5671,6 +5698,10 @@ async def _original_continue_game(
             reference_image_url=avatar_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/char_turn{turn_num}_p{pid}",
+            game_id=game_id,
+            player_id=str(pid),
+            turn=turn_num,
+            kind="character_scene",
         )
         if url:
             save_game_image(

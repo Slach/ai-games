@@ -186,13 +186,8 @@ class ImageGenerator:
             "client_id": self.client_id,
         }
 
-        if kind is None:
-            # Legacy verbose logging
-            logger.info("=== COMFYUI WORKFLOW ===")
-            logger.info(f"Endpoint: {self.comfyui_url}/prompt")
-            logger.info(f"Client ID: {self.client_id}")
-            logger.info(f"Workflow JSON:\n{json.dumps(workflow, indent=2, ensure_ascii=False)}")
-            logger.info("=== END COMFYUI WORKFLOW ===")
+        # Detailed workflow JSON is written to a dedicated log file by the
+        # caller (generate_image).  Only emit a compact one-liner here.
 
         # Retry logic for transient failures (DNS, connection refused, etc.)
         max_retries = 3
@@ -232,6 +227,7 @@ class ImageGenerator:
                     logger.error(f"ComfyUI connection failed after {max_retries} attempts: {last_error}", exc_info=True)
 
         raise Exception(f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}")
+
     async def _wait_for_completion(self, prompt_id: str, timeout: int = 300) -> dict[str, Any]:
         """Wait for ComfyUI to finish processing a prompt via /history endpoint."""
         start = asyncio.get_event_loop().time()
@@ -316,22 +312,17 @@ class ImageGenerator:
         ctx_player = player_id or "none"
         ctx_turn = f"t{turn}" if turn is not None else "t0"
 
-        if kind is not None:
-            logger.info(
-                "ComfyUI [%s] game=%s player=%s turn=%s | size=%dx%d prefix=%s retries=%d",
-                kind, ctx_game, ctx_player, ctx_turn,
-                width, height, filename_prefix, max_retries,
-            )
-        else:
-            logger.info("=== IMAGE GENERATION REQUEST ===")
-            logger.info("Model: Z-Image Turbo (8-step distilled)")
-            logger.info(f"Size: {width}x{height}")
-            logger.info(f"Filename prefix: {filename_prefix}")
-            logger.info(f"Max retries: {max_retries}")
-            logger.info("--- PROMPT TEXT ---")
-            for line in prompt.split("\n"):
-                logger.info(line)
-            logger.info("=== END IMAGE GENERATION REQUEST ===")
+        logger.info(
+            "ComfyUI [%s] game=%s player=%s turn=%s | size=%dx%d prefix=%s retries=%d",
+            kind or "unspecified",
+            ctx_game,
+            ctx_player,
+            ctx_turn,
+            width,
+            height,
+            filename_prefix,
+            max_retries,
+        )
 
         logger.info("[IMAGE] Generating image via Z-Image Turbo")
         logger.info(f"[IMAGE] Size: {width}x{height}, max_retries={max_retries}")
@@ -348,36 +339,45 @@ class ImageGenerator:
                         filename_prefix=filename_prefix,
                     )
 
-                    if kind is not None:
-                        comfyui_req = (
-                            f"Model: Z-Image Turbo (8-step distilled)\n"
-                            f"Size: {width}x{height}\n"
-                            f"Filename prefix: {filename_prefix}\n"
-                            f"Attempt: {attempt}/{max_retries}\n\n"
-                            f"--- PROMPT ---\n{prompt}\n\n"
-                            f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
-                        )
-                        write_comfyui_log(
-                            game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
-    kind=kind, log_type="request", content=comfyui_req,
-                        )
+                    comfyui_req = (
+                        f"Model: Z-Image Turbo (8-step distilled)\n"
+                        f"Size: {width}x{height}\n"
+                        f"Filename prefix: {filename_prefix}\n"
+                        f"Attempt: {attempt}/{max_retries}\n\n"
+                        f"--- PROMPT ---\n{prompt}\n\n"
+                        f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
+                    )
+                    write_comfyui_log(
+                        game_id=ctx_game,
+                        player_id=ctx_player,
+                        turn=ctx_turn,
+                        kind=kind or "unspecified",
+                        log_type="request",
+                        content=comfyui_req,
+                    )
 
                     prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
                     outputs = await self._wait_for_completion(prompt_id, timeout=180)
                     image_url = self._extract_image_url(outputs)
 
                     if image_url:
-                        if kind is not None:
-                            write_comfyui_log(
-                                game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
-    kind=kind, log_type="response", content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
-                            )
-                            logger.info(
-                                "ComfyUI [%s] OK game=%s player=%s turn=%s | attempt=%d | url=%s",
-                                kind, ctx_game, ctx_player, ctx_turn, attempt, image_url,
-                            )
-                        else:
-                            logger.info(f"[IMAGE] Image generated: {image_url}")
+                        write_comfyui_log(
+                            game_id=ctx_game,
+                            player_id=ctx_player,
+                            turn=ctx_turn,
+                            kind=kind or "unspecified",
+                            log_type="response",
+                            content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
+                        )
+                        logger.info(
+                            "ComfyUI [%s] OK game=%s player=%s turn=%s | attempt=%d | url=%s",
+                            kind or "unspecified",
+                            ctx_game,
+                            ctx_player,
+                            ctx_turn,
+                            attempt,
+                            image_url,
+                        )
                         return image_url
                     elif attempt < max_retries:
                         logger.warning(f"[IMAGE] No image in ComfyUI output (attempt {attempt}/{max_retries}), retrying...")
@@ -400,6 +400,11 @@ class ImageGenerator:
         filename_prefix: str = "avatar",
         width: int = 768,
         height: int = 1024,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | None = None,
+        kind: str | None = None,
     ) -> str | None:
         """Generate a character avatar image via ComfyUI.
 
@@ -410,6 +415,10 @@ class ImageGenerator:
             filename_prefix=filename_prefix,
             width=width,
             height=height,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
         )
 
     async def generate_scene_image(
@@ -418,6 +427,11 @@ class ImageGenerator:
         filename_prefix: str = "scene",
         width: int = 1024,
         height: int = 1024,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | None = None,
+        kind: str | None = None,
     ) -> str | None:
         """Generate a scene image via ComfyUI."""
         return await self.generate_image(
@@ -425,6 +439,10 @@ class ImageGenerator:
             filename_prefix=filename_prefix,
             width=width,
             height=height,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
         )
 
     async def generate_character_image(
@@ -433,6 +451,11 @@ class ImageGenerator:
         role: str,
         traits: list[str],
         scene_description: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | None = None,
+        kind: str | None = None,
     ) -> str | None:
         """Generate a character image (backward compatible interface)."""
         prompt = (
@@ -446,6 +469,10 @@ class ImageGenerator:
         return await self.generate_avatar_image(
             prompt=prompt,
             filename_prefix=f"default_game/char_{character_name.replace(' ', '_')}",
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
         )
 
     @staticmethod
@@ -618,6 +645,11 @@ class ImageGenerator:
         width: int = 1024,
         height: int = 1024,
         denoise: float = 0.75,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | None = None,
+        kind: str | None = None,
     ) -> str:
         """Generate an action scene image using avatar as visual reference.
 
@@ -653,8 +685,11 @@ class ImageGenerator:
                         filename_prefix=filename_prefix,
                     )
 
+                    ctx_game = game_id or "none"
+                    ctx_player = player_id or "none"
+                    ctx_turn = f"t{turn}" if turn is not None else "t0"
                     async with _image_semaphore:
-                        prompt_id = await self._queue_prompt(workflow)
+                        prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
                         outputs = await self._wait_for_completion(prompt_id, timeout=300)
                         image_url = self._extract_image_url(outputs)
 
@@ -676,6 +711,10 @@ class ImageGenerator:
         image_url = await self.generate_scene_image(
             prompt=fallback_prompt,
             filename_prefix=filename_prefix,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
         )
 
         if image_url:
@@ -736,6 +775,8 @@ class ImageGenerator:
                     width=width,
                     height=height,
                     max_retries=2,
+                    game_id=game_id,
+                    kind="loading",
                 )
                 if url:
                     urls.append(url)
@@ -792,6 +833,8 @@ class ImageGenerator:
             filename_prefix=f"{game_id}/{filename_prefix}",
             width=width,
             height=height,
+            game_id=game_id,
+            kind="bridge",
         )
 
     async def generate_splash_images(
@@ -835,6 +878,8 @@ class ImageGenerator:
                     width=width,
                     height=height,
                     max_retries=2,
+                    game_id=game_id,
+                    kind="splash",
                 )
                 if url:
                     urls.append(url)
