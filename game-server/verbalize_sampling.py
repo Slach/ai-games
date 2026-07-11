@@ -5,6 +5,7 @@ and Unlock LLM Diversity", ICLR 2026.
 """
 
 import logging
+import random
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -129,3 +130,47 @@ DIVERSITY_HINTS: dict[str, str] = {
         "- Scene scale (intimate close-up, expansive epic wide shot)\n"
     ),
 }
+
+
+def select_response(
+    responses: list[dict],
+    sampling_mode: str = "full",
+) -> dict:
+    """Weighted random selection from verbalized responses.
+
+    Args:
+        responses: List of {"probability": float, "text": str} dicts.
+        sampling_mode: "full" (sample from all) or "tails" (only p < 0.10).
+
+    Returns:
+        The selected response dict.
+
+    Raises:
+        ValueError: If responses list is empty.
+    """
+    if not responses:
+        raise ValueError("Cannot select from empty responses list")
+
+    if len(responses) == 1:
+        return responses[0]
+
+    if sampling_mode == "tails":
+        candidates = [r for r in responses if r["probability"] < 0.10]
+        if not candidates:
+            logger.warning("No tails candidates found (all p >= 0.10), falling back to full sampling")
+            candidates = responses
+        responses = candidates
+
+    total = sum(r["probability"] for r in responses)
+    if total <= 0:
+        logger.warning("All probabilities are zero or negative, using uniform selection")
+        return random.choice(responses)
+
+    r = random.uniform(0, total)
+    cumulative = 0.0
+    for resp in responses:
+        cumulative += resp["probability"]
+        if r <= cumulative:
+            return resp
+
+    return responses[-1]
