@@ -138,6 +138,17 @@ comments for removed code, etc. If you are certain that something is unused, you
   Never do `strftime(...) + " UTC"` or any other manual timezone string concatenation —
   it hardcodes a timezone that may be wrong and defeats the purpose of being timezone-aware.
 
+- **Never log full LLM/ComfyUI payloads to the main log.** Every
+  LLM and ComfyUI call writes its full request/response to a dedicated
+  file in `logs/` via `logging_utils.write_llm_log` /
+  `logging_utils.write_comfyui_log` (named by game/player/turn/kind). The
+  main log stream must contain only compact one-liners — never prompt
+  text, never workflow JSON, never raw API response bodies. When adding a
+  new LLM or image-generation call site, pass `kind` / `game_id` /
+  `player_id` / `turn` through to `generate_image` or the `GameServer`
+  method so the detailed log file is named correctly; do not add
+  `logger.info(json.dumps(...))` for workflow or prompt content.
+
 - **Language model.** Server-side logging is always in English. Telegram UI
   messages use the player's stored language preference (`player_store.py`).
   Game content (narrative, NPC dialogue) uses the language set when the game
@@ -168,10 +179,10 @@ After running this, you must generate a new turn via Telegram:
 `/gm_start <game_id>` (first turn) then `/gm_continue <game_id>`
 for subsequent turns, since all sessions/game state is deleted.
 
-### Reading service logs (two sources — use the right one)
+### Reading service logs (three tiers — use the right one)
 
-Logs live in **two places** with different coverage. When debugging an event,
-pick the source that actually contains it:
+Logs live in **three places** with different granularity. When debugging an
+event, pick the source that actually contains what you need:
 
 1. **`docker compose logs`** — container stdout, **only since the last
    container restart**. Fine for live/recent activity, but useless for
@@ -183,26 +194,59 @@ pick the source that actually contains it:
    docker compose logs -t telegram-bot | grep cmd_team    # one service, filtered
    ```
 
-2. **Daily `YYYY-MM-DD.log` files** — each service mirrors its full log to a
-   date-stamped file that **survives restarts and spans days**. This is where
-   the real history lives. Files are written into each service directory:
+2. **Daily `YYYY-MM-DD.log` files in `logs/`** — each service mirrors its
+   full log to a date-stamped file in the shared `logs/` directory (mounted
+   as a Docker volume). These **survive restarts and span days**:
 
-   - `telegram-bot/YYYY-MM-DD.log`
-   - `game-server/YYYY-MM-DD.log`
-   - `game-scheduler/YYYY-MM-DD.log`
+   - `logs/game-server-YYYY-MM-DD.log`
+   - `logs/game-scheduler-YYYY-MM-DD.log`
+   - `logs/telegram-bot-YYYY-MM-DD.log`
    - ComfyUI: `comfyui/user/comfyui.log` (current) plus `comfyui.prev.log`,
      `comfyui.prev2.log` (rotated)
 
+   The main log contains only **compact one-liners** for LLM and ComfyUI
+   calls — no request bodies, no prompt text, no workflow JSON.
+
    ```bash
    # Search one service's full history for a specific day
-   grep -nE "cmd_team|NPC_AVATAR|1553177251" game-server/2026-07-06.log
+   grep -nE "cmd_team|NPC_AVATAR|1553177251" logs/game-server-2026-07-06.log
    # All services, today's files, errors only
-   grep -Hn "ERROR" */"$(date +%F)".log
+   grep -Hn "ERROR" logs/*"$(date +%F)".log
    ```
 
-Rule of thumb: first locate the event's timestamp in the daily `.log` file
-(full history), then optionally cross-reference `docker compose logs` for the
-current session's detail.
+3. **Detailed request/response files in `logs/`** — every LLM and ComfyUI
+   call writes its full payload to a dedicated file. These are named by
+   context (game, player, turn, kind) so you can trace exactly which call
+   produced what:
+
+   - LLM:
+     `logs/game_{game_id}_player{player_id}_turn{tN}_{kind}_llm_request.log`
+     `logs/game_{game_id}_player{player_id}_turn{tN}_{kind}_llm_response.log`
+   - ComfyUI:
+     `logs/game_{game_id}_player{player_id}_turn{tN}_{kind}_comfyui_request.log`
+     `logs/game_{game_id}_player{player_id}_turn{tN}_{kind}_comfyui_response.log`
+
+   The `kind` reflects the purpose: `avatar`, `npc_avatar`, `bridge`,
+   `scene`, `outcome`, `player_action`, `loading`, `splash`,
+   `character_scene`, `player_briefing`, etc.
+
+   ComfyUI request files contain the full prompt text AND workflow JSON.
+   ComfyUI response files contain the generated image URL and prompt ID.
+   LLM files contain the full system/user prompts and raw API responses.
+
+   ```bash
+   # Find all ComfyUI requests for game c39q8a
+   ls logs/game_c39q8a_*_comfyui_request.log
+   # See what prompt produced a specific NPC avatar
+   head -20 logs/game_c39q8a_player*none_turn*t0_npc_avatar_comfyui_request.log
+   # Count how many LLM calls happened for turn 3
+   ls logs/game_*_player*_turn*t3_*_llm_request.log | wc -l
+   ```
+
+Rule of thumb: first locate the event's compact entry in the daily `.log`
+file (fast grep for game/player/turn), then open the matching detailed
+request/response file for the full payload. `docker compose logs` is only
+useful for live tailing.
 
 ### Run tests
 
