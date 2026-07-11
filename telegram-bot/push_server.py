@@ -184,7 +184,7 @@ def _build_crew_dialogues_text(
     if not crew_dialogues:
         return ""
     sep = "\n---\n"
-    lines = [f"*{d.get('npc', 'NPC')}*: {d.get('dialogue', '')}" for d in crew_dialogues]
+    lines = [f"*{_escape_md(d.get('npc', 'NPC'))}*: {_escape_md(d.get('dialogue', ''))}" for d in crew_dialogues]
     outcome_msgs = get_push_outcome(language)
     return f"*{outcome_msgs['crew_behavior_header']}*:\n{sep.join(lines)}"
 
@@ -201,11 +201,12 @@ def _build_briefing_text(
     acts = "\n\n".join(f"{i + 1} - {_escape_md(a.get('text', a.get('description', '')))}" for i, a in enumerate(choices))
 
     if personal_title:
-        title_line = f"🎯 *{personal_title}*"
+        title_line = f"🎯 *{_escape_md(personal_title)}*"
     else:
         title_line = current.get("title", "Turn {turn}").format(turn=turn_num)
 
-    return title_line + "\n\n" + current.get("briefing_header", "{briefing}").format(briefing=briefing) + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
+    briefing_header = current.get("briefing_header", "{briefing}").format(briefing=_escape_md(briefing))
+    return title_line + "\n\n" + briefing_header + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
 
 
 async def _download_image(url: str, timeout: int = 30) -> bytes | None:
@@ -306,7 +307,7 @@ async def _deliver_briefing(
                 caption = bridge_msgs.get("title", "")
                 mission_name = (mission or {}).get("name", "")
                 if mission_name:
-                    caption += "\n\n" + bridge_msgs.get("mission_header", "Mission: {name}").format(name=mission_name)
+                    caption += "\n\n" + bridge_msgs.get("mission_header", "Mission: {name}").format(name=_escape_md(mission_name))
                 img_data = await _download_image(bridge_url)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="bridge.png")
@@ -333,7 +334,7 @@ async def _deliver_briefing(
                         await call_with_retry(
                             lambda: bot.send_message(
                                 chat_id=player_id,
-                                text=bridge_msgs.get("mission_desc", "{description}").format(description=desc),
+                                text=bridge_msgs.get("mission_desc", "{description}").format(description=_escape_md(desc)),
                                 parse_mode="Markdown",
                             )
                         )
@@ -349,7 +350,7 @@ async def _deliver_briefing(
                     caption = f"*{intro_title}*"
                     narrative_too_long = global_narrative and len(global_narrative) > 900
                     if not narrative_too_long and global_narrative:
-                        caption += f"\n\n{global_narrative}"
+                        caption += f"\n\n{_escape_md(global_narrative)}"
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
@@ -366,7 +367,7 @@ async def _deliver_briefing(
                 await call_with_retry(
                     lambda: bot.send_message(
                         chat_id=player_id,
-                        text=f"*{intro_title}*\n\n{global_narrative}",
+                        text=f"*{intro_title}*\n\n{_escape_md(global_narrative)}",
                         parse_mode="Markdown",
                     )
                 )
@@ -379,12 +380,12 @@ async def _deliver_briefing(
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="character.png")
                     outcome_msgs = get_push_outcome(language)
-                    caption_text = personal_title or outcome_msgs["character_caption"].format(turn=turn, role=player_data.get("role", ""))
+                    caption_text = personal_title or outcome_msgs["character_caption"].format(turn=turn, role=_escape_md(player_data.get("role", "")))
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
-                            caption=f"*{caption_text}*",
+                            caption=f"*{_escape_md(caption_text)}*",
                             parse_mode="Markdown",
                         )
                     )
@@ -451,7 +452,7 @@ async def _deliver_briefing(
             # Mark as sent (track dedup across bot restarts)
             mark_sent_fn(player_id, game_id, turn)
 
-        except TelegramForbiddenError:
+        except TelegramForbiddenError as _:
             logger.warning(
                 "[PUSH_BRIEFING] Player %d blocked the bot (forbidden), auto-kicking",
                 player_id,
@@ -474,7 +475,7 @@ async def _deliver_briefing(
                 exc_info=True,
             )
             return False
-        except Exception:
+        except Exception as _:
             logger.error(
                 "[PUSH_BRIEFING] Unexpected error for player %d turn %s",
                 player_id,
@@ -534,7 +535,7 @@ async def _deliver_player_action(
             exc_info=True,
         )
         return False
-    except Exception:
+    except Exception as _:
         logger.error(
             "[PUSH_ACTION] Unexpected error for player %d turn %s",
             player_id,
@@ -949,7 +950,7 @@ async def _deliver_game_over(
                         )
                     )
 
-            full_text = f"*{title}*\n\n{finale_narrative}"
+            full_text = f"*{title}*\n\n{_escape_md(finale_narrative)}"
             await call_with_retry(
                 lambda: bot.send_message(
                     chat_id=player_id,
@@ -1025,7 +1026,7 @@ async def _deliver_onboarding_ready(
     try:
         welcome_text = welcome_message or ""
         if game_title:
-            welcome_text = f"**{_escape_md(game_title)}**\n\n{welcome_text}" if welcome_text else f"**{_escape_md(game_title)}**"
+            welcome_text = f"**{_escape_md(game_title)}**\n\n{_escape_md(welcome_text)}" if welcome_text else f"**{_escape_md(game_title)}**"
 
         # Send splash image
         splash_sent = False

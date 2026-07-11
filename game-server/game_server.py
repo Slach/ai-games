@@ -807,6 +807,12 @@ class GameServer:
         self._init_default_npcs()
         logger.info(f"GameServer initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
 
+        # Logging context — set by caller to enable compact LLM logging
+        self._llm_game_id: str | None = None
+        self._llm_player_id: str | None = None
+        self._llm_turn: int | None = None
+        self._llm_kind: str | None = None
+
     def _get_player_briefing_schema(self) -> dict[str, object]:
         """Build the player briefing JSON schema with dynamic maxItems."""
         total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
@@ -895,17 +901,22 @@ class GameServer:
         max_tokens: int | None = None,
         enable_thinking: bool = False,
     ) -> dict[str, Any]:
-        """
-        Call LLM with json_schema structured output.
+        """Call LLM with json_schema structured output.
 
         Falls back to plain text + JSON extraction if the endpoint
         does not support response_format (e.g. older llama.cpp).
 
+        When ``self._llm_kind`` is set (via the caller), writes full
+        request/response to a dedicated log file under logs/ and logs
+        only a compact one-line summary. Otherwise falls back to legacy
+        verbose inline logging.
+
         Args:
             enable_thinking: If True, allows the LLM to use reasoning/thinking tokens
-                before generating the final output. Use for complex multi-step
-                reasoning tasks like consequence analysis.
+                before generating the final output.
         """
+        from logging_utils import write_llm_log
+
         if max_tokens is None:
             max_tokens = self.llm_max_tokens
         messages: list[ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam] = [
@@ -913,20 +924,45 @@ class GameServer:
             {"role": "user", "content": user_prompt},
         ]
 
-        # Log full LLM request
-        logger.info("=== LLM REQUEST (structured) ===")
-        logger.info(f"Model: {self.llm_model}")
-        logger.info(f"Temperature: {temperature}")
-        logger.info(f"Max tokens: {max_tokens}")
-        logger.info(f"Enable thinking: {enable_thinking}")
-        logger.info(f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}")
-        logger.info("--- SYSTEM PROMPT ---")
-        for line in system_prompt.split("\n"):
-            logger.info(line)
-        logger.info("--- USER PROMPT ---")
-        for line in user_prompt.split("\n"):
-            logger.info(line)
-        logger.info("=== END LLM REQUEST ===")
+        kind = self._llm_kind
+        ctx_game = self._llm_game_id or "none"
+        ctx_player = self._llm_player_id or "none"
+        ctx_turn = f"t{self._llm_turn}" if self._llm_turn is not None else "t0"
+
+        if kind is not None:
+            request_log = (
+                f"Model: {self.llm_model}\n"
+                f"Temperature: {temperature}\n"
+                f"Max tokens: {max_tokens}\n"
+                f"Enable thinking: {enable_thinking}\n"
+                f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}\n\n"
+                f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n"
+                f"--- USER PROMPT ---\n{user_prompt}"
+            )
+            write_llm_log(
+                game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
+                kind=kind, log_type="request", content=request_log,
+            )
+            prompt_len = len(system_prompt) + len(user_prompt)
+            logger.info(
+                "LLM [%s] game=%s player=%s turn=%s | model=%s temp=%.2f max_tok=%d thinking=%s prompt_len=%d",
+                kind, ctx_game, ctx_player, ctx_turn,
+                self.llm_model, temperature, max_tokens, enable_thinking, prompt_len,
+            )
+        else:
+            logger.info("=== LLM REQUEST (structured) ===")
+            logger.info(f"Model: {self.llm_model}")
+            logger.info(f"Temperature: {temperature}")
+            logger.info(f"Max tokens: {max_tokens}")
+            logger.info(f"Enable thinking: {enable_thinking}")
+            logger.info(f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}")
+            logger.info("--- SYSTEM PROMPT ---")
+            for line in system_prompt.split("\n"):
+                logger.info(line)
+            logger.info("--- USER PROMPT ---")
+            for line in user_prompt.split("\n"):
+                logger.info(line)
+            logger.info("=== END LLM REQUEST ===")
 
         extra_body = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
         response = None
@@ -943,15 +979,30 @@ class GameServer:
             content = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
 
-            # Log full LLM response
-            logger.info("=== LLM RESPONSE (structured) ===")
-            logger.info(f"Finish reason: {finish_reason}")
-            if response.usage:
-                logger.info(f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}")
-            logger.info("--- RESPONSE CONTENT ---")
-            for line in (content or "").split("\n"):
-                logger.info(line)
-            logger.info("=== END LLM RESPONSE ===")
+            if kind is not None:
+                response_log = (
+                    f"Finish reason: {finish_reason}\n"
+                    f"Usage: {response.usage.prompt_tokens}p/{response.usage.completion_tokens}c/{response.usage.total_tokens}t\n\n"
+                    f"--- RESPONSE CONTENT ---\n{content or ''}"
+                )
+                write_llm_log(
+                    game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
+                    kind=kind, log_type="response", content=response_log,
+                )
+                logger.info(
+                    "LLM [%s] OK game=%s player=%s turn=%s | finish=%s prompt_tok=%d compl_tok=%d total_tok=%d",
+                    kind, ctx_game, ctx_player, ctx_turn,
+                    finish_reason, response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens,
+                )
+            else:
+                logger.info("=== LLM RESPONSE (structured) ===")
+                logger.info(f"Finish reason: {finish_reason}")
+                if response.usage:
+                    logger.info(f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}")
+                logger.info("--- RESPONSE CONTENT ---")
+                for line in (content or "").split("\n"):
+                    logger.info(line)
+                logger.info("=== END LLM RESPONSE ===")
 
             if content is None:
                 raise ValueError(f"LLM returned content=None. Finish reason: {finish_reason}. Usage: {response.usage}")
@@ -959,23 +1010,14 @@ class GameServer:
 
         except Exception as e:
             logger.warning(f"Structured output failed ({e}), falling back to plain JSON extraction")
-            # Log raw response from the first attempt if available
-            if response is not None:
-                try:
-                    first_content = response.choices[0].message.content
-                    logger.warning(f"Raw LLM response on first attempt:\ntype(content)={type(first_content).__name__}\ncontent={repr(first_content)}\nfinish_reason={response.choices[0].finish_reason}")
-                except Exception as log_err:
-                    logger.warning(f"Could not log raw response: {log_err}")
 
-            # Fallback: ask for JSON in plain text, then parse
             json_instruction = "\n\nIMPORTANT: Return ONLY valid JSON. No markdown, no code blocks, no explanation. Pure JSON only."
 
-            # Log fallback request (with json instruction appended)
-            logger.info("=== LLM REQUEST (fallback text) ===")
-            logger.info("--- USER PROMPT (with JSON instruction) ---")
-            for line in (user_prompt + json_instruction).split("\n"):
-                logger.info(line)
-            logger.info("=== END LLM REQUEST (fallback) ===")
+            if kind is not None:
+                logger.info(
+                    "LLM [%s] FALLBACK game=%s player=%s turn=%s | structured output failed: %s",
+                    kind, ctx_game, ctx_player, ctx_turn, e,
+                )
 
             messages[1]["content"] = user_prompt + json_instruction
 
@@ -989,78 +1031,49 @@ class GameServer:
             content = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
 
-            # Log full fallback response
-            logger.info("=== LLM RESPONSE (fallback text) ===")
-            logger.info(f"Finish reason: {finish_reason}")
-            logger.info("--- RESPONSE CONTENT ---")
-            content_str = content if content is not None else ""
-            for line in content_str.split("\n"):
-                logger.info(line)
-            logger.info("=== END LLM RESPONSE (fallback) ===")
+            if kind is not None:
+                response_log = (
+                    f"=== FALLBACK ===\n"
+                    f"Finish reason: {finish_reason}\n"
+                    f"Usage: {response.usage.prompt_tokens}p/{response.usage.completion_tokens}c/{response.usage.total_tokens}t\n\n"
+                    f"--- RESPONSE CONTENT ---\n{content or ''}"
+                )
+                write_llm_log(
+                    game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
+                    kind=kind, log_type="response", content=response_log,
+                )
+                logger.info(
+                    "LLM [%s] FALLBACK OK game=%s player=%s turn=%s | finish=%s prompt_tok=%d compl_tok=%d",
+                    kind, ctx_game, ctx_player, ctx_turn,
+                    finish_reason, response.usage.prompt_tokens, response.usage.completion_tokens,
+                )
+            else:
+                logger.info("=== LLM RESPONSE (fallback text) ===")
+                logger.info(f"Finish reason: {finish_reason}")
+                logger.info("--- RESPONSE CONTENT ---")
+                for line in (content or "").split("\n"):
+                    logger.info(line)
+                logger.info("=== END LLM RESPONSE (fallback) ===")
 
             if content is None:
-                raise ValueError(f"LLM returned empty content on fallback call. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
+                raise ValueError(f"LLM returned empty content on fallback. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
             if content.strip() == "":
-                raise ValueError(f"LLM returned empty content on fallback call. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
+                raise ValueError(f"LLM returned empty content on fallback. Finish reason: {finish_reason}. Raw response:\n{str(response)}") from e
 
             content = content.strip()
-            # Clean and parse
             content = self._strip_json_block(content)
             try:
                 return json.loads(content)
             except json.JSONDecodeError as parse_err:
+                repaired = repair_json(content)
+                if repaired != content:
+                    logger.info("Attempting JSON repair on fallback response...")
+                if repaired != content and _try_loads(repaired) is not None:
+                    return _try_loads(repaired)
+                if repaired != content:
+                    logger.warning("JSON repair did not help, still unparsable")
                 logger.error(f"Fallback JSON parse failed: {parse_err}\nRaw content:\n{content}\nFinish reason: {finish_reason}", exc_info=True)
                 raise
-
-    def _call_llm_text(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        temperature: float = 0.7,
-        max_tokens: int = 2048,
-    ) -> str:
-        """Call LLM and return raw text response (for free-form text)."""
-        messages: list[ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        # Log full LLM request
-        logger.info("=== LLM REQUEST (text) ===")
-        logger.info(f"Model: {self.llm_model}")
-        logger.info(f"Temperature: {temperature}")
-        logger.info(f"Max tokens: {max_tokens}")
-        logger.info("--- SYSTEM PROMPT ---")
-        for line in system_prompt.split("\n"):
-            logger.info(line)
-        logger.info("--- USER PROMPT ---")
-        for line in user_prompt.split("\n"):
-            logger.info(line)
-        logger.info("=== END LLM REQUEST ===")
-
-        response = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        )
-
-        content = response.choices[0].message.content or ""
-        finish_reason = response.choices[0].finish_reason
-
-        # Log full LLM response
-        logger.info("=== LLM RESPONSE (text) ===")
-        logger.info(f"Finish reason: {finish_reason}")
-        if response.usage:
-            logger.info(f"Usage: prompt_tokens={response.usage.prompt_tokens}, completion_tokens={response.usage.completion_tokens}, total_tokens={response.usage.total_tokens}")
-        logger.info("--- RESPONSE CONTENT ---")
-        for line in content.split("\n"):
-            logger.info(line)
-        logger.info("=== END LLM RESPONSE ===")
-
-        return content.strip()
-
     _JSON_BLOCK_PATTERNS = (
         re.compile(r"\{.*\}", re.DOTALL),
         re.compile(r"\[.*\]", re.DOTALL),

@@ -26,12 +26,20 @@ from database import (
 )
 
 # Configure logging.
+# A daily file handler mirrors logs to logs/ subdirectory so they
+# survive container restarts/recreates (docker json-logs are wiped on
+# recreate). The path is relative to this file (=/app inside containers).
+os.makedirs(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs"),
+    exist_ok=True,
+)
+# Configure logging.
 # A daily file handler mirrors logs to <script dir>/YYYY-MM-DD.log so they
 # survive container restarts/recreates (docker json-logs are wiped on
 # recreate). The path is relative to this file (=/app inside containers).
 _LOG_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    f"{datetime.now().strftime('%Y-%m-%d')}.log",
+    f"logs/game-scheduler-{datetime.now().strftime('%Y-%m-%d')}.log",
 )
 logging.basicConfig(
     level=logging.INFO,

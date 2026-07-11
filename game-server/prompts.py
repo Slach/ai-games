@@ -1010,7 +1010,6 @@ def build_global_circumstances_prompts(
     return system, user
 
 
-
 # ── Mission generation prompts ─────────────────────────────────────
 
 # ── Mission generation prompts ─────────────────────────────────────
@@ -1100,6 +1099,7 @@ def build_npc_name_system(language: str) -> str:
             "- Для симбиотических: составные имена\n"
             "- Имя ДОЛЖНО быть на русском языке!\n"
             "- НЕ используй транслит английских имён — создай оригинальное имя.\n"
+            "- НИКОГДА не используй подчёркивание (_) в именах. Разделяй слова пробелами или дефисами.\n"
             "- Учитывай роль персонажа при выборе имени\n"
             "- Будь КРЕАТИВНЫМ, избегай шаблонов"
         )
@@ -1114,6 +1114,7 @@ def build_npc_name_system(language: str) -> str:
         "- For cybernetic: names with technical undertones\n"
         "- For symbiotic: compound names\n"
         "- Consider the character's role when choosing a name\n"
+        "- NEVER use underscore (_) in names. Separate words with spaces or hyphens.\n"
         "- Be CREATIVE, avoid templates"
     )
 

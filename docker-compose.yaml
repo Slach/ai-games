@@ -93,6 +93,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./game-server/:/app/
+      - ./logs/:/app/logs/
 
   # Telegram Bot - Player interface via Telegram
   telegram-bot:
@@ -136,6 +137,7 @@ services:
       start_interval: 3s
     volumes:
       - ./telegram-bot/:/app/
+      - ./logs/:/app/logs/
 
   # Game Scheduler - triggers turn generation via game-server
   # Can be run manually for debugging: docker compose run --rm game-scheduler
@@ -162,6 +164,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./game-scheduler/:/app/
+      - ./logs/:/app/logs/
 
 networks:
   spark-network:

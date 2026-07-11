@@ -6,7 +6,8 @@ and Unlock LLM Diversity", ICLR 2026.
 
 import json
 import logging
-import random
+import random as _random
+import re as _re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,110 @@ logger = logging.getLogger(__name__)
 class VSConfig:
     k: int = 5
     sampling_mode: str = "full"  # "full" | "tails"
+
+
+# Per-endpoint k overrides: some endpoints produce very large responses,
+# so we use fewer candidates to keep JSON parsable.
+VS_K_OVERRIDES: dict[str, int] = {
+    "combined_outcome": 3,
+}
+
+
+def repair_json(text: str) -> str:
+    """Attempt to repair common LLM JSON errors: trailing commas, unescaped
+    newlines in strings, truncated trailing content.
+
+    Returns the repaired text if repairable, otherwise the original text.
+    """
+    original = text.strip()
+    if not original:
+        return original
+
+    repaired = original
+
+    # 1. Remove trailing text after the last balanced JSON container.
+    repaired = _trim_to_last_json_root(repaired)
+
+    # 2. Fix trailing commas before } or ]
+    repaired = _re.sub(r",\s*(\}|\])", r"\1", repaired)
+
+    # 3. Balance braces/brackets: if the JSON is truncated, close unclosed containers.
+    open_braces = repaired.count("{") - repaired.count("}")
+    open_brackets = repaired.count("[") - repaired.count("]")
+
+    if open_braces > 0 or open_brackets > 0:
+        last_char = repaired.rstrip()[-1:] if repaired.rstrip() else ""
+        if last_char in (",", ":", "{", "[", '"', "e", "t", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            repaired = repaired.rstrip().rstrip(",")
+            for _ in range(open_brackets):
+                repaired += "]"
+            for _ in range(open_braces):
+                repaired += "}"
+
+    # 4. Fix unescaped newlines inside quoted string values.
+    repaired = _fix_broken_strings(repaired)
+
+    if repaired != original:
+        logger.info("repair_json: applied repairs (%d bytes delta)", len(repaired) - len(original))
+
+    return repaired
+
+
+def _trim_to_last_json_root(text: str) -> str:
+    """Trim trailing text after the last balanced JSON object or array."""
+    # Find the last } or ] in the text — this is the root closer.
+    root_close = -1
+    for i in range(len(text) - 1, -1, -1):
+        if text[i] in ("}", "]"):
+            root_close = i
+            break
+    if root_close == -1:
+        return text  # No JSON container found
+
+    # Walk backward from root_close to find the matching opener.
+    depth = 0
+    for i in range(root_close, -1, -1):
+        ch = text[i]
+        if ch in ("}", "]"):
+            depth += 1
+        elif ch in ("{", "["):
+            depth -= 1
+        if depth == 0:
+            # i is the root opener position
+            return text[i : root_close + 1]
+    return text
+
+
+def _fix_broken_strings(text: str) -> str:
+    """Try to fix string values where literal newlines broke the JSON structure."""
+    lines = text.split("\n")
+    result = []
+    in_broken_string = False
+    for line in lines:
+        stripped = line.strip()
+        if in_broken_string:
+            if stripped.endswith('",') or stripped.endswith('"') or stripped == '"':
+                result.append(line)
+                in_broken_string = False
+            else:
+                escaped = line.replace("\t", "\\t")
+                result.append(escaped)
+        elif _starts_value_string(stripped) and not _ends_value_string(stripped):
+            result.append(line)
+            in_broken_string = True
+        else:
+            result.append(line)
+    return "\n".join(result)
+
+
+def _starts_value_string(line: str) -> bool:
+    """Check if a line starts a JSON string value (like '"key": "value...')."""
+    return bool(_re.match(r'^\s*"[^"]+"\s*:\s*"', line))
+
+
+def _ends_value_string(line: str) -> bool:
+    """Check if a line ends a JSON string value (like '...value",' or '...value"')."""
+    return bool(_re.search(r'",?\s*$', line))
 
 
 VS_RESPONSE_SCHEMA: dict = {
@@ -156,9 +261,9 @@ def select_response(
     total = sum(r["probability"] for r in responses)
     if total <= 0:
         logger.warning("All probabilities are zero or negative, using uniform selection")
-        return random.choice(responses)
+        return _random.choice(responses)
 
-    r = random.uniform(0, total)
+    r = _random.uniform(0, total)
     cumulative = 0.0
     for resp in responses:
         cumulative += resp["probability"]
@@ -224,3 +329,8 @@ def vs_parse_json(text: str) -> dict:
     except (json.JSONDecodeError, ValueError) as e:
         logger.warning("VS text is not valid JSON: %s, using raw fallback", e)
         return {"raw": text}
+
+
+def vs_k_for(endpoint: str, default: int = 5) -> int:
+    """Return the VS k value for a given endpoint, using overrides if present."""
+    return VS_K_OVERRIDES.get(endpoint, default)

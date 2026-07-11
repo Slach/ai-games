@@ -21,8 +21,4 @@ __pycache__/
 *.pyc
 *.db-wal
 *.db-shm
-
-# Daily service logs (telegram-bot, game-server, game-scheduler -> /app/YYYY-MM-DD.log)
-telegram-bot/*.log
-game-server/*.log
-game-scheduler/*.log
+*.log
