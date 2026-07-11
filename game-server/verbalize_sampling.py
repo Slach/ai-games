@@ -174,3 +174,44 @@ def select_response(
             return resp
 
     return responses[-1]
+
+
+def verbalize_prompt(
+    system_prompt: str,
+    user_prompt: str,
+    diversity_hint: str,
+    k: int = 5,
+) -> tuple[str, str]:
+    """Wrap instance-level prompt into distribution-level VS prompt.
+
+    Args:
+        system_prompt: Original system prompt.
+        user_prompt: Original user prompt.
+        diversity_hint: Hints for what axes to vary.
+        k: Number of candidate responses to request.
+
+    Returns:
+        (modified_system_prompt, modified_user_prompt)
+    """
+    vs_system = (
+        f"{system_prompt}\n\n"
+        f"You are a creative generator using Verbalized Sampling. "
+        f"For each request, output k={k} DIVERSE options with verbalized "
+        f"probabilities. Each option must be meaningfully different — explore "
+        f"the full distribution including likely, unlikely, and surprising options."
+    )
+
+    vs_user = (
+        f"{user_prompt}\n\n"
+        f"Generate {k} DIVERSE options for the above. Each option must be "
+        f"meaningfully different from the others.\n"
+        f"{diversity_hint}\n\n"
+        f"For each option, assign a numeric probability (0.0-1.0) representing "
+        f"how likely or appropriate this option is. Probabilities must sum to 1.0. "
+        f"Include both high-probability (conventional) and low-probability "
+        f"(creative, surprising) options.\n\n"
+        f'Format: output as JSON with a "responses" array. Each entry has '
+        f'"probability" (float) and "text" (string with the full response content).'
+    )
+
+    return vs_system, vs_user

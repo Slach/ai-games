@@ -1,7 +1,33 @@
 """Tests for verbalize_sampling module."""
 
 import unittest
-from verbalize_sampling import select_response
+from verbalize_sampling import select_response, verbalize_prompt
+
+
+class TestVerbalizePrompt(unittest.TestCase):
+    def test_adds_distribution_framing(self):
+        system = "You are a Game Master."
+        user = "Create a mission."
+        hint = "Vary genre and tone."
+        vs_system, vs_user = verbalize_prompt(system, user, hint, k=3)
+
+        self.assertIn("distribution", vs_system.lower())
+        self.assertIn("3", vs_user)
+        self.assertIn("probability", vs_user.lower())
+        self.assertIn("Vary genre and tone", vs_user)
+
+    def test_preserves_original_content(self):
+        system = "You are Game Master."
+        user = "Create a mission about first contact."
+        hint = "Vary genre."
+        vs_system, vs_user = verbalize_prompt(system, user, hint)
+
+        self.assertIn("You are Game Master", vs_system)
+        self.assertIn("Create a mission about first contact", vs_user)
+
+    def test_k_in_user_prompt(self):
+        _, vs_user = verbalize_prompt("S", "U", "", k=7)
+        self.assertIn("7", vs_user)
 
 
 class TestSelectResponse(unittest.TestCase):
