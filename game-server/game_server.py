@@ -52,7 +52,7 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from pydantic import BaseModel
 
-from verbalize_sampling import DIVERSITY_HINTS, select_response, verbalize_prompt, vs_response_schema
+from verbalize_sampling import DIVERSITY_HINTS, repair_json, select_response, verbalize_prompt, vs_response_schema
 
 logger = logging.getLogger(__name__)
 
@@ -926,8 +926,8 @@ class GameServer:
 
         kind = self._llm_kind
         ctx_game = self._llm_game_id or "none"
-        ctx_player = self._llm_player_id or "none"
-        ctx_turn = f"t{self._llm_turn}" if self._llm_turn is not None else "t0"
+        ctx_player = str(self._llm_player_id) if self._llm_player_id else ""
+        ctx_turn = str(self._llm_turn) if self._llm_turn is not None else "0"
 
         if kind is not None:
             request_log = (
@@ -940,14 +940,25 @@ class GameServer:
                 f"--- USER PROMPT ---\n{user_prompt}"
             )
             write_llm_log(
-                game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
-                kind=kind, log_type="request", content=request_log,
+                game_id=ctx_game,
+                player_id=ctx_player,
+                turn=ctx_turn,
+                kind=kind,
+                log_type="request",
+                content=request_log,
             )
             prompt_len = len(system_prompt) + len(user_prompt)
             logger.info(
                 "LLM [%s] game=%s player=%s turn=%s | model=%s temp=%.2f max_tok=%d thinking=%s prompt_len=%d",
-                kind, ctx_game, ctx_player, ctx_turn,
-                self.llm_model, temperature, max_tokens, enable_thinking, prompt_len,
+                kind,
+                ctx_game,
+                ctx_player,
+                ctx_turn,
+                self.llm_model,
+                temperature,
+                max_tokens,
+                enable_thinking,
+                prompt_len,
             )
         else:
             logger.info("=== LLM REQUEST (structured) ===")
@@ -978,21 +989,28 @@ class GameServer:
             )
             content = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
+            _u = response.usage
 
             if kind is not None:
-                response_log = (
-                    f"Finish reason: {finish_reason}\n"
-                    f"Usage: {response.usage.prompt_tokens}p/{response.usage.completion_tokens}c/{response.usage.total_tokens}t\n\n"
-                    f"--- RESPONSE CONTENT ---\n{content or ''}"
-                )
+                response_log = f"Finish reason: {finish_reason}\nUsage: {_u.prompt_tokens if _u else 0}p/{_u.completion_tokens if _u else 0}c/{_u.total_tokens if _u else 0}t\n\n--- RESPONSE CONTENT ---\n{content or ''}"
                 write_llm_log(
-                    game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
-                    kind=kind, log_type="response", content=response_log,
+                    game_id=ctx_game,
+                    player_id=ctx_player,
+                    turn=ctx_turn,
+                    kind=kind,
+                    log_type="response",
+                    content=response_log,
                 )
                 logger.info(
                     "LLM [%s] OK game=%s player=%s turn=%s | finish=%s prompt_tok=%d compl_tok=%d total_tok=%d",
-                    kind, ctx_game, ctx_player, ctx_turn,
-                    finish_reason, response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens,
+                    kind,
+                    ctx_game,
+                    ctx_player,
+                    ctx_turn,
+                    finish_reason,
+                    _u.prompt_tokens if _u else 0,
+                    _u.completion_tokens if _u else 0,
+                    _u.total_tokens if _u else 0,
                 )
             else:
                 logger.info("=== LLM RESPONSE (structured) ===")
@@ -1005,7 +1023,7 @@ class GameServer:
                 logger.info("=== END LLM RESPONSE ===")
 
             if content is None:
-                raise ValueError(f"LLM returned content=None. Finish reason: {finish_reason}. Usage: {response.usage}")
+                raise ValueError(f"LLM returned content=None. Finish reason: {finish_reason}. Usage: {_u}")
             return json.loads(content)
 
         except Exception as e:
@@ -1016,7 +1034,11 @@ class GameServer:
             if kind is not None:
                 logger.info(
                     "LLM [%s] FALLBACK game=%s player=%s turn=%s | structured output failed: %s",
-                    kind, ctx_game, ctx_player, ctx_turn, e,
+                    kind,
+                    ctx_game,
+                    ctx_player,
+                    ctx_turn,
+                    e,
                 )
 
             messages[1]["content"] = user_prompt + json_instruction
@@ -1030,22 +1052,27 @@ class GameServer:
             )
             content = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
+            _u = response.usage
 
             if kind is not None:
-                response_log = (
-                    f"=== FALLBACK ===\n"
-                    f"Finish reason: {finish_reason}\n"
-                    f"Usage: {response.usage.prompt_tokens}p/{response.usage.completion_tokens}c/{response.usage.total_tokens}t\n\n"
-                    f"--- RESPONSE CONTENT ---\n{content or ''}"
-                )
+                response_log = f"=== FALLBACK ===\nFinish reason: {finish_reason}\nUsage: {_u.prompt_tokens if _u else 0}p/{_u.completion_tokens if _u else 0}c/{_u.total_tokens if _u else 0}t\n\n--- RESPONSE CONTENT ---\n{content or ''}"
                 write_llm_log(
-                    game_id=ctx_game, player_id=ctx_player, turn=ctx_turn,
-                    kind=kind, log_type="response", content=response_log,
+                    game_id=ctx_game,
+                    player_id=ctx_player,
+                    turn=ctx_turn,
+                    kind=kind,
+                    log_type="response",
+                    content=response_log,
                 )
                 logger.info(
                     "LLM [%s] FALLBACK OK game=%s player=%s turn=%s | finish=%s prompt_tok=%d compl_tok=%d",
-                    kind, ctx_game, ctx_player, ctx_turn,
-                    finish_reason, response.usage.prompt_tokens, response.usage.completion_tokens,
+                    kind,
+                    ctx_game,
+                    ctx_player,
+                    ctx_turn,
+                    finish_reason,
+                    _u.prompt_tokens if _u else 0,
+                    _u.completion_tokens if _u else 0,
                 )
             else:
                 logger.info("=== LLM RESPONSE (fallback text) ===")
@@ -1068,12 +1095,16 @@ class GameServer:
                 repaired = repair_json(content)
                 if repaired != content:
                     logger.info("Attempting JSON repair on fallback response...")
-                if repaired != content and _try_loads(repaired) is not None:
-                    return _try_loads(repaired)
+                if repaired != content:
+                    try:
+                        return json.loads(repaired)
+                    except json.JSONDecodeError:
+                        pass
                 if repaired != content:
                     logger.warning("JSON repair did not help, still unparsable")
                 logger.error(f"Fallback JSON parse failed: {parse_err}\nRaw content:\n{content}\nFinish reason: {finish_reason}", exc_info=True)
                 raise
+
     _JSON_BLOCK_PATTERNS = (
         re.compile(r"\{.*\}", re.DOTALL),
         re.compile(r"\[.*\]", re.DOTALL),
@@ -1443,6 +1474,27 @@ class GameServer:
         return prompts
 
     # ============== Player Message ==============
+
+    def _call_llm_text(self, system_prompt: str, user_prompt: str) -> str:
+        """Simple text completion without structured output — last-resort fallback."""
+
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            response = self.client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=0.7,
+                max_tokens=1024,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            content = response.choices[0].message.content
+            return content or "Game Master received your message."
+        except Exception as e:
+            logger.error(f"_call_llm_text failed: {e}", exc_info=True)
+            return "Game Master received your message."
 
     def process_player_message(self, player_id: int, message: str, player_profile: dict[str, Any], game_context: dict[str, Any] | None = None) -> str:
         """Process a player message and generate Game Master response.

@@ -22,10 +22,12 @@ def _sanitize_filename_component(component: str) -> str:
 
 def _ensure_logs_dir() -> str:
     """Return the logs directory path, creating it if necessary."""
-    # Works both inside Docker (/app/logs/) and locally
+    # In Docker, the host's ./logs/ is mounted at /app/logs/
+    docker_logs = "/app/logs"
+    if os.path.isdir(docker_logs):
+        return docker_logs
+    # Local development: logs/ is one level up from the game-server/ directory
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
-    if os.getenv("DOCKER", ""):
-        log_dir = "/app/logs"
     try:
         os.makedirs(log_dir, exist_ok=True)
     except OSError:
@@ -46,19 +48,22 @@ def write_llm_log(
 
     Args:
         game_id: Game identifier (or "none")
-        player_id: Player identifier (or "none")
-        turn: Turn number (or "t0")
+        player_id: Player identifier (or empty string if none)
+        turn: Turn number (e.g. "1", "2")
         kind: Call type descriptor (e.g., "player_briefing")
         log_type: "request" or "response"
         content: Full text content to write
     """
     log_dir = _ensure_logs_dir()
     safe_game = _sanitize_filename_component(game_id)
-    safe_player = _sanitize_filename_component(player_id)
     safe_turn = _sanitize_filename_component(turn)
     safe_kind = _sanitize_filename_component(kind)
     safe_type = _sanitize_filename_component(log_type)
-    filename = f"game_{safe_game}_player{safe_player}_turn{safe_turn}_{safe_kind}_llm_{safe_type}.log"
+    if player_id:
+        safe_player = _sanitize_filename_component(player_id)
+        filename = f"game_{safe_game}_player_{safe_player}_turn{safe_turn}_{safe_kind}_llm_{safe_type}.log"
+    else:
+        filename = f"game_{safe_game}_turn{safe_turn}_{safe_kind}_llm_{safe_type}.log"
     filepath = os.path.join(log_dir, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -81,19 +86,22 @@ def write_comfyui_log(
 
     Args:
         game_id: Game identifier (or "none")
-        player_id: Player identifier (or "none")
-        turn: Turn number (or "t0")
+        player_id: Player identifier (or empty string if none)
+        turn: Turn number (e.g. "1", "2")
         kind: Call type descriptor (e.g., "avatar", "scene")
         log_type: "request" or "response"
         content: Full text content to write
     """
     log_dir = _ensure_logs_dir()
     safe_game = _sanitize_filename_component(game_id)
-    safe_player = _sanitize_filename_component(player_id)
     safe_turn = _sanitize_filename_component(turn)
     safe_kind = _sanitize_filename_component(kind)
     safe_type = _sanitize_filename_component(log_type)
-    filename = f"game_{safe_game}_player{safe_player}_turn{safe_turn}_{safe_kind}_comfyui_{safe_type}.log"
+    if player_id:
+        safe_player = _sanitize_filename_component(player_id)
+        filename = f"game_{safe_game}_player_{safe_player}_turn{safe_turn}_{safe_kind}_comfyui_{safe_type}.log"
+    else:
+        filename = f"game_{safe_game}_turn{safe_turn}_{safe_kind}_comfyui_{safe_type}.log"
     filepath = os.path.join(log_dir, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:

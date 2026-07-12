@@ -177,8 +177,8 @@ class ImageGenerator:
         *,
         kind: str | None = None,
         ctx_game: str = "none",
-        ctx_player: str = "none",
-        ctx_turn: str = "t0",
+        ctx_player: str = "",
+        ctx_turn: str = "0",
     ) -> str:
         """Submit a workflow to ComfyUI /prompt endpoint and return the prompt_id."""
         payload = {
@@ -309,8 +309,8 @@ class ImageGenerator:
         from logging_utils import write_comfyui_log
 
         ctx_game = game_id or "none"
-        ctx_player = player_id or "none"
-        ctx_turn = f"t{turn}" if turn is not None else "t0"
+        ctx_player = str(player_id) if player_id else ""
+        ctx_turn = str(turn) if turn is not None else "0"
 
         logger.info(
             "ComfyUI [%s] game=%s player=%s turn=%s | size=%dx%d prefix=%s retries=%d",
@@ -439,36 +439,6 @@ class ImageGenerator:
             filename_prefix=filename_prefix,
             width=width,
             height=height,
-            game_id=game_id,
-            player_id=player_id,
-            turn=turn,
-            kind=kind,
-        )
-
-    async def generate_character_image(
-        self,
-        character_name: str,
-        role: str,
-        traits: list[str],
-        scene_description: str = "",
-        *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | None = None,
-        kind: str | None = None,
-    ) -> str | None:
-        """Generate a character image (backward compatible interface)."""
-        prompt = (
-            f"Sci-fi character portrait: {character_name}, {role}. "
-            f"Personality traits: {', '.join(traits)}. "
-            f"{scene_description} "
-            f"Futuristic uniform, detailed face, cinematic lighting, 4K quality. "
-            f"Space opera style, Star Trek aesthetic. Portrait, upper body."
-        )
-
-        return await self.generate_avatar_image(
-            prompt=prompt,
-            filename_prefix=f"default_game/char_{character_name.replace(' ', '_')}",
             game_id=game_id,
             player_id=player_id,
             turn=turn,
@@ -686,8 +656,8 @@ class ImageGenerator:
                     )
 
                     ctx_game = game_id or "none"
-                    ctx_player = player_id or "none"
-                    ctx_turn = f"t{turn}" if turn is not None else "t0"
+                    ctx_player = str(player_id) if player_id else ""
+                    ctx_turn = str(turn) if turn is not None else "0"
                     async with _image_semaphore:
                         prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
                         outputs = await self._wait_for_completion(prompt_id, timeout=300)

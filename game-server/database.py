@@ -666,10 +666,10 @@ def get_recent_role_score_history(
            WHERE osh.completed = 1
              AND osh.role_score_history IS NOT NULL
              AND osh.role_score_history != '{}'
-             AND (pp.game_id = ? OR ? = 'default_game')
+             AND pp.game_id = ?
            ORDER BY osh.created_at DESC
            LIMIT ?""",
-        (game_id, game_id, limit),
+        (game_id, limit),
     )
     rows = cursor.fetchall()
     conn.close()
@@ -1542,7 +1542,7 @@ def create_npc_profile(npc_data: dict[str, Any]) -> dict[str, Any] | None:
             npc_data.get("species", "Human"),
             npc_data.get("gender", "Male"),
             npc_data.get("avatar_description", ""),
-            npc_data.get("game_id", "default_game"),
+            npc_data["game_id"],
             1 if npc_data.get("is_active", True) else 0,
             npc_data.get("replaces_player_id"),
             datetime.now().isoformat(),
