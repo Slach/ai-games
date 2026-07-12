@@ -1318,11 +1318,16 @@ async def complete_onboarding(session_id: str):
         species_desc = profile.get("species_description") or ""
         species_type = profile.get("species", "") or ""
         gender_type = profile.get("gender", "") or ""
+        species_primary = profile.get("species_primary_key") or ""
         if species_desc or species_type or gender_type:
             parts = [profile.get("avatar_description", "")]
             if species_type:
                 parts.append(f"Species type: {species_type}")
-            if gender_type:
+            # A human gender label (Male/Female) is a strong humanoid prior that
+            # collapses alien anatomy back into a person, so for non-humanoid,
+            # energy, and symbiotic beings we let the LLM invent a fitting
+            # non-human biological identity instead of passing the gender through.
+            if gender_type and species_primary not in ("non_humanoid", "energy", "symbiotic"):
                 parts.append(f"Gender type: {gender_type}")
             if species_desc:
                 parts.append(f"Appearance: {species_desc}")
@@ -1414,38 +1419,42 @@ async def complete_onboarding(session_id: str):
                 f"Portrait, upper body, space opera aesthetic."
             ),
             "non_humanoid": (
-                f"Sci-fi artwork of a non-humanoid {profile['role']} in Star Trek style. "
+                f"Alien creature concept art of a non-humanoid {profile['role']}. "
                 f"Personality traits: {traits_str}. "
-                f"Character form: {avatar_desc} "
+                f"Creature form: {avatar_desc} "
                 f"{species_desc} "
-                f"Cinematic lighting, 4K quality, space opera aesthetic. "
+                f"The creature is NOT a human or humanoid: no two arms ending in hands, "
+                f"no two legs, no human face or hair, not a bipedal silhouette, no uniform. "
+                f"Cinematic lighting, 4K quality, detailed alien biology. "
                 f"Full body or 3/4 view showing the alien physiology."
             ),
             "energy": (
-                f"Sci-fi artwork of an energy being {profile['role']} in Star Trek style. "
+                f"Abstract energy-being concept art of an energy being {profile['role']}. "
                 f"Personality traits: {traits_str}. "
                 f"Form: {avatar_desc} "
                 f"{species_desc} "
-                f"Glowing plasma energy form, luminous, ethereal, "
-                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"Glowing plasma energy form, luminous, ethereal, no solid body, "
+                f"no face, no limbs, not a human or humanoid. "
+                f"Cinematic lighting, 4K quality. "
                 f"Full body showing the energy form."
             ),
             "cybernetic": (
-                f"Sci-fi artwork of a cybernetic {profile['role']} in Star Trek style. "
+                f"Sci-fi concept art of a cybernetic {profile['role']}. "
                 f"Personality traits: {traits_str}. "
                 f"Form: {avatar_desc} "
                 f"{species_desc} "
                 f"Mechanical body, circuits, synthetic components, "
-                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"cinematic lighting, 4K quality. "
                 f"Full body or 3/4 view showing cybernetic anatomy."
             ),
             "symbiotic": (
-                f"Sci-fi artwork of a symbiotic being {profile['role']} in Star Trek style. "
+                f"Alien creature concept art of a symbiotic being {profile['role']}. "
                 f"Personality traits: {traits_str}. "
                 f"Form: {avatar_desc} "
                 f"{species_desc} "
                 f"Composite organism, multiple life forms in one body, "
-                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"not a single humanoid body, no human face. "
+                f"Cinematic lighting, 4K quality. "
                 f"Full body view showing the composite nature."
             ),
         }
@@ -1537,11 +1546,16 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
         species_desc = profile.get("species_description") or ""
         species_type = profile.get("species", "") or ""
         gender_type = profile.get("gender", "") or ""
+        species_primary = profile.get("species_primary_key") or ""
         if species_desc or species_type or gender_type:
             parts = [profile.get("avatar_description", "")]
             if species_type:
                 parts.append(f"Species type: {species_type}")
-            if gender_type:
+            # A human gender label (Male/Female) is a strong humanoid prior that
+            # collapses alien anatomy back into a person, so for non-humanoid,
+            # energy, and symbiotic beings we let the LLM invent a fitting
+            # non-human biological identity instead of passing the gender through.
+            if gender_type and species_primary not in ("non_humanoid", "energy", "symbiotic"):
                 parts.append(f"Gender type: {gender_type}")
             if species_desc:
                 parts.append(f"Appearance: {species_desc}")
@@ -1637,38 +1651,42 @@ async def _generate_player_avatar(player_id: int, game_id: str, language: str = 
                 f"Portrait, upper body, space opera aesthetic."
             ),
             "non_humanoid": (
-                f"Sci-fi artwork of a non-humanoid {profile['role']} in Star Trek style. "
+                f"Alien creature concept art of a non-humanoid {profile['role']}. "
                 f"Personality traits: {traits_str}. "
-                f"Character form: {avatar_desc} "
+                f"Creature form: {avatar_desc} "
                 f"{species_desc} "
-                f"Cinematic lighting, 4K quality, space opera aesthetic. "
+                f"The creature is NOT a human or humanoid: no two arms ending in hands, "
+                f"no two legs, no human face or hair, not a bipedal silhouette, no uniform. "
+                f"Cinematic lighting, 4K quality, detailed alien biology. "
                 f"Full body or 3/4 view showing the alien physiology."
             ),
             "energy": (
-                f"Sci-fi artwork of an energy being {profile['role']} in Star Trek style. "
+                f"Abstract energy-being concept art of an energy being {profile['role']}. "
                 f"Personality traits: {traits_str}. "
                 f"Form: {avatar_desc} "
                 f"{species_desc} "
-                f"Glowing plasma energy form, luminous, ethereal, "
-                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"Glowing plasma energy form, luminous, ethereal, no solid body, "
+                f"no face, no limbs, not a human or humanoid. "
+                f"Cinematic lighting, 4K quality. "
                 f"Full body showing the energy form."
             ),
             "cybernetic": (
-                f"Sci-fi artwork of a cybernetic {profile['role']} in Star Trek style. "
+                f"Sci-fi concept art of a cybernetic {profile['role']}. "
                 f"Personality traits: {traits_str}. "
                 f"Form: {avatar_desc} "
                 f"{species_desc} "
                 f"Mechanical body, circuits, synthetic components, "
-                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"cinematic lighting, 4K quality. "
                 f"Full body or 3/4 view showing cybernetic anatomy."
             ),
             "symbiotic": (
-                f"Sci-fi artwork of a symbiotic being {profile['role']} in Star Trek style. "
+                f"Alien creature concept art of a symbiotic being {profile['role']}. "
                 f"Personality traits: {traits_str}. "
                 f"Form: {avatar_desc} "
                 f"{species_desc} "
                 f"Composite organism, multiple life forms in one body, "
-                f"cinematic lighting, 4K quality, space opera aesthetic. "
+                f"not a single humanoid body, no human face. "
+                f"Cinematic lighting, 4K quality. "
                 f"Full body view showing the composite nature."
             ),
         }

@@ -1558,47 +1558,73 @@ class GameServer:
     # ============== Avatar Prompt ==============
 
     def _species_prompt_instructions(self, category: str) -> dict:
-        """Return (focus_instructions, framing) for a given species category."""
+        """Return (focus_instructions, framing) for a given species category.
+
+        ``genre`` controls the stylistic frame handed to the LLM: human and
+        humanoid keep the Star Trek uniformed-portrait look, while non-humanoid,
+        energy, and symbiotic beings are framed as alien concept art instead —
+        the Trek/uniform framing is a strong humanoid prior that collapses
+        alien anatomy back into "two arms, two legs, a head".
+        """
         prompts = {
             "human": {
                 "intro": "character avatar",
                 "appearance": "- Character appearance (face, expression, uniform details)",
                 "framing": "- Portrait style, upper body",
+                "genre": "Star Trek space opera",
             },
             "humanoid": {
                 "intro": "humanoid alien character avatar",
                 "appearance": "- Character appearance: humanoid anatomy with subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.)",
                 "framing": "- Portrait style, upper body",
+                "genre": "Star Trek space opera",
             },
             "non_humanoid": {
-                "intro": "non-humanoid alien character",
-                "appearance": "- The character's ACTUAL physical form from the description — alien anatomy (tentacles, carapace, exoskeleton, multiple limbs, etc.)\n- Do NOT add human features (face, hair, eyes) unless explicitly described",
+                "intro": "non-humanoid alien creature",
+                "appearance": (
+                    "- The creature's ACTUAL physical form from the description — alien anatomy "
+                    "(tentacles, carapace, exoskeleton, crystalline structure, gas sac, hive cluster, etc.)\n"
+                    "- The creature must NOT resemble a human: NO two arms ending in hands, "
+                    "NO two legs, NO human face or hair, NOT a bipedal humanoid silhouette\n"
+                    "- Limbs, sensory organs, and body shape must match the described alien biology\n"
+                    "- The creature does not wear a uniform"
+                ),
                 "framing": "- Full body or 3/4 view showing the alien physiology",
+                "genre": "alien creature concept art, NOT a Star Trek uniformed officer",
             },
             "energy": {
-                "intro": "energy being character",
-                "appearance": "- The character's form as a being of energy, plasma, or light — "
-                "no solid physical body\n"
-                "- Describe the visual signature: glow, frequency patterns, luminosity, \
-spatial presence\n"
-                "- Do NOT add human features or solid anatomy unless explicitly described",
+                "intro": "energy being",
+                "appearance": (
+                    "- The being's form as energy, plasma, or light — NO solid physical body\n"
+                    "- Describe the visual signature: glow, frequency patterns, luminosity, spatial presence\n"
+                    "- Must NOT resemble a human: NO solid body, NO face, NO limbs, NO two arms/two legs\n"
+                    "- The being does not wear a uniform or clothing"
+                ),
                 "framing": "- Full body showing the energy form in its environment",
+                "genre": "abstract energy-being concept art, NOT a Star Trek uniformed officer",
             },
             "cybernetic": {
                 "intro": "cybernetic / synthetic character",
-                "appearance": "- The character's mechanical/cybernetic body — "
-                "metal, circuits, synthetic components, digital displays\n"
-                "- If part-organic, highlight the blend of biological and mechanical\n"
-                "- Describe the technological aesthetic of their form",
+                "appearance": (
+                    "- The character's mechanical/cybernetic body — "
+                    "metal, circuits, synthetic components, digital displays\n"
+                    "- If part-organic, highlight the blend of biological and mechanical\n"
+                    "- Describe the technological aesthetic of their form"
+                ),
                 "framing": "- Full body or 3/4 view showing the mechanical/cybernetic anatomy",
+                "genre": "cyberpunk sci-fi concept art",
             },
             "symbiotic": {
-                "intro": "symbiotic / composite character",
-                "appearance": "- The character as a composite of multiple organisms or entities — "
-                "describe how the different parts coexist in one form\n"
-                "- Highlight the hybrid nature: textures, connections, shared biology\n"
-                "- Do NOT default to a single humanoid body unless described that way",
+                "intro": "symbiotic / composite creature",
+                "appearance": (
+                    "- The creature as a composite of multiple organisms or entities — "
+                    "describe how the different parts coexist in one form\n"
+                    "- Highlight the hybrid nature: textures, connections, shared biology\n"
+                    "- Must NOT default to a single humanoid body, NO two arms/two legs/human face\n"
+                    "- The creature does not wear a uniform"
+                ),
                 "framing": "- Full body view showing the composite/symbiotic nature",
+                "genre": "alien creature concept art, NOT a Star Trek uniformed officer",
             },
         }
         return prompts.get(category, prompts["human"])
@@ -1632,11 +1658,15 @@ spatial presence\n"
             "CRITICAL RULE: The character description below is the DEFINITIVE source for the "
             "character's appearance. If it describes an alien, non-humanoid, energy, cybernetic, "
             "or symbiotic being — describe their ACTUAL form, NOT human anatomy.\n"
-            'Never default to "face, hair, eyes, upper body" for non-human characters.'
+            'Never default to "face, hair, eyes, upper body" for non-human characters.\n\n'
+            "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
+            "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
+            "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
+            "beings whose biology would not have them."
         )
 
         user = (
-            f"Generate an image prompt for a Star Trek-style {instr['intro']}.\n"
+            f"Generate an image prompt for a {instr['genre']} {instr['intro']}.\n"
             f"Role: {role}\n"
             f"Personality traits: {', '.join(traits)}\n"
             f"Character description (definitive source): {avatar_description}\n\n"
@@ -1644,7 +1674,7 @@ spatial presence\n"
             f"{instr['appearance']}\n"
             "- Environment setting (ship interior, lab, planet surface, etc.)\n"
             "- Cinematic lighting and composition appropriate to the character\n"
-            "- Sci-fi/space opera aesthetic\n"
+            f"- {instr['genre']} aesthetic\n"
             "- High quality, 4K, detailed\n"
             f"{instr['framing']}\n"
             "Write the prompt in English."
@@ -2913,32 +2943,73 @@ spatial presence\n"
         """
         logger.info(f"[NPC_AVATAR] Generating avatar prompts for {len(npc_roles)} NPCs")
 
-        roles_text = "\n".join([f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={r.get('species', 'random')} gender={r.get('gender', 'random')} | traits: {', '.join(r.get('personality_traits', []))}" for r in npc_roles])
+        # For non-humanoid, energy, and symbiotic beings a human gender label
+        # (e.g. "Male"/"Female") is a strong humanoid prior that collapses the
+        # alien form back into a person. Tell the LLM to invent a fitting
+        # non-human biological identity for those species instead of passing the
+        # human gender through.
+        alien_species = {"non_humanoid", "energy", "symbiotic"}
 
-        system = "You are an expert AI art prompt engineer specializing in sci-fi character portraits. Generate VARIED, DIVERSE character portrait prompts in English."
+        role_lines = []
+        for r in npc_roles:
+            sp = r.get("species", "random")
+            if sp in alien_species:
+                gender = "invent a non-human biological identity fitting the species"
+            else:
+                gender = r.get("gender", "random")
+            role_lines.append(
+                f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}"
+            )
+        roles_text = "\n".join(role_lines)
+
+        system = (
+            "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
+            "Generate VARIED, DIVERSE character portrait prompts in English.\n\n"
+            "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
+            "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
+            "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
+            "beings whose biology would not have them."
+        )
 
         # Species-specific instructions mirroring _species_prompt_instructions
         species_rules = {
             "human": "The character is human. Describe face, expression, uniform details. Portrait style, upper body.",
             "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Portrait style, upper body.",
-            "non_humanoid": "The character is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline structure, multiple limbs, amorphous form, etc.). Do NOT add human features (face, hair, eyes, human-like torso) unless explicitly described. Do NOT use 'wearing a uniform' or 'upper body' framing. Start the prompt with the species description (e.g. 'A towering crystalline entity', 'A mass of pulsating bio-gel', 'An insectoid being with chitinous armor'). Full body or 3/4 view showing the alien physiology.",
+            "non_humanoid": (
+                "The creature is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline "
+                "structure, multiple limbs, amorphous form, hive cluster, etc.). "
+                "The image MUST NOT look like a human or humanoid: NO two arms ending in hands, NO two legs, "
+                "NO human face or hair, NOT a bipedal silhouette. The creature does NOT wear a uniform or clothing. "
+                "Start the prompt with the creature itself (e.g. 'A towering crystalline entity', 'A mass of pulsating bio-gel', "
+                "'An insectoid being with chitinous armor'). Alien creature concept art, NOT a Star Trek officer. "
+                "Full body or 3/4 view showing the alien physiology."
+            ),
             "cybernetic": "The character is CYBERNETIC/SYNTHETIC — mechanical or cybernetic body (metal, circuits, synthetic components, digital displays). If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts. Start the prompt with the species/mechanical description. Full body or 3/4 view.",
-            "energy": "The character is an ENERGY BEING — no solid physical body, composed of energy, plasma, or light. Describe the visual signature (glow, frequency patterns, luminosity). Do NOT add human features or solid anatomy. Start the prompt with the energy-form description. Full body view.",
-            "symbiotic": "The character is a SYMBIOTIC/COMPOSITE being — a hybrid of multiple organisms. Describe how different parts coexist. Do NOT default to a single humanoid body. Start the prompt with the composite nature. Full body view.",
+            "energy": (
+                "The being is an ENERGY BEING — NO solid physical body, composed of energy, plasma, or light. "
+                "Describe the visual signature (glow, frequency patterns, luminosity). "
+                "The image MUST NOT resemble a human: NO solid body, NO face, NO limbs, NO two arms/two legs. "
+                "The being does NOT wear a uniform or clothing. Start the prompt with the energy-form description. "
+                "Abstract energy-being concept art, NOT a Star Trek officer. Full body view."
+            ),
+            "symbiotic": (
+                "The creature is a SYMBIOTIC/COMPOSITE being — a hybrid of multiple organisms. Describe how different "
+                "parts coexist. The image MUST NOT default to a single humanoid body: NO two arms/two legs/human face. "
+                "The creature does NOT wear a uniform or clothing. Start the prompt with the composite nature. "
+                "Alien creature concept art, NOT a Star Trek officer. Full body view."
+            ),
         }
 
         user = (
             f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
-            "For EACH role, generate a unique, detailed English image prompt for a "
-            "Star Trek-style character portrait.\n\n"
-            "CRITICAL: RESPECT the species and gender specified for each role. "
-            "Use those exact values — do not randomize them.\n\n"
+            "For EACH role, generate a unique, detailed English image prompt for a character portrait.\n\n"
+            "CRITICAL: RESPECT the species specified for each role. Use that exact value — do not randomize it.\n\n"
             "Species-specific rules (FOLLOW THEM EXACTLY):\n"
         )
         for sp_key in ["human", "humanoid", "non_humanoid", "cybernetic", "energy", "symbiotic"]:
             if sp_key in species_rules:
                 user += f"  - {sp_key}: {species_rules[sp_key]}\n"
-        user += '\n~50 words per prompt. Cinematic lighting. Sci-fi/space opera aesthetic. 4K quality. Output as JSON array: [{"role_key": ..., "prompt": ...}]'
+        user += '\n~50 words per prompt. Cinematic lighting. 4K quality. Output as JSON array: [{"role_key": ..., "prompt": ...}]'
 
         try:
             if self.vs_enabled:
@@ -2971,23 +3042,23 @@ spatial presence\n"
             fallback = []
 
             fallback_framing = {
-                "human": "human, portrait style, upper body, uniform",
-                "humanoid": "humanoid alien with subtle alien features, portrait style, upper body, uniform",
-                "non_humanoid": "non-humanoid alien being with alien anatomy, do NOT add human features, full body or 3/4 view, no uniform",
-                "cybernetic": "cybernetic/synthetic being with mechanical body, full body or 3/4 view",
-                "energy": "energy being composed of plasma or light, no solid body, full body view",
-                "symbiotic": "symbiotic composite being, hybrid of multiple organisms, full body view",
+                "human": ("human, portrait style, upper body, uniform", "Star Trek character portrait of"),
+                "humanoid": ("humanoid alien with subtle alien features, portrait style, upper body, uniform", "Star Trek character portrait of"),
+                "non_humanoid": ("non-humanoid alien creature, alien anatomy, NOT a human or humanoid, NO two arms and two legs, NO human face, NO uniform, NO clothing, full body or 3/4 view showing alien physiology", "Alien creature concept art of a"),
+                "cybernetic": ("cybernetic/synthetic being with mechanical body, full body or 3/4 view", "Sci-fi concept art of a"),
+                "energy": ("energy being composed of plasma or light, NO solid body, NO face, NO limbs, NOT a human or humanoid, full body view", "Abstract energy-being concept art of an"),
+                "symbiotic": ("symbiotic composite creature, hybrid of multiple organisms, NOT a single humanoid body, NO human face, full body view", "Alien creature concept art of a"),
             }
 
             for r in npc_roles:
                 sp = r.get("species", "human").lower()
                 if sp not in fallback_framing:
                     sp = "human"
-                framing = fallback_framing[sp]
+                framing, lead = fallback_framing[sp]
                 fallback.append(
                     {
                         "role_key": r.get("role_key", "?"),
-                        "prompt": (f"Star Trek character portrait of a {r.get('role_name', '?')}, {framing}. Cinematic lighting, space opera aesthetic, 4K quality, highly detailed. Unique appearance."),
+                        "prompt": (f"{lead} {r.get('role_name', '?')}, {framing}. Cinematic lighting, 4K quality, highly detailed. Unique appearance."),
                     }
                 )
             return fallback
