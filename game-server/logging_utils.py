@@ -20,6 +20,32 @@ def _sanitize_filename_component(component: str) -> str:
     return _FILENAME_SAFE_RE.sub("_", component)
 
 
+def _build_log_filename(
+    game_id: str,
+    player_id: str,
+    turn: str,
+    kind: str,
+    backend: str,
+    log_type: str,
+) -> str:
+    """Build a unique, descriptive log filename.
+
+    The player segment is ALWAYS present (even when empty → ``player_none``)
+    so that concurrent calls for the same game/turn/kind but different players
+    never collapse into one file. For NPC calls, callers pass the npc_key as
+    ``player_id`` to disambiguate roles.
+    """
+    safe_game = _sanitize_filename_component(game_id)
+    safe_player = _sanitize_filename_component(player_id) if player_id else "none"
+    safe_turn = _sanitize_filename_component(turn)
+    safe_kind = _sanitize_filename_component(kind)
+    safe_type = _sanitize_filename_component(log_type)
+    return (
+        f"game_{safe_game}_player_{safe_player}_turn{safe_turn}"
+        f"_{safe_kind}_{backend}_{safe_type}.log"
+    )
+
+
 def _ensure_logs_dir() -> str:
     """Return the logs directory path, creating it if necessary."""
     # In Docker, the host's ./logs/ is mounted at /app/logs/
@@ -54,17 +80,8 @@ def write_llm_log(
         log_type: "request" or "response"
         content: Full text content to write
     """
-    log_dir = _ensure_logs_dir()
-    safe_game = _sanitize_filename_component(game_id)
-    safe_turn = _sanitize_filename_component(turn)
-    safe_kind = _sanitize_filename_component(kind)
-    safe_type = _sanitize_filename_component(log_type)
-    if player_id:
-        safe_player = _sanitize_filename_component(player_id)
-        filename = f"game_{safe_game}_player_{safe_player}_turn{safe_turn}_{safe_kind}_llm_{safe_type}.log"
-    else:
-        filename = f"game_{safe_game}_turn{safe_turn}_{safe_kind}_llm_{safe_type}.log"
-    filepath = os.path.join(log_dir, filename)
+    filename = _build_log_filename(game_id, player_id, turn, kind, "llm", log_type)
+    filepath = os.path.join(_ensure_logs_dir(), filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
@@ -92,17 +109,8 @@ def write_comfyui_log(
         log_type: "request" or "response"
         content: Full text content to write
     """
-    log_dir = _ensure_logs_dir()
-    safe_game = _sanitize_filename_component(game_id)
-    safe_turn = _sanitize_filename_component(turn)
-    safe_kind = _sanitize_filename_component(kind)
-    safe_type = _sanitize_filename_component(log_type)
-    if player_id:
-        safe_player = _sanitize_filename_component(player_id)
-        filename = f"game_{safe_game}_player_{safe_player}_turn{safe_turn}_{safe_kind}_comfyui_{safe_type}.log"
-    else:
-        filename = f"game_{safe_game}_turn{safe_turn}_{safe_kind}_comfyui_{safe_type}.log"
-    filepath = os.path.join(log_dir, filename)
+    filename = _build_log_filename(game_id, player_id, turn, kind, "comfyui", log_type)
+    filepath = os.path.join(_ensure_logs_dir(), filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)

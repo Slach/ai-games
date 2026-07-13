@@ -370,6 +370,7 @@ class GameScheduler:
         # Step 2: Get current game state
         api_state = await self.check_game_state(game_id)
         current_turn = api_state.get("turn", 1)
+        game_language = api_state["language"]
         logger.info(f"Scheduled turn for game '{game_id}', Turn {current_turn}")
 
         # Step 3: Auto-select actions for unresponsive players from the PREVIOUS turn.
@@ -385,7 +386,7 @@ class GameScheduler:
                     f"{self.api_url}/admin/continue-game",
                     params={
                         "game_id": game_id,
-                        "language": "en",
+                        "language": game_language,
                     },
                 ) as resp:
                     if resp.status != 200:
@@ -593,12 +594,14 @@ class GameScheduler:
 
     async def _select_auto_action(self, game_id: str, player_id: int, turn: int) -> dict[str, Any] | None:
         try:
+            state = await self.check_game_state(game_id)
+            game_language = state["language"]
             logger.info(f"[AUTO_ACTION] Calling LLM auto-action for player {player_id} in game '{game_id}' on turn {turn}")
             async with (
                 aiohttp.ClientSession() as session,
                 session.post(
                     f"{self.api_url}/game/auto-action/{player_id}/{turn}",
-                    params={"language": "en", "game_id": game_id},
+                    params={"language": game_language, "game_id": game_id},
                 ) as resp,
             ):
                 if resp.status == 200:

@@ -871,12 +871,6 @@ class GameServer:
         self._init_default_npcs()
         logger.info(f"GameServer initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
 
-        # Logging context — set by caller to enable compact LLM logging
-        self._llm_game_id: str | None = None
-        self._llm_player_id: str | None = None
-        self._llm_turn: int | None = None
-        self._llm_kind: str | None = None
-
     def _get_player_briefing_schema(self) -> dict[str, object]:
         """Build the player briefing JSON schema with dynamic maxItems."""
         total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
@@ -964,20 +958,28 @@ class GameServer:
         temperature: float = 0.7,
         max_tokens: int | None = None,
         enable_thinking: bool = False,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Call LLM with json_schema structured output.
 
         Falls back to plain text + JSON extraction if the endpoint
         does not support response_format (e.g. older llama.cpp).
 
-        When ``self._llm_kind`` is set (via the caller), writes full
-        request/response to a dedicated log file under logs/ and logs
-        only a compact one-line summary. Otherwise falls back to legacy
-        verbose inline logging.
+        When ``kind`` is provided, writes full request/response to a
+        dedicated log file under logs/ (named from game_id/player_id/turn/kind)
+        and logs only a compact one-line summary. Otherwise falls back to
+        legacy verbose inline logging. All four context parameters are
+        passed explicitly by the caller — there are no instance attributes.
 
         Args:
             enable_thinking: If True, allows the LLM to use reasoning/thinking tokens
                 before generating the final output.
+            game_id, player_id, turn, kind: Logging context. ``kind=None``
+                disables the dedicated log file (legacy verbose logging).
         """
         from logging_utils import write_llm_log
 
@@ -988,10 +990,9 @@ class GameServer:
             {"role": "user", "content": user_prompt},
         ]
 
-        kind = self._llm_kind
-        ctx_game = self._llm_game_id or "none"
-        ctx_player = str(self._llm_player_id) if self._llm_player_id else ""
-        ctx_turn = str(self._llm_turn) if self._llm_turn is not None else "0"
+        ctx_game = game_id or "none"
+        ctx_player = str(player_id) if player_id else ""
+        ctx_turn = str(turn) if turn is not None else "0"
 
         if kind is not None:
             request_log = (
@@ -1194,6 +1195,11 @@ class GameServer:
     def generate_onboarding_questions(
         self,
         underrepresented_hint: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> list[dict[str, Any]]:
         """Generate dynamic onboarding questions using LLM with json_schema.
 
@@ -1229,6 +1235,10 @@ class GameServer:
             system_prompt=system,
             user_prompt=user,
             response_schema=ONBOARDING_QUESTIONS_SCHEMA,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
         )
 
         questions = result.get("questions", [])
@@ -1350,7 +1360,14 @@ class GameServer:
             "role_points": role_points,
         }
 
-    def generate_game_title(self) -> dict[str, str]:
+    def generate_game_title(
+        self,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
+    ) -> dict[str, str]:
         """Generate a creative game title and welcome message."""
         logger.info(f"[TITLE] Generating game title, language: {self.language}")
 
@@ -1362,6 +1379,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=vs_response_schema(GAME_TITLE_SCHEMA),
                 temperature=0.9,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             chosen = select_response(vs_result["responses"], self.vs_mode)
             logger.info("[VS-TITLE] Selected p=%.3f", chosen["probability"])
@@ -1372,6 +1393,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=GAME_TITLE_SCHEMA,
                 temperature=0.9,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
 
         logger.info(f"[TITLE] Generated: {result.get('title', '')}")
@@ -1379,7 +1404,16 @@ class GameServer:
 
     # ============== Daily Story ==============
 
-    def generate_turn_story(self, turn: int, previous_summary: str = "", player_role: str = "") -> GameStory:
+    def generate_turn_story(
+        self,
+        turn: int,
+        previous_summary: str = "",
+        player_role: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        kind: str | None = None,
+    ) -> GameStory:
         """Generate daily story using LLM with json_schema."""
         logger.info(f"[STORY] Starting story generation for Turn {turn}, language: {self.language}")
 
@@ -1391,6 +1425,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=vs_response_schema(STORY_SCHEMA),
                 max_tokens=8192,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             chosen = select_response(vs_result["responses"], self.vs_mode)
             logger.info("[VS-STORY] Selected p=%.3f", chosen["probability"])
@@ -1401,6 +1439,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=STORY_SCHEMA,
                 max_tokens=4096,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
 
         story = GameStory(
@@ -1420,6 +1462,11 @@ class GameServer:
         story: GameStory,
         player_role: str,
         crew_members: list[dict[str, Any]] | None = None,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> list[NPCDialogue]:
         """Generate NPC dialogues for the turn.
 
@@ -1492,6 +1539,10 @@ class GameServer:
                     response_schema=NPC_DIALOGUE_SCHEMA,
                     temperature=0.8,
                     max_tokens=256,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
 
                 dialogues.append(
@@ -1512,7 +1563,17 @@ class GameServer:
 
     # ============== Content Prompts ==============
 
-    def generate_content_prompts(self, story: GameStory, dialogues: list[NPCDialogue], player_role: str) -> ContentPrompts:
+    def generate_content_prompts(
+        self,
+        story: GameStory,
+        dialogues: list[NPCDialogue],
+        player_role: str,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
+    ) -> ContentPrompts:
         """Generate prompts for content generation (image, video, comic)."""
         logger.info(f"[CONTENT] Starting content prompt generation, language: {self.language}")
 
@@ -1526,6 +1587,10 @@ class GameServer:
             user_prompt=user,
             response_schema=CONTENT_PROMPTS_SCHEMA,
             max_tokens=2048,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
         )
 
         prompts = ContentPrompts(
@@ -1560,7 +1625,17 @@ class GameServer:
             logger.error(f"_call_llm_text failed: {e}", exc_info=True)
             return "Game Master received your message."
 
-    def process_player_message(self, player_id: int, message: str, player_profile: dict[str, Any], game_context: dict[str, Any] | None = None) -> str:
+    def process_player_message(
+        self,
+        player_id: int,
+        message: str,
+        player_profile: dict[str, Any],
+        game_context: dict[str, Any] | None = None,
+        *,
+        game_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
+    ) -> str:
         """Process a player message and generate Game Master response.
 
         Args:
@@ -1602,6 +1677,10 @@ class GameServer:
                     user_prompt=user,
                     response_schema=vs_response_schema(PLAYER_MESSAGE_SCHEMA),
                     max_tokens=2048,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-PLAYERMSG] Selected p=%.3f", chosen["probability"])
@@ -1613,6 +1692,10 @@ class GameServer:
                     user_prompt=user,
                     response_schema=PLAYER_MESSAGE_SCHEMA,
                     max_tokens=1024,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 return parsed.get("response", "Game Master received your message.")
         except Exception as e:
@@ -1699,6 +1782,11 @@ class GameServer:
         traits: list[str],
         avatar_description: str,
         species_category: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> str:
         """Generate an image prompt for player avatar using LLM with json_schema.
 
@@ -1751,6 +1839,10 @@ class GameServer:
                 user_prompt=vs_user,
                 response_schema=vs_response_schema(AVATAR_PROMPT_SCHEMA),
                 max_tokens=self.llm_max_avatar_tokens,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             chosen = select_response(parsed["responses"], self.vs_mode)
             inner = chosen["text"]
@@ -1762,6 +1854,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=AVATAR_PROMPT_SCHEMA,
                 max_tokens=self.llm_max_avatar_tokens,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             avatar_prompt = parsed.get("avatar_prompt", "")
         logger.info(f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}...")
@@ -1777,6 +1873,11 @@ class GameServer:
         species_desc: str = "",
         species_type: str = "",
         species_category: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> str:
         """Generate an image prompt for the chosen action scene using LLM.
 
@@ -1851,6 +1952,10 @@ class GameServer:
                 user_prompt=vs_user,
                 response_schema=vs_response_schema(CHOSEN_ACTION_PROMPT_SCHEMA),
                 max_tokens=self.llm_max_avatar_tokens,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             chosen = select_response(parsed["responses"], self.vs_mode)
             inner = chosen["text"]
@@ -1862,6 +1967,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=CHOSEN_ACTION_PROMPT_SCHEMA,
                 max_tokens=self.llm_max_avatar_tokens,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             prompt = parsed.get("chosen_action_prompt", "")
         logger.info(f"[ACTION_PROMPT] Generated for {role}: {prompt[:120]}...")
@@ -1874,6 +1983,11 @@ class GameServer:
         dimension: str,
         sg_step: int,
         accumulated_tags: dict[str, int],
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Generate ONE species or gender onboarding question via LLM.
 
@@ -1894,6 +2008,10 @@ class GameServer:
                 response_schema=schema,
                 temperature=0.9,
                 max_tokens=1024,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             text = (result.get("text") or "").strip()
             if text:
@@ -2018,6 +2136,11 @@ class GameServer:
         species_result: dict[str, Any],
         gender_result: dict[str, Any],
         role: str,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> str:
         """Generate a vivid narrative description of the player's species and gender using LLM."""
         logger.info(f"[SPECIES] Generating species+gender description for role: {role}")
@@ -2050,6 +2173,10 @@ class GameServer:
                     response_schema=vs_response_schema(SPECIES_GENDER_DESC_SCHEMA),
                     temperature=0.8,
                     max_tokens=2048,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
@@ -2060,6 +2187,10 @@ class GameServer:
                     response_schema=SPECIES_GENDER_DESC_SCHEMA,
                     temperature=0.8,
                     max_tokens=1024,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             species_desc = parsed.get("species_description", "")
             logger.info(f"[SPECIES] Description generated: {species_desc}...")
@@ -2097,6 +2228,11 @@ class GameServer:
         question: dict[str, Any],
         accumulated_tags: dict[str, int],
         tag_type: str = "species_tags",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, str]:
         """Generate one image per answer option for a species/gender question.
 
@@ -2142,6 +2278,10 @@ class GameServer:
                     response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
                     temperature=0.8,
                     max_tokens=1024,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 prompts_dict = {}
                 if result and "prompts" in result:
@@ -2202,7 +2342,16 @@ class GameServer:
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
-    def generate_npc_choice(self, choices: list[dict[str, Any]], npc_profile: dict[str, Any]) -> dict[str, Any]:
+    def generate_npc_choice(
+        self,
+        choices: list[dict[str, Any]],
+        npc_profile: dict[str, Any],
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
+    ) -> dict[str, Any]:
         """NPC makes a choice using LLM without seeing the consequences.
 
         The NPC only sees the action text IDs and descriptions — no consequences.
@@ -2237,6 +2386,10 @@ class GameServer:
                     response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
                     temperature=0.8,
                     max_tokens=2048,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
@@ -2247,6 +2400,10 @@ class GameServer:
                     response_schema=NPC_CHOICE_SCHEMA,
                     temperature=0.8,
                     max_tokens=512,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             action_id = parsed.get("action_id", "")
             rationale = parsed.get("rationale", "")
@@ -2274,6 +2431,11 @@ class GameServer:
         personal_briefing: str,
         global_circumstances: dict[str, Any] | None = None,
         player_name: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Generate an LLM-based auto-choice for a player who didn't choose in time.
 
@@ -2339,6 +2501,10 @@ class GameServer:
                     response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
                     temperature=0.8,
                     max_tokens=2048,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
@@ -2349,6 +2515,10 @@ class GameServer:
                     response_schema=NPC_CHOICE_SCHEMA,
                     temperature=0.8,
                     max_tokens=512,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             action_id = parsed.get("action_id", "")
             rationale = parsed.get("rationale", "")
@@ -2375,6 +2545,10 @@ class GameServer:
         previous_summary: str = "",
         player_profiles: list[dict[str, Any]] | None = None,
         mission_context: dict[str, Any] | None = None,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Generate the shared global circumstances for a game turn.
 
@@ -2447,6 +2621,10 @@ class GameServer:
                     user_prompt=user,
                     response_schema=vs_response_schema(GLOBAL_CIRCUMSTANCES_SCHEMA),
                     max_tokens=8192,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-CIRCUMSTANCES] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
@@ -2457,6 +2635,10 @@ class GameServer:
                     user_prompt=user,
                     response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
                     max_tokens=4096,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             logger.info(f"[TURN] Global circumstances generated: setting='{str(parsed.get('setting', ''))}...'")
             return parsed
@@ -2475,6 +2657,9 @@ class GameServer:
         player_profile: dict[str, Any],
         player_name: str = "",
         turn: int | None = None,
+        *,
+        game_id: str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
@@ -2562,6 +2747,10 @@ class GameServer:
                 user_prompt=user,
                 response_schema=self._get_player_briefing_schema(),
                 max_tokens=4096,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             logger.info(f"[TURN] Briefing generated for {player_id}")
 
@@ -2609,6 +2798,11 @@ class GameServer:
         previous_summary: str = "",
         mission_context: dict[str, Any] | None = None,
         crew_roster: list[dict[str, Any]] | None = None,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Analyze all player and NPC choices together with their hidden consequences
         to produce a coherent combined outcome narrative.
@@ -2699,6 +2893,10 @@ class GameServer:
                     response_schema=vs_response_schema(COMBINED_OUTCOME_SCHEMA),
                     max_tokens=262144,
                     enable_thinking=True,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-OUTCOME] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
@@ -2710,6 +2908,10 @@ class GameServer:
                     response_schema=COMBINED_OUTCOME_SCHEMA,
                     max_tokens=262144,
                     enable_thinking=True,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             logger.info(f"[TURN] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
             return parsed
@@ -2737,6 +2939,11 @@ class GameServer:
         outcome_type: str,
         outcome_narrative: str,
         mission_summary: str,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, str]:
         """Generate a dramatic finale narrative and image prompt for game end.
 
@@ -2767,6 +2974,10 @@ class GameServer:
                     response_schema=vs_response_schema(GAME_OVER_SCHEMA),
                     max_tokens=4096,
                     enable_thinking=True,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-GAMEOVER] Selected p=%.3f", chosen["probability"])
@@ -2778,6 +2989,10 @@ class GameServer:
                     response_schema=GAME_OVER_SCHEMA,
                     max_tokens=2048,
                     enable_thinking=True,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             logger.info(f"[GAME_OVER] Finale generated: {str(parsed.get('finale_narrative', ''))[:100]}...")
             return parsed
@@ -2790,7 +3005,15 @@ class GameServer:
 
     # ============== Mission Generation ==============
 
-    def generate_mission(self, all_participants: list[dict[str, Any]]) -> dict[str, Any]:
+    def generate_mission(
+        self,
+        all_participants: list[dict[str, Any]],
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
+    ) -> dict[str, Any]:
         """Generate a mission with stages/objectives for the game.
 
         Objectives are normalized (1-based, thresholds 3-5) and the mission
@@ -2819,6 +3042,10 @@ class GameServer:
                     response_schema=vs_response_schema(MISSION_SCHEMA),
                     max_tokens=8192,
                     temperature=0.8,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info(
@@ -2835,6 +3062,10 @@ class GameServer:
                     response_schema=MISSION_SCHEMA,
                     max_tokens=4096,
                     temperature=0.8,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
         except Exception as e:
             logger.error(f"[MISSION] Generation failed: {e}", exc_info=True)
@@ -2864,6 +3095,11 @@ class GameServer:
         self,
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Generate a detailed prompt for the bridge scene image and crew positioning.
 
@@ -2900,6 +3136,10 @@ class GameServer:
                     response_schema=vs_response_schema(BRIDGE_IMAGE_SCHEMA),
                     max_tokens=8192,
                     temperature=0.8,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-BRIDGE] Selected p=%.3f", chosen["probability"])
@@ -2911,6 +3151,10 @@ class GameServer:
                     response_schema=BRIDGE_IMAGE_SCHEMA,
                     max_tokens=4096,
                     temperature=0.8,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
             logger.info(f"[BRIDGE] Prompt generated: {str(result.get('bridge_prompt', ''))[:100]}...")
             return result
@@ -2935,6 +3179,11 @@ class GameServer:
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
         language: str = LANGUAGE_EN,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, str]:
         """Generate empty-location background prompts via LLM.
 
@@ -2970,6 +3219,10 @@ class GameServer:
                 response_schema=BACKGROUND_PROMPTS_SCHEMA,
                 max_tokens=8192,
                 temperature=0.8,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             backgrounds = result.get("backgrounds", [])
             mapping: dict[str, str] = {}
@@ -2994,6 +3247,11 @@ class GameServer:
         language: str = LANGUAGE_EN,
         background_location: str | None = None,
         scene_context: str = "",
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
 
@@ -3025,6 +3283,10 @@ class GameServer:
                 response_schema=SCENE_INSTRUCTION_SCHEMA,
                 max_tokens=1024,
                 temperature=0.7,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             instruction = result.get("instruction", "").strip()
             if not instruction:
@@ -3047,6 +3309,11 @@ class GameServer:
         avatar_description: str,
         personality_traits: list[str],
         avoid_names: set[str] | None = None,
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
     ) -> str:
         """Generate a creative name for an NPC using LLM.
 
@@ -3086,6 +3353,10 @@ class GameServer:
                 response_schema=NPC_NAME_SCHEMA,
                 temperature=0.95,
                 max_tokens=256,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
             )
             name = parsed.get("name", "").strip()
             explanation = parsed.get("explanation", "")
@@ -3107,7 +3378,15 @@ class GameServer:
 
     # ============== NPC Avatar Prompts (simplified, random) ==============
 
-    def generate_npc_avatar_prompts(self, npc_roles: list[dict[str, Any]]) -> list[dict[str, str]]:
+    def generate_npc_avatar_prompts(
+        self,
+        npc_roles: list[dict[str, Any]],
+        *,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | str | None = None,
+        kind: str | None = None,
+    ) -> list[dict[str, str]]:
         """Generate simplified avatar prompts for NPCs at game start.
 
         Unlike human players who go through full onboarding with species/gender interviews,
@@ -3192,6 +3471,10 @@ class GameServer:
                     response_schema=vs_response_schema(NPC_AVATAR_PROMPT_SCHEMA),
                     max_tokens=8192,
                     temperature=0.9,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-NPCAVATAR] Selected p=%.3f", chosen["probability"])
@@ -3204,6 +3487,10 @@ class GameServer:
                     response_schema=NPC_AVATAR_PROMPT_SCHEMA,
                     max_tokens=4096,
                     temperature=0.9,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
                 )
                 prompts_list = result.get("prompts", [])
             logger.info(f"[NPC_AVATAR] Generated {len(prompts_list)} prompts")

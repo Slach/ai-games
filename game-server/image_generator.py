@@ -933,19 +933,36 @@ class ImageGenerator:
         ctx_player = str(player_id) if player_id else ""
         ctx_turn = str(turn) if turn is not None else "0"
 
-        try:
-            async with _image_semaphore:
-                prompt_id = await self._queue_prompt(
-                    workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn
+        # Qwen-Image-Edit is the identity-preserving path. It can time out
+        # under GPU contention (the ComfyUI queue backs up); before degrading
+        # to img2img (which loses the character's identity at denoise=0.75),
+        # retry once so the prompt re-enters the queue after contention clears.
+        max_qwen_attempts = 2
+        for attempt in range(1, max_qwen_attempts + 1):
+            try:
+                async with _image_semaphore:
+                    prompt_id = await self._queue_prompt(
+                        workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn
+                    )
+                    outputs = await self._wait_for_completion(prompt_id, timeout=600)
+                    image_url = self._extract_image_url(outputs)
+                if image_url:
+                    logger.info("[QWEN_EDIT] Generated: %s", image_url)
+                    return image_url
+                logger.warning(
+                    "[QWEN_EDIT] No output (attempt %d/%d)", attempt, max_qwen_attempts
                 )
-                outputs = await self._wait_for_completion(prompt_id, timeout=300)
-                image_url = self._extract_image_url(outputs)
-            if image_url:
-                logger.info("[QWEN_EDIT] Generated: %s", image_url)
-                return image_url
-            logger.warning("[QWEN_EDIT] No output, falling back to img2img")
-        except Exception:
-            logger.warning("[QWEN_EDIT] failed, falling back to img2img", exc_info=True)
+            except Exception:
+                if attempt < max_qwen_attempts:
+                    logger.warning(
+                        "[QWEN_EDIT] attempt %d/%d failed, retrying before img2img fallback",
+                        attempt,
+                        max_qwen_attempts,
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(5)
+                    continue
+                logger.warning("[QWEN_EDIT] failed after %d attempts, falling back to img2img", attempt, exc_info=True)
 
         return await self.generate_action_image_with_reference(
             prompt=instruction_prompt,

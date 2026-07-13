@@ -1039,6 +1039,7 @@ def get_game_state(game_id: str) -> dict[str, Any]:
         "finale_narrative": row["finale_narrative"] if "finale_narrative" in row.keys() else "",
         "finale_outcome_type": row["finale_outcome_type"] if "finale_outcome_type" in row.keys() else "",
         "finale_image_url": row["finale_image_url"] if "finale_image_url" in row.keys() else "",
+        "language": get_game_language(game_id),
     }
 
 

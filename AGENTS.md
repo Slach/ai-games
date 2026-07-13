@@ -171,6 +171,7 @@ docker compose --progress=plain stop telegram-bot game-scheduler game-server --t
 ```bash
 docker compose down \
   && rm -rfv ./*/*.db \
+  && rm -rf ./logs/*.log \
   && rm -fv ./comfyui/output/*_.png \
   && docker compose up -d --build
 ```
