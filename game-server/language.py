@@ -237,7 +237,7 @@ def get_dimension_tag_field(dimension: str) -> str:
     return SPECIES_GENDER_DIMENSIONS[dimension][1]
 
 
-def get_tag_display_name(tag: str, dimension: str, language: str = LANGUAGE_RU) -> str:
+def get_tag_display_name(tag: str, dimension: str, language: str) -> str:
     """Return the localized display name for a tag within a dimension."""
     names_map = SPECIES_GENDER_DIMENSIONS[dimension][2]
     return names_map.get(language, names_map[LANGUAGE_RU]).get(tag, tag)
@@ -1304,7 +1304,7 @@ GENDER_QUESTIONS_DATA = {
 }
 
 
-def get_ship_role_i18n(role_key: str, language: str = LANGUAGE_RU) -> dict:
+def get_ship_role_i18n(role_key: str, language: str) -> dict:
     """Get localized ship role data by role_key and language.
 
     Returns dict with keys: role_name, role_description, avatar_description, personality_traits.
@@ -1314,7 +1314,7 @@ def get_ship_role_i18n(role_key: str, language: str = LANGUAGE_RU) -> dict:
     return role_data.get(language, role_data.get(LANGUAGE_RU, {}))
 
 
-def get_all_ship_roles_i18n(language: str = LANGUAGE_RU) -> dict:
+def get_all_ship_roles_i18n(language: str) -> dict:
     """Get all ship roles for a specific language.
 
     Returns dict keyed by role_key, each value containing
@@ -1323,30 +1323,30 @@ def get_all_ship_roles_i18n(language: str = LANGUAGE_RU) -> dict:
     return {role_key: data.get(language, data.get(LANGUAGE_RU, {})) for role_key, data in SHIP_ROLES_I18N.items()}
 
 
-def get_species_type_name(species_type: str, language: str = LANGUAGE_RU) -> str:
+def get_species_type_name(species_type: str, language: str) -> str:
     """Get localized species type display name."""
     names = SPECIES_TYPE_NAMES.get(language, SPECIES_TYPE_NAMES[LANGUAGE_RU])
     return names.get(species_type, species_type)
 
 
-def get_hybrid_species_name(hybrid_key: str, language: str = LANGUAGE_RU) -> str:
+def get_hybrid_species_name(hybrid_key: str, language: str) -> str:
     """Get localized hybrid species description."""
     names = HYBRID_SPECIES_NAMES.get(language, HYBRID_SPECIES_NAMES[LANGUAGE_RU])
     return names.get(hybrid_key, hybrid_key)
 
 
-def get_gender_type_name(gender_type: str, language: str = LANGUAGE_RU) -> str:
+def get_gender_type_name(gender_type: str, language: str) -> str:
     """Get localized gender type display name."""
     names = GENDER_TYPE_NAMES.get(language, GENDER_TYPE_NAMES[LANGUAGE_RU])
     return names.get(gender_type, gender_type)
 
 
-def get_species_questions_data(language: str = LANGUAGE_RU) -> list:
+def get_species_questions_data(language: str) -> list:
     """Get species onboarding questions for a specific language."""
     return SPECIES_QUESTIONS_DATA.get(language, SPECIES_QUESTIONS_DATA[LANGUAGE_RU])
 
 
-def get_gender_questions_data(language: str = LANGUAGE_RU) -> list:
+def get_gender_questions_data(language: str) -> list:
     """Get gender onboarding questions for a specific language."""
     return GENDER_QUESTIONS_DATA.get(language, GENDER_QUESTIONS_DATA[LANGUAGE_RU])
 
@@ -1518,6 +1518,6 @@ GAME_STRINGS = {
 }
 
 
-def get_game_strings(language: str = LANGUAGE_RU) -> dict:
+def get_game_strings(language: str) -> dict:
     """Get game-level localized strings."""
     return GAME_STRINGS.get(language, GAME_STRINGS[LANGUAGE_RU])
