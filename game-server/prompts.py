@@ -1199,3 +1199,137 @@ def build_personal_briefing_system(language: str) -> str:
         "Among the action choices there MUST ALWAYS be at least one safe/defensive option "
         "(cover, defend, evacuate, wait it out) that predictably reduces incoming damage."
     )
+
+
+# ── Background library prompts ─────────────────────────────────────
+
+# Canonical empty-location types. Each is generated once per game (no
+# characters present) and later used as the scene backdrop when Qwen-Image-Edit
+# composes a character into the environment.
+BACKGROUND_LOCATION_TYPES = [
+    "bridge",
+    "engineering",
+    "sickbay",
+    "lab",
+    "corridor",
+    "exterior_ship",
+    "planet_surface",
+    "main_screen",
+]
+
+_BACKGROUND_LOCATION_LABELS = {
+    "bridge": ("Мостик корабля — капитанский мостик", "Ship bridge — the command bridge"),
+    "engineering": ("Машинное отделение / инженерный отсек", "Engineering / engine room"),
+    "sickbay": ("Медицинский отсек", "Sickbay / medical bay"),
+    "lab": ("Научная лаборатория", "Science laboratory"),
+    "corridor": ("Коридор корабля", "Ship corridor"),
+    "exterior_ship": ("Корабль снаружи в космосе", "Ship exterior in space"),
+    "planet_surface": ("Поверхность планеты", "Planet surface"),
+    "main_screen": ("Главный экран мостика (тактическая карта)", "Bridge main screen (tactical display)"),
+}
+
+
+def build_background_prompts_user(language: str, mission: dict, crew_summary: str) -> str:
+    """Build the user prompt for the background-library LLM call.
+
+    The model returns one English image prompt per location type, reflecting the
+    mission's tone and the crew's species composition (so stations and decor fit
+    humanoids / energy beings / cybernetic forms alike).
+    """
+    labels = _BACKGROUND_LOCATION_LABELS
+    loc_lines = "\n".join(f"- {k}: {labels[k][0 if language == LANGUAGE_RU else 1]}" for k in BACKGROUND_LOCATION_TYPES)
+    mission_name = mission.get("name", "")
+    mission_desc = mission.get("description", "") or mission.get("short_description", "")
+
+    if language == LANGUAGE_RU:
+        return (
+            f"Миссия: {mission_name}\n{mission_desc}\n\n"
+            f"Состав экипажа:\n{crew_summary}\n\n"
+            "Для КАЖДОЙ из перечисленных локаций напиши промпт на АНГЛИЙСКОМ для генерации "
+            "пустого интерьера/экстерьера БЕЗ персонажей. Фоны должны быть консистентны "
+            "эстетике корабля и миссии; рабочие станции и терминалы — соответствовать "
+            f"видовому составу экипажа. Кинематографично, sci-fi/space opera, 4K.\n"
+            f"Локации:\n{loc_lines}"
+        )
+    return (
+        f"Mission: {mission_name}\n{mission_desc}\n\n"
+        f"Crew:\n{crew_summary}\n\n"
+        "For EACH of the listed locations, write an ENGLISH image-generation prompt for an "
+        "empty interior/exterior with NO characters. Backgrounds must be consistent with the "
+        "ship/mission aesthetic; workstations and terminals should fit the crew's species "
+        f"composition. Cinematic, sci-fi/space opera, 4K quality.\n"
+        f"Locations:\n{loc_lines}"
+    )
+
+
+def build_background_prompts_system(language: str) -> str:
+    """System prompt for the background-library LLM call."""
+    if language == LANGUAGE_RU:
+        return (
+            "Ты — эксперт по cinematic prompt engineering для AI-генерации изображений. "
+            "Создаёшь промпты для пустых фоновых локаций космического корабля (БЕЗ персонажей), "
+            "которые позже будут использоваться как холст для вставки персонажей. "
+            "Каждый промпт — детальное описание окружения, освещения, атмосферы на английском."
+        )
+    return (
+        "You are an expert cinematic prompt engineer for AI image generation. "
+        "You create prompts for empty starship/space-opera locations (NO characters) "
+        "that will later serve as backdrops for composing characters into the scene. "
+        "Each prompt is a detailed English description of environment, lighting, and atmosphere."
+    )
+
+
+# ── Scene instruction prompt (Qwen-Image-Edit) ─────────────────────
+
+
+def build_scene_instruction_system(language: str) -> str:
+    """System prompt for the Qwen-Image-Edit scene-instruction LLM call.
+
+    Qwen-Image-Edit understands instruction-style prompts that refer to the
+    reference images as "Picture 1" (character) and "Picture 2" (background).
+    """
+    if language == LANGUAGE_RU:
+        return (
+            "Ты — эксперт по написанию инструкций для AI image-editing модели Qwen-Image-Edit. "
+            "Модель получает два изображения: Picture 1 — персонаж (аватар), Picture 2 — фон сцены. "
+            "Напиши инструкцию на АНГЛИЙСКОМ, как разместить персонажа из Picture 1 в окружение "
+            "из Picture 2: поза, действие, эмоция, освещение, композиция. "
+            "Описание персонажа и его идентичность НЕ повторяй — модель сохранит их сама. "
+            "Фокус на действии и постановке."
+        )
+    return (
+        "You are an expert at writing instructions for the Qwen-Image-Edit AI model. "
+        "The model receives two images: Picture 1 — a character (avatar), Picture 2 — the scene background. "
+        "Write an ENGLISH instruction on how to place the character from Picture 1 into the environment "
+        "of Picture 2: pose, action, emotion, lighting, composition. "
+        "Do NOT restate the character's description or identity — the model preserves it automatically. "
+        "Focus on the action and staging."
+    )
+
+
+def build_scene_instruction_user(
+    language: str,
+    action_text: str,
+    role: str,
+    species_desc: str,
+    background_location: str | None,
+) -> str:
+    """User prompt for the scene-instruction LLM call."""
+    bg_note = f" Scene location: {background_location}." if background_location else ""
+    if language == LANGUAGE_RU:
+        return (
+            f"Действие: {action_text}\n"
+            f"Роль: {role}.{bg_note}\n"
+            f"Описание вида: {species_desc}\n\n"
+            "Напиши ОДНУ инструкцию (1-3 предложения) для Qwen-Image-Edit, "
+            "начиная с 'Place the character from Picture 1...'. "
+            "Опиши позу, действие, освещение. Без описания внешности персонажа."
+        )
+    return (
+        f"Action: {action_text}\n"
+        f"Role: {role}.{bg_note}\n"
+        f"Species: {species_desc}\n\n"
+        "Write ONE instruction (1-3 sentences) for Qwen-Image-Edit, "
+        "starting with 'Place the character from Picture 1...'. "
+        "Describe pose, action, lighting. Do not describe the character's appearance."
+    )

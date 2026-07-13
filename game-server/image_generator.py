@@ -52,6 +52,160 @@ DEFAULT_LOADING_FALLBACK_URL = os.getenv(
 
 # ============== ComfyUI Workflow Templates ==============
 
+# ============== Qwen-Image-Edit-2511 model references ==============
+# Instruction-editing model: takes a character reference image + optional
+# background image, and renders the character into the scene via a text
+# instruction prompt. Preserves identity far better than img2img because it
+# understands the subject semantically rather than treating the avatar as noise.
+# GGUF Q4_K_M (13 GB) fits 24 GB VRAM where the bf16 (40 GB) cannot.
+QWEN_EDIT_UNET_GGUF = "qwen-image-edit-2511-Q4_K_M.gguf"
+QWEN_EDIT_CLIP = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+QWEN_EDIT_VAE = "qwen_image_vae.safetensors"
+QWEN_EDIT_LIGHTNING_LORA = "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+
+
+def _build_qwen_edit_workflow(
+    instruction: str,
+    character_filename: str,
+    background_filename: str | None = None,
+    width: int = 1024,
+    height: int = 1024,
+    seed: int = 0,
+    filename_prefix: str = "qwen_edit",
+) -> dict[str, Any]:
+    """Build a Qwen-Image-Edit-2511 workflow for placing a character into a scene.
+
+    Uses Qwen-Image-Edit-2511 GGUF (Q4_K_M) with the Lightning LoRA for 4-step
+    generation. The character avatar is always provided; if a background image
+    is supplied it is passed as a second reference so the model composes the
+    character into that specific environment.
+
+    Args:
+        instruction: Editing instruction referring to "Picture 1" (the
+            character) and optionally "Picture 2" (the background), e.g.
+            "Place the character from Picture 1 at the engineering console
+            shown in Picture 2, red alert lighting."
+        character_filename: LoadImage filename for the character avatar.
+        background_filename: Optional LoadImage filename for the background.
+        width, height: Output dimensions.
+        seed: Random seed (0 = randomize).
+        filename_prefix: Output filename prefix.
+
+    Returns:
+        ComfyUI API workflow dict.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+
+    if background_filename:
+        # Two references: image1 = character, image2 = background.
+        # The instruction refers to them as "Picture 1" and "Picture 2".
+        text_encode_node: dict[str, Any] = {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": instruction,
+                "vae": ["29", 0],
+                "image1": ["41", 0],
+                "image2": ["42", 0],
+            },
+        }
+        load_bg_node = {
+            "class_type": "LoadImage",
+            "inputs": {"image": background_filename},
+        }
+    else:
+        # Single reference: character only.
+        text_encode_node = {
+            "class_type": "TextEncodeQwenImageEdit",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": instruction,
+                "vae": ["29", 0],
+                "image": ["41", 0],
+            },
+        }
+        load_bg_node = None
+
+    workflow: dict[str, Any] = {
+        # Load the GGUF model.
+        "10": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": QWEN_EDIT_UNET_GGUF},
+        },
+        # Qwen2.5-VL text encoder (handles vision tokens + instruction).
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": QWEN_EDIT_CLIP,
+                "type": "qwen_image",
+            },
+        },
+        # Qwen-Image VAE (separate from the Z-Image-Turbo ae.safetensors).
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": QWEN_EDIT_VAE},
+        },
+        # Load character avatar.
+        "41": {
+            "class_type": "LoadImage",
+            "inputs": {"image": character_filename},
+        },
+        # Lightning LoRA for 4-step sampling.
+        "50": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": ["10", 0],
+                "lora_name": QWEN_EDIT_LIGHTNING_LORA,
+                "strength_model": 1.0,
+            },
+        },
+        # Qwen-Image-Edit conditioning (references + instruction).
+        "70": text_encode_node,
+        # Empty negative (Qwen-Image-Edit does not use classifier-free guidance
+        # the way SD/Z-Image do; an empty string is the conventional negative).
+        "75": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "", "clip": ["30", 0]},
+        },
+        # Layered latent: layers=3 matches the two reference images + output.
+        "90": {
+            "class_type": "EmptyQwenImageLayeredLatentImage",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "layers": 3,
+                "batch_size": 1,
+            },
+        },
+        "100": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 4,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["50", 0],
+                "positive": ["70", 0],
+                "negative": ["75", 0],
+                "latent_image": ["90", 0],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["100", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    if load_bg_node is not None:
+        workflow["42"] = load_bg_node
+    return workflow
+
 
 def _build_zimage_turbo_workflow(
     prompt: str,
@@ -693,6 +847,149 @@ class ImageGenerator:
 
         logger.warning("[ACTION_IMAGE] Generation failed completely, using placeholder")
         return f"/content/comics/{filename_prefix}_placeholder.webp"
+
+    async def generate_character_in_scene(
+        self,
+        instruction_prompt: str,
+        character_avatar_url: str | None,
+        background_url: str | None = None,
+        *,
+        character_description: str = "",
+        filename_prefix: str = "qwen_scene",
+        width: int = 1024,
+        height: int = 1024,
+        game_id: str | None = None,
+        player_id: str | None = None,
+        turn: int | None = None,
+        kind: str | None = None,
+    ) -> str | None:
+        """Place a character into a scene via Qwen-Image-Edit-2511.
+
+        Uses the character avatar as a semantic reference (not img2img noise):
+        Qwen-Image-Edit preserves the character's identity while following the
+        instruction prompt. When a background image is supplied it is passed as
+        a second reference so the character is composed into that environment.
+
+        Falls back to img2img (:meth:`generate_action_image_with_reference`)
+        when Qwen-Image-Edit is unavailable or fails — e.g. no avatar, or the
+        GGUF model/custom node is missing from the ComfyUI instance.
+
+        Args:
+            instruction_prompt: Instruction referring to "Picture 1" (the
+                character) and optionally "Picture 2" (the background).
+            character_avatar_url: URL of the avatar to place into the scene.
+            background_url: Optional URL of a pre-generated empty background.
+            character_description: Short text for the img2img fallback.
+            filename_prefix: Output filename prefix.
+            width, height: Output dimensions.
+            game_id, player_id, turn, kind: Logging context.
+
+        Returns:
+            URL of the generated image, or None on failure.
+        """
+        if not character_avatar_url:
+            logger.warning("[QWEN_EDIT] No character avatar, falling back to img2img")
+            return await self.generate_action_image_with_reference(
+                prompt=instruction_prompt,
+                reference_image_url=None,
+                character_description=character_description,
+                filename_prefix=filename_prefix,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+
+        char_filename = self._extract_filename_from_url(character_avatar_url)
+        bg_filename = (
+            self._extract_filename_from_url(background_url) if background_url else None
+        )
+        if not char_filename:
+            logger.warning(
+                "[QWEN_EDIT] Could not parse avatar filename from %s, falling back",
+                character_avatar_url,
+            )
+            return await self.generate_action_image_with_reference(
+                prompt=instruction_prompt,
+                reference_image_url=character_avatar_url,
+                character_description=character_description,
+                filename_prefix=filename_prefix,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+
+        workflow = _build_qwen_edit_workflow(
+            instruction=instruction_prompt,
+            character_filename=char_filename,
+            background_filename=bg_filename,
+            width=width,
+            height=height,
+            filename_prefix=filename_prefix,
+        )
+
+        ctx_game = game_id or "none"
+        ctx_player = str(player_id) if player_id else ""
+        ctx_turn = str(turn) if turn is not None else "0"
+
+        try:
+            async with _image_semaphore:
+                prompt_id = await self._queue_prompt(
+                    workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn
+                )
+                outputs = await self._wait_for_completion(prompt_id, timeout=300)
+                image_url = self._extract_image_url(outputs)
+            if image_url:
+                logger.info("[QWEN_EDIT] Generated: %s", image_url)
+                return image_url
+            logger.warning("[QWEN_EDIT] No output, falling back to img2img")
+        except Exception:
+            logger.warning("[QWEN_EDIT] failed, falling back to img2img", exc_info=True)
+
+        return await self.generate_action_image_with_reference(
+            prompt=instruction_prompt,
+            reference_image_url=character_avatar_url,
+            character_description=character_description,
+            filename_prefix=filename_prefix,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=kind,
+        )
+
+    async def generate_background_image(
+        self,
+        prompt: str,
+        location_type: str,
+        *,
+        game_id: str,
+        width: int = 1024,
+        height: int = 576,
+    ) -> str | None:
+        """Generate a single empty-location background via Z-Image Turbo.
+
+        Backgrounds are plain text-to-image (no characters) generated once per
+        game and later reused as backdrops for Qwen-Image-Edit scene compositing.
+
+        Args:
+            prompt: English image prompt for the empty location.
+            location_type: Canonical location key (e.g. "bridge", "engineering").
+            game_id: Game to scope the image to.
+            width, height: Output dimensions (landscape by default).
+
+        Returns:
+            URL of the generated background, or None on failure.
+        """
+        return await self.generate_image(
+            prompt=prompt,
+            filename_prefix=f"{game_id}/bg_{location_type}",
+            width=width,
+            height=height,
+            max_retries=2,
+            game_id=game_id,
+            kind=f"background_{location_type}",
+        )
 
     # ============== Batch Image Generation ==============
 

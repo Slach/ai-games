@@ -25,7 +25,10 @@ from openai import OpenAI
 from prompts import (
     COMBINED_OUTCOME_SCHEMA,
     GAME_OVER_SCHEMA,
+    BACKGROUND_LOCATION_TYPES,
     build_auto_choice_prompts,
+    build_background_prompts_system,
+    build_background_prompts_user,
     build_combined_outcome_prompts,
     build_content_prompt_note,
     build_turn_story_prompts,
@@ -41,6 +44,8 @@ from prompts import (
     build_onboarding_prompts,
     build_personal_briefing_system,
     build_player_message_prompts,
+    build_scene_instruction_system,
+    build_scene_instruction_user,
     build_species_description_prompts,
 )
 from openai.types.chat import (
@@ -712,6 +717,65 @@ BRIDGE_IMAGE_SCHEMA = {
                 },
             },
             "required": ["bridge_prompt", "crew_descriptions"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+BACKGROUND_PROMPTS_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "background_prompts",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "backgrounds": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "location_type": {
+                                "type": "string",
+                                "description": "One of: " + ", ".join(BACKGROUND_LOCATION_TYPES),
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Detailed English image prompt for the empty location (no characters)",
+                            },
+                        },
+                        "required": ["location_type", "prompt"],
+                        "additionalProperties": False,
+                    },
+                    "description": "One entry per location type",
+                },
+            },
+            "required": ["backgrounds"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+SCENE_INSTRUCTION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "scene_instruction",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "instruction": {
+                    "type": "string",
+                    "description": "English instruction for Qwen-Image-Edit, starting with 'Place the character from Picture 1...'",
+                },
+                "background_location": {
+                    "type": ["string", "null"],
+                    "description": "Best-matching location type for this scene, or null if no background applies",
+                },
+            },
+            "required": ["instruction", "background_location"],
             "additionalProperties": False,
         },
     },
@@ -2863,6 +2927,108 @@ class GameServer:
                     for p in all_participants
                 ],
             }
+
+    # ============== Background Library Prompts ==============
+
+    def generate_background_prompts(
+        self,
+        mission: dict[str, Any],
+        all_participants: list[dict[str, Any]],
+        language: str = LANGUAGE_EN,
+    ) -> dict[str, str]:
+        """Generate empty-location background prompts via LLM.
+
+        Returns a mapping of ``location_type -> English image prompt`` covering
+        the canonical ship locations (bridge, engineering, sickbay, ...). The
+        prompts reflect the mission tone and the crew's species composition so
+        that workstations and decor fit the inhabitants.
+
+        Args:
+            mission: Mission dict (name + description used for tone).
+            all_participants: Crew list (species/gender composition informs decor).
+            language: Game content language (prompts are always English; this
+                only affects the LLM instruction language).
+
+        Returns:
+            Dict mapping location_type -> prompt. Missing locations on failure
+            are simply absent; callers should treat the dict as best-effort.
+        """
+        logger.info("[BACKGROUND] Generating prompts for %d participants", len(all_participants))
+        crew_summary = "\n".join(
+            f"- {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, "
+            f"gender={p.get('gender') or '?'}"
+            for p in all_participants
+        )
+
+        system = build_background_prompts_system(language)
+        user = build_background_prompts_user(language, mission, crew_summary)
+
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=BACKGROUND_PROMPTS_SCHEMA,
+                max_tokens=8192,
+                temperature=0.8,
+            )
+            backgrounds = result.get("backgrounds", [])
+            mapping: dict[str, str] = {}
+            for entry in backgrounds:
+                loc = entry.get("location_type", "")
+                prompt = entry.get("prompt", "")
+                if loc in BACKGROUND_LOCATION_TYPES and prompt:
+                    mapping[loc] = prompt
+            logger.info("[BACKGROUND] Generated %d/%d location prompts", len(mapping), len(BACKGROUND_LOCATION_TYPES))
+            return mapping
+        except Exception:
+            logger.error("[BACKGROUND] Generation failed", exc_info=True)
+            return {}
+
+    # ============== Scene Instruction (Qwen-Image-Edit) ==============
+
+    def generate_scene_instruction(
+        self,
+        action_text: str,
+        role: str,
+        species_desc: str,
+        language: str = LANGUAGE_EN,
+        background_location: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
+
+        Returns an instruction string referring to "Picture 1" (the character)
+        and the best-matching background location for this action.
+
+        Args:
+            action_text: What the character is doing (player action or scene setup).
+            role: The character's role (e.g. "Captain").
+            species_desc: Short species description (informs pose/environment fit).
+            language: Game content language (instruction is always English).
+            background_location: Optional explicit location override.
+
+        Returns:
+            Dict with "instruction" (str) and "background_location" (str|None).
+        """
+        system = build_scene_instruction_system(language)
+        user = build_scene_instruction_user(language, action_text, role, species_desc, background_location)
+
+        try:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=SCENE_INSTRUCTION_SCHEMA,
+                max_tokens=1024,
+                temperature=0.7,
+            )
+            instruction = result.get("instruction", "").strip()
+            if not instruction:
+                instruction = f"Place the character from Picture 1 in the scene. {action_text}. Cinematic lighting, photorealistic, 4K."
+            loc = result.get("background_location")
+            return {"instruction": instruction, "background_location": loc}
+        except Exception:
+            logger.warning("[SCENE_INSTRUCTION] failed, using fallback", exc_info=True)
+            fallback = f"Place the character from Picture 1 in the scene. {role} {action_text}. Cinematic lighting, photorealistic, 4K."
+            return {"instruction": fallback, "background_location": background_location}
 
     # ============== NPC Name Generation (creative, species/gender-aware) ==============
 

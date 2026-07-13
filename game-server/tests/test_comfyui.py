@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from image_generator import (
     ImageGenerator,
+    _build_qwen_edit_workflow,
     _build_zimage_turbo_workflow,
     create_image_generator,
 )
@@ -153,6 +154,127 @@ class TestZImageTurboWorkflow(unittest.TestCase):
         except json.JSONDecodeError as e:
             self.fail(f"Workflow JSON is invalid: {e}")
         self.assertEqual(parsed, wf)
+
+
+class TestQwenEditWorkflow(unittest.TestCase):
+    """Test Qwen-Image-Edit-2511 workflow JSON structure."""
+
+    def test_required_nodes_no_background(self):
+        """Workflow without background should use single-reference mode."""
+        wf = _build_qwen_edit_workflow(
+            instruction="Place the character...", character_filename="avatar.png"
+        )
+        required = ["10", "30", "29", "41", "50", "70", "75", "90", "100", "110", "120"]
+        for node_id in required:
+            self.assertIn(node_id, wf, f"Missing node {node_id}")
+        # No background loader when background_filename is None
+        self.assertNotIn("42", wf)
+        # Single-reference conditioning node
+        self.assertEqual(wf["70"]["class_type"], "TextEncodeQwenImageEdit")
+
+    def test_required_nodes_with_background(self):
+        """Workflow with background should use Plus (two-image) mode."""
+        wf = _build_qwen_edit_workflow(
+            instruction="Place the character...",
+            character_filename="avatar.png",
+            background_filename="bg.png",
+        )
+        self.assertIn("42", wf)
+        self.assertEqual(wf["42"]["class_type"], "LoadImage")
+        self.assertEqual(wf["42"]["inputs"]["image"], "bg.png")
+        self.assertEqual(wf["70"]["class_type"], "TextEncodeQwenImageEditPlus")
+        # image1 = character, image2 = background
+        self.assertEqual(wf["70"]["inputs"]["image1"], ["41", 0])
+        self.assertEqual(wf["70"]["inputs"]["image2"], ["42", 0])
+
+    def test_gguf_loader(self):
+        """UnetLoaderGGUF should load the Q4_K_M GGUF model."""
+        wf = _build_qwen_edit_workflow(instruction="t", character_filename="a.png")
+        self.assertEqual(wf["10"]["class_type"], "UnetLoaderGGUF")
+        self.assertEqual(wf["10"]["inputs"]["unet_name"], "qwen-image-edit-2511-Q4_K_M.gguf")
+
+    def test_clip_loader_qwen_image(self):
+        """CLIPLoader should use qwen_2.5_vl with type qwen_image."""
+        wf = _build_qwen_edit_workflow(instruction="t", character_filename="a.png")
+        clip = wf["30"]
+        self.assertEqual(clip["class_type"], "CLIPLoader")
+        self.assertEqual(clip["inputs"]["clip_name"], "qwen_2.5_vl_7b_fp8_scaled.safetensors")
+        self.assertEqual(clip["inputs"]["type"], "qwen_image")
+
+    def test_vae_loader(self):
+        """VAELoader should use the Qwen-Image VAE (not the Z-Image ae)."""
+        wf = _build_qwen_edit_workflow(instruction="t", character_filename="a.png")
+        self.assertEqual(wf["29"]["inputs"]["vae_name"], "qwen_image_vae.safetensors")
+
+    def test_lightning_lora(self):
+        """LoraLoaderModelOnly should attach the Lightning LoRA at strength 1.0."""
+        wf = _build_qwen_edit_workflow(instruction="t", character_filename="a.png")
+        lora = wf["50"]
+        self.assertEqual(lora["class_type"], "LoraLoaderModelOnly")
+        self.assertIn("Lightning-4steps", lora["inputs"]["lora_name"])
+        self.assertEqual(lora["inputs"]["strength_model"], 1.0)
+
+    def test_ksampler_lightning_4_steps(self):
+        """KSampler should use 4 steps (Lightning LoRA) with euler/simple."""
+        wf = _build_qwen_edit_workflow(instruction="t", character_filename="a.png")
+        ks = wf["100"]
+        self.assertEqual(ks["class_type"], "KSampler")
+        self.assertEqual(ks["inputs"]["steps"], 4)
+        self.assertEqual(ks["inputs"]["cfg"], 1.0)
+        self.assertEqual(ks["inputs"]["sampler_name"], "euler")
+        self.assertEqual(ks["inputs"]["scheduler"], "simple")
+        self.assertEqual(ks["inputs"]["denoise"], 1.0)
+
+    def test_layered_latent(self):
+        """EmptyQwenImageLayeredLatentImage should use layers=3."""
+        wf = _build_qwen_edit_workflow(
+            instruction="t", character_filename="a.png", width=768, height=1024
+        )
+        latent = wf["90"]
+        self.assertEqual(latent["class_type"], "EmptyQwenImageLayeredLatentImage")
+        self.assertEqual(latent["inputs"]["layers"], 3)
+        self.assertEqual(latent["inputs"]["width"], 768)
+        self.assertEqual(latent["inputs"]["height"], 1024)
+
+    def test_instruction_in_conditioning(self):
+        """Instruction text should be passed to the TextEncode node."""
+        wf = _build_qwen_edit_workflow(
+            instruction="Place the character from Picture 1 at the console.",
+            character_filename="a.png",
+        )
+        self.assertEqual(
+            wf["70"]["inputs"]["prompt"],
+            "Place the character from Picture 1 at the console.",
+        )
+
+    def test_node_connections_valid(self):
+        """All node links should reference valid node IDs."""
+        wf = _build_qwen_edit_workflow(
+            instruction="t", character_filename="a.png", background_filename="bg.png"
+        )
+        all_node_ids = set(wf.keys())
+        for node_id, node in wf.items():
+            for _key, value in node["inputs"].items():
+                if isinstance(value, list) and len(value) == 2:
+                    linked_node, _slot = value
+                    self.assertIn(
+                        str(linked_node),
+                        all_node_ids,
+                        f"Node {node_id} links to non-existent node {linked_node}",
+                    )
+
+    def test_seed_zero_randomizes(self):
+        """seed=0 should produce different seeds across calls."""
+        wf1 = _build_qwen_edit_workflow(instruction="t", character_filename="a.png", seed=0)
+        wf2 = _build_qwen_edit_workflow(instruction="t", character_filename="a.png", seed=0)
+        self.assertNotEqual(wf1["100"]["inputs"]["seed"], wf2["100"]["inputs"]["seed"])
+
+    def test_serializable_json(self):
+        """Workflow should round-trip through JSON."""
+        wf = _build_qwen_edit_workflow(
+            instruction="t", character_filename="a.png", background_filename="bg.png"
+        )
+        self.assertEqual(json.loads(json.dumps(wf)), wf)
 
 
 class TestImageGeneratorUnit(unittest.TestCase):

@@ -22,3 +22,5 @@ __pycache__/
 *.db-wal
 *.db-shm
 *.log
+# Local ZCode agent state
+.zcode/

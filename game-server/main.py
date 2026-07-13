@@ -1219,6 +1219,50 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     return result
 
 
+async def _generate_background_library(
+    game_id: str,
+    mission_data: dict,
+    all_participants: list[dict],
+    gm,
+    language: str,
+) -> None:
+    """Pre-generate empty-location backgrounds for a game (best-effort).
+
+    Generates one background per canonical location type (bridge, engineering,
+    sickbay, ...) via Z-Image Turbo, then stores each under
+    ``game_images.type = "background_{location}"`` so scene generation can look
+    them up by location. Safe to call repeatedly: existing backgrounds are
+    skipped. Failures are logged and do not abort the caller.
+    """
+    from prompts import BACKGROUND_LOCATION_TYPES
+
+    existing = {loc for loc in BACKGROUND_LOCATION_TYPES if get_random_game_image(type=f"background_{loc}", game_id=game_id)}
+    if existing:
+        logger.info("[BACKGROUND] %d/%d backgrounds already exist for game %s, skipping", len(existing), len(BACKGROUND_LOCATION_TYPES), game_id)
+        return
+
+    try:
+        prompts_by_loc = gm.generate_background_prompts(mission_data, all_participants, language=language)
+    except Exception:
+        logger.error("[BACKGROUND] Prompt generation failed for game %s", game_id, exc_info=True)
+        return
+    if not prompts_by_loc:
+        logger.warning("[BACKGROUND] No prompts returned for game %s", game_id)
+        return
+
+    image_gen = create_image_generator()
+    for loc, prompt in prompts_by_loc.items():
+        try:
+            url = await image_gen.generate_background_image(
+                prompt=prompt, location_type=loc, game_id=game_id
+            )
+            if url:
+                save_game_image(type=f"background_{loc}", image_url=url, prompt=prompt, game_id=game_id)
+                logger.info("[BACKGROUND] Generated %s for game %s: %s", loc, game_id, url)
+        except Exception:
+            logger.error("[BACKGROUND] Failed to generate %s for game %s", loc, game_id, exc_info=True)
+
+
 @app.post("/onboarding/{session_id}/complete")
 async def _generate_started_game_assets(game_id: str, language: str) -> None:
     """Generate and persist mission + bridge image for an auto-started game.
@@ -1271,6 +1315,12 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
             mission_data = gm.generate_mission(all_participants)
             create_mission(mission_data, game_id)
             logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
+
+        # Pre-generate empty-location backgrounds (used as backdrops for Qwen-Image-Edit scene compositing)
+        try:
+            await _generate_background_library(game_id, mission_data or {}, all_participants, gm, language)
+        except Exception:
+            logger.error(f"[BACKGROUND] Library generation failed for auto-started game {game_id}", exc_info=True)
 
         # Bridge image (needs the mission for crew positioning context)
         if not get_random_game_image(type="bridge", game_id=game_id):
@@ -2537,38 +2587,44 @@ async def _generate_chosen_action_image(
         if species and species not in ("Unknown", "Неизвестно"):
             character_description += f", {species}"
 
-        # Generate prompt via LLM (same style as avatar prompt),
-        # with fallback to string concatenation
-        prompt = ""
+        # Generate Qwen-Image-Edit instruction via LLM (refers to the avatar as
+        # "Picture 1" and the best-matching background as "Picture 2"), with a
+        # plain-text fallback if the LLM call fails.
+        gm = None
         try:
             gm = create_game_server(language="en")
-            prompt = gm.generate_chosen_action_prompt(
-                role=role,
-                traits=traits,
-                avatar_description=avatar_desc,
+            scene = gm.generate_scene_instruction(
                 action_text=action_text,
-                setting=setting,
-                species_desc=species_desc,
-                species_type=species,
-                species_category=profile.get("species_primary_key") or "",
+                role=role,
+                species_desc=species_desc or species,
             )
-            logger.info(f"[ACTION_IMAGE] LLM prompt for {role}: {prompt[:120]}...")
+            instruction = scene.get("instruction", "")
+            bg_location = scene.get("background_location")
+            logger.info(f"[ACTION_IMAGE] Scene instruction for {role}: {instruction[:120]}...")
         except Exception as llm_err:
-            logger.warning(f"[ACTION_IMAGE] LLM prompt failed for {role}: {llm_err}, using fallback prompt")
+            logger.warning(f"[ACTION_IMAGE] Scene instruction failed for {role}: {llm_err}, using fallback")
+            instruction = ""
+            bg_location = None
 
-        if not prompt:
-            # Fallback: build prompt via concatenation
-            prompt = (
-                f"{role} performing action: {action_text}. {character_description}. Setting: {setting[:200]}. Cinematic sci-fi scene, dynamic action in progress, dramatic lighting, detailed environment, space opera aesthetic, photorealistic quality, 4K."
+        if not instruction:
+            instruction = (
+                f"Place the character from Picture 1 performing this action: {action_text}. "
+                f"Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
             )
+
+        # Look up a pre-generated background for the chosen location (if any)
+        background_url = None
+        if bg_location:
+            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id)
 
         # Get player's avatar URL for reference
         avatar_url = profile.get("avatar_url") or None
 
         image_gen = create_image_generator()
-        chosen_action_url = await image_gen.generate_action_image_with_reference(
-            prompt=prompt,
-            reference_image_url=avatar_url,
+        chosen_action_url = await image_gen.generate_character_in_scene(
+            instruction_prompt=instruction,
+            character_avatar_url=avatar_url,
+            background_url=background_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/action_turn{turn}_p{player_id}",
             game_id=game_id,
@@ -2668,28 +2724,37 @@ async def _generate_npc_chosen_action_image(
 
         character_description = f"{npc_name}, the {role}"
 
-        # Generate prompt via LLM
-        prompt = ""
+        # Generate Qwen-Image-Edit instruction via LLM
+        npc_species = npc_profile.get("species", "") or ""
+        instruction = ""
+        bg_location = None
         try:
             gm = create_game_server(language="en")
-            prompt = gm.generate_chosen_action_prompt(
-                role=role,
-                traits=traits,
-                avatar_description=avatar_desc_clean,
+            scene = gm.generate_scene_instruction(
                 action_text=action_text,
-                setting=setting,
-                species_category=npc_profile.get("species_primary_key") or "",
+                role=role,
+                species_desc=npc_species,
             )
+            instruction = scene.get("instruction", "")
+            bg_location = scene.get("background_location")
         except Exception as llm_err:
-            logger.warning(f"[NPC_ACTION_IMAGE] LLM prompt failed for {npc_name}: {llm_err}")
+            logger.warning(f"[NPC_ACTION_IMAGE] Scene instruction failed for {npc_name}: {llm_err}")
 
-        if not prompt:
-            prompt = f"{npc_name} ({role}) performing action: {action_text}. Setting: {setting[:200]}. Cinematic sci-fi scene, dynamic action in progress, dramatic lighting, detailed environment, space opera aesthetic, photorealistic quality, 4K."
+        if not instruction:
+            instruction = (
+                f"Place the character from Picture 1 performing this action: {action_text}. "
+                f"Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
+            )
+
+        background_url = None
+        if bg_location:
+            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id)
 
         image_gen = create_image_generator()
-        chosen_action_url = await image_gen.generate_action_image_with_reference(
-            prompt=prompt,
-            reference_image_url=avatar_url,
+        chosen_action_url = await image_gen.generate_character_in_scene(
+            instruction_prompt=instruction,
+            character_avatar_url=avatar_url,
+            background_url=background_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/action_turn{turn}_{npc_key}",
             game_id=game_id,
@@ -4266,6 +4331,12 @@ async def _original_start_game(request: StartGameRequest):
             logger.error("[MISSION] Failed to create mission", stack_info=True)
             mission_result = {}
 
+    # 6b.5 Pre-generate empty-location backgrounds (best-effort)
+    try:
+        await _generate_background_library(game_id, mission_data or {}, all_participants, gm, language)
+    except Exception:
+        logger.error("[BACKGROUND] Library generation failed for game %s", game_id, exc_info=True)
+
     # 6c. Generate bridge image (resume: skip if already generated)
     try:
         if get_random_game_image(type="bridge", game_id=game_id):
@@ -4579,41 +4650,33 @@ async def _original_start_game(request: StartGameRequest):
         gender_type = profile.get("gender", "") or ""
         setting = global_circ.get("setting", "ship interior")
 
-        # Try LLM-based species-aware prompt generation
-        prompt = ""
+        # Qwen-Image-Edit instruction for placing this character in the scene.
+        # The action_text is the player's personal briefing headline/personal_title
+        # so the model knows what the character is reacting to.
+        char_action = b.get("personal_title", "") or f"reacting to the situation in {setting[:120]}"
+        instruction = ""
+        bg_location = None
         try:
-            # Build combined description (same as onboarding avatar flow)
-            parts = [avatar_desc]
-            if species_type and species_type not in ("Unknown", "Неизвестно"):
-                parts.append(f"Species type: {species_type}")
-            if gender_type and gender_type not in ("Unknown", "Неизвестно"):
-                parts.append(f"Gender type: {gender_type}")
-            if species_desc:
-                parts.append(f"Appearance: {species_desc}")
-            avatar_description_combined = "\n".join(parts)
-
-            prompt = await asyncio.to_thread(
-                gm.generate_avatar_prompt,
+            scene = await asyncio.to_thread(
+                gm.generate_scene_instruction,
+                action_text=char_action,
                 role=role,
-                traits=traits,
-                avatar_description=avatar_description_combined,
-                species_category=profile.get("species_primary_key") or "",
+                species_desc=species_desc or species_type,
             )
+            instruction = scene.get("instruction", "")
+            bg_location = scene.get("background_location")
         except Exception as e:
-            logger.warning(f"[CHAR_IMAGE] LLM prompt generation failed for {role}: {e}")
+            logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
 
-        if not prompt:
-            # Fallback: hardcoded prompt
-            prompt = (
-                f"Sci-fi character portrait of {player_name}, the {role}, "
-                f"placed in the current environment: {setting[:200]}. "
-                f"Character appearance: {avatar_desc[:200]}. "
-                f"{species_desc[:150]}"
-                f"Personality: {', '.join(traits) if traits else 'professional'}. "
-                f"The character is reacting to the situation around them. "
-                f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
-                f"detailed uniform, 4K quality, Star Trek aesthetic."
+        if not instruction:
+            instruction = (
+                f"Place the character from Picture 1 in the scene. {role} {char_action}. "
+                f"Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
             )
+
+        background_url = None
+        if bg_location:
+            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id)
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
@@ -4623,9 +4686,10 @@ async def _original_start_game(request: StartGameRequest):
         if species_desc:
             character_description += f". {species_desc[:200]}"
 
-        url = await image_gen.generate_action_image_with_reference(
-            prompt=prompt,
-            reference_image_url=avatar_url,
+        url = await image_gen.generate_character_in_scene(
+            instruction_prompt=instruction,
+            character_avatar_url=avatar_url,
+            background_url=background_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/char_turn{turn_num}_p{pid}",
             game_id=game_id,
@@ -4639,7 +4703,7 @@ async def _original_start_game(request: StartGameRequest):
                 image_url=url,
                 game_id=game_id,
                 turn=turn_num,
-                prompt=prompt,
+                prompt=instruction,
             )
         return url
 
@@ -5691,41 +5755,31 @@ async def _original_continue_game(
         gender_type = profile.get("gender", "") or ""
         setting = global_circ.get("setting", "ship interior")
 
-        # Try LLM-based species-aware prompt generation
-        prompt = ""
+        # Qwen-Image-Edit instruction for placing this character in the scene.
+        char_action = b.get("personal_title", "") or f"reacting to the situation in {setting[:120]}"
+        instruction = ""
+        bg_location = None
         try:
-            # Build combined description (same as onboarding avatar flow)
-            parts = [avatar_desc]
-            if species_type and species_type not in ("Unknown", "Неизвестно"):
-                parts.append(f"Species type: {species_type}")
-            if gender_type and gender_type not in ("Unknown", "Неизвестно"):
-                parts.append(f"Gender type: {gender_type}")
-            if species_desc:
-                parts.append(f"Appearance: {species_desc}")
-            avatar_description_combined = "\n".join(parts)
-
             gm._llm_kind = "character_scene"
-            prompt = gm.generate_avatar_prompt(
+            scene = gm.generate_scene_instruction(
+                action_text=char_action,
                 role=role,
-                traits=traits,
-                avatar_description=avatar_description_combined,
-                species_category=profile.get("species_primary_key") or "",
+                species_desc=species_desc or species_type,
             )
+            instruction = scene.get("instruction", "")
+            bg_location = scene.get("background_location")
         except Exception as e:
-            logger.warning(f"[CHAR_IMAGE] LLM prompt generation failed for {role}: {e}")
+            logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
 
-        if not prompt:
-            # Fallback: hardcoded prompt
-            prompt = (
-                f"Sci-fi character portrait of {player_name}, the {role}, "
-                f"placed in the current environment: {setting[:200]}. "
-                f"Character appearance: {avatar_desc[:200]}. "
-                f"{species_desc[:150]}"
-                f"Personality: {', '.join(traits) if traits else 'professional'}. "
-                f"The character is reacting to the situation around them. "
-                f"Cinematic sci-fi portrait, upper body, dynamic lighting, "
-                f"detailed uniform, 4K quality, Star Trek aesthetic."
+        if not instruction:
+            instruction = (
+                f"Place the character from Picture 1 in the scene. {role} {char_action}. "
+                f"Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
             )
+
+        background_url = None
+        if bg_location:
+            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id)
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
@@ -5735,9 +5789,10 @@ async def _original_continue_game(
         if species_desc:
             character_description += f". {species_desc[:200]}"
 
-        url = await image_gen.generate_action_image_with_reference(
-            prompt=prompt,
-            reference_image_url=avatar_url,
+        url = await image_gen.generate_character_in_scene(
+            instruction_prompt=instruction,
+            character_avatar_url=avatar_url,
+            background_url=background_url,
             character_description=character_description,
             filename_prefix=f"{game_id}/char_turn{turn_num}_p{pid}",
             game_id=game_id,
@@ -5751,7 +5806,7 @@ async def _original_continue_game(
                 image_url=url,
                 game_id=game_id,
                 turn=turn_num,
-                prompt=prompt,
+                prompt=instruction,
             )
         return url
 

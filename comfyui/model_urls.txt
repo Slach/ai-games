@@ -48,3 +48,9 @@ https://huggingface.co/ByteDance/Z-Image-Turbo-LoRAs/resolve/main/pixel_art_styl
 # ============== Qwen Image Models (for editing) ==============
 https://huggingface.co/Qwen/Qwen-Image-Edit-2511/resolve/main/qwen_image_edit_2511_bf16.safetensors -> diffusion_models/qwen_image_edit_2511_bf16.safetensors
 https://huggingface.co/Qwen/Qwen-Image-Edit-2511/resolve/main/vae/qwen_image_vae.safetensors -> vae/qwen_image_vae.safetensors
+
+# Qwen-Image-Edit-2511 GGUF Q4_K_M — 13 GB, fits 24 GB VRAM where bf16 (40 GB) cannot
+https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q4_K_M.gguf -> unet/qwen-image-edit-2511-Q4_K_M.gguf
+
+# Lightning LoRA for Qwen-Image-Edit-2511 — enables 4-step generation
+https://huggingface.co/alibaba-pai/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors -> loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
