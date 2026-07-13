@@ -4929,20 +4929,24 @@ async def get_mission_endpoint(game_id: str):
 @app.get("/game/bridge-image")
 async def get_bridge_image_endpoint(
     game_id: str,
-    turn: str | None,
 ):
-    """Get the bridge image for a game.
-
-    Args:
-        game_id: Game identifier
-        turn: If set, returns the scene image for that turn instead of bridge image.
-    """
-    turn_num = int(turn) if turn else None
-    img_type = "scene" if turn_num is not None else "bridge"
-    url = get_random_game_image(type=img_type, game_id=game_id, turn=turn_num)
+    """Get the bridge image for a game."""
+    url = get_random_game_image(type="bridge", game_id=game_id, turn=None)
     if not url:
-        raise HTTPException(status_code=404, detail=f"No {img_type} image found")
-    return {"image_url": url, "game_id": game_id, "type": img_type}
+        raise HTTPException(status_code=404, detail="No bridge image found")
+    return {"image_url": url, "game_id": game_id, "type": "bridge"}
+
+
+@app.get("/game/scene-image")
+async def get_scene_image_endpoint(
+    game_id: str,
+    turn: int,
+):
+    """Get the scene image for a specific turn of a game."""
+    url = get_random_game_image(type="scene", game_id=game_id, turn=turn)
+    if not url:
+        raise HTTPException(status_code=404, detail=f"No scene image found for turn {turn}")
+    return {"image_url": url, "game_id": game_id, "turn": turn, "type": "scene"}
 
 
 @app.get("/game/team")

@@ -800,7 +800,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         "GET",
                         "/game/bridge-image",
                         data=None,
-                        params={"game_id": game_id_for_mission, "turn": ""},
+                        params={"game_id": game_id_for_mission},
                         timeout_total=600,
                         ignore_codes=(404,),
                     )
@@ -1057,7 +1057,7 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
             except Exception as e:
                 logger.error(f"Failed to fetch mission for game {game_id}: {e}", exc_info=True)
             try:
-                bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id, "turn": ""}, timeout_total=600, ignore_codes=(404,))
+                bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
             except Exception as e:
                 logger.error(f"Failed to fetch bridge image for game {game_id}: {e}", exc_info=True)
 
@@ -2472,7 +2472,7 @@ async def cmd_turn(message: types.Message):
             try:
                 scene_resp = await api_request(
                     "GET",
-                    "/game/bridge-image",
+                    "/game/scene-image",
                     data=None,
                     params={"turn": turn_number, "game_id": turn_data.get("game_id", "default_game")},
                     timeout_total=600,
@@ -2577,7 +2577,7 @@ async def cmd_bridge(message: types.Message):
         # Get bridge image
         bridge = None
         try:
-            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id, "turn": ""}, timeout_total=600, ignore_codes=(404,))
+            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
         except Exception as e:
             logger.error(f"Failed to fetch bridge image for game {game_id}: {e}", exc_info=True)
 
@@ -2768,7 +2768,7 @@ async def cmd_invite(message: types.Message):
         except Exception as e:
             logger.error(f"Failed to fetch mission for invite: {e}", exc_info=True)
         try:
-            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id, "turn": ""}, timeout_total=600, ignore_codes=(404,))
+            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
         except Exception as e:
             logger.error(f"Failed to fetch bridge image for invite: {e}", exc_info=True)
 
