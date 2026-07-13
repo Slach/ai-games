@@ -2993,6 +2993,7 @@ class GameServer:
         species_desc: str,
         language: str = LANGUAGE_EN,
         background_location: str | None = None,
+        scene_context: str = "",
     ) -> dict[str, Any]:
         """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
 
@@ -3005,12 +3006,17 @@ class GameServer:
             species_desc: Short species description (informs pose/environment fit).
             language: Game content language (instruction is always English).
             background_location: Optional explicit location override.
+            scene_context: Current turn setting + conflict (from global_circumstances).
+                Lets the model pick a background_location matching the scene rather
+                than guessing from action_text alone.
 
         Returns:
             Dict with "instruction" (str) and "background_location" (str|None).
         """
         system = build_scene_instruction_system(language)
-        user = build_scene_instruction_user(language, action_text, role, species_desc, background_location)
+        user = build_scene_instruction_user(
+            language, action_text, role, species_desc, background_location, scene_context
+        )
 
         try:
             result = self._call_llm(

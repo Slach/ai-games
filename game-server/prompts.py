@@ -1313,14 +1313,28 @@ def build_scene_instruction_user(
     role: str,
     species_desc: str,
     background_location: str | None,
+    scene_context: str = "",
 ) -> str:
-    """User prompt for the scene-instruction LLM call."""
-    bg_note = f" Scene location: {background_location}." if background_location else ""
+    """User prompt for the scene-instruction LLM call.
+
+    Args:
+        scene_context: Free-form description of the current turn's setting and
+            situation (typically global_circumstances setting + conflict). Lets
+            the model pick a background_location that actually matches the scene
+            rather than guessing from the action text alone.
+    """
+    bg_note = f" Scene location hint: {background_location}." if background_location else ""
+    ctx_block = f"\nScene context: {scene_context}\n" if scene_context else ""
     if language == LANGUAGE_RU:
         return (
             f"Действие: {action_text}\n"
             f"Роль: {role}.{bg_note}\n"
-            f"Описание вида: {species_desc}\n\n"
+            f"Описание вида: {species_desc}{ctx_block}\n"
+            "Выбери background_location исходя из того, ГДЕ происходит действие "
+            "(в рубке, в инженерном отсеке, на поверхности планеты, снаружи корабля и т.д.). "
+            "Допустимые значения: " + ", ".join(BACKGROUND_LOCATION_TYPES) + ". "
+            "Если действие происходит вне корабля (планета, космос) — выбери planet_surface или exterior_ship. "
+            "Если внутри корабля — выбери соответствующий отсек.\n\n"
             "Напиши ОДНУ инструкцию (1-3 предложения) для Qwen-Image-Edit, "
             "начиная с 'Place the character from Picture 1...'. "
             "Опиши позу, действие, освещение. Без описания внешности персонажа."
@@ -1328,7 +1342,12 @@ def build_scene_instruction_user(
     return (
         f"Action: {action_text}\n"
         f"Role: {role}.{bg_note}\n"
-        f"Species: {species_desc}\n\n"
+        f"Species: {species_desc}{ctx_block}\n"
+        "Choose background_location based on WHERE the action takes place "
+        "(bridge, engineering bay, planet surface, outside the ship, etc.). "
+        "Valid values: " + ", ".join(BACKGROUND_LOCATION_TYPES) + ". "
+        "If the action happens off-ship (planet, space), pick planet_surface or exterior_ship. "
+        "If inside the ship, pick the matching compartment.\n\n"
         "Write ONE instruction (1-3 sentences) for Qwen-Image-Edit, "
         "starting with 'Place the character from Picture 1...'. "
         "Describe pose, action, lighting. Do not describe the character's appearance."

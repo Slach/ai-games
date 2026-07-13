@@ -2590,6 +2590,8 @@ async def _generate_chosen_action_image(
         # Generate Qwen-Image-Edit instruction via LLM (refers to the avatar as
         # "Picture 1" and the best-matching background as "Picture 2"), with a
         # plain-text fallback if the LLM call fails.
+        conflict = global_circ.get("conflict", "")
+        scene_context = f"Setting: {setting[:300]}. Situation: {conflict[:300]}" if conflict else f"Setting: {setting[:300]}"
         gm = None
         try:
             gm = create_game_server(language="en")
@@ -2597,6 +2599,7 @@ async def _generate_chosen_action_image(
                 action_text=action_text,
                 role=role,
                 species_desc=species_desc or species,
+                scene_context=scene_context,
             )
             instruction = scene.get("instruction", "")
             bg_location = scene.get("background_location")
@@ -2728,12 +2731,15 @@ async def _generate_npc_chosen_action_image(
         npc_species = npc_profile.get("species", "") or ""
         instruction = ""
         bg_location = None
+        conflict = global_circ.get("conflict", "")
+        scene_context = f"Setting: {setting[:300]}. Situation: {conflict[:300]}" if conflict else f"Setting: {setting[:300]}"
         try:
             gm = create_game_server(language="en")
             scene = gm.generate_scene_instruction(
                 action_text=action_text,
                 role=role,
                 species_desc=npc_species,
+                scene_context=scene_context,
             )
             instruction = scene.get("instruction", "")
             bg_location = scene.get("background_location")
@@ -4662,6 +4668,7 @@ async def _original_start_game(request: StartGameRequest):
                 action_text=char_action,
                 role=role,
                 species_desc=species_desc or species_type,
+                scene_context=f"Setting: {setting[:300]}",
             )
             instruction = scene.get("instruction", "")
             bg_location = scene.get("background_location")
@@ -5765,6 +5772,7 @@ async def _original_continue_game(
                 action_text=char_action,
                 role=role,
                 species_desc=species_desc or species_type,
+                scene_context=f"Setting: {setting[:300]}",
             )
             instruction = scene.get("instruction", "")
             bg_location = scene.get("background_location")
