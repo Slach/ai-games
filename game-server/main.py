@@ -2274,6 +2274,25 @@ async def auto_select_action(
         choice="auto_selected",
     )
 
+    # ── Generate comic panel for this player's action ────────────────
+    # Mirrors the manual /game/actions path so auto-selected actions get
+    # the same chosen_action_url, appear in the outcome album, and get
+    # pushed to the player. Registered in _pending_action_tasks before the
+    # remaining-check below so _analyze_turn_outcome (if triggered now)
+    # awaits it before pushing the outcome.
+    action_key = (turn, game_id)
+    action_task = asyncio.create_task(
+        _generate_chosen_action_image(
+            player_id=player_id,
+            game_id=game_id,
+            turn=turn,
+            action_id=action_id,
+            language=language,
+        )
+    )
+    _pending_action_tasks.setdefault(action_key, set()).add(action_task)
+    action_task.add_done_callback(lambda _t, k=action_key: _pending_action_tasks.get(k, set()).discard(_t))
+
     # 6. Notify player about auto-selection
     action_text = ""
     for c in choices:
