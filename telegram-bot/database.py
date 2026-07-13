@@ -80,7 +80,7 @@ MIGRATIONS: list[tuple[int, str]] = [
 # ---------------------------------------------------------------------------
 
 
-def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
+def get_db_connection(db_path: str) -> sqlite3.Connection:
     """Create a new SQLite connection with WAL mode and dict row factory."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -88,7 +88,7 @@ def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: str = DB_PATH) -> None:
+def init_db(db_path: str) -> None:
     """Initialize database: create tables and apply pending migrations.
 
     Safe to call multiple times — uses IF NOT EXISTS and tracks applied
@@ -173,9 +173,9 @@ def insert_push_message(
     player_id: int,
     push_type: str,
     payload: str,
-    turn: int | None = None,
-    game_id: str | None = None,
-    db_path: str = DB_PATH,
+    turn: int | None,
+    game_id: str | None,
+    db_path: str,
 ) -> int:
     """Insert a pending push message. Returns the new row id."""
     conn = get_db_connection(db_path)
@@ -191,7 +191,7 @@ def insert_push_message(
     return row_id
 
 
-def mark_push_sent(push_id: int, db_path: str = DB_PATH) -> bool:
+def mark_push_sent(push_id: int, db_path: str) -> bool:
     """Mark a push message as successfully sent."""
     conn = get_db_connection(db_path)
     cursor = conn.cursor()
@@ -205,7 +205,7 @@ def mark_push_sent(push_id: int, db_path: str = DB_PATH) -> bool:
     return updated
 
 
-def mark_push_failed(push_id: int, error: str, db_path: str = DB_PATH) -> bool:
+def mark_push_failed(push_id: int, error: str, db_path: str) -> bool:
     """Mark a push message as failed, incrementing retry_count."""
     conn = get_db_connection(db_path)
     cursor = conn.cursor()
@@ -219,7 +219,7 @@ def mark_push_failed(push_id: int, error: str, db_path: str = DB_PATH) -> bool:
     return updated
 
 
-def mark_push_expired(push_id: int, db_path: str = DB_PATH) -> bool:
+def mark_push_expired(push_id: int, db_path: str) -> bool:
     """Mark a push message as expired (turn already passed)."""
     conn = get_db_connection(db_path)
     cursor = conn.cursor()
@@ -233,7 +233,7 @@ def mark_push_expired(push_id: int, db_path: str = DB_PATH) -> bool:
     return updated
 
 
-def reset_failed_for_current_turn(game_id: str, turn: int, db_path: str = DB_PATH) -> int:
+def reset_failed_for_current_turn(game_id: str, turn: int, db_path: str) -> int:
     """Reset failed push messages to pending if their turn equals current turn.
 
     On bot restart, messages that failed delivery for the *current* turn
@@ -254,7 +254,7 @@ def reset_failed_for_current_turn(game_id: str, turn: int, db_path: str = DB_PAT
     return count
 
 
-def expire_game_push_messages(game_id: str, db_path: str = DB_PATH) -> int:
+def expire_game_push_messages(game_id: str, db_path: str) -> int:
     """Mark all not-yet-sent push_queue rows for *game_id* as expired.
 
     Called at a game-restart epoch boundary (see bot.cmd_gm_restart) so that
@@ -275,7 +275,7 @@ def expire_game_push_messages(game_id: str, db_path: str = DB_PATH) -> int:
     return count
 
 
-def get_pending_push_messages(db_path: str = DB_PATH) -> list[dict]:
+def get_pending_push_messages(db_path: str) -> list[dict]:
     """Get all pending push messages, ordered by id (insertion order)."""
     conn = get_db_connection(db_path)
     cursor = conn.cursor()
@@ -285,7 +285,7 @@ def get_pending_push_messages(db_path: str = DB_PATH) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_pending_for_player(player_id: int, db_path: str = DB_PATH) -> list[dict]:
+def get_pending_for_player(player_id: int, db_path: str) -> list[dict]:
     """Get pending push messages for a specific player, ordered by id."""
     conn = get_db_connection(db_path)
     cursor = conn.cursor()

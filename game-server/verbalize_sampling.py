@@ -231,7 +231,7 @@ DIVERSITY_HINTS: dict[str, str] = {
 
 def select_response(
     responses: list[dict],
-    sampling_mode: str = "full",
+    sampling_mode: str,
 ) -> dict:
     """Weighted random selection from verbalized responses.
 
@@ -277,7 +277,7 @@ def verbalize_prompt(
     system_prompt: str,
     user_prompt: str,
     diversity_hint: str,
-    k: int = 5,
+    k: int,
 ) -> tuple[str, str]:
     """Wrap instance-level prompt into distribution-level VS prompt.
 
@@ -331,6 +331,6 @@ def vs_parse_json(text: str) -> dict:
         return {"raw": text}
 
 
-def vs_k_for(endpoint: str, default: int = 5) -> int:
+def vs_k_for(endpoint: str, default: int) -> int:
     """Return the VS k value for a given endpoint, using overrides if present."""
     return VS_K_OVERRIDES.get(endpoint, default)

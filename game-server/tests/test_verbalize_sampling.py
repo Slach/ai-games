@@ -20,7 +20,7 @@ class TestVerbalizePrompt(unittest.TestCase):
         system = "You are Game Master."
         user = "Create a mission about first contact."
         hint = "Vary genre."
-        vs_system, vs_user = verbalize_prompt(system, user, hint)
+        vs_system, vs_user = verbalize_prompt(system, user, hint, k=5)
 
         self.assertIn("You are Game Master", vs_system)
         self.assertIn("Create a mission about first contact", vs_user)

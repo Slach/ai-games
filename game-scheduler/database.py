@@ -52,7 +52,7 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
-def init_db(default_schedule: str = "8h") -> None:
+def init_db(default_schedule: str) -> None:
     """Initialize database: create tables, apply migrations, seed defaults.
 
     Args:
@@ -115,8 +115,8 @@ def save_game_schedule(
     mode: str,
     schedule_type: str,
     schedule_value: str,
-    last_run_at: str | None = None,
-    next_run_at: str | None = None,
+    last_run_at: str | None,
+    next_run_at: str | None,
 ) -> None:
     """Upsert a schedule for a specific game."""
     now = datetime.now(timezone.utc).isoformat()

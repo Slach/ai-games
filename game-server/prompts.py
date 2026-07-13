@@ -23,8 +23,8 @@ class OnboardingQuestion(BaseModel):
     id: int
     text: str
     options: list[dict[str, Any]]
-    image_url: str | None = None
-    image_prompt: str | None = None
+    image_url: str | None
+    image_prompt: str | None
 
 
 def build_dynamic_sg_question_prompts(
@@ -363,8 +363,8 @@ def build_combined_outcome_prompts(
     mission_text: str,
     decisions_text: str,
     roster_text: str,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for combined outcome analysis.
 
@@ -465,8 +465,8 @@ def build_game_over_prompts(
     outcome_type: str,
     outcome_narrative: str,
     mission_summary: str,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for finale/game-over generation.
 
@@ -588,7 +588,7 @@ def build_onboarding_prompts(
 # ── Game title generation prompts ──────────────────────────────────
 
 
-def build_game_title_prompts(language: str, *, use_vs: bool = False, vs_k: int = 5) -> tuple[str, str]:
+def build_game_title_prompts(language: str, *, use_vs: bool, vs_k: int) -> tuple[str, str]:
     """Build system and user prompts for game title generation."""
     if language == LANGUAGE_RU:
         system = "Ты — креативный писатель-фантаст. Придумываешь названия и описания для космических приключений."
@@ -620,7 +620,7 @@ def build_game_title_prompts(language: str, *, use_vs: bool = False, vs_k: int =
 # ── Daily story prompts ────────────────────────────────────────────
 
 
-def build_turn_story_prompts(language: str, turn: int, previous_summary: str, player_role: str, *, use_vs: bool = False, vs_k: int = 5) -> tuple[str, str]:
+def build_turn_story_prompts(language: str, turn: int, previous_summary: str, player_role: str, *, use_vs: bool, vs_k: int) -> tuple[str, str]:
     """Build system and user prompts for daily story generation."""
     if language == LANGUAGE_RU:
         system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
@@ -682,18 +682,18 @@ def build_player_message_prompts(
     player_traits: list[str],
     message: str,
     *,
-    game_title: str = "",
-    mission_name: str = "",
-    mission_description: str = "",
-    mission_objectives: str = "",
-    turn: int = 1,
-    previous_turn_summary: str = "",
-    global_circumstances_setting: str = "",
-    global_circumstances_conflict: str = "",
-    global_circumstances_narrative: str = "",
-    crew_context: str = "",
-    use_vs: bool = False,
-    vs_k: int = 5,
+    game_title: str,
+    mission_name: str,
+    mission_description: str,
+    mission_objectives: str,
+    turn: int,
+    previous_turn_summary: str,
+    global_circumstances_setting: str,
+    global_circumstances_conflict: str,
+    global_circumstances_narrative: str,
+    crew_context: str,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for player message processing with full game context."""
     traits_str = ", ".join(player_traits) if player_traits else ""
@@ -820,8 +820,8 @@ def build_species_description_prompts(
     gender_secondary: str | None,
     gender_hybrid: bool,
     *,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for species description generation."""
     if language == LANGUAGE_RU:
@@ -866,8 +866,8 @@ def build_npc_decision_prompts(
     traits: str | list[str],
     choices_text: str,
     *,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for NPC decision making."""
     traits_str = ", ".join(traits) if isinstance(traits, list) else traits
@@ -896,8 +896,8 @@ def build_auto_choice_prompts(
     gc_settings: str,
     choices_text: str,
     *,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for auto-choice when player doesn't respond."""
     traits_str = ", ".join(traits) if isinstance(traits, list) else str(traits)
@@ -948,8 +948,8 @@ def build_global_circumstances_prompts(
     player_descriptions: str,
     mission_str: str,
     *,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for global circumstances generation."""
     if language == LANGUAGE_RU:
@@ -1018,11 +1018,11 @@ def build_global_circumstances_prompts(
 def build_mission_prompts(
     language: str,
     crew_desc: str,
-    archetype: str | None = None,
-    seeds: dict | None = None,
+    archetype: str | None,
+    seeds: dict | None,
     *,
-    use_vs: bool = False,
-    vs_k: int = 5,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for mission generation.
 
@@ -1313,7 +1313,7 @@ def build_scene_instruction_user(
     role: str,
     species_desc: str,
     background_location: str | None,
-    scene_context: str = "",
+    scene_context: str,
 ) -> str:
     """User prompt for the scene-instruction LLM call.
 

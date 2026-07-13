@@ -115,7 +115,7 @@ def parse_schedule(schedule: str) -> tuple[str, str]:
     raise ValueError(f"Invalid schedule format: {schedule}")
 
 
-def _compute_next_run(schedule_type: str, schedule_value: str, from_time: datetime | None = None) -> datetime:
+def _compute_next_run(schedule_type: str, schedule_value: str, from_time: datetime | None) -> datetime:
     """Compute next run time from a given from_time (default now)."""
     now = from_time or datetime.now(timezone.utc)
 
@@ -193,9 +193,11 @@ class GameScheduleState:
                 mode=self.mode,
                 schedule_type=self.schedule_type,
                 schedule_value=self.schedule_value,
+                last_run_at=None,
+                next_run_at=None,
             )
 
-        self.next_run_at = self.next_run_at or _compute_next_run(self.schedule_type, self.schedule_value)
+        self.next_run_at = self.next_run_at or _compute_next_run(self.schedule_type, self.schedule_value, None)
 
     def get_schedule_tuple(self) -> tuple[str, str]:
         """Return (type, value_str) for this state."""
@@ -212,7 +214,7 @@ class GameScheduleState:
         )
 
     def reset_timer(self) -> datetime:
-        self.next_run_at = _compute_next_run(self.schedule_type, self.schedule_value)
+        self.next_run_at = _compute_next_run(self.schedule_type, self.schedule_value, None)
         self.persist()
         return self.next_run_at
 
@@ -259,7 +261,7 @@ class GameScheduler:
 
     # ── Game management ──
 
-    def register_game(self, game_id: str, schedule_raw: str | None = None) -> GameScheduleState:
+    def register_game(self, game_id: str, schedule_raw: str | None) -> GameScheduleState:
         """Register a game with the scheduler. Uses default or provided schedule.
 
         If the game already exists and was ended, reactivates it.
@@ -310,7 +312,7 @@ class GameScheduler:
             stype, svalue = parse_schedule(schedule_raw)
             state.schedule_type = stype
             state.schedule_value = str(svalue)
-            state.next_run_at = _compute_next_run(stype, svalue)
+            state.next_run_at = _compute_next_run(stype, svalue, None)
             state.persist()
             logger.info(f"Schedule for '{game_id}' set to {_schedule_label(stype, svalue)}, next run at {state.next_run_at}")
         return state
@@ -338,7 +340,7 @@ class GameScheduler:
         logger.info(f"Resumed game '{game_id}', next run at {state.next_run_at}")
         return True
 
-    def get_status(self, game_id: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
+    def get_status(self, game_id: str | None) -> list[dict[str, Any]] | dict[str, Any]:
         """Return status for one or all games."""
         if game_id:
             state = self._games.get(game_id)
@@ -450,7 +452,7 @@ class GameScheduler:
                     if gid in self._paused_games or state.mode == "ended":
                         continue
                     if state.next_run_at is None or state.next_run_at <= now:
-                        state.next_run_at = _compute_next_run(state.schedule_type, state.schedule_value)
+                        state.next_run_at = _compute_next_run(state.schedule_type, state.schedule_value, None)
                         state.persist()
                     if nearest is None or state.next_run_at < nearest[1]:
                         nearest = (gid, state.next_run_at)
@@ -491,7 +493,7 @@ class GameScheduler:
                 logger.error("Error in scheduling loop", exc_info=True)
                 await asyncio.sleep(60)
 
-    async def run_single_generation(self, game_id: str | None = None):
+    async def run_single_generation(self, game_id: str | None):
         """Run a single generation for a specific game or the first registered."""
         gid = game_id or next(iter(self._games.keys()), GAME_ID)
         logger.info(f"Running single generation for game '{gid}'")
@@ -760,7 +762,7 @@ def create_app() -> web.Application:
         sched: GameScheduler = app["scheduler"]
         if mode == "single":
             logger.info("Running in single mode (one generation)")
-            asyncio.create_task(sched.run_single_generation())
+            asyncio.create_task(sched.run_single_generation(None))
         else:
             logger.info("Running in multi-game scheduled mode")
             asyncio.create_task(sched.run_scheduling_loop())

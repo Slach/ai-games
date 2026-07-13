@@ -50,10 +50,10 @@ DEFAULT_STATE: dict[str, Any] = {
 
 
 # Run database initialization once at module load
-init_db()
+init_db(DB_PATH)
 
 
-def _conn(db_path: str = DB_PATH) -> sqlite3.Connection:
+def _conn(db_path: str) -> sqlite3.Connection:
     """Create a new SQLite connection with WAL mode and dict row factory."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -73,7 +73,7 @@ def get_player_state(player_id: int) -> dict[str, Any]:
       game_id, onboarding_session_id,
       current_question_id, current_options, last_poll, pending_updates
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         row = conn.execute("SELECT * FROM player_states WHERE player_id = ?", (player_id,)).fetchone()
 
@@ -168,7 +168,7 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
     in-memory dict.  Datetime values are serialised to ISO strings, lists/dicts
     to JSON strings.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         # Warn about unknown keys
         unknown = kwargs.keys() - _PLAYER_STATE_COLUMNS.keys()
@@ -224,7 +224,7 @@ def get_all_briefing_dedup() -> dict[tuple[int, str], int]:
     has a non-NULL briefing turn. Loaded once at startup into the in-memory
     dedup cache. Keyed per-(player, game) so different games never collide.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         result: dict[tuple[int, str], int] = {}
         for row in conn.execute("SELECT player_id, game_id, last_briefing_turn FROM delivery_dedup WHERE last_briefing_turn IS NOT NULL"):
@@ -239,7 +239,7 @@ def get_all_outcome_dedup() -> dict[tuple[int, str], int]:
     has a non-NULL outcome turn. Loaded once at startup into the in-memory
     dedup cache.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         result: dict[tuple[int, str], int] = {}
         for row in conn.execute("SELECT player_id, game_id, last_outcome_turn FROM delivery_dedup WHERE last_outcome_turn IS NOT NULL"):
@@ -254,7 +254,7 @@ def set_briefing_dedup(player_id: int, game_id: str, turn: int) -> None:
     *player_id*. Per-(player, game) so it survives bot restarts without
     cross-game or cross-epoch bleed.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         conn.execute(
             """INSERT INTO delivery_dedup (player_id, game_id, last_briefing_turn, updated_at)
@@ -273,7 +273,7 @@ def set_outcome_dedup(player_id: int, game_id: str, turn: int) -> None:
     """Record that the outcome for *turn* of *game_id* was delivered to
     *player_id*.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         conn.execute(
             """INSERT INTO delivery_dedup (player_id, game_id, last_outcome_turn, updated_at)
@@ -294,7 +294,7 @@ def get_all_game_over_dedup() -> dict[tuple[int, str], str]:
     survives bot restarts (previously it was an in-memory-only dict that reset
     on every restart, allowing duplicate finales).
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         result: dict[tuple[int, str], str] = {}
         for row in conn.execute("SELECT player_id, game_id, last_game_over FROM delivery_dedup WHERE last_game_over IS NOT NULL"):
@@ -309,7 +309,7 @@ def set_game_over_dedup(player_id: int, game_id: str) -> None:
     *player_id*. Per-(player, game) so it survives bot restarts and never
     blocks a different game's finale.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         conn.execute(
             """INSERT INTO delivery_dedup (player_id, game_id, last_game_over, updated_at)
@@ -331,7 +331,7 @@ def clear_dedup_for_game(game_id: str) -> int:
     and outcomes fresh (the per-turn dedup would otherwise skip regenerated
     turns). Returns the number of rows deleted.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         cur = conn.execute("DELETE FROM delivery_dedup WHERE game_id = ?", (game_id,))
         conn.commit()
@@ -345,7 +345,7 @@ def clear_dedup_for_player(player_id: int) -> int:
 
     Used on /reset so a wiped profile starts clean. Returns rows deleted.
     """
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         cur = conn.execute("DELETE FROM delivery_dedup WHERE player_id = ?", (player_id,))
         conn.commit()
@@ -356,7 +356,7 @@ def clear_dedup_for_player(player_id: int) -> int:
 
 def delete_player_state(player_id: int) -> None:
     """Remove a player's state row entirely (cleanup on profile deletion)."""
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         conn.execute("DELETE FROM player_states WHERE player_id = ?", (player_id,))
         conn.commit()
@@ -382,7 +382,7 @@ def record_reference(referred_id: int, referrer_id: int, game_id: str) -> bool:
     if not game_id or referred_id == referrer_id:
         return False
 
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         cur = conn.execute(
             """
@@ -399,7 +399,7 @@ def record_reference(referred_id: int, referrer_id: int, game_id: str) -> bool:
 
 def get_referrer_id(referred_id: int, game_id: str) -> int | None:
     """Return the referrer_id who invited ``referred_id`` into ``game_id``."""
-    conn = _conn()
+    conn = _conn(DB_PATH)
     try:
         row = conn.execute(
             """

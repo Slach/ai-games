@@ -846,7 +846,7 @@ class GameServer:
     structured outputs for all LLM interactions.
     """
 
-    def __init__(self, language: str = "en"):
+    def __init__(self, language: str):
         self.llm_base_url = os.getenv("LLM_URL", "http://llama.cpp:8090/v1")
         self.llm_api_key = os.getenv("LLM_API_KEY", "placeholder-key-for-llama-cpp")
         self.llm_model = os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B")
@@ -955,14 +955,14 @@ class GameServer:
         system_prompt: str,
         user_prompt: str,
         response_schema: dict[str, Any],
-        temperature: float = 0.7,
-        max_tokens: int | None = None,
-        enable_thinking: bool = False,
+        temperature: float,
+        max_tokens: int | None,
+        enable_thinking: bool,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Call LLM with json_schema structured output.
 
@@ -1194,12 +1194,12 @@ class GameServer:
 
     def generate_onboarding_questions(
         self,
-        underrepresented_hint: str = "",
+        underrepresented_hint: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> list[dict[str, Any]]:
         """Generate dynamic onboarding questions using LLM with json_schema.
 
@@ -1235,6 +1235,9 @@ class GameServer:
             system_prompt=system,
             user_prompt=user,
             response_schema=ONBOARDING_QUESTIONS_SCHEMA,
+            temperature=0.7,
+            max_tokens=None,
+            enable_thinking=False,
             game_id=game_id,
             player_id=player_id,
             turn=turn,
@@ -1277,7 +1280,7 @@ class GameServer:
         self,
         answers: dict[int, str],
         available_roles: list[dict[str, Any]],
-        questions: list[dict[str, Any]] | None = None,
+        questions: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """Assign role based on accumulated points from onboarding answers.
 
@@ -1299,7 +1302,7 @@ class GameServer:
             raise ValueError("No roles available")
 
         # Build role scores from answer selections
-        role_points: dict[str, int] = dict.fromkeys(SHIP_ROLE_KEYS, 0)
+        role_points: dict[str, int]
 
         if questions:
             # Build lookup: question_id -> question data
@@ -1363,10 +1366,10 @@ class GameServer:
     def generate_game_title(
         self,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, str]:
         """Generate a creative game title and welcome message."""
         logger.info(f"[TITLE] Generating game title, language: {self.language}")
@@ -1379,6 +1382,8 @@ class GameServer:
                 user_prompt=user,
                 response_schema=vs_response_schema(GAME_TITLE_SCHEMA),
                 temperature=0.9,
+                max_tokens=None,
+                enable_thinking=False,
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
@@ -1393,6 +1398,8 @@ class GameServer:
                 user_prompt=user,
                 response_schema=GAME_TITLE_SCHEMA,
                 temperature=0.9,
+                max_tokens=None,
+                enable_thinking=False,
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
@@ -1407,12 +1414,12 @@ class GameServer:
     def generate_turn_story(
         self,
         turn: int,
-        previous_summary: str = "",
-        player_role: str = "",
+        previous_summary: str,
+        player_role: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        kind: str | None,
     ) -> GameStory:
         """Generate daily story using LLM with json_schema."""
         logger.info(f"[STORY] Starting story generation for Turn {turn}, language: {self.language}")
@@ -1424,6 +1431,8 @@ class GameServer:
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=vs_response_schema(STORY_SCHEMA),
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=8192,
                 game_id=game_id,
                 player_id=player_id,
@@ -1438,6 +1447,8 @@ class GameServer:
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=STORY_SCHEMA,
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=4096,
                 game_id=game_id,
                 player_id=player_id,
@@ -1461,12 +1472,12 @@ class GameServer:
         self,
         story: GameStory,
         player_role: str,
-        crew_members: list[dict[str, Any]] | None = None,
+        crew_members: list[dict[str, Any]] | None,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> list[NPCDialogue]:
         """Generate NPC dialogues for the turn.
 
@@ -1538,6 +1549,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=NPC_DIALOGUE_SCHEMA,
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=256,
                     game_id=game_id,
                     player_id=player_id,
@@ -1569,10 +1581,10 @@ class GameServer:
         dialogues: list[NPCDialogue],
         player_role: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> ContentPrompts:
         """Generate prompts for content generation (image, video, comic)."""
         logger.info(f"[CONTENT] Starting content prompt generation, language: {self.language}")
@@ -1586,6 +1598,8 @@ class GameServer:
             system_prompt=system,
             user_prompt=user,
             response_schema=CONTENT_PROMPTS_SCHEMA,
+            temperature=0.7,
+            enable_thinking=False,
             max_tokens=2048,
             game_id=game_id,
             player_id=player_id,
@@ -1630,11 +1644,11 @@ class GameServer:
         player_id: int,
         message: str,
         player_profile: dict[str, Any],
-        game_context: dict[str, Any] | None = None,
+        game_context: dict[str, Any] | None,
         *,
-        game_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> str:
         """Process a player message and generate Game Master response.
 
@@ -1676,6 +1690,8 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(PLAYER_MESSAGE_SCHEMA),
+                    temperature=0.7,
+                    enable_thinking=False,
                     max_tokens=2048,
                     game_id=game_id,
                     player_id=player_id,
@@ -1691,6 +1707,8 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=PLAYER_MESSAGE_SCHEMA,
+                    temperature=0.7,
+                    enable_thinking=False,
                     max_tokens=1024,
                     game_id=game_id,
                     player_id=player_id,
@@ -1781,12 +1799,12 @@ class GameServer:
         role: str,
         traits: list[str],
         avatar_description: str,
-        species_category: str = "",
+        species_category: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> str:
         """Generate an image prompt for player avatar using LLM with json_schema.
 
@@ -1838,6 +1856,8 @@ class GameServer:
                 system_prompt=vs_system,
                 user_prompt=vs_user,
                 response_schema=vs_response_schema(AVATAR_PROMPT_SCHEMA),
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=self.llm_max_avatar_tokens,
                 game_id=game_id,
                 player_id=player_id,
@@ -1853,6 +1873,8 @@ class GameServer:
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=AVATAR_PROMPT_SCHEMA,
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=self.llm_max_avatar_tokens,
                 game_id=game_id,
                 player_id=player_id,
@@ -1870,14 +1892,14 @@ class GameServer:
         avatar_description: str,
         action_text: str,
         setting: str,
-        species_desc: str = "",
-        species_type: str = "",
-        species_category: str = "",
+        species_desc: str,
+        species_type: str,
+        species_category: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> str:
         """Generate an image prompt for the chosen action scene using LLM.
 
@@ -1951,6 +1973,8 @@ class GameServer:
                 system_prompt=vs_system,
                 user_prompt=vs_user,
                 response_schema=vs_response_schema(CHOSEN_ACTION_PROMPT_SCHEMA),
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=self.llm_max_avatar_tokens,
                 game_id=game_id,
                 player_id=player_id,
@@ -1966,6 +1990,8 @@ class GameServer:
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=CHOSEN_ACTION_PROMPT_SCHEMA,
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=self.llm_max_avatar_tokens,
                 game_id=game_id,
                 player_id=player_id,
@@ -1984,10 +2010,10 @@ class GameServer:
         sg_step: int,
         accumulated_tags: dict[str, int],
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate ONE species or gender onboarding question via LLM.
 
@@ -2007,6 +2033,7 @@ class GameServer:
                 user_prompt=user,
                 response_schema=schema,
                 temperature=0.9,
+                enable_thinking=False,
                 max_tokens=1024,
                 game_id=game_id,
                 player_id=player_id,
@@ -2036,7 +2063,7 @@ class GameServer:
         idx = max(0, min(idx, len(pool) - 1))
         text = pool[idx]["text"]
         tag_field = "species_tags" if dimension == "species" else "gender_tags"
-        labels: dict[str, str] = {}
+        labels: dict[str, str]
         for q in pool:
             for opt in q["options"]:
                 for tag in opt.get(tag_field, []):
@@ -2049,14 +2076,14 @@ class GameServer:
     def _count_tags_from_answers(
         answers: dict[int, str],
         tag_key: str,
-        questions: list[dict[str, Any]] | None = None,
+        questions: list[dict[str, Any]] | None,
     ) -> dict[str, int]:
         """Count occurrences of a given tag type across all answered questions."""
         if not questions:
             return {}
 
         question_map = {q.get("id"): q for q in questions}
-        tag_counts: dict[str, int] = {}
+        tag_counts: dict[str, int]
 
         for question_id, selected_value in answers.items():
             try:
@@ -2082,7 +2109,7 @@ class GameServer:
     @staticmethod
     def calculate_species_from_answers(
         answers: dict[int, str],
-        questions: list[dict[str, Any]] | None = None,
+        questions: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """Calculate species type by counting species_tags across answers.
 
@@ -2108,7 +2135,7 @@ class GameServer:
     @staticmethod
     def calculate_gender_from_answers(
         answers: dict[int, str],
-        questions: list[dict[str, Any]] | None = None,
+        questions: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """Calculate gender type by counting gender_tags across answers.
 
@@ -2137,10 +2164,10 @@ class GameServer:
         gender_result: dict[str, Any],
         role: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> str:
         """Generate a vivid narrative description of the player's species and gender using LLM."""
         logger.info(f"[SPECIES] Generating species+gender description for role: {role}")
@@ -2172,6 +2199,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=vs_response_schema(SPECIES_GENDER_DESC_SCHEMA),
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=2048,
                     game_id=game_id,
                     player_id=player_id,
@@ -2186,6 +2214,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=SPECIES_GENDER_DESC_SCHEMA,
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=1024,
                     game_id=game_id,
                     player_id=player_id,
@@ -2227,12 +2256,12 @@ class GameServer:
         self,
         question: dict[str, Any],
         accumulated_tags: dict[str, int],
-        tag_type: str = "species_tags",
+        tag_type: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, str]:
         """Generate one image per answer option for a species/gender question.
 
@@ -2277,6 +2306,7 @@ class GameServer:
                     user_prompt=prompt,
                     response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=1024,
                     game_id=game_id,
                     player_id=player_id,
@@ -2347,10 +2377,10 @@ class GameServer:
         choices: list[dict[str, Any]],
         npc_profile: dict[str, Any],
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """NPC makes a choice using LLM without seeing the consequences.
 
@@ -2385,6 +2415,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=2048,
                     game_id=game_id,
                     player_id=player_id,
@@ -2399,6 +2430,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=NPC_CHOICE_SCHEMA,
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=512,
                     game_id=game_id,
                     player_id=player_id,
@@ -2429,13 +2461,13 @@ class GameServer:
         choices: list[dict[str, Any]],
         player_profile: dict[str, Any],
         personal_briefing: str,
-        global_circumstances: dict[str, Any] | None = None,
-        player_name: str = "",
+        global_circumstances: dict[str, Any] | None,
+        player_name: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate an LLM-based auto-choice for a player who didn't choose in time.
 
@@ -2500,6 +2532,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=2048,
                     game_id=game_id,
                     player_id=player_id,
@@ -2514,6 +2547,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=NPC_CHOICE_SCHEMA,
                     temperature=0.8,
+                    enable_thinking=False,
                     max_tokens=512,
                     game_id=game_id,
                     player_id=player_id,
@@ -2542,13 +2576,13 @@ class GameServer:
     def generate_global_circumstances(
         self,
         turn: int,
-        previous_summary: str = "",
-        player_profiles: list[dict[str, Any]] | None = None,
-        mission_context: dict[str, Any] | None = None,
+        previous_summary: str,
+        player_profiles: list[dict[str, Any]] | None,
+        mission_context: dict[str, Any] | None,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate the shared global circumstances for a game turn.
 
@@ -2620,6 +2654,8 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(GLOBAL_CIRCUMSTANCES_SCHEMA),
+                    temperature=0.7,
+                    enable_thinking=False,
                     max_tokens=8192,
                     game_id=game_id,
                     player_id=player_id,
@@ -2634,6 +2670,8 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
+                    temperature=0.7,
+                    enable_thinking=False,
                     max_tokens=4096,
                     game_id=game_id,
                     player_id=player_id,
@@ -2655,11 +2693,11 @@ class GameServer:
         self,
         global_circumstances: dict[str, Any],
         player_profile: dict[str, Any],
-        player_name: str = "",
-        turn: int | None = None,
+        player_name: str,
+        turn: int | None,
         *,
-        game_id: str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
@@ -2746,6 +2784,8 @@ class GameServer:
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=self._get_player_briefing_schema(),
+                temperature=0.7,
+                enable_thinking=False,
                 max_tokens=4096,
                 game_id=game_id,
                 player_id=player_id,
@@ -2795,14 +2835,14 @@ class GameServer:
         self,
         global_circumstances: dict[str, Any],
         all_decisions: list[dict[str, Any]],
-        previous_summary: str = "",
-        mission_context: dict[str, Any] | None = None,
-        crew_roster: list[dict[str, Any]] | None = None,
+        previous_summary: str,
+        mission_context: dict[str, Any] | None,
+        crew_roster: list[dict[str, Any]] | None,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Analyze all player and NPC choices together with their hidden consequences
         to produce a coherent combined outcome narrative.
@@ -2891,6 +2931,7 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(COMBINED_OUTCOME_SCHEMA),
+                    temperature=0.7,
                     max_tokens=262144,
                     enable_thinking=True,
                     game_id=game_id,
@@ -2906,6 +2947,7 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=COMBINED_OUTCOME_SCHEMA,
+                    temperature=0.7,
                     max_tokens=262144,
                     enable_thinking=True,
                     game_id=game_id,
@@ -2940,10 +2982,10 @@ class GameServer:
         outcome_narrative: str,
         mission_summary: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, str]:
         """Generate a dramatic finale narrative and image prompt for game end.
 
@@ -2972,6 +3014,7 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(GAME_OVER_SCHEMA),
+                    temperature=0.7,
                     max_tokens=4096,
                     enable_thinking=True,
                     game_id=game_id,
@@ -2987,6 +3030,7 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=GAME_OVER_SCHEMA,
+                    temperature=0.7,
                     max_tokens=2048,
                     enable_thinking=True,
                     game_id=game_id,
@@ -3009,10 +3053,10 @@ class GameServer:
         self,
         all_participants: list[dict[str, Any]],
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate a mission with stages/objectives for the game.
 
@@ -3024,7 +3068,7 @@ class GameServer:
 
         crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')})" for p in all_participants])
 
-        mission_seeds = select_mission_seeds(self.language)
+        mission_seeds = select_mission_seeds(self.language, None)
         system, user = build_mission_prompts(
             self.language,
             crew_desc,
@@ -3042,6 +3086,7 @@ class GameServer:
                     response_schema=vs_response_schema(MISSION_SCHEMA),
                     max_tokens=8192,
                     temperature=0.8,
+                    enable_thinking=False,
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
@@ -3062,6 +3107,7 @@ class GameServer:
                     response_schema=MISSION_SCHEMA,
                     max_tokens=4096,
                     temperature=0.8,
+                    enable_thinking=False,
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
@@ -3096,10 +3142,10 @@ class GameServer:
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate a detailed prompt for the bridge scene image and crew positioning.
 
@@ -3136,6 +3182,7 @@ class GameServer:
                     response_schema=vs_response_schema(BRIDGE_IMAGE_SCHEMA),
                     max_tokens=8192,
                     temperature=0.8,
+                    enable_thinking=False,
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
@@ -3151,6 +3198,7 @@ class GameServer:
                     response_schema=BRIDGE_IMAGE_SCHEMA,
                     max_tokens=4096,
                     temperature=0.8,
+                    enable_thinking=False,
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
@@ -3178,12 +3226,12 @@ class GameServer:
         self,
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
-        language: str = LANGUAGE_EN,
+        language: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, str]:
         """Generate empty-location background prompts via LLM.
 
@@ -3219,6 +3267,7 @@ class GameServer:
                 response_schema=BACKGROUND_PROMPTS_SCHEMA,
                 max_tokens=8192,
                 temperature=0.8,
+                enable_thinking=False,
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
@@ -3244,14 +3293,14 @@ class GameServer:
         action_text: str,
         role: str,
         species_desc: str,
-        language: str = LANGUAGE_EN,
-        background_location: str | None = None,
-        scene_context: str = "",
+        language: str,
+        background_location: str | None,
+        scene_context: str,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> dict[str, Any]:
         """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
 
@@ -3283,6 +3332,7 @@ class GameServer:
                 response_schema=SCENE_INSTRUCTION_SCHEMA,
                 max_tokens=1024,
                 temperature=0.7,
+                enable_thinking=False,
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
@@ -3308,12 +3358,12 @@ class GameServer:
         gender: str,
         avatar_description: str,
         personality_traits: list[str],
-        avoid_names: set[str] | None = None,
+        avoid_names: set[str] | None,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> str:
         """Generate a creative name for an NPC using LLM.
 
@@ -3352,6 +3402,7 @@ class GameServer:
                 user_prompt=user,
                 response_schema=NPC_NAME_SCHEMA,
                 temperature=0.95,
+                enable_thinking=False,
                 max_tokens=256,
                 game_id=game_id,
                 player_id=player_id,
@@ -3382,10 +3433,10 @@ class GameServer:
         self,
         npc_roles: list[dict[str, Any]],
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | str | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
     ) -> list[dict[str, str]]:
         """Generate simplified avatar prompts for NPCs at game start.
 
@@ -3471,6 +3522,7 @@ class GameServer:
                     response_schema=vs_response_schema(NPC_AVATAR_PROMPT_SCHEMA),
                     max_tokens=8192,
                     temperature=0.9,
+                    enable_thinking=False,
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
@@ -3487,6 +3539,7 @@ class GameServer:
                     response_schema=NPC_AVATAR_PROMPT_SCHEMA,
                     max_tokens=4096,
                     temperature=0.9,
+                    enable_thinking=False,
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
@@ -3538,7 +3591,7 @@ class GameServer:
 # ============== Factory Function ==============
 
 
-def create_game_server(language: str = "en") -> GameServer:
+def create_game_server(language: str) -> GameServer:
     """Create and initialize Game Server agent.
 
     Args:

@@ -358,7 +358,7 @@ def _ensure_game_state(game_id: str):
     conn.close()
 
 
-def _enrich_role_with_i18n(role_key: str, taken_by: int | None = None, language: str = LANGUAGE_RU) -> dict[str, Any]:
+def _enrich_role_with_i18n(role_key: str, taken_by: int | None, language: str) -> dict[str, Any]:
     ru = get_ship_role_i18n(role_key, LANGUAGE_RU)
     en = get_ship_role_i18n(role_key, LANGUAGE_EN)
     localized = get_ship_role_i18n(role_key, language)
@@ -374,7 +374,7 @@ def _enrich_role_with_i18n(role_key: str, taken_by: int | None = None, language:
     }
 
 
-def get_available_roles(game_id: str, language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
+def get_available_roles(game_id: str, language: str) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -386,7 +386,7 @@ def get_available_roles(game_id: str, language: str = LANGUAGE_RU) -> list[dict[
     return [_enrich_role_with_i18n(row["role_key"], language=language) for row in rows]
 
 
-def get_all_roles(game_id: str, language: str = LANGUAGE_RU) -> list[dict[str, Any]]:
+def get_all_roles(game_id: str, language: str) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT role_key, taken_by FROM ship_roles WHERE game_id = ?", (game_id,))
@@ -451,7 +451,7 @@ def release_role(role_key: str, game_id: str) -> bool:
 
 def get_role_by_key(
     role_key: str,
-    language: str = LANGUAGE_RU,
+    language: str,
     *,
     game_id: str,
 ) -> dict[str, Any] | None:
@@ -493,9 +493,9 @@ def reset_active_npcs(game_id: str):
 
 def create_onboarding_session(
     player_id: int,
-    language: str = "en",
-    questions: list[dict[str, Any]] | None = None,
-    shuffle_seed: int = 0,
+    language: str,
+    shuffle_seed: int,
+    questions: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
@@ -563,9 +563,9 @@ def update_onboarding_session(
     session_id: str,
     current_question: int,
     answers: dict[int, str],
-    completed: bool = False,
-    language: str | None = None,
-    questions: list | None = None,
+    completed: bool,
+    language: str | None,
+    questions: list | None,
 ) -> dict[str, Any] | None:
     """Update an onboarding session"""
     conn = get_db_connection()
@@ -650,7 +650,7 @@ def update_onboarding_role_scores(
 
 def get_recent_role_score_history(
     game_id: str,
-    limit: int = 10,
+    limit: int,
 ) -> list[dict[str, int]]:
     """Get the last N completed onboarding sessions' role_score_history for a game.
 
@@ -686,7 +686,7 @@ def get_recent_role_score_history(
 
 def get_underrepresented_roles(
     game_id: str,
-    n_last: int = 10,
+    n_last: int,
 ) -> list[str]:
     """Find roles that received the least total points across recent onboarding sessions.
 
@@ -909,7 +909,7 @@ def save_player_action(
     turn: int,
     action_id: str,
     choice: str,
-    consequence_result: dict[str, Any] | None = None,
+    consequence_result: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Save a player action"""
     conn = get_db_connection()
@@ -942,7 +942,7 @@ def save_player_action(
     }
 
 
-def get_player_actions(player_id: int, turn: int | None = None) -> list[dict[str, Any]]:
+def get_player_actions(player_id: int, turn: int | None) -> list[dict[str, Any]]:
     """Get player actions, optionally filtered by turn"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -973,7 +973,7 @@ def get_player_actions(player_id: int, turn: int | None = None) -> list[dict[str
 # ============== Game Messages ==============
 
 
-def add_game_message(player_id: int, message: str, message_type: str = "text") -> dict[str, Any]:
+def add_game_message(player_id: int, message: str, message_type: str) -> dict[str, Any]:
     """Add a game message"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -997,7 +997,7 @@ def add_game_message(player_id: int, message: str, message_type: str = "text") -
     }
 
 
-def get_game_messages(player_id: int, limit: int = 10) -> list[dict[str, Any]]:
+def get_game_messages(player_id: int, limit: int) -> list[dict[str, Any]]:
     """Get recent game messages for a player"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1045,9 +1045,9 @@ def get_game_state(game_id: str) -> dict[str, Any]:
 
 def update_game_state(
     turn: int,
-    status: str = "active",
-    ship_alive: bool = True,
-    crew_health: int = 100,
+    status: str,
+    ship_alive: bool,
+    crew_health: int,
     *,
     game_id: str,
 ) -> dict[str, Any]:
@@ -1076,7 +1076,7 @@ def update_game_state(
     return get_game_state(game_id)
 
 
-def set_last_death_turn(game_id: str, turn: int = 0) -> bool:
+def set_last_death_turn(game_id: str, turn: int) -> bool:
     """Record the turn of the most recent crew death (death cooldown tracking)."""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1097,7 +1097,7 @@ def is_game_active(game_id: str) -> bool:
     return state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
 
 
-def end_game(reason: str = "game_over", *, game_id: str) -> dict[str, Any]:
+def end_game(reason: str, *, game_id: str) -> dict[str, Any]:
     """End the game by setting ship destroyed and crew health to 0"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
@@ -1124,8 +1124,8 @@ def end_game(reason: str = "game_over", *, game_id: str) -> dict[str, Any]:
 def save_game_finale(
     game_id: str,
     finale_narrative: str,
-    finale_outcome_type: str = "",
-    finale_image_url: str = "",
+    finale_outcome_type: str,
+    finale_image_url: str,
 ) -> None:
     """Save the LLM-generated game-over finale to game_state."""
     _ensure_game_state(game_id)
@@ -1421,8 +1421,8 @@ def save_game_image(
     type: str,
     image_url: str,
     game_id: str,
-    turn: int | None = None,
-    prompt: str = "",
+    turn: int | None,
+    prompt: str,
 ) -> int | None:
     """Save a game image URL (loading or splash) to the database.
 
@@ -1457,7 +1457,7 @@ def save_game_image(
 def get_random_game_image(
     type: str,
     game_id: str,
-    turn: int | None = None,
+    turn: int | None,
 ) -> str | None:
     """Get a random game image URL by type.
 
@@ -1497,7 +1497,7 @@ def get_random_game_image(
 def get_game_image_count(
     type: str,
     game_id: str,
-    turn: int | None = None,
+    turn: int | None,
 ) -> int:
     """Count images of a given type."""
     try:
@@ -1685,7 +1685,7 @@ def deactivate_npc(npc_key: str) -> bool:
 # ============== Player Kicks ==============
 
 
-def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str = "", *, game_id: str) -> dict[str, Any]:
+def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str, *, game_id: str) -> dict[str, Any]:
     """Record a player kick scoped to a specific game."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1819,8 +1819,8 @@ def get_all_briefings_for_turn(turn: int, game_id: str) -> list[dict[str, Any]]:
 def update_briefing_choice(
     briefing_id: int,
     selected_action_id: str,
-    choice_rationale: str = "",
-    consequence_result: dict[str, Any] | None = None,
+    choice_rationale: str,
+    consequence_result: dict[str, Any] | None,
 ) -> bool:
     """Update a briefing with the player/NPC's choice."""
     conn = get_db_connection()
@@ -1942,7 +1942,7 @@ def create_mission(mission_data: dict[str, Any], game_id: str) -> dict[str, Any]
     return get_mission(mission_id, game_id=game_id)
 
 
-def get_mission(mission_id: int | None = None, *, game_id: str) -> dict[str, Any] | None:
+def get_mission(mission_id: int | None, *, game_id: str) -> dict[str, Any] | None:
     """Get the latest mission for a game, or a specific mission by ID."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1983,7 +1983,7 @@ def update_mission_stage_progress(
     stage_progress: dict[str, Any],
     current_stage: int,
     game_id: str,
-    completed: bool = False,
+    completed: bool,
 ) -> bool:
     """Update stage progress for a mission."""
     conn = get_db_connection()

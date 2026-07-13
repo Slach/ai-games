@@ -45,7 +45,7 @@ from aiogram.utils.deep_linking import create_start_link, decode_payload
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram_sqlite_storage.sqlitestore import SQLStorage
 from aiohttp_socks import ProxyConnector
-from database import expire_game_push_messages
+from database import DB_PATH, expire_game_push_messages
 from player_store import (
     clear_dedup_for_game,
     clear_dedup_for_player,
@@ -232,7 +232,7 @@ def _mark_game_over_sent(player_id: int, game_id: str) -> None:
     set_game_over_dedup(player_id, game_id)
 
 
-async def _download_image(url: str, timeout: int = 30) -> bytes | None:
+async def _download_image(url: str, timeout: int) -> bytes | None:
     """Download an image from URL and return raw bytes."""
     try:
         async with (
@@ -251,8 +251,8 @@ async def _download_image(url: str, timeout: int = 30) -> bytes | None:
 async def _send_split_message(
     target: types.Message,
     text: str,
-    parse_mode: str | None = None,
-    max_len: int = 4096,
+    parse_mode: str | None,
+    max_len: int,
 ) -> None:
     """Send a potentially long message as one or more parts.
 
@@ -346,7 +346,7 @@ def parse_proxy_url(proxy_url: str) -> tuple[str, int, str | None, str | None]:
 
 
 async def create_aiohttp_session(
-    proxy_url: str | None = None,
+    proxy_url: str | None,
 ) -> aiohttp.ClientSession:
     """Create an aiohttp ClientSession with Socks5 proxy support.
 
@@ -375,10 +375,10 @@ async def create_aiohttp_session(
 async def api_request(
     method: str,
     endpoint: str,
-    data: dict | None = None,
-    params: dict | None = None,
-    timeout_total: int = 600,
-    ignore_codes: tuple = (),
+    data: dict | None,
+    params: dict | None,
+    timeout_total: int,
+    ignore_codes: tuple,
 ) -> dict | None:
     """Make a request to the Game Master API (direct connection, no proxy)
 
@@ -420,7 +420,7 @@ async def api_request(
         await session.close()
 
 
-def create_bot_session(proxy_url: str | None = None):
+def create_bot_session(proxy_url: str | None):
     """Create an AiohttpSession for aiogram Bot with SOCKS5 proxy support.
 
     Args:
@@ -454,8 +454,8 @@ def create_bot_session(proxy_url: str | None = None):
 async def send_image_from_api_url(
     bot_or_message: types.Message,
     image_url: str,
-    caption: str = "",
-    reply_markup=None,
+    caption: str,
+    reply_markup,
 ) -> bool:
     """Fetch an image from a URL (from game-server) and send as photo.
 
@@ -495,14 +495,14 @@ def get_player_language(player_id: int) -> str:
     return state.get("language", DEFAULT_LANGUAGE)
 
 
-async def get_game_language(game_id: str, fallback: str = DEFAULT_LANGUAGE) -> str:
+async def get_game_language(game_id: str, fallback: str) -> str:
     """Get the game's stored language from the server.
 
     Falls back to the provided fallback (or DEFAULT_LANGUAGE) when the
     server can't be reached or the game doesn't exist yet.
     """
     try:
-        result = await api_request("GET", "/game/started", params={"game_id": game_id})
+        result = await api_request("GET", "/game/started", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if result and result.get("language"):
             return result["language"]
     except Exception as e:
@@ -510,7 +510,7 @@ async def get_game_language(game_id: str, fallback: str = DEFAULT_LANGUAGE) -> s
     return fallback
 
 
-async def send_random_loading_image(message: types.Message, caption_key: str = "loading_caption", language: str = DEFAULT_LANGUAGE) -> bool:
+async def send_random_loading_image(message: types.Message, caption_key: str, language: str) -> bool:
     """Fetch and send a random loading image from the API with a caption.
 
     Args:
@@ -521,17 +521,17 @@ async def send_random_loading_image(message: types.Message, caption_key: str = "
     Returns True if sent, False otherwise.
     """
     try:
-        result = await api_request("GET", "/content/loading-image")
+        result = await api_request("GET", "/content/loading-image", data=None, params=None, timeout_total=600, ignore_codes=())
         image_url = result.get("image_url") if result else None
         if image_url:
             caption = lang.get_images(language)[caption_key]
-            return await send_image_from_api_url(message, image_url, caption=caption)
+            return await send_image_from_api_url(message, image_url, caption=caption, reply_markup=None)
     except Exception as e:
         logger.warning(f"Failed to get/send loading image: {e}")
     return False
 
 
-async def send_random_splash_image(message: types.Message, caption: str = "", reply_markup=None, game_id: str | None = None) -> bool:
+async def send_random_splash_image(message: types.Message, caption: str, reply_markup, game_id: str | None) -> bool:
     """Fetch and send a random splash image from the API with optional caption.
 
     Args:
@@ -544,7 +544,7 @@ async def send_random_splash_image(message: types.Message, caption: str = "", re
     """
     try:
         params = {"game_id": game_id} if game_id else None
-        result = await api_request("GET", "/content/splash-image", params=params)
+        result = await api_request("GET", "/content/splash-image", data=None, params=params, timeout_total=600, ignore_codes=())
         image_url = result.get("image_url") if result else None
         if image_url:
             return await send_image_from_api_url(message, image_url, caption=caption, reply_markup=reply_markup)
@@ -557,7 +557,7 @@ async def send_question_with_image(
     bot_or_message: types.Message,
     question: dict,
     keyboard: InlineKeyboardMarkup,
-    language: str = DEFAULT_LANGUAGE,
+    language: str,
 ) -> str:
     """Send a question to the player, optionally with an image.
 
@@ -658,7 +658,7 @@ async def send_question_with_image(
 async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
     """Check if player has an existing game profile"""
     try:
-        profile = await api_request("GET", f"/players/{player_id}/profile")
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
         return profile
     except Exception:
         logger.warning(
@@ -669,7 +669,7 @@ async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
         return None
 
 
-def _build_share_text(msgs: dict, game_title: str = "") -> str:
+def _build_share_text(msgs: dict, game_title: str) -> str:
     """Build pre-filled text for t.me/share/url?text= parameter."""
     base = msgs.get("share_text", "Join the game")
     if game_title:
@@ -686,7 +686,10 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         result = await api_request(
             "POST",
             f"/onboarding/{session_id}/complete",
+            data=None,
+            params=None,
             timeout_total=300,
+            ignore_codes=(),
         )
         if result is None:
             logger.error(f"Onboarding completion returned no result for player {player_id}", stack_info=True)
@@ -750,7 +753,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         photo=photo,
                         caption=onboarding_text,
                         parse_mode="Markdown",
-                        reply_markup=create_main_menu_keyboard(),
+                        reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                     )
                 else:
                     logger.warning(f"Failed to download avatar: {resp.status}")
@@ -758,7 +761,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                         chat_id=player_id,
                         text=onboarding_text,
                         parse_mode="Markdown",
-                        reply_markup=create_main_menu_keyboard(),
+                        reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                     )
         else:
             logger.info(f"No avatar URL for player {player_id}")
@@ -766,7 +769,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 chat_id=player_id,
                 text=onboarding_text,
                 parse_mode="Markdown",
-                reply_markup=create_main_menu_keyboard(),
+                reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
             )
 
         # If game already started, send mission info with bridge image
@@ -778,7 +781,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     mission = await api_request(
                         "GET",
                         "/game/mission",
+                        data=None,
                         params={"game_id": game_id_for_mission},
+                        timeout_total=600,
                         ignore_codes=(404,),
                     )
                 except Exception:
@@ -794,7 +799,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     bridge = await api_request(
                         "GET",
                         "/game/bridge-image",
+                        data=None,
                         params={"game_id": game_id_for_mission},
+                        timeout_total=600,
                         ignore_codes=(404,),
                     )
                 except Exception:
@@ -809,7 +816,10 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     game_state = await api_request(
                         "GET",
                         "/game/state",
+                        data=None,
                         params={"game_id": game_id_for_mission},
+                        timeout_total=600,
+                        ignore_codes=(),
                     )
                 except Exception:
                     logger.warning(
@@ -892,7 +902,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         global BOT_USERNAME
         if not BOT_USERNAME:
             try:
-                bot_me = await call_with_retry(lambda: bot.get_me(), max_retries=3)
+                bot_me = await call_with_retry(lambda: bot.get_me(), max_retries=3, base_delay=1.0, max_delay=10.0)
                 BOT_USERNAME = bot_me.username
                 logger.info(f"Bot username resolved on demand (avatar): {BOT_USERNAME}")
             except Exception as e:
@@ -944,7 +954,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
             onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
             # Try to get profile info for fallback message
             try:
-                profile = await api_request("GET", f"/players/{player_id}/profile")
+                profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
                 if profile is None:
                     profile = {}
                 text = onboarding_msgs["onboarding_complete"].format(
@@ -967,7 +977,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     chat_id=player_id,
                     text=text,
                     parse_mode="Markdown",
-                    reply_markup=create_main_menu_keyboard(),
+                    reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                 )
             except Exception:
                 # Fallback: send without Markdown if parsing fails
@@ -975,7 +985,7 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                 await bot.send_message(
                     chat_id=player_id,
                     text=plain_text,
-                    reply_markup=create_main_menu_keyboard(),
+                    reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                 )
         except Exception:
             logger.error(f"Failed to send fallback message to player {player_id}", exc_info=True)
@@ -1043,11 +1053,11 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
         bridge = None
         if game_id:
             try:
-                mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
+                mission = await api_request("GET", "/game/mission", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
             except Exception as e:
                 logger.error(f"Failed to fetch mission for game {game_id}: {e}", exc_info=True)
             try:
-                bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
+                bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
             except Exception as e:
                 logger.error(f"Failed to fetch bridge image for game {game_id}: {e}", exc_info=True)
 
@@ -1105,7 +1115,7 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
         logger.error(f"Broadcast game started failed: {e}", exc_info=True)
 
 
-def wrap_text(text: str, width: int = 35) -> str:
+def wrap_text(text: str, width: int) -> str:
     """Wrap text into multiple lines for Telegram button.
 
     Telegram inline buttons have limited width. This function splits
@@ -1132,7 +1142,7 @@ def wrap_text(text: str, width: int = 35) -> str:
     return "\n".join(lines)
 
 
-def create_onboarding_keyboard(options: list, question_id: int, selected_index: int | None = None) -> InlineKeyboardMarkup:
+def create_onboarding_keyboard(options: list, question_id: int, selected_index: int | None) -> InlineKeyboardMarkup:
     """Create inline keyboard for onboarding options.
 
     Buttons show numbers [1] [2] [3] etc. attached to the message
@@ -1199,7 +1209,7 @@ async def _maybe_show_sg_progress_message(
     await message.answer(msgs["generating_next_question"])
 
 
-def create_main_menu_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
+def create_main_menu_keyboard(language: str) -> ReplyKeyboardMarkup:
     """Create compact main menu keyboard with horizontal button layout"""
     menu = lang.get_menu(language)
     return ReplyKeyboardMarkup(
@@ -1211,7 +1221,7 @@ def create_main_menu_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboard
     )
 
 
-def create_action_keyboard(actions: list, selected_action_id: str | None = None) -> InlineKeyboardMarkup:
+def create_action_keyboard(actions: list, selected_action_id: str | None) -> InlineKeyboardMarkup:
     """Create inline keyboard for game actions
 
     Buttons show numbers [1] [2] [3] etc. instead of full action text.
@@ -1243,7 +1253,7 @@ def create_game_info_keyboard(game_id: str) -> InlineKeyboardMarkup:
 # ============== Handlers ==============
 
 
-async def create_new_game(player_id: int, language: str = "ru", schedule: str = "8h") -> tuple[str, str]:
+async def create_new_game(player_id: int, language: str, schedule: str) -> tuple[str, str]:
     """Create a new game with the given language and turn schedule.
 
     Returns (game_id, game_name).
@@ -1252,6 +1262,9 @@ async def create_new_game(player_id: int, language: str = "ru", schedule: str = 
         "POST",
         "/admin/create-game",
         data={"name": f"Game by {player_id}", "language": language, "schedule": schedule},
+        params=None,
+        timeout_total=600,
+        ignore_codes=(),
     )
     if not result:
         raise Exception("No response from /admin/create-game")
@@ -1399,13 +1412,13 @@ async def lang_set_callback(callback: types.CallbackQuery):
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
 
-async def show_game_selection(message: types.Message, state: FSMContext, language: str = ""):
+async def show_game_selection(message: types.Message, state: FSMContext, language: str):
     """Show available games or option to create a new one."""
     effective_lang = language or DEFAULT_LANGUAGE
     msgs = lang.get_onboarding(effective_lang)
 
     try:
-        result = await api_request("GET", "/admin/list-games")
+        result = await api_request("GET", "/admin/list-games", data=None, params=None, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
 
         keyboard = []
@@ -1457,8 +1470,8 @@ async def start_onboarding_flow(
     state: FSMContext,
     player_id: int,
     game_id: str,
-    player_name: str = "",
-    language: str = "",
+    player_name: str,
+    language: str,
 ):
     """Start onboarding flow with a specific game_id and optional player_name.
 
@@ -1478,7 +1491,9 @@ async def start_onboarding_flow(
                 "player_name": player_name,
                 "language": effective_language,
             },
+            params=None,
             timeout_total=120,
+            ignore_codes=(),
         )
         logger.info(f"Onboarding start response: {result}")
         if result is None:
@@ -1529,7 +1544,7 @@ async def start_onboarding_flow(
             if game_title:
                 welcome_text = f"**{game_title}**\n\n{welcome_text}" if welcome_text else f"**{game_title}**"
 
-            splash_sent = await send_random_splash_image(message, welcome_text, game_id=game_id)
+            splash_sent = await send_random_splash_image(message, welcome_text, None, game_id)
             if not splash_sent:
                 await message.answer(welcome_text, parse_mode="Markdown")
 
@@ -1538,7 +1553,7 @@ async def start_onboarding_flow(
             if question.get("image_url"):
                 logger.info(f"Question has image: {question['image_url']}")
 
-            keyboard = create_onboarding_keyboard(question["options"], question["id"])
+            keyboard = create_onboarding_keyboard(question["options"], question["id"], None)
             await send_question_with_image(message, question, keyboard, effective_language)
             await state.set_state(OnboardingState.waiting_for_answer)
 
@@ -1592,7 +1607,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             game_lang = player_lang
             game_name = ""
             try:
-                result = await api_request("GET", "/admin/list-games")
+                result = await api_request("GET", "/admin/list-games", data=None, params=None, timeout_total=600, ignore_codes=())
                 games = result.get("games", []) if result else []
                 for g in games:
                     if g.get("game_id") == game_id:
@@ -1787,7 +1802,7 @@ async def _enter_name_for_game(
     message: types.Message,
     state: FSMContext,
     game_id: str,
-    fallback_lang: str = DEFAULT_LANGUAGE,
+    fallback_lang: str,
 ) -> None:
     """Ask for the player's name to begin onboarding for a specific game.
 
@@ -1798,7 +1813,7 @@ async def _enter_name_for_game(
     game_lang = fallback_lang
     game_name = ""
     try:
-        result = await api_request("GET", "/admin/list-games")
+        result = await api_request("GET", "/admin/list-games", data=None, params=None, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
         for g in games:
             if g.get("game_id") == game_id:
@@ -1839,7 +1854,7 @@ async def _show_deeplink_game_conflict(
     new_name = new_game_id
     current_name = current_game_id
     try:
-        result = await api_request("GET", "/admin/list-games")
+        result = await api_request("GET", "/admin/list-games", data=None, params=None, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
         names = {g.get("game_id"): g.get("name", "") for g in games}
         if names.get(new_game_id):
@@ -1907,7 +1922,7 @@ async def deeplink_conflict_callback(callback: types.CallbackQuery, state: FSMCo
         await message.answer(
             msgs["deeplink_back_done"],
             parse_mode="Markdown",
-            reply_markup=create_main_menu_keyboard(),
+            reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
         )
 
 
@@ -1939,7 +1954,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 current_question_id=current_question_id,
                 current_options=current_options,
             )
-            keyboard = create_onboarding_keyboard(current_options, current_question_id)
+            keyboard = create_onboarding_keyboard(current_options, current_question_id, None)
             question = {
                 "id": current_question_id,
                 "text": current_question_text,
@@ -1954,7 +1969,9 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 session_data = await api_request(
                     "GET",
                     f"/onboarding/{session_id}",
+                    data=None,
                     params={"language": player_lang},
+                    timeout_total=600,
                     ignore_codes=(404,),
                 )
             except Exception as e:
@@ -1997,7 +2014,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     current_question_text=next_question["text"],
                     current_question_image_url=next_question.get("image_url"),
                 )
-                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
                 await send_question_with_image(message, next_question, keyboard, player_lang)
                 await state.set_state(OnboardingState.waiting_for_answer)
             else:
@@ -2077,7 +2094,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 return
 
             # Player already has a profile - welcome back
-            await send_random_loading_image(message, language=player_lang)
+            await send_random_loading_image(message, caption_key="loading_caption", language=player_lang)
 
             welcome_text = lang.get_onboarding(player_lang)["welcome_back"].format(
                 role=profile["role"],
@@ -2105,7 +2122,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                                     photo=photo,
                                     caption=welcome_text,
                                     parse_mode="Markdown",
-                                    reply_markup=create_main_menu_keyboard(),
+                                    reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                                 )
                                 avatar_sent = True
                 except Exception as avatar_err:
@@ -2115,14 +2132,14 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 await message.answer(
                     welcome_text,
                     parse_mode="Markdown",
-                    reply_markup=create_main_menu_keyboard(),
+                    reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                 )
 
             # Send invite link for existing player
             global BOT_USERNAME
             if not BOT_USERNAME and message.bot is not None:
                 try:
-                    bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3)  # type: ignore[union-attr]
+                    bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3, base_delay=1.0, max_delay=10.0)  # type: ignore[union-attr]
                     BOT_USERNAME = bot_me.username
                     logger.info(f"Bot username resolved on demand (start): {BOT_USERNAME}")
                 except Exception as e:
@@ -2133,7 +2150,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     # Fetch game title for share text
                     game_title = ""
                     try:
-                        title_data = await api_request("GET", "/game/title", params={"game_id": game_id})
+                        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
                         if title_data and title_data.get("title"):
                             game_title = title_data["title"]
                     except Exception as e:
@@ -2191,7 +2208,7 @@ async def cmd_profile(message: types.Message):
     player_lang = get_player_language(player_id)
 
     try:
-        profile = await api_request("GET", f"/players/{player_id}/profile")
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
         if profile is None:
             msgs = lang.get_profile(player_lang)
             await message.answer(msgs["no_profile"])
@@ -2275,14 +2292,14 @@ async def cmd_turn(message: types.Message):
         msgs = lang.get_current_turn(player_lang)
 
         # ── Get player's game ID ────────────────────────────────────
-        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
         if not profile or not profile.get("game_id"):
             await message.answer(msgs["error"].format(error="No active game found"))
             return
         game_id = profile["game_id"]
 
         # ── Check game state ────────────────────────────────────────
-        state = await api_request("GET", "/game/state", params={"game_id": game_id})
+        state = await api_request("GET", "/game/state", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if not state:
             await message.answer(lang.get_errors(player_lang)["api_error"])
             return
@@ -2302,7 +2319,7 @@ async def cmd_turn(message: types.Message):
             reason = reason_map.get(game_status, game_status)
 
             try:
-                finale = await api_request("GET", "/game/finale", params={"game_id": game_id}, ignore_codes=(404,))
+                finale = await api_request("GET", "/game/finale", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
             except Exception:
                 logger.error(f"Failed to fetch finale for player {player_id}", exc_info=True)
                 finale = None
@@ -2312,7 +2329,7 @@ async def cmd_turn(message: types.Message):
                 finale_image_url = finale.get("finale_image_url")
                 if finale_image_url:
                     try:
-                        img_data = await _download_image(finale_image_url)
+                        img_data = await _download_image(finale_image_url, 30)
                         if img_data:
                             photo = BufferedInputFile(img_data, filename="finale.png")
                             title_text = msgs["game_over_victory_title"] if finale.get("finale_outcome_type") == "victory" else msgs["game_over_defeat_title"]
@@ -2339,6 +2356,9 @@ async def cmd_turn(message: types.Message):
             briefing = await api_request(
                 "GET",
                 f"/game/briefing/{player_id}/{current_turn_num}",
+                data=None,
+                params=None,
+                timeout_total=600,
                 ignore_codes=(404,),
             )
         except Exception:
@@ -2360,7 +2380,9 @@ async def cmd_turn(message: types.Message):
                 turn_data = await api_request(
                     "GET",
                     f"/game/turn/{current_turn_num}",
+                    data=None,
                     params={"game_id": briefing.get("game_id", "default_game")},
+                    timeout_total=600,
                     ignore_codes=(404,),
                 )
                 if turn_data:
@@ -2375,7 +2397,7 @@ async def cmd_turn(message: types.Message):
             briefing_image_url = briefing.get("briefing_image_url")
             if briefing_image_url:
                 try:
-                    img_data = await _download_image(briefing_image_url)
+                    img_data = await _download_image(briefing_image_url, 30)
                     if img_data:
                         photo = BufferedInputFile(img_data, filename="scene.png")
                         caption = msgs["title"].format(turn=briefing["turn"])
@@ -2390,7 +2412,7 @@ async def cmd_turn(message: types.Message):
             avatar_url = briefing.get("avatar_url")
             if avatar_url:
                 try:
-                    img_data = await _download_image(avatar_url)
+                    img_data = await _download_image(avatar_url, 30)
                     if img_data:
                         photo = BufferedInputFile(img_data, filename="avatar.png")
                         await message.answer_photo(photo=photo)
@@ -2402,7 +2424,7 @@ async def cmd_turn(message: types.Message):
             chosen_action_url = briefing.get("chosen_action_url")
             if chosen_action_url:
                 try:
-                    img_data = await _download_image(chosen_action_url)
+                    img_data = await _download_image(chosen_action_url, 30)
                     if img_data:
                         photo = BufferedInputFile(img_data, filename="action.png")
                         await message.answer_photo(photo=photo)
@@ -2422,14 +2444,14 @@ async def cmd_turn(message: types.Message):
                 crew_text = msgs["crew_dialogues"] + "\n" + "\n---\n".join(dialogue_lines)
 
                 # Send briefing
-                await _send_split_message(message, briefing_text, parse_mode="Markdown")
+                await _send_split_message(message, briefing_text, parse_mode="Markdown", max_len=4096)
                 # Send dialogues
-                await _send_split_message(message, crew_text, parse_mode="Markdown")
+                await _send_split_message(message, crew_text, parse_mode="Markdown", max_len=4096)
                 # Send actions
                 await message.answer(actions_block, parse_mode="Markdown", reply_markup=keyboard)
             else:
                 full = briefing_text + actions_block
-                await _send_split_message(message, full, parse_mode="Markdown")
+                await _send_split_message(message, full, parse_mode="Markdown", max_len=4096)
                 if keyboard:
                     await message.answer(
                         msgs["select_action"],
@@ -2438,7 +2460,7 @@ async def cmd_turn(message: types.Message):
                     )
         else:
             # Legacy system: show global story — split into parts
-            turn_data = await api_request("GET", "/game/current-turn", params={"game_id": game_id})
+            turn_data = await api_request("GET", "/game/current-turn", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
             if turn_data is None:
                 await message.answer(lang.get_errors(player_lang)["api_error"])
                 return
@@ -2451,7 +2473,9 @@ async def cmd_turn(message: types.Message):
                 scene_resp = await api_request(
                     "GET",
                     "/game/bridge-image",
+                    data=None,
                     params={"turn": turn_number, "game_id": turn_data.get("game_id", "default_game")},
+                    timeout_total=600,
                     ignore_codes=(404,),
                 )
                 if scene_resp:
@@ -2464,7 +2488,7 @@ async def cmd_turn(message: types.Message):
 
             if scene_image_url:
                 try:
-                    img_data = await _download_image(scene_image_url)
+                    img_data = await _download_image(scene_image_url, 30)
                     if img_data:
                         photo = BufferedInputFile(img_data, filename="scene.png")
                         caption = msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"])
@@ -2478,6 +2502,7 @@ async def cmd_turn(message: types.Message):
                             message,
                             msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"]),
                             parse_mode="Markdown",
+                            max_len=4096,
                         )
                 except Exception as e:
                     logger.warning(f"[TURN] Failed to send scene image: {e}")
@@ -2486,12 +2511,14 @@ async def cmd_turn(message: types.Message):
                         message,
                         msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"]),
                         parse_mode="Markdown",
+                        max_len=4096,
                     )
             else:
                 await _send_split_message(
                     message,
                     msgs["title"].format(turn=turn_number) + "\n\n" + msgs["story"].format(story=turn_data["story"]),
                     parse_mode="Markdown",
+                    max_len=4096,
                 )
 
             # Part 2: Crew dialogues (if any)
@@ -2501,12 +2528,12 @@ async def cmd_turn(message: types.Message):
                     line = f"*{d['npc']}*: {d['dialogue']}"
                     dialogue_lines.append(line)
                 crew_text = msgs["crew_dialogues"] + "\n" + "\n---\n".join(dialogue_lines)
-                await _send_split_message(message, crew_text, parse_mode="Markdown")
+                await _send_split_message(message, crew_text, parse_mode="Markdown", max_len=4096)
 
             # Part 3: Actions + keyboard (or selected action if already chosen)
             player_actions = turn_data.get("player_actions", [])
             if player_actions:
-                keyboard = create_action_keyboard(player_actions)
+                keyboard = create_action_keyboard(player_actions, None)
                 actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(player_actions)])
                 await message.answer(
                     msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"],
@@ -2530,7 +2557,7 @@ async def cmd_bridge(message: types.Message):
 
     try:
         # Resolve the player's game before fetching game-scoped data
-        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
         if not profile or not profile.get("game_id"):
             await message.answer(lang.get_bridge(player_lang)["error"])
             return
@@ -2543,14 +2570,14 @@ async def cmd_bridge(message: types.Message):
         # Get mission info
         mission = None
         try:
-            mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
+            mission = await api_request("GET", "/game/mission", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
         except Exception as e:
             logger.error(f"Failed to fetch mission for game {game_id}: {e}", exc_info=True)
 
         # Get bridge image
         bridge = None
         try:
-            bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
+            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
         except Exception as e:
             logger.error(f"Failed to fetch bridge image for game {game_id}: {e}", exc_info=True)
 
@@ -2559,7 +2586,7 @@ async def cmd_bridge(message: types.Message):
             if mission:
                 caption += "\n\n" + bridge_msgs["mission_header"].format(name=mission.get("name", ""))
                 caption += "\n\n" + bridge_msgs["mission_desc"].format(description=mission.get("description", ""))
-            await send_image_from_api_url(message, bridge["image_url"], caption=caption)
+            await send_image_from_api_url(message, bridge["image_url"], caption=caption, reply_markup=None)
         else:
             await message.answer(bridge_msgs["error"])
     except Exception as e:
@@ -2577,7 +2604,7 @@ async def cmd_team(message: types.Message):
 
     try:
         # Get player profile to find game_id
-        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
         if not profile:
             await message.answer(msgs["no_team"])
             return
@@ -2588,7 +2615,7 @@ async def cmd_team(message: types.Message):
             return
 
         # Fetch team data
-        team_data = await api_request("GET", "/game/team", params={"game_id": game_id})
+        team_data = await api_request("GET", "/game/team", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if not team_data or not team_data.get("members"):
             await message.answer(msgs["no_team"])
             return
@@ -2655,6 +2682,9 @@ async def cmd_team(message: types.Message):
                 batch = media_group[i : i + 10]
                 await call_with_retry(
                     lambda: message.answer_media_group(media=batch),
+                    max_retries=3,
+                    base_delay=1.0,
+                    max_delay=10.0,
                 )
 
         # Send roster text after images
@@ -2663,6 +2693,9 @@ async def cmd_team(message: types.Message):
                 roster_text,
                 parse_mode="Markdown",
             ),
+            max_retries=3,
+            base_delay=1.0,
+            max_delay=10.0,
         )
 
     except Exception as e:
@@ -2678,11 +2711,11 @@ async def cmd_invite(message: types.Message):
     logger.info("[HANDLER] cmd_invite")
 
     try:
-        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
         if not profile:
             await message.answer(
                 lang.get_profile(get_player_language(player_id))["no_profile"],
-                reply_markup=create_main_menu_keyboard(),
+                reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
             )
             return
 
@@ -2690,7 +2723,7 @@ async def cmd_invite(message: types.Message):
         if not game_id:
             await message.answer(
                 "No active game found. Use /start to join a game.",
-                reply_markup=create_main_menu_keyboard(),
+                reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
             )
             return
 
@@ -2700,28 +2733,28 @@ async def cmd_invite(message: types.Message):
         if message.bot is None:
             await message.answer(
                 "Bot username is not available. Invite links cannot be generated at this moment.",
-                reply_markup=create_main_menu_keyboard(),
+                reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
             )
             return
 
         global BOT_USERNAME
         if not BOT_USERNAME:
             try:
-                bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3)  # type: ignore[union-attr]
+                bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3, base_delay=1.0, max_delay=10.0)  # type: ignore[union-attr]
                 BOT_USERNAME = bot_me.username
                 logger.info(f"Bot username resolved on demand: {BOT_USERNAME}")
             except Exception as e:
                 logger.error("Failed to fetch bot username on demand", exc_info=e)
                 await message.answer(
                     "Bot username is not available. Invite links cannot be generated at this moment.",
-                    reply_markup=create_main_menu_keyboard(),
+                    reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                 )
                 return
 
         # Fetch game title
         game_title = ""
         try:
-            title_data = await api_request("GET", "/game/title", params={"game_id": game_id})
+            title_data = await api_request("GET", "/game/title", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
             if title_data and title_data.get("title"):
                 game_title = title_data["title"]
         except Exception as e:
@@ -2731,11 +2764,11 @@ async def cmd_invite(message: types.Message):
         mission = None
         bridge = None
         try:
-            mission = await api_request("GET", "/game/mission", params={"game_id": game_id}, ignore_codes=(404,))
+            mission = await api_request("GET", "/game/mission", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
         except Exception as e:
             logger.error(f"Failed to fetch mission for invite: {e}", exc_info=True)
         try:
-            bridge = await api_request("GET", "/game/bridge-image", params={"game_id": game_id}, ignore_codes=(404,))
+            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
         except Exception as e:
             logger.error(f"Failed to fetch bridge image for invite: {e}", exc_info=True)
 
@@ -2756,7 +2789,7 @@ async def cmd_invite(message: types.Message):
                 mission_description=escape_markdown(short_desc),
                 invite_url=escape_markdown(invite_url),
             )
-            sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption)
+            sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption, reply_markup=None)
             if not sent:
                 await message.answer(caption, parse_mode="Markdown")
         else:
@@ -2769,7 +2802,7 @@ async def cmd_invite(message: types.Message):
                 game_title=escape_markdown(clean_title),
                 invite_url=escape_markdown(invite_url),
             )
-            splash_sent = await send_random_splash_image(message, caption=caption, game_id=game_id)
+            splash_sent = await send_random_splash_image(message, caption, None, game_id)
             if not splash_sent:
                 await message.answer(caption, parse_mode="Markdown")
 
@@ -2788,7 +2821,7 @@ async def cmd_invite(message: types.Message):
         logger.error(f"Failed to send invite for player {player_id}: {e}", exc_info=True)
         await message.answer(
             "Failed to generate invite link. Please try again later.",
-            reply_markup=create_main_menu_keyboard(),
+            reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
         )
 
 
@@ -2869,7 +2902,9 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
             "POST",
             "/admin/reset-player",
             data={"player_id": player_id, "language": player_lang},
+            params=None,
             timeout_total=120,
+            ignore_codes=(),
         )
     except Exception as e:
         logger.error(f"[RESET] API call failed for player {player_id}: {e}", exc_info=True)
@@ -2919,7 +2954,7 @@ async def cmd_help(message: types.Message):
     # Fetch game title dynamically from API
     game_title = "🎮 Game"
     try:
-        title_data = await api_request("GET", "/game/title", params={"game_id": "default_game"})
+        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": "default_game"}, timeout_total=600, ignore_codes=())
         if title_data and title_data.get("title"):
             game_title = f"🎮 {title_data['title']}"
     except Exception as e:
@@ -3014,7 +3049,9 @@ async def cmd_gm_start(message: types.Message):
             "POST",
             "/admin/start-game",
             data={"game_id": game_id, "language": game_lang},
+            params=None,
             timeout_total=60,
+            ignore_codes=(),
         )
         if result and result.get("status") == "accepted":
             logger.info(f"Start game {game_id} accepted by server")
@@ -3075,7 +3112,9 @@ async def cmd_gm_kick(message: types.Message):
             "POST",
             "/admin/kick-player",
             data={"role_key": role_key, "reason": reason, "game_id": game_id},
+            params=None,
             timeout_total=120,
+            ignore_codes=(),
         )
         if result and result.get("status") == "success":
             kicked_id = result.get("kicked_player_id")
@@ -3113,7 +3152,7 @@ async def cmd_gm_list(message: types.Message):
         return
 
     try:
-        result = await api_request("GET", "/admin/list-games", params={"include_ended": "true"})
+        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": "true"}, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
 
         if not games:
@@ -3388,8 +3427,10 @@ async def cmd_gm_continue(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/continue-game",
+            data=None,
             params={"game_id": game_id, "language": game_lang},
             timeout_total=60,
+            ignore_codes=(),
         )
         if result and result.get("status") == "accepted":
             turn_num = result.get("turn", 1)
@@ -3448,8 +3489,10 @@ async def cmd_gm_turn(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/regenerate-turn",
+            data=None,
             params={"game_id": game_id, "language": game_lang},
             timeout_total=60,
+            ignore_codes=(),
         )
         if result and result.get("status") == "accepted":
             turn_num = result.get("turn", 1)
@@ -3509,8 +3552,10 @@ async def cmd_gm_restart(message: types.Message):
         result = await api_request(
             "POST",
             "/admin/restart-game",
+            data=None,
             params={"game_id": game_id, "language": game_lang},
             timeout_total=120,
+            ignore_codes=(),
         )
         if not result or result.get("status") != "success":
             await message.answer(gm_msgs["restart_game_error"].format(error=result))
@@ -3523,7 +3568,7 @@ async def cmd_gm_restart(message: types.Message):
         # (2) Clear per-(player, game) delivery dedup so the new epoch's
         #     regenerated turns deliver fresh instead of being skipped.
         try:
-            expired = expire_game_push_messages(game_id)
+            expired = expire_game_push_messages(game_id, DB_PATH)
             cleared = clear_dedup_for_game(game_id)
             for key in [k for k in _last_sent_briefing_turn if k[1] == game_id]:
                 _last_sent_briefing_turn.pop(key, None)
@@ -3544,7 +3589,9 @@ async def cmd_gm_restart(message: types.Message):
                 "language": game_lang,
                 "was_restarted": True,
             },
+            params=None,
             timeout_total=60,
+            ignore_codes=(),
         )
         if start_result and start_result.get("status") == "accepted":
             logger.info(f"Restart game {game_id}: reset complete, background generation started")
@@ -3601,7 +3648,7 @@ async def cmd_gm_status(message: types.Message):
     await message.answer(gm_msgs["status_loading"].format(game_id=game_id), parse_mode="Markdown")
 
     try:
-        result = await api_request("GET", "/game/status", params={"game_id": game_id})
+        result = await api_request("GET", "/game/status", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if not result:
             await message.answer(gm_msgs["status_error"].format(error="No response"))
             return
@@ -3769,7 +3816,9 @@ async def cmd_gm_lang(message: types.Message):
             "POST",
             "/admin/set-language",
             data={"game_id": game_id, "language": lang_code},
+            params=None,
             timeout_total=120,
+            ignore_codes=(),
         )
         if result and result.get("status") == "success":
             new_title = result.get("title", "")
@@ -3806,6 +3855,9 @@ async def handle_voice_message(message: types.Message):
                 "message": "[voice message]",
                 "message_type": "voice",
             },
+            params=None,
+            timeout_total=600,
+            ignore_codes=(),
         )
     except Exception as e:
         logger.error(f"Failed to send voice message to API: {e}", exc_info=True)
@@ -3834,6 +3886,9 @@ async def handle_text_message(message: types.Message):
                 "message": text_content,
                 "message_type": "text",
             },
+            params=None,
+            timeout_total=600,
+            ignore_codes=(),
         )
 
         msgs = lang.get_messages(player_lang)
@@ -3948,6 +4003,8 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             f"/onboarding/{session_id}/answer",
             data={"question_id": current_question_id, "answer": answer_value},
             params={"language": DEFAULT_LANGUAGE},
+            timeout_total=600,
+            ignore_codes=(),
         )
         logger.info(f"Onboarding answer response: {result}")
 
@@ -3973,7 +4030,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
 
             try:
-                verify_profile = await api_request("GET", f"/players/{player_id}/profile")
+                verify_profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
                 logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
             except Exception as verify_error:
                 logger.error(f"Profile verification failed for player {player_id}: {verify_error}", exc_info=True)
@@ -4009,7 +4066,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                     current_question_text=next_question["text"],
                     current_question_image_url=next_question.get("image_url"),
                 )
-                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
                 await send_question_with_image(msg, next_question, keyboard, player_lang)
 
     except Exception as e:
@@ -4142,6 +4199,8 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             f"/onboarding/{session_id}/answer",
             data={"question_id": current_question_id, "answer": answer_value},
             params={"language": DEFAULT_LANGUAGE},
+            timeout_total=600,
+            ignore_codes=(),
         )
         logger.info(f"Onboarding answer response: {result}")
 
@@ -4165,7 +4224,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
 
             try:
-                verify_profile = await api_request("GET", f"/players/{player_id}/profile")
+                verify_profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
                 logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
             except Exception as verify_error:
                 logger.error(f"Profile verification failed for player {player_id}: {verify_error}", exc_info=True)
@@ -4207,7 +4266,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                     current_question_text=next_question["text"],
                     current_question_image_url=next_question.get("image_url"),
                 )
-                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"])
+                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
                 await send_question_with_image(message, next_question, keyboard, get_player_language(player_id))
 
     except Exception as e:
@@ -4236,13 +4295,13 @@ async def action_selection(callback: types.CallbackQuery):
 
     try:
         # Resolve the player's game so the current turn matches their game
-        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
         if not profile or not profile.get("game_id"):
             raise Exception("No active game found")
         game_id = profile["game_id"]
 
         # Get current turn to validate
-        turn_data = await api_request("GET", "/game/current-turn", params={"game_id": game_id})
+        turn_data = await api_request("GET", "/game/current-turn", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if turn_data is None:
             raise Exception("No current turn data from API")
 
@@ -4256,6 +4315,9 @@ async def action_selection(callback: types.CallbackQuery):
                 "action_id": action_id,
                 "choice": "selected",
             },
+            params=None,
+            timeout_total=600,
+            ignore_codes=(),
         )
 
         # Mark the selected action on the inline keyboard with ✅
@@ -4271,7 +4333,7 @@ async def action_selection(callback: types.CallbackQuery):
         action_lang = await get_game_language("default_game", fallback=player_lang)
         msgs = lang.get_actions(action_lang)
         if callback.message:
-            await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard())
+            await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE))
 
     except Exception as e:
         logger.error(f"Failed to record action for player {player_id}: {e}", exc_info=True)
@@ -4304,13 +4366,13 @@ async def refresh_game(callback: types.CallbackQuery):
 
     try:
         # Resolve the player's game so the current turn matches their game
-        profile = await api_request("GET", f"/players/{player_id}/profile", ignore_codes=(404,))
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
         if not profile or not profile.get("game_id"):
             raise Exception("No active game found")
         game_id = profile["game_id"]
 
         # Refresh current turn
-        turn_data = await api_request("GET", "/game/current-turn", params={"game_id": game_id})
+        turn_data = await api_request("GET", "/game/current-turn", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if turn_data is None:
             raise Exception("No current turn data from API")
 
@@ -4330,7 +4392,7 @@ async def refresh_game(callback: types.CallbackQuery):
             await callback.message.edit_text(
                 main_text,
                 parse_mode="Markdown",
-                reply_markup=create_action_keyboard(turn_data.get("player_actions", [])),
+                reply_markup=create_action_keyboard(turn_data.get("player_actions", []), None),
             )
             # Crew dialogues as a separate message (avoids 4096 limit)
             if crew_dialogues_text:
@@ -4359,7 +4421,7 @@ async def main():
     storage = SQLStorage(db_path=db_path, serializing_method="json")
 
     # Create aiohttp session with Socks5 proxy for Telegram API
-    bot_session = create_bot_session()
+    bot_session = create_bot_session(TELEGRAM_SOCKS_PROXY)
 
     # Initialize bot and dispatcher with SQLite storage and proxy session
     bot = Bot(token=BOT_TOKEN, session=bot_session)
@@ -4372,7 +4434,7 @@ async def main():
     try:
         from retry import call_with_retry
 
-        bot_me = await call_with_retry(lambda: bot.get_me(), max_retries=3)
+        bot_me = await call_with_retry(lambda: bot.get_me(), max_retries=3, base_delay=1.0, max_delay=10.0)
         BOT_USERNAME = bot_me.username
         logger.info(f"Bot username: {BOT_USERNAME}")
     except Exception as e:

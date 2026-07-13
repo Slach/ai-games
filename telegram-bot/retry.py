@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 async def call_with_retry(
     fn: Callable[[], Any],
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 10.0,
+    max_retries: int,
+    base_delay: float,
+    max_delay: float,
 ) -> Any:
     """Call an async function with exponential backoff on network errors.
 

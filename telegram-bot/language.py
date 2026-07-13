@@ -343,7 +343,7 @@ TEAM = {
 }
 
 
-def get_team(language: str = LANGUAGE_RU):
+def get_team(language: str):
     """Get team roster messages for a specific language"""
     return TEAM.get(language, TEAM[LANGUAGE_RU])
 
@@ -359,7 +359,7 @@ NOTIFICATIONS = {
 }
 
 
-def get_notifications(language: str = LANGUAGE_RU):
+def get_notifications(language: str):
     """Get notification messages for a specific language"""
     return NOTIFICATIONS.get(language, NOTIFICATIONS[LANGUAGE_RU])
 
@@ -592,62 +592,62 @@ GM_COMMANDS = {
 }
 
 
-def get_onboarding(language: str = LANGUAGE_RU):
+def get_onboarding(language: str):
     """Get onboarding messages for a specific language"""
     return ONBOARDING.get(language, ONBOARDING[LANGUAGE_RU])
 
 
-def get_help(language: str = LANGUAGE_RU):
+def get_help(language: str):
     """Get help messages for a specific language"""
     return HELP.get(language, HELP[LANGUAGE_RU])
 
 
-def get_profile(language: str = LANGUAGE_RU):
+def get_profile(language: str):
     """Get profile messages for a specific language"""
     return PROFILE.get(language, PROFILE[LANGUAGE_RU])
 
 
-def get_current_turn(language: str = LANGUAGE_RU):
+def get_current_turn(language: str):
     """Get current turn messages for a specific language"""
     return CURRENT_TURN.get(language, CURRENT_TURN[LANGUAGE_RU])
 
 
-def get_actions(language: str = LANGUAGE_RU):
+def get_actions(language: str):
     """Get action messages for a specific language"""
     return ACTIONS.get(language, ACTIONS[LANGUAGE_RU])
 
 
-def get_messages(language: str = LANGUAGE_RU):
+def get_messages(language: str):
     """Get message handling strings for a specific language"""
     return MESSAGES.get(language, MESSAGES[LANGUAGE_RU])
 
 
-def get_errors(language: str = LANGUAGE_RU):
+def get_errors(language: str):
     """Get error messages for a specific language"""
     return ERRORS.get(language, ERRORS[LANGUAGE_RU])
 
 
-def get_menu(language: str = LANGUAGE_RU):
+def get_menu(language: str):
     """Get menu labels for a specific language"""
     return MENU.get(language, MENU[LANGUAGE_RU])
 
 
-def get_reset(language: str = LANGUAGE_RU):
+def get_reset(language: str):
     """Get /reset command strings for a specific language"""
     return RESET.get(language, RESET[LANGUAGE_RU])
 
 
-def get_images(language: str = LANGUAGE_RU):
+def get_images(language: str):
     """Get loading/splash image messages for a specific language"""
     return IMAGES.get(language, IMAGES[LANGUAGE_RU])
 
 
-def get_gm_commands(language: str = LANGUAGE_RU):
+def get_gm_commands(language: str):
     """Get Game Master command response strings for a specific language"""
     return GM_COMMANDS.get(language, GM_COMMANDS[LANGUAGE_RU])
 
 
-def get_bridge(language: str = LANGUAGE_RU):
+def get_bridge(language: str):
     """Get bridge image messages for a specific language"""
     return BRIDGE.get(language, BRIDGE[LANGUAGE_RU])
 
@@ -697,12 +697,12 @@ PUSH_OUTCOME = {
 }
 
 
-def get_push_outcome(language: str = LANGUAGE_RU):
+def get_push_outcome(language: str):
     """Get push outcome messages for a specific language"""
     return PUSH_OUTCOME.get(language, PUSH_OUTCOME[LANGUAGE_RU])
 
 
-def get_spectator(language: str = LANGUAGE_RU):
+def get_spectator(language: str):
     """Get spectator/dead player messages for a specific language"""
     return SPECTATOR.get(language, SPECTATOR[LANGUAGE_RU])
 
@@ -712,7 +712,7 @@ def get_language_flag(lang_code: str) -> str:
     return LANGUAGE_FLAGS.get(lang_code, "🌐")
 
 
-def get_language_name(lang_code: str, display_language: str = LANGUAGE_RU) -> str:
+def get_language_name(lang_code: str, display_language: str) -> str:
     """Get the display name of a language in a given display language.
 
     Example: get_language_name("en", "ru") -> "English"
@@ -722,6 +722,6 @@ def get_language_name(lang_code: str, display_language: str = LANGUAGE_RU) -> st
     return names_map.get(lang_code, lang_code)
 
 
-def get_player_lang(language: str = LANGUAGE_RU):
+def get_player_lang(language: str):
     """Get /lang command messages for a specific language"""
     return PLAYER_LANG.get(language, PLAYER_LANG[LANGUAGE_RU])

@@ -147,7 +147,7 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         agent = GameServer(language="en")
         agent.vs_enabled = False
         with patch.object(GameServer, "_call_llm", return_value=self._fake_llm_result()):
-            result = agent.generate_mission([{"role": "Pilot", "type": "player"}])
+            result = agent.generate_mission([{"role": "Pilot", "type": "player"}], game_id=None, player_id=None, turn=None, kind=None)
         self.assertEqual([o["stage"] for o in result["objectives"]], [1, 2, 3])
         self.assertEqual([o["name"] for o in result["objectives"]], ["A", "B", "C"])
         for o in result["objectives"]:
@@ -201,13 +201,13 @@ from prompts import build_mission_prompts  # noqa: E402
 class TestMissionPromptInjection(unittest.TestCase):
     def test_prompt_includes_archetype_and_seeds(self):
         seeds = select_mission_seeds(language="en", rng=_random.Random(7))
-        system, user = build_mission_prompts("en", "  - Pilot (player)", archetype=seeds["archetype"], seeds=seeds["seeds"])
+        system, user = build_mission_prompts("en", "  - Pilot (player)", archetype=seeds["archetype"], seeds=seeds["seeds"], use_vs=True, vs_k=5)
         self.assertIn(seeds["archetype"], system + user)
         for value in seeds["seeds"].values():
             self.assertIn(value, system + user)
 
     def test_prompt_lists_forbidden_openings_and_threshold_range(self):
-        _, user = build_mission_prompts("ru", "  - Пилот (игрок)")
+        _, user = build_mission_prompts("ru", "  - Пилот (игрок)", archetype=None, seeds=None, use_vs=True, vs_k=5)
         self.assertIn("3-5", user)
         self.assertIn("сигнал", user)  # forbidden list mentions the banned trope
 
@@ -221,21 +221,21 @@ from game_rules import (  # noqa: E402
 class TestDeathLimits(unittest.TestCase):
     def test_first_death_allowed(self):
         outcome = {"dead_crew_members": [["A", "Pilot"]], "crew_injured": []}
-        out, last = apply_death_limits(outcome, turn=3, last_death_turn=0, alive_count=5)
+        out, last = apply_death_limits(outcome, turn=3, last_death_turn=0, alive_count=5, min_alive=1, cooldown=DEATH_COOLDOWN_TURNS)
         self.assertEqual(out["dead_crew_members"], [["A", "Pilot"]])
         self.assertEqual(last, 3)
         self.assertEqual(out["crew_injured"], [])
 
     def test_second_death_on_cooldown_is_demoted_to_critical(self):
         outcome = {"dead_crew_members": [["B", "Medic"]], "crew_injured": []}
-        out, last = apply_death_limits(outcome, turn=4, last_death_turn=3, alive_count=5)
+        out, last = apply_death_limits(outcome, turn=4, last_death_turn=3, alive_count=5, min_alive=1, cooldown=DEATH_COOLDOWN_TURNS)
         self.assertEqual(out["dead_crew_members"], [])
         self.assertEqual(out["crew_injured"], [["B", "Medic", "critical"]])
         self.assertEqual(last, 3)  # unchanged, no new death accepted
 
     def test_death_after_cooldown_allowed_again(self):
         outcome = {"dead_crew_members": [["C", "Engineer"]], "crew_injured": []}
-        out, last = apply_death_limits(outcome, turn=3 + DEATH_COOLDOWN_TURNS, last_death_turn=3, alive_count=4)
+        out, last = apply_death_limits(outcome, turn=3 + DEATH_COOLDOWN_TURNS, last_death_turn=3, alive_count=4, min_alive=1, cooldown=DEATH_COOLDOWN_TURNS)
         self.assertEqual(out["dead_crew_members"], [["C", "Engineer"]])
         self.assertEqual(last, 3 + DEATH_COOLDOWN_TURNS)
 
@@ -244,14 +244,14 @@ class TestDeathLimits(unittest.TestCase):
             "dead_crew_members": [["A", "Pilot"], ["B", "Medic"], ["C", "Eng"]],
             "crew_injured": [],
         }
-        out, _ = apply_death_limits(outcome, turn=5, last_death_turn=0, alive_count=6)
+        out, _ = apply_death_limits(outcome, turn=5, last_death_turn=0, alive_count=6, min_alive=1, cooldown=DEATH_COOLDOWN_TURNS)
         self.assertEqual(len(out["dead_crew_members"]), 1)
         self.assertEqual(len(out["crew_injured"]), 2)
         self.assertTrue(all(i[2] == "critical" for i in out["crew_injured"]))
 
     def test_never_kill_below_min_alive(self):
         outcome = {"dead_crew_members": [["A", "Pilot"]], "crew_injured": []}
-        out, last = apply_death_limits(outcome, turn=2, last_death_turn=0, alive_count=1, min_alive=1)
+        out, last = apply_death_limits(outcome, turn=2, last_death_turn=0, alive_count=1, min_alive=1, cooldown=DEATH_COOLDOWN_TURNS)
         self.assertEqual(out["dead_crew_members"], [])
         self.assertEqual(last, 0)
         self.assertEqual(out["crew_injured"], [["A", "Pilot", "critical"]])
@@ -261,7 +261,7 @@ class TestDeathLimits(unittest.TestCase):
             "ship_destroyed": True,
             "dead_crew_members": [["A", "Pilot"], ["B", "Medic"]],
         }
-        out, last = apply_death_limits(outcome, turn=4, last_death_turn=3, alive_count=5)
+        out, last = apply_death_limits(outcome, turn=4, last_death_turn=3, alive_count=5, min_alive=1, cooldown=DEATH_COOLDOWN_TURNS)
         self.assertEqual(len(out["dead_crew_members"]), 2)
         self.assertEqual(last, 3)
 

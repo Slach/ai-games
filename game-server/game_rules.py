@@ -326,7 +326,7 @@ FORBIDDEN_OPENINGS: dict[str, list[str]] = {
 }
 
 
-def select_mission_seeds(language: str = "en", rng: random.Random | None = None) -> dict:
+def select_mission_seeds(language: str, rng: random.Random | None) -> dict:
     """Pick a mission archetype and one entry per seed table (deterministic with rng).
 
     Returns {"archetype": <key>, "seeds": {table: entry}, "language": language}.
@@ -357,9 +357,9 @@ def apply_death_limits(
     outcome: dict,
     turn: int,
     last_death_turn: int,
-    alive_count: int | None = None,
-    min_alive: int = 1,
-    cooldown: int = DEATH_COOLDOWN_TURNS,
+    alive_count: int | None,
+    min_alive: int,
+    cooldown: int,
 ) -> tuple[dict, int]:
     """Enforce crew-death rate limits on a raw combined outcome (P3).
 

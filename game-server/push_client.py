@@ -58,14 +58,15 @@ async def push_briefings(
     game_id: str,
     turn: int,
     players_briefings: list[dict],
-    bridge_url: str | None = None,
-    mission: dict | None = None,
-    crew_dialogues: list | None = None,
-    is_first_turn: bool = False,
-    force_resend: bool = False,
-    global_narrative: str = "",
-    was_restarted: bool = False,
-    language: str = "ru",
+    bridge_url: str | None,
+    mission: dict | None,
+    crew_dialogues: list | None,
+    is_first_turn: bool,
+    force_resend: bool,
+    global_narrative: str,
+    was_restarted: bool,
+    *,
+    language: str,
 ) -> bool:
     """Push briefings to telegram-bot with exponential backoff retry.
 
@@ -186,8 +187,9 @@ async def push_player_chosen_action(
     turn: int,
     chosen_action_url: str,
     game_id: str,
-    action_text: str = "",
-    language: str = "ru",
+    action_text: str,
+    *,
+    language: str,
 ) -> bool:
     """Push a player's chosen action image to the telegram-bot.
 
@@ -209,10 +211,11 @@ async def push_gm_notification(
     game_id: str,
     turn: int,
     status: str,
-    error: str = "",
-    players: int = 0,
-    npcs: int = 0,
-    language: str = "ru",
+    error: str,
+    players: int,
+    npcs: int,
+    *,
+    language: str,
 ) -> bool:
     """Push a notification to the Game Server about turn generation status.
 
@@ -249,19 +252,20 @@ async def push_turn_outcome(
     turn: int,
     outcome_text: str,
     alive_players: list[int],
-    outcome_image_url: str | None = None,
-    ship_status: str | None = None,
-    mission_progress: dict | None = None,
-    death_notices: list[dict] | None = None,
-    injury_notices: list[dict] | None = None,
-    personal_outcomes: list[dict] | None = None,
-    action_images: list[dict] | None = None,
-    ship_hull_integrity: int | None = None,
-    ship_shields: int | None = None,
-    ship_systems_offline: list[str] | None = None,
-    total_crew_count: int | None = None,
-    alive_crew_count: int | None = None,
-    language: str = "ru",
+    outcome_image_url: str | None,
+    ship_status: str | None,
+    mission_progress: dict | None,
+    death_notices: list[dict] | None,
+    injury_notices: list[dict] | None,
+    personal_outcomes: list[dict] | None,
+    action_images: list[dict] | None,
+    ship_hull_integrity: int | None,
+    ship_shields: int | None,
+    ship_systems_offline: list[str] | None,
+    total_crew_count: int | None,
+    alive_crew_count: int | None,
+    *,
+    language: str,
 ) -> bool:
     """Push the combined turn outcome to all alive players.
 
@@ -329,7 +333,7 @@ async def push_game_over(
     outcome_type: str,
     alive_players: list[int],
     available_games: list[dict],
-    language: str = "ru",
+    language: str,
 ) -> bool:
     """Push the game-over finale to all alive players.
 
@@ -361,10 +365,11 @@ async def push_onboarding_ready(
     player_id: int,
     game_id: str,
     session_id: str,
-    question: dict | None = None,
-    game_title: str = "",
-    welcome_message: str = "",
-    language: str = "ru",
+    question: dict | None,
+    game_title: str,
+    welcome_message: str,
+    *,
+    language: str,
 ) -> bool:
     """Push that onboarding images are ready to the telegram-bot with retry.
 

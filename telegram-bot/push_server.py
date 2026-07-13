@@ -24,6 +24,7 @@ from aiogram.types import (
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiohttp import web
 from database import (
+    DB_PATH,
     get_pending_push_messages,
     insert_push_message,
     mark_push_expired,
@@ -194,7 +195,7 @@ def _build_briefing_text(
     briefing: str,
     choices: list[dict[str, Any]],
     language: str,
-    personal_title: str = "",
+    personal_title: str,
 ) -> str:
     """Build the briefing message text for a player (without NPC dialogues)."""
     current = get_current_turn(language)
@@ -209,7 +210,7 @@ def _build_briefing_text(
     return title_line + "\n\n" + briefing_header + "\n\n" + current.get("actions", "{actions}").format(actions=acts) + "\n\n" + current.get("select_action", "")
 
 
-async def _download_image(url: str, timeout: int = 30) -> bytes | None:
+async def _download_image(url: str, timeout: int) -> bytes | None:
     """Download an image from URL and return raw bytes."""
 
     async def _do_download():
@@ -227,7 +228,7 @@ async def _download_image(url: str, timeout: int = 30) -> bytes | None:
             )
 
     try:
-        return await call_with_retry(_do_download, max_retries=2, base_delay=0.5)
+        return await call_with_retry(_do_download, max_retries=2, base_delay=0.5, max_delay=10.0)
     except Exception as e:
         logger.warning(f"[PUSH] Failed to download image: {e}")
     return None
@@ -299,7 +300,7 @@ async def _deliver_briefing(
                             text=restart_msg,
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Bridge image + mission (first turn only)
             if is_first_turn and bridge_url:
@@ -308,7 +309,7 @@ async def _deliver_briefing(
                 mission_name = (mission or {}).get("name", "")
                 if mission_name:
                     caption += "\n\n" + bridge_msgs.get("mission_header", "Mission: {name}").format(name=_escape_md(mission_name))
-                img_data = await _download_image(bridge_url)
+                img_data = await _download_image(bridge_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="bridge.png")
                     await call_with_retry(
@@ -318,7 +319,7 @@ async def _deliver_briefing(
                             caption=caption,
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
                 else:
                     await call_with_retry(
                         lambda: bot.send_message(
@@ -326,7 +327,7 @@ async def _deliver_briefing(
                             text=caption,
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
                 if mission:
                     desc = mission.get("description", "")
@@ -337,12 +338,12 @@ async def _deliver_briefing(
                                 text=bridge_msgs.get("mission_desc", "{description}").format(description=_escape_md(desc)),
                                 parse_mode="Markdown",
                             )
-                        )
+                        , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Scene image
             scene_url = player_data.get("scene_url")
             if scene_url:
-                img_data = await _download_image(scene_url)
+                img_data = await _download_image(scene_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="scene.png")
                     current_msgs = get_current_turn(language)
@@ -358,7 +359,7 @@ async def _deliver_briefing(
                             caption=caption,
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Global narrative as separate text (if too long)
             if global_narrative and len(global_narrative) > 900:
@@ -370,13 +371,13 @@ async def _deliver_briefing(
                         text=f"*{intro_title}*\n\n{_escape_md(global_narrative)}",
                         parse_mode="Markdown",
                     )
-                )
+                , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Character image
             character_image_url = player_data.get("character_image_url")
             personal_title = player_data.get("personal_title", "")
             if character_image_url:
-                img_data = await _download_image(character_image_url)
+                img_data = await _download_image(character_image_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="character.png")
                     outcome_msgs = get_push_outcome(language)
@@ -388,15 +389,15 @@ async def _deliver_briefing(
                             caption=f"*{_escape_md(caption_text)}*",
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Previous action image
             chosen_action_url = player_data.get("chosen_action_url")
             if chosen_action_url:
-                img_data = await _download_image(chosen_action_url)
+                img_data = await _download_image(chosen_action_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="action.png")
-                    await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo))
+                    await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo), max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Crew dialogues as a separate message (before briefing to avoid 4096 limit)
             crew_text = _build_crew_dialogues_text(crew_dialogues, language)
@@ -407,7 +408,7 @@ async def _deliver_briefing(
                         text=crew_text,
                         parse_mode="Markdown",
                     )
-                )
+                , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Briefing text + action choices (or expired notice)
             briefing = player_data.get("briefing", "")
@@ -430,7 +431,7 @@ async def _deliver_briefing(
                             text=text,
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
                 else:
                     text = _build_briefing_text(
                         turn,
@@ -439,7 +440,7 @@ async def _deliver_briefing(
                         language,
                         personal_title=personal_title,
                     )
-                    keyboard = create_keyboard_fn(choices)
+                    keyboard = create_keyboard_fn(choices, None)
                     await call_with_retry(
                         lambda: bot.send_message(
                             chat_id=player_id,
@@ -447,7 +448,7 @@ async def _deliver_briefing(
                             parse_mode="Markdown",
                             reply_markup=keyboard,
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Mark as sent (track dedup across bot restarts)
             mark_sent_fn(player_id, game_id, turn)
@@ -506,7 +507,7 @@ async def _deliver_player_action(
     _pending_action_events.setdefault(event_key, asyncio.Event())
 
     try:
-        img_data = await _download_image(chosen_action_url)
+        img_data = await _download_image(chosen_action_url, 30)
         if img_data:
             photo = BufferedInputFile(img_data, filename="action_image.png")
             msgs = get_actions(language)
@@ -517,7 +518,7 @@ async def _deliver_player_action(
                     photo=photo,
                     caption=caption,
                 )
-            )
+            , max_retries=3, base_delay=1.0, max_delay=10.0)
         return True
     except TelegramBadRequest as e:
         if "USER_IS_BLOCKED" in str(e):
@@ -553,8 +554,8 @@ async def _deliver_outcome(
     bot: Bot,
     language: str,
     last_sent_per_player: dict[tuple[int, str], int],
-    current_player_id: int = 0,
-    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
+    current_player_id: int,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None,
 ) -> bool:
     """Deliver a /push/outcome message to all alive players.
 
@@ -620,7 +621,7 @@ async def _deliver_outcome(
             key = pid if pid is not None else (npc_key or f"npc_{len(_prefetched_action_photos)}")
             if key in _prefetched_action_photos:
                 continue
-            img_data = await _download_image(img_url)
+            img_data = await _download_image(img_url, 30)
             if img_data:
                 _prefetched_action_photos[key] = BufferedInputFile(img_data, filename=f"action_{key}.png")
             else:
@@ -737,7 +738,7 @@ async def _deliver_outcome(
                         chat_id=target_player_id,
                         media=chunk,
                     )
-                )
+                , max_retries=3, base_delay=1.0, max_delay=10.0)
             except TelegramBadRequest as album_err:
                 err_str = str(album_err)
                 if "USER_IS_BLOCKED" in err_str:
@@ -764,7 +765,7 @@ async def _deliver_outcome(
             await _send_others_album(player_id)
 
             if outcome_image_url:
-                img_data = await _download_image(outcome_image_url)
+                img_data = await _download_image(outcome_image_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="outcome_image.png")
                     await call_with_retry(
@@ -772,14 +773,14 @@ async def _deliver_outcome(
                             chat_id=player_id,
                             photo=photo,
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             await call_with_retry(
                 lambda: bot.send_message(
                     chat_id=player_id,
                     text=outcome_message,
                 )
-            )
+            , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             last_sent_per_player[(player_id, game_id)] = turn
             if mark_outcome_sent_fn is not None:
@@ -855,7 +856,7 @@ async def _deliver_gm_notification(
                     text=msg,
                     parse_mode="Markdown",
                 )
-            )
+            , max_retries=3, base_delay=1.0, max_delay=10.0)
         except Exception as e:
             logger.error("[PUSH_GM] Failed to send GM notification: %s", e, exc_info=True)
             return False
@@ -865,9 +866,9 @@ async def _deliver_gm_notification(
 async def _deliver_game_over(
     payload: dict[str, Any],
     bot: Bot,
-    current_player_id: int = 0,
-    last_sent: dict[tuple[int, str], str] | None = None,
-    mark_fn: Callable[[int, str], None] | None = None,
+    current_player_id: int,
+    last_sent: dict[tuple[int, str], str] | None,
+    mark_fn: Callable[[int, str], None] | None,
 ) -> bool:
     """Deliver a /push/game-over message to all alive players.
 
@@ -938,7 +939,7 @@ async def _deliver_game_over(
             continue
         try:
             if finale_image_url:
-                img_data = await _download_image(finale_image_url)
+                img_data = await _download_image(finale_image_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="finale.png")
                     await call_with_retry(
@@ -948,7 +949,7 @@ async def _deliver_game_over(
                             caption=f"*{title}*",
                             parse_mode="Markdown",
                         )
-                    )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             full_text = f"*{title}*\n\n{_escape_md(finale_narrative)}"
             await call_with_retry(
@@ -957,7 +958,7 @@ async def _deliver_game_over(
                     text=full_text,
                     parse_mode="Markdown",
                 )
-            )
+            , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             if continue_text:
                 await call_with_retry(
@@ -966,7 +967,7 @@ async def _deliver_game_over(
                         text=continue_text,
                         reply_markup=keyboard,
                     )
-                )
+                , max_retries=3, base_delay=1.0, max_delay=10.0)
 
             if player_id == current_player_id:
                 current_player_delivered = True
@@ -1187,8 +1188,8 @@ async def _dispatch_one(
     last_sent_briefing: dict[tuple[int, str], int],
     last_sent_outcome: dict[tuple[int, str], int],
     last_sent_game_over: dict[tuple[int, str], str],
-    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
-    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None,
 ) -> bool:
     """Try to deliver a single push_queue row. Returns True on success."""
     push_type = row["push_type"]
@@ -1199,13 +1200,13 @@ async def _dispatch_one(
         payload = json.loads(row["payload"])
     except (ValueError, KeyError):
         logger.error("[PUSH] Corrupt payload in push_queue #%d, marking failed", push_id)
-        mark_push_failed(push_id, "Corrupt JSON payload")
+        mark_push_failed(push_id, "Corrupt JSON payload", DB_PATH)
         return True  # Don't block — this message will never succeed
 
     deliver_fn = _DELIVER_FNS.get(push_type)
     if deliver_fn is None:
         logger.error("[PUSH] Unknown push_type '%s' for #%d", push_type, push_id)
-        mark_push_failed(push_id, f"Unknown push_type: {push_type}")
+        mark_push_failed(push_id, f"Unknown push_type: {push_type}", DB_PATH)
         return True
 
     try:
@@ -1232,9 +1233,9 @@ async def _dispatch_one(
             turn = row.get("turn")
             game_id = row.get("game_id")
             if _is_stale(turn, game_id) and push_type == "briefing":
-                mark_push_expired(push_id)
+                mark_push_expired(push_id, DB_PATH)
             else:
-                mark_push_sent(push_id)
+                mark_push_sent(push_id, DB_PATH)
             logger.info(
                 "[PUSH] Delivered #%d (type=%s, player=%s, turn=%s)",
                 push_id,
@@ -1244,7 +1245,7 @@ async def _dispatch_one(
             )
             return True
         else:
-            mark_push_failed(push_id, f"Delivery failed for {push_type} to player {player_id}")
+            mark_push_failed(push_id, f"Delivery failed for {push_type} to player {player_id}", DB_PATH)
             logger.warning("[PUSH] Failed to deliver #%d", push_id)
             return False
     except TelegramForbiddenError:
@@ -1253,7 +1254,7 @@ async def _dispatch_one(
             player_id,
         )
         asyncio.create_task(_auto_kick_blocked_player(player_id))
-        mark_push_sent(push_id)  # Don't retry
+        mark_push_sent(push_id, DB_PATH)  # Don't retry
         return True
     except TelegramBadRequest as e:
         err_str = str(e)
@@ -1263,14 +1264,14 @@ async def _dispatch_one(
                 player_id,
             )
             asyncio.create_task(_auto_kick_blocked_player(player_id))
-            mark_push_sent(push_id)  # Don't retry
+            mark_push_sent(push_id, DB_PATH)  # Don't retry
             return True
         logger.error("[PUSH] TelegramBadRequest delivering #%d: %s", push_id, e, exc_info=True)
-        mark_push_failed(push_id, str(e))
+        mark_push_failed(push_id, str(e), DB_PATH)
         return False
     except Exception as e:
         logger.error("[PUSH] Exception delivering #%d: %s", push_id, e, exc_info=True)
-        mark_push_failed(push_id, str(e))
+        mark_push_failed(push_id, str(e), DB_PATH)
         return False
 
 
@@ -1285,15 +1286,15 @@ async def _sender_loop(
     last_sent_briefing: dict[tuple[int, str], int],
     last_sent_outcome: dict[tuple[int, str], int],
     last_sent_game_over: dict[tuple[int, str], str],
-    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
-    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
-    poll_interval: float = 1.0,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None,
+    poll_interval: float,
 ) -> None:
     """Background task that drains push_queue in per-player order."""
     logger.info("[PUSH_SENDER] Background sender started")
     while True:
         try:
-            pending = get_pending_push_messages()
+            pending = get_pending_push_messages(DB_PATH)
             if not pending:
                 await asyncio.sleep(poll_interval)
                 continue
@@ -1348,8 +1349,8 @@ async def _startup_flush(
     last_sent_briefing: dict[tuple[int, str], int],
     last_sent_outcome: dict[tuple[int, str], int],
     last_sent_game_over: dict[tuple[int, str], str],
-    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
-    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None,
 ) -> None:
     """Synchronously drain all pending messages before starting HTTP."""
     logger.info("[PUSH_STARTUP] Fetching current turns from game-server...")
@@ -1360,7 +1361,7 @@ async def _startup_flush(
     # Retry failed messages whose turn is still current
     retried_total = 0
     for game_id, turn in turns.items():
-        retried = reset_failed_for_current_turn(game_id, turn)
+        retried = reset_failed_for_current_turn(game_id, turn, DB_PATH)
         if retried:
             retried_total += retried
             logger.info(
@@ -1372,7 +1373,7 @@ async def _startup_flush(
     if retried_total:
         logger.info("[PUSH_STARTUP] Total %d failed message(s) reset for retry", retried_total)
 
-    pending = get_pending_push_messages()
+    pending = get_pending_push_messages(DB_PATH)
     if not pending:
         logger.info("[PUSH_STARTUP] No pending messages to flush")
         return
@@ -1447,6 +1448,7 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
             payload=json.dumps(per_player_payload, ensure_ascii=False),
             turn=turn,
             game_id=game_id,
+            db_path=DB_PATH,
         )
         inserted += 1
 
@@ -1483,6 +1485,7 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
         payload=json.dumps(payload, ensure_ascii=False),
         turn=turn,
         game_id=game_id,
+        db_path=DB_PATH,
     )
 
     logger.info(
@@ -1518,6 +1521,7 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             payload=json.dumps(payload, ensure_ascii=False),
             turn=turn,
             game_id=game_id,
+            db_path=DB_PATH,
         )
         inserted += 1
 
@@ -1546,6 +1550,7 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
         payload=json.dumps(payload, ensure_ascii=False),
         turn=turn,
         game_id=game_id,
+        db_path=DB_PATH,
     )
 
     logger.info(
@@ -1575,7 +1580,9 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
             player_id=player_id,
             push_type="game_over",
             payload=json.dumps(payload, ensure_ascii=False),
+            turn=None,
             game_id=game_id,
+            db_path=DB_PATH,
         )
         inserted += 1
 
@@ -1605,7 +1612,9 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
         player_id=player_id,
         push_type="onboarding",
         payload=json.dumps(payload, ensure_ascii=False),
+        turn=None,
         game_id=game_id,
+        db_path=DB_PATH,
     )
 
     logger.info(
@@ -1626,14 +1635,14 @@ async def handle_health(request: web.Request) -> web.Response:
 
 async def start_push_server(
     bot: Bot,
-    language: str = "ru",
-    last_sent_briefing_turn: dict[tuple[int, str], int] | None = None,
-    mark_sent_fn: Callable[[int, str, int], None] | None = None,
-    last_sent_outcome_turn: dict[tuple[int, str], int] | None = None,
-    mark_outcome_sent_fn: Callable[[int, str, int], None] | None = None,
-    last_sent_game_over_turn: dict[tuple[int, str], str] | None = None,
-    mark_game_over_sent_fn: Callable[[int, str], None] | None = None,
-    create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None) = None,
+    language: str,
+    last_sent_briefing_turn: dict[tuple[int, str], int] | None,
+    mark_sent_fn: Callable[[int, str, int], None] | None,
+    last_sent_outcome_turn: dict[tuple[int, str], int] | None,
+    mark_outcome_sent_fn: Callable[[int, str, int], None] | None,
+    last_sent_game_over_turn: dict[tuple[int, str], str] | None,
+    mark_game_over_sent_fn: Callable[[int, str], None] | None,
+    create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None),
 ) -> web.AppRunner:
     """Start the push HTTP server with persistent delivery queue.
 
@@ -1701,6 +1710,7 @@ async def start_push_server(
             last_sent_game_over,
             mark_outcome_sent_fn,
             mark_game_over_sent_fn,
+            1.0,
         )
     )
 

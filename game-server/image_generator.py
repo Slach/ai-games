@@ -67,11 +67,11 @@ QWEN_EDIT_LIGHTNING_LORA = "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safe
 def _build_qwen_edit_workflow(
     instruction: str,
     character_filename: str,
-    background_filename: str | None = None,
-    width: int = 1024,
-    height: int = 1024,
-    seed: int = 0,
-    filename_prefix: str = "qwen_edit",
+    background_filename: str | None,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
 ) -> dict[str, Any]:
     """Build a Qwen-Image-Edit-2511 workflow for placing a character into a scene.
 
@@ -209,10 +209,10 @@ def _build_qwen_edit_workflow(
 
 def _build_zimage_turbo_workflow(
     prompt: str,
-    width: int = 1024,
-    height: int = 1024,
-    seed: int = 0,
-    filename_prefix: str = "ComfyUI",
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
 ) -> dict[str, Any]:
     """Build a Z-Image Turbo text-to-image workflow for ComfyUI API.
 
@@ -329,10 +329,10 @@ class ImageGenerator:
         self,
         workflow: dict[str, Any],
         *,
-        kind: str | None = None,
-        ctx_game: str = "none",
-        ctx_player: str = "",
-        ctx_turn: str = "0",
+        kind: str | None,
+        ctx_game: str,
+        ctx_player: str,
+        ctx_turn: str,
     ) -> str:
         """Submit a workflow to ComfyUI /prompt endpoint and return the prompt_id."""
         payload = {
@@ -382,7 +382,7 @@ class ImageGenerator:
 
         raise Exception(f"Failed to connect to ComfyUI after {max_retries} attempts: {last_error}")
 
-    async def _wait_for_completion(self, prompt_id: str, timeout: int = 300) -> dict[str, Any]:
+    async def _wait_for_completion(self, prompt_id: str, timeout: int) -> dict[str, Any]:
         """Wait for ComfyUI to finish processing a prompt via /history endpoint."""
         start = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start) < timeout:
@@ -431,15 +431,15 @@ class ImageGenerator:
     async def generate_image(
         self,
         prompt: str,
-        filename_prefix: str = "ComfyUI",
-        width: int = 1024,
-        height: int = 1024,
-        max_retries: int = 3,
+        filename_prefix: str,
+        width: int,
+        height: int,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | None = None,
-        kind: str | None = None,
+        max_retries: int,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | None,
+        kind: str | None,
     ) -> str | None:
         """Generate an image via ComfyUI using Z-Image Turbo with retry.
 
@@ -451,7 +451,7 @@ class ImageGenerator:
             filename_prefix: Prefix for output filename
             width: Image width (multiple of 16)
             height: Image height (multiple of 16)
-            max_retries: Number of generation attempts before giving up (default: 3)
+            max_retries: Number of generation attempts before giving up.
             game_id: Game identifier for log file naming.
             player_id: Player identifier for log file naming.
             turn: Turn number for log file naming.
@@ -490,6 +490,7 @@ class ImageGenerator:
                         prompt=prompt,
                         width=width,
                         height=height,
+                        seed=0,
                         filename_prefix=filename_prefix,
                     )
 
@@ -551,14 +552,14 @@ class ImageGenerator:
     async def generate_avatar_image(
         self,
         prompt: str,
-        filename_prefix: str = "avatar",
-        width: int = 768,
-        height: int = 1024,
+        filename_prefix: str,
+        width: int,
+        height: int,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | None,
+        kind: str | None,
     ) -> str | None:
         """Generate a character avatar image via ComfyUI.
 
@@ -569,6 +570,7 @@ class ImageGenerator:
             filename_prefix=filename_prefix,
             width=width,
             height=height,
+            max_retries=3,
             game_id=game_id,
             player_id=player_id,
             turn=turn,
@@ -578,14 +580,14 @@ class ImageGenerator:
     async def generate_scene_image(
         self,
         prompt: str,
-        filename_prefix: str = "scene",
-        width: int = 1024,
-        height: int = 1024,
+        filename_prefix: str,
+        width: int,
+        height: int,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | None = None,
-        kind: str | None = None,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | None,
+        kind: str | None,
     ) -> str | None:
         """Generate a scene image via ComfyUI."""
         return await self.generate_image(
@@ -593,6 +595,7 @@ class ImageGenerator:
             filename_prefix=filename_prefix,
             width=width,
             height=height,
+            max_retries=3,
             game_id=game_id,
             player_id=player_id,
             turn=turn,
@@ -633,11 +636,11 @@ class ImageGenerator:
         self,
         prompt: str,
         reference_filename: str,
-        width: int = 1024,
-        height: int = 1024,
-        seed: int = 0,
-        denoise: float = 0.75,
-        filename_prefix: str = "action",
+        denoise: float,
+        width: int,
+        height: int,
+        seed: int,
+        filename_prefix: str,
     ) -> dict[str, Any]:
         """Build a Z-Image Turbo img2img workflow using reference image as latent.
 
@@ -764,16 +767,16 @@ class ImageGenerator:
         self,
         prompt: str,
         reference_image_url: str | None,
-        character_description: str = "",
-        filename_prefix: str = "action",
-        width: int = 1024,
-        height: int = 1024,
-        denoise: float = 0.75,
+        character_description: str,
+        filename_prefix: str,
+        width: int,
+        height: int,
         *,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | None = None,
-        kind: str | None = None,
+        denoise: float,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | None,
+        kind: str | None,
     ) -> str:
         """Generate an action scene image using avatar as visual reference.
 
@@ -805,6 +808,7 @@ class ImageGenerator:
                         reference_filename=ref_filename,
                         width=width,
                         height=height,
+                        seed=0,
                         denoise=denoise,
                         filename_prefix=filename_prefix,
                     )
@@ -835,6 +839,8 @@ class ImageGenerator:
         image_url = await self.generate_scene_image(
             prompt=fallback_prompt,
             filename_prefix=filename_prefix,
+            width=width,
+            height=height,
             game_id=game_id,
             player_id=player_id,
             turn=turn,
@@ -852,16 +858,16 @@ class ImageGenerator:
         self,
         instruction_prompt: str,
         character_avatar_url: str | None,
-        background_url: str | None = None,
+        background_url: str | None,
         *,
-        character_description: str = "",
-        filename_prefix: str = "qwen_scene",
-        width: int = 1024,
-        height: int = 1024,
-        game_id: str | None = None,
-        player_id: str | None = None,
-        turn: int | None = None,
-        kind: str | None = None,
+        character_description: str,
+        filename_prefix: str,
+        width: int,
+        height: int,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | None,
+        kind: str | None,
     ) -> str | None:
         """Place a character into a scene via Qwen-Image-Edit-2511.
 
@@ -894,6 +900,9 @@ class ImageGenerator:
                 reference_image_url=None,
                 character_description=character_description,
                 filename_prefix=filename_prefix,
+                width=width,
+                height=height,
+                denoise=0.75,
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
@@ -914,6 +923,9 @@ class ImageGenerator:
                 reference_image_url=character_avatar_url,
                 character_description=character_description,
                 filename_prefix=filename_prefix,
+                width=width,
+                height=height,
+                denoise=0.75,
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
@@ -926,6 +938,7 @@ class ImageGenerator:
             background_filename=bg_filename,
             width=width,
             height=height,
+            seed=0,
             filename_prefix=filename_prefix,
         )
 
@@ -969,6 +982,9 @@ class ImageGenerator:
             reference_image_url=character_avatar_url,
             character_description=character_description,
             filename_prefix=filename_prefix,
+            width=width,
+            height=height,
+            denoise=0.75,
             game_id=game_id,
             player_id=player_id,
             turn=turn,
@@ -981,8 +997,8 @@ class ImageGenerator:
         location_type: str,
         *,
         game_id: str,
-        width: int = 1024,
-        height: int = 576,
+        width: int,
+        height: int,
     ) -> str | None:
         """Generate a single empty-location background via Z-Image Turbo.
 
@@ -1005,6 +1021,8 @@ class ImageGenerator:
             height=height,
             max_retries=2,
             game_id=game_id,
+            player_id=None,
+            turn=None,
             kind=f"background_{location_type}",
         )
 
@@ -1025,13 +1043,13 @@ class ImageGenerator:
 
     async def generate_loading_images(
         self,
-        count: int = 10,
-        start_index: int = 0,
-        filename_prefix: str = "loading",
+        count: int,
+        start_index: int,
+        filename_prefix: str,
         *,
         game_id: str,
-        width: int = 768,
-        height: int = 768,
+        width: int,
+        height: int,
     ) -> list[str]:
         """Generate N loading screen images for /start display.
 
@@ -1060,6 +1078,8 @@ class ImageGenerator:
                     height=height,
                     max_retries=2,
                     game_id=game_id,
+                    player_id=None,
+                    turn=None,
                     kind="loading",
                 )
                 if url:
@@ -1077,12 +1097,12 @@ class ImageGenerator:
         self,
         prompt: str,
         crew_descriptions: list[dict[str, str]],
-        avatar_urls: list[str | None] | None = None,
-        filename_prefix: str = "bridge",
+        avatar_urls: list[str | None] | None,
+        filename_prefix: str,
         *,
         game_id: str,
-        width: int = 1024,
-        height: int = 768,
+        width: int,
+        height: int,
     ) -> str | None:
         """Generate a bridge scene image with the crew.
 
@@ -1117,7 +1137,10 @@ class ImageGenerator:
             filename_prefix=f"{game_id}/{filename_prefix}",
             width=width,
             height=height,
+            max_retries=3,
             game_id=game_id,
+            player_id=None,
+            turn=None,
             kind="bridge",
         )
 
@@ -1125,12 +1148,12 @@ class ImageGenerator:
         self,
         game_title: str,
         welcome_text: str,
-        count: int = 3,
-        filename_prefix: str = "splash",
+        count: int,
+        filename_prefix: str,
         *,
         game_id: str,
-        width: int = 1024,
-        height: int = 768,
+        width: int,
+        height: int,
     ) -> list[str]:
         """Generate N splash images based on game title and description.
 
@@ -1163,6 +1186,8 @@ class ImageGenerator:
                     height=height,
                     max_retries=2,
                     game_id=game_id,
+                    player_id=None,
+                    turn=None,
                     kind="splash",
                 )
                 if url:
