@@ -2697,7 +2697,7 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(COMBINED_OUTCOME_SCHEMA),
-                    max_tokens=8192,
+                    max_tokens=262144,
                     enable_thinking=True,
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
@@ -2708,7 +2708,7 @@ class GameServer:
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=COMBINED_OUTCOME_SCHEMA,
-                    max_tokens=4096,
+                    max_tokens=262144,
                     enable_thinking=True,
                 )
             logger.info(f"[TURN] Combined outcome generated: {str(parsed.get('outcome_narrative', ''))}...")
