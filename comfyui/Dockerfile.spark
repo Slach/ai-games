@@ -46,6 +46,11 @@ RUN git clone --depth 1 https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyU
 # Install IP-Adapter custom nodes (for image reference / style transfer)
 RUN git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus.git /opt/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus
 
+# Install ComfyUI-GGUF (GGUF model loader — required for Qwen-Image-Edit-2511
+# GGUF quantized models; provides the UnetLoaderGGUF node)
+RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF && \
+    /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
+
 # Fix outdated channel URLs (ltdrdata -> Comfy-Org) in Manager source
 RUN sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main|g' \
     /opt/ComfyUI/custom_nodes/ComfyUI-Manager/channels.list.template && \
