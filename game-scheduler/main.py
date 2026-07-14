@@ -575,13 +575,13 @@ class GameScheduler:
             return []
 
     async def check_and_auto_select_actions(self, game_id: str, turn: int):
-        try:
-            player_ids = await self.get_players_in_game(game_id)
-            if not player_ids:
-                logger.info(f"No players in game '{game_id}'")
-                return
-            logger.info(f"Checking {len(player_ids)} players for action selection on turn {turn} in game '{game_id}'")
-            for player_id in player_ids:
+        player_ids = await self.get_players_in_game(game_id)
+        if not player_ids:
+            logger.info(f"No players in game '{game_id}'")
+            return
+        logger.info(f"Checking {len(player_ids)} players for action selection on turn {turn} in game '{game_id}'")
+        for player_id in player_ids:
+            try:
                 async with (
                     aiohttp.ClientSession() as session,
                     session.get(f"{self.api_url}/game/briefing/{player_id}/{turn}") as resp,
@@ -592,8 +592,8 @@ class GameScheduler:
                             continue
                 logger.info(f"Player {player_id} (game '{game_id}') has not selected action, auto-selecting")
                 await self._select_auto_action(game_id, player_id, turn)
-        except Exception as e:
-            logger.error(f"Failed to check auto-select for game '{game_id}': {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Failed to check auto-select for player {player_id} in game '{game_id}': {e}", exc_info=True)
 
     async def _select_auto_action(self, game_id: str, player_id: int, turn: int) -> dict[str, Any] | None:
         try:

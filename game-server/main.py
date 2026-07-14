@@ -3046,7 +3046,7 @@ async def _analyze_turn_outcome(
                     p = get_player_profile(player_id)
                     if p:
                         role_name = p.get("role", "")
-                        entity_name = str(player_id)
+                        entity_name = p.get("player_name", "") or str(player_id)
                 elif npc_key:
                     n = get_npc_profile(npc_key)
                     if n:
@@ -5998,8 +5998,22 @@ async def _original_continue_game(
     # Must run BEFORE pushing new turn briefings so player sees:
     #   Итоги хода N-1 → Вводная хода N → Ход N + действия
     if turn_num > 1:
+        # Auto-select actions for players who haven't chosen yet on the
+        # previous turn. Without this, _analyze_turn_outcome skips their
+        # briefings (selected_action_id IS NULL) and they never appear in
+        # personal_outcomes — so non-responders silently vanish from the
+        # "Последствия хода" list.
+        prev_turn = turn_num - 1
+        missing = get_players_who_need_to_choose(prev_turn, game_id=game_id)
+        for b in missing:
+            pid = b.get("player_id")
+            try:
+                await auto_select_action(player_id=pid, turn=prev_turn, language=language, game_id=game_id)
+            except Exception:
+                logger.warning(f"[AUTO_ACTION] Auto-select failed for player {pid} turn {prev_turn}", exc_info=True)
+
         await _analyze_turn_outcome(
-            turn=turn_num - 1,
+            turn=prev_turn,
             language=language,
             game_id=game_id,
             force=False,
