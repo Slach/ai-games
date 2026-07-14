@@ -389,7 +389,7 @@ class GameScheduler:
                     params={
                         "game_id": game_id,
                         "language": game_language,
-                        "force_resend": False,
+                        "force_resend": "false",
                     },
                 ) as resp:
                     if resp.status != 200:

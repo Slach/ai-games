@@ -383,7 +383,7 @@ def get_available_roles(game_id: str, language: str) -> list[dict[str, Any]]:
     )
     rows = cursor.fetchall()
     conn.close()
-    return [_enrich_role_with_i18n(row["role_key"], language=language) for row in rows]
+    return [_enrich_role_with_i18n(row["role_key"], None, language=language) for row in rows]
 
 
 def get_all_roles(game_id: str, language: str) -> list[dict[str, Any]]:

@@ -2198,7 +2198,7 @@ async def submit_player_action(request: PlayerActionRequest):
         if not remaining:
             # All players chose — analyze combined outcome
             logger.info(f"All players chose for turn {request.turn}, analyzing combined outcome")
-            asyncio.create_task(_analyze_turn_outcome(request.turn, language=game_lang, game_id=game_id))
+            asyncio.create_task(_analyze_turn_outcome(request.turn, language=game_lang, game_id=game_id, force=False))
     except Exception as e:
         logger.warning(f"Combined outcome check failed: {e}")
 
@@ -2334,7 +2334,7 @@ async def auto_select_action(
         remaining = get_players_who_need_to_choose(turn, game_id=game_id)
         if not remaining:
             logger.info(f"All players chose for turn {turn} (after auto-select), analyzing combined outcome")
-            asyncio.create_task(_analyze_turn_outcome(turn, language=language, game_id=game_id))
+            asyncio.create_task(_analyze_turn_outcome(turn, language=language, game_id=game_id, force=False))
     except Exception as e:
         logger.warning(f"Combined outcome check after auto-select failed: {e}")
 
@@ -5466,6 +5466,7 @@ async def _background_continue_wrapper(
                 language=language,
                 force_resend=force_resend,
             ),
+            resume_job_id=None,
         )
         if result and result.get("status") == "success":
             await _notify_scheduler("reset")
@@ -5756,8 +5757,6 @@ async def _original_continue_game(
             player_name,
             turn_num,
             game_id=game_id,
-            player_id=str(participant.get("player_id") or participant.get("npc_key", "")),
-            turn=turn_num,
             kind="player_briefing",
         )
         briefing = briefing_data.get("briefing", "")

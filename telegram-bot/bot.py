@@ -1418,7 +1418,7 @@ async def show_game_selection(message: types.Message, state: FSMContext, languag
     msgs = lang.get_onboarding(effective_lang)
 
     try:
-        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": False}, timeout_total=600, ignore_codes=())
+        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": "false"}, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
 
         keyboard = []
@@ -1607,7 +1607,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             game_lang = player_lang
             game_name = ""
             try:
-                result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": False}, timeout_total=600, ignore_codes=())
+                result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": "false"}, timeout_total=600, ignore_codes=())
                 games = result.get("games", []) if result else []
                 for g in games:
                     if g.get("game_id") == game_id:
@@ -1813,7 +1813,7 @@ async def _enter_name_for_game(
     game_lang = fallback_lang
     game_name = ""
     try:
-        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": False}, timeout_total=600, ignore_codes=())
+        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": "false"}, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
         for g in games:
             if g.get("game_id") == game_id:
@@ -1854,7 +1854,7 @@ async def _show_deeplink_game_conflict(
     new_name = new_game_id
     current_name = current_game_id
     try:
-        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": False}, timeout_total=600, ignore_codes=())
+        result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": "false"}, timeout_total=600, ignore_codes=())
         games = result.get("games", []) if result else []
         names = {g.get("game_id"): g.get("name", "") for g in games}
         if names.get(new_game_id):
@@ -3428,7 +3428,7 @@ async def cmd_gm_continue(message: types.Message):
             "POST",
             "/admin/continue-game",
             data=None,
-            params={"game_id": game_id, "language": game_lang, "force_resend": False},
+            params={"game_id": game_id, "language": game_lang, "force_resend": "false"},
             timeout_total=60,
             ignore_codes=(),
         )
