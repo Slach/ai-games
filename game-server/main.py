@@ -373,6 +373,7 @@ async def generate_dynamic_onboarding_questions(
                         id=q.get("id", i + 1),
                         text=q.get("text", f"Question {i + 1}"),
                         options=q.get("options", []),
+                        image_url=None,
                         image_prompt=q.get("image_prompt"),
                     )
                 )
@@ -609,7 +610,7 @@ async def generate_dynamic_species_gender_question(
     rng = random.Random(session.get("shuffle_seed", 0) + sg_step)
     rng.shuffle(options)
 
-    question = OnboardingQuestion(id=len(existing_questions) + 1, text=generated["text"], options=options)
+    question = OnboardingQuestion(id=len(existing_questions) + 1, text=generated["text"], options=options, image_url=None, image_prompt=None)
 
     try:
         question = await _generate_option_images_for_question(

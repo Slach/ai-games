@@ -308,6 +308,65 @@ async def _send_split_message(
         await target.answer(prefix + part, parse_mode=parse_mode)
 
 
+async def _send_game_over_finale(
+    message: types.Message, game_id: str, game_status: str, player_id: int, language: str
+) -> None:
+    """Show the game-over finale (title, reason, narrative + image) for an ended game.
+
+    ``game_status`` is the value from ``GET /game/state`` (caller already fetched it)
+    — one of mission_complete / ship_destroyed / crew_wiped / game_over.
+    """
+    msgs = lang.get_current_turn(language)
+    reason_map = {
+        "mission_complete": msgs["game_over_reason_mission_complete"],
+        "ship_destroyed": msgs["game_over_reason_ship_destroyed"],
+        "crew_wiped": msgs["game_over_reason_crew_wiped"],
+        "game_over": msgs["game_over_reason_game_over"],
+    }
+    reason = reason_map.get(game_status, game_status)
+
+    try:
+        finale = await api_request(
+            "GET", "/game/finale", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,)
+        )
+    except Exception:
+        logger.error(f"Failed to fetch finale for player {player_id}", exc_info=True)
+        finale = None
+
+    if finale:
+        # Show finale image if available
+        finale_image_url = finale.get("finale_image_url")
+        if finale_image_url:
+            try:
+                img_data = await _download_image(finale_image_url, 30)
+                if img_data:
+                    photo = BufferedInputFile(img_data, filename="finale.png")
+                    title_text = (
+                        msgs["game_over_victory_title"]
+                        if finale.get("finale_outcome_type") == "victory"
+                        else msgs["game_over_defeat_title"]
+                    )
+                    await message.answer_photo(photo=photo, caption=f"*{title_text}*", parse_mode="Markdown")
+                    logger.info(f"[FINALE] Sent finale image to player {player_id}")
+            except Exception as e:
+                logger.warning(f"[FINALE] Failed to send finale image: {e}")
+
+        title_text = (
+            msgs["game_over_victory_title"]
+            if finale.get("finale_outcome_type") == "victory"
+            else msgs["game_over_defeat_title"]
+        )
+        full_text = f"*{title_text}*\n\n*{reason}*\n\n{finale['finale_narrative']}"
+        await _send_split_message(message, full_text, parse_mode="Markdown", max_len=4096)
+    else:
+        # No finale available — show basic game-over info
+        title_text = msgs["game_over_defeat_title"]
+        await message.answer(
+            f"*{title_text}*\n\n*{reason}*\n\n{msgs['game_over_no_finale']}",
+            parse_mode="Markdown",
+        )
+
+
 # ============== Helper Functions ==============
 
 
@@ -521,7 +580,7 @@ async def send_random_loading_image(message: types.Message, caption_key: str, la
     Returns True if sent, False otherwise.
     """
     try:
-        result = await api_request("GET", "/content/loading-image", data=None, params=None, timeout_total=600, ignore_codes=())
+        result = await api_request("GET", "/content/loading-image", data=None, params={"game_id": "default_game"}, timeout_total=600, ignore_codes=())
         image_url = result.get("image_url") if result else None
         if image_url:
             caption = lang.get_images(language)[caption_key]
@@ -2093,6 +2152,21 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 )
                 return
 
+            # Game already ended — show finale + game list instead of welcoming back
+            if existing_game_id:
+                game_state = await api_request(
+                    "GET", "/game/state", data=None, params={"game_id": existing_game_id}, timeout_total=600, ignore_codes=()
+                )
+                if not game_state:
+                    await message.answer(lang.get_errors(player_lang)["api_error"])
+                    return
+                if game_state.get("status", "active") != "active":
+                    await _send_game_over_finale(
+                        message, existing_game_id, game_state.get("status", "active"), player_id, player_lang
+                    )
+                    await show_game_selection(message, state, player_lang)
+                    return
+
             # Player already has a profile - welcome back
             await send_random_loading_image(message, caption_key="loading_caption", language=player_lang)
 
@@ -2310,44 +2384,7 @@ async def cmd_turn(message: types.Message):
 
         # ── Game over: show finale ──────────────────────────────────
         if game_status != "active":
-            reason_map = {
-                "mission_complete": msgs["game_over_reason_mission_complete"],
-                "ship_destroyed": msgs["game_over_reason_ship_destroyed"],
-                "crew_wiped": msgs["game_over_reason_crew_wiped"],
-                "game_over": msgs["game_over_reason_game_over"],
-            }
-            reason = reason_map.get(game_status, game_status)
-
-            try:
-                finale = await api_request("GET", "/game/finale", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
-            except Exception:
-                logger.error(f"Failed to fetch finale for player {player_id}", exc_info=True)
-                finale = None
-
-            if finale:
-                # Show finale image if available
-                finale_image_url = finale.get("finale_image_url")
-                if finale_image_url:
-                    try:
-                        img_data = await _download_image(finale_image_url, 30)
-                        if img_data:
-                            photo = BufferedInputFile(img_data, filename="finale.png")
-                            title_text = msgs["game_over_victory_title"] if finale.get("finale_outcome_type") == "victory" else msgs["game_over_defeat_title"]
-                            await message.answer_photo(photo=photo, caption=f"*{title_text}*", parse_mode="Markdown")
-                            logger.info(f"[TURN] Sent finale image to player {player_id}")
-                    except Exception as e:
-                        logger.warning(f"[TURN] Failed to send finale image: {e}")
-
-                title_text = msgs["game_over_victory_title"] if finale.get("finale_outcome_type") == "victory" else msgs["game_over_defeat_title"]
-                full_text = f"*{title_text}*\n\n*{reason}*\n\n{finale['finale_narrative']}"
-                await _send_split_message(message, full_text, parse_mode="Markdown", max_len=4096)
-            else:
-                # No finale available — show basic game-over info
-                title_text = msgs["game_over_defeat_title"]
-                await message.answer(
-                    f"*{title_text}*\n\n*{reason}*\n\n{msgs['game_over_no_finale']}",
-                    parse_mode="Markdown",
-                )
+            await _send_game_over_finale(message, game_id, game_status, player_id, player_lang)
             return
 
         # ── Game is active — try personal briefing (new system) ──────
