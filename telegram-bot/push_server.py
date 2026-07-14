@@ -842,6 +842,11 @@ async def _deliver_gm_notification(
             msg = f"✅ **Ход {turn} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {turn}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
         else:
             msg = f"✅ **Turn {turn} for game `{game_id}` generated!**\n\n🎯 Turn: {turn}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
+    elif status == "game_ended":
+        if language == "ru":
+            msg = f"🏁 **Игра `{game_id}` завершена во время генерации хода {turn}.**\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."
+        else:
+            msg = f"🏁 **Game `{game_id}` ended during turn {turn} generation.**\n\nTurn {turn} was not sent to players — the game ended on the previous turn."
     else:
         if language == "ru":
             msg = f"❌ **Ошибка генерации хода {turn} игры `{game_id}`**\n\n{safe_error}"

@@ -158,6 +158,67 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         self.assertFalse(result["completed"])
 
 
+class TestGameOverFallback(unittest.TestCase):
+    """Regression: a victory whose LLM finale call failed used to return the
+    defeat fallback narrative ("Корабль погиб...") because the caller passed
+    the localized header as `outcome_type`, so `fallback_{header}` never
+    matched and `.get(key, fallback_defeat)` silently returned the defeat
+    text. Victory must map to fallback_victory, defeat to fallback_defeat."""
+
+    def _run_failing_finale(self, language, outcome_type, outcome_label):
+        agent = GameServer(language=language)
+        agent.vs_enabled = False
+        with patch.object(GameServer, "_call_llm", side_effect=RuntimeError("boom")):
+            return agent.generate_game_over_outcome(
+                outcome_type=outcome_type,
+                outcome_narrative="narrative",
+                mission_summary="summary",
+                game_id=None,
+                player_id=None,
+                turn=None,
+                kind=None,
+                outcome_label=outcome_label,
+            )
+
+    def test_victory_fallback_not_defeat_when_llm_fails(self):
+        result = self._run_failing_finale("ru", "victory", "🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!")
+        self.assertIn("Миссия выполнена", result["finale_narrative"])
+        self.assertNotIn("Корабль погиб", result["finale_narrative"])
+
+    def test_defeat_fallback_when_llm_fails(self):
+        result = self._run_failing_finale("ru", "defeat", "💀 КОРАБЛЬ УНИЧТОЖЕН — ПОРАЖЕНИЕ")
+        self.assertIn("Корабль погиб", result["finale_narrative"])
+
+    def test_victory_fallback_english(self):
+        result = self._run_failing_finale("en", "victory", "🏆 MISSION ACCOMPLISHED — VICTORY!")
+        self.assertIn("mission", result["finale_narrative"].lower())
+        self.assertNotIn("perished", result["finale_narrative"].lower())
+
+    def test_outcome_label_reaches_llm_prompt_not_the_token(self):
+        agent = GameServer(language="ru")
+        agent.vs_enabled = False
+        captured = {}
+
+        def _capture(system_prompt, user_prompt, **kwargs):
+            captured["user"] = user_prompt
+            return {"finale_narrative": "ok", "finale_image_prompt": "ok"}
+
+        with patch.object(GameServer, "_call_llm", side_effect=_capture):
+            agent.generate_game_over_outcome(
+                outcome_type="victory",
+                outcome_narrative="narrative",
+                mission_summary="summary",
+                game_id=None,
+                player_id=None,
+                turn=None,
+                kind=None,
+                outcome_label="🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!",
+            )
+        self.assertIn("🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!", captured["user"])
+        self.assertNotIn("Исход игры: victory", captured["user"])
+
+
+
 import random as _random  # noqa: E402
 
 from game_rules import (  # noqa: E402

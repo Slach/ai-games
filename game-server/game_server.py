@@ -2986,22 +2986,26 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
+        outcome_label: str | None = None,
     ) -> dict[str, str]:
         """Generate a dramatic finale narrative and image prompt for game end.
 
         Args:
-            outcome_type: "victory" or "defeat" — label the LLM uses to frame the finale
+            outcome_type: "victory" or "defeat" — machine token, selects the fallback
+            outcome_label: human-readable header shown to the LLM (defaults to outcome_type)
             outcome_narrative: The last turn's outcome narrative for context
             mission_summary: Summary of mission stages and their completion status
 
         Returns:
             Dict with finale_narrative and finale_image_prompt
         """
+        if outcome_label is None:
+            outcome_label = outcome_type
         logger.info(f"[GAME_OVER] Generating {outcome_type} finale, language={self.language}")
 
         system, user = build_game_over_prompts(
             language=self.language,
-            outcome_type=outcome_type,
+            outcome_type=outcome_label,
             outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
             use_vs=self.vs_enabled,
@@ -3015,7 +3019,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=vs_response_schema(GAME_OVER_SCHEMA),
                     temperature=0.7,
-                    max_tokens=4096,
+                    max_tokens=8192,
                     enable_thinking=True,
                     game_id=game_id,
                     player_id=player_id,
@@ -3031,7 +3035,7 @@ class GameServer:
                     user_prompt=user,
                     response_schema=GAME_OVER_SCHEMA,
                     temperature=0.7,
-                    max_tokens=2048,
+                    max_tokens=8192,
                     enable_thinking=True,
                     game_id=game_id,
                     player_id=player_id,

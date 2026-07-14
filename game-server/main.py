@@ -3476,13 +3476,15 @@ async def _analyze_turn_outcome(
                             mission_summary_parts.append(f"{done} Этап {stage}: {name} ({progress}/{threshold})")
                     mission_summary = "\n".join(mission_summary_parts) if mission_summary_parts else "No mission data"
 
-                    # Get outcome_type label for LLM
+                    # outcome_type is the machine token ("victory"/"defeat") used for
+                    # fallback lookup; outcome_label is the human-readable header shown
+                    # to the LLM. Mixing them once routed a victory to the defeat fallback.
                     gs = get_game_strings(language)
                     go_msgs = gs.get("game_over", {})
                     outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
 
                     gm = create_game_server(language=language)
-                    game_over = gm.generate_game_over_outcome(outcome_type=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary, game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome")
+                    game_over = gm.generate_game_over_outcome(outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary, game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome")
 
                     finale_narrative = game_over.get("finale_narrative", "")
                     finale_image_prompt = game_over.get("finale_image_prompt", "")
@@ -5479,6 +5481,17 @@ async def _background_continue_wrapper(
                 npcs=result.get("npcs", 0),
                 language=language,
             )
+        elif result and result.get("status") == "game_ended":
+            logger.info(f"[BACKGROUND] Game {game_id} ended during turn {turn_num} generation; not notifying scheduler")
+            await push_gm_notification(
+                game_id=game_id,
+                turn=turn_num,
+                status="game_ended",
+                error="",
+                players=result.get("players", 0),
+                npcs=result.get("npcs", 0),
+                language=language,
+            )
     except Exception as e:
         logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}", exc_info=True)
         await push_gm_notification(
@@ -5991,8 +6004,19 @@ async def _original_continue_game(
     }
     create_game_turn(new_turn, game_id)
 
-    # Advance game state
-    update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
+    # Advance game state — but only if the previous turn didn't already end
+    # the game (race: the last player's action can trigger _analyze_turn_outcome
+    # → end_game before the scheduler fires continue-game). Without this guard
+    # we'd clobber end_game's status='mission_complete'/'ship_destroyed' back
+    # to 'active', resurrecting a dead game and letting turn N+1 be pushed.
+    pre_state = get_game_state(game_id)
+    if pre_state["status"] == "active" and pre_state["ship_alive"]:
+        update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
+    else:
+        logger.info(
+            f"[CONTINUE] Game already ended (status={pre_state['status']}) "
+            f"before advancing to turn {turn_num + 1}; skipping state update"
+        )
 
     # ── Push previous turn outcome (if applicable) ──────────────
     # Must run BEFORE pushing new turn briefings so player sees:
@@ -6018,6 +6042,23 @@ async def _original_continue_game(
             game_id=game_id,
             force=False,
         )
+
+    # If analyzing the previous turn just ended the game, do NOT push the
+    # new turn's briefings — players should see the finale, not turn N+1.
+    post_state = get_game_state(game_id)
+    if post_state["status"] != "active" or not post_state["ship_alive"]:
+        logger.info(
+            f"[CONTINUE] Game ended after analyzing turn {turn_num - 1} "
+            f"(status={post_state['status']}); not pushing turn {turn_num} briefings"
+        )
+        return {
+            "status": "game_ended",
+            "turn": turn_num,
+            "total_participants": len(all_participants),
+            "players": len(player_ids),
+            "npcs": len(npcs),
+            "crew_dialogues": crew_dialogues_list,
+        }
 
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
