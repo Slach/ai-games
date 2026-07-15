@@ -569,7 +569,7 @@ async def get_game_language(game_id: str, fallback: str) -> str:
     return fallback
 
 
-async def send_random_loading_image(message: types.Message, caption_key: str, language: str) -> bool:
+async def send_random_loading_image(message: types.Message, caption_key: str, language: str, game_id: str) -> bool:
     """Fetch and send a random loading image from the API with a caption.
 
     Args:
@@ -580,7 +580,7 @@ async def send_random_loading_image(message: types.Message, caption_key: str, la
     Returns True if sent, False otherwise.
     """
     try:
-        result = await api_request("GET", "/content/loading-image", data=None, params={"game_id": "default_game"}, timeout_total=600, ignore_codes=())
+        result = await api_request("GET", "/content/loading-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         image_url = result.get("image_url") if result else None
         if image_url:
             caption = lang.get_images(language)[caption_key]
@@ -1255,7 +1255,7 @@ async def _maybe_show_sg_progress_message(
     if not _options_have_sg_tags(current_options):
         # Role question — the species/gender phase starts right after the last one.
         if role_count and current_question_id == role_count:
-            await send_random_loading_image(message, caption_key="sg_intro_caption", language=language)
+            await send_random_loading_image(message, caption_key="sg_intro_caption", language=language, game_id=state_data["game_id"])
         return
 
     # Answering a species/gender question: skip the 'generating next question' line
@@ -1836,7 +1836,13 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
 
     # Store name in FSM data and proceed to onboarding
     data = await state.get_data()
-    game_id = data.get("game_id", "default_game")
+    game_id = data.get("game_id")
+    if not game_id:
+        logger.error(f"Player {player_id} reached name input without game_id in FSM state")
+        onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
+        await message.answer(onboarding_msgs["onboarding_error"].format(error="missing game_id"))
+        await state.clear()
+        return
     game_language = data.get("game_language", "")
     effective_lang = game_language or DEFAULT_LANGUAGE
 
@@ -1849,7 +1855,7 @@ async def handle_onboarding_name(message: types.Message, state: FSMContext):
 
     # Send loading image with "please wait" caption immediately — the onboarding
     # API call below takes ~30-60s to generate questions via LLM.
-    await send_random_loading_image(message, caption_key="onboarding_wait", language=effective_lang)
+    await send_random_loading_image(message, caption_key="onboarding_wait", language=effective_lang, game_id=game_id)
 
     await state.update_data(player_name=player_name)
 
@@ -2009,7 +2015,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
             # Re-send the current question with image and inline keyboard
             await state.update_data(
                 session_id=session_id,
-                game_id=player_state.get("game_id", "default_game"),
+                game_id=player_state["game_id"],
                 current_question_id=current_question_id,
                 current_options=current_options,
             )
@@ -2061,7 +2067,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 logger.info(f"Restored onboarding question from API: id={next_question['id']}")
                 await state.update_data(
                     session_id=session_id,
-                    game_id=session_data.get("game_id", "default_game"),
+                    game_id=session_data["game_id"],
                     current_question_id=next_question["id"],
                     current_options=next_question["options"],
                 )
@@ -2168,7 +2174,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     return
 
             # Player already has a profile - welcome back
-            await send_random_loading_image(message, caption_key="loading_caption", language=player_lang)
+            await send_random_loading_image(message, caption_key="loading_caption", language=player_lang, game_id=existing_game_id)
 
             welcome_text = lang.get_onboarding(player_lang)["welcome_back"].format(
                 role=profile["role"],
@@ -2257,7 +2263,9 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                         logger.warning(f"Failed to send invite to player {player_id}: {e}")
 
             # Update player state with game info
-            update_player_state(player_id, game_id=profile.get("game_id", "default_game"))
+            game_id_from_profile = profile.get("game_id")
+            if game_id_from_profile:
+                update_player_state(player_id, game_id=game_id_from_profile)
 
         else:
             if game_id:
@@ -2418,7 +2426,7 @@ async def cmd_turn(message: types.Message):
                     "GET",
                     f"/game/turn/{current_turn_num}",
                     data=None,
-                    params={"game_id": briefing.get("game_id", "default_game")},
+                    params={"game_id": game_id},
                     timeout_total=600,
                     ignore_codes=(404,),
                 )
@@ -2511,7 +2519,7 @@ async def cmd_turn(message: types.Message):
                     "GET",
                     "/game/scene-image",
                     data=None,
-                    params={"turn": turn_number, "game_id": turn_data.get("game_id", "default_game")},
+                    params={"turn": turn_number, "game_id": game_id},
                     timeout_total=600,
                     ignore_codes=(404,),
                 )
@@ -2991,7 +2999,7 @@ async def cmd_help(message: types.Message):
     # Fetch game title dynamically from API
     game_title = "🎮 Game"
     try:
-        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": "default_game"}, timeout_total=600, ignore_codes=())
+        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": "all"}, timeout_total=600, ignore_codes=())
         if title_data and title_data.get("title"):
             game_title = f"🎮 {title_data['title']}"
     except Exception as e:
@@ -3368,9 +3376,12 @@ async def cmd_gm_pause(message: types.Message):
 
     gm_msgs = lang.get_gm_commands(player_lang)
 
-    # Parse optional game_id; default to env GAME_ID
+    # Parse game_id argument
     parts = (message.text or "").split()
-    game_id = parts[1].strip() if len(parts) > 1 else os.getenv("GAME_ID", "default_game")
+    if len(parts) < 2:
+        await message.answer(gm_msgs["pause_usage"])
+        return
+    game_id = parts[1].strip()
 
     try:
         # First, check current state
@@ -4082,7 +4093,7 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             )
 
             # Show loading image while profile/avatar is being generated
-            await send_random_loading_image(msg, caption_key="processing_caption", language=player_lang)
+            await send_random_loading_image(msg, caption_key="processing_caption", language=player_lang, game_id=state_data["game_id"])
 
             # Avatar generation + onboarding message
             if msg.bot is None:
@@ -4276,7 +4287,7 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             )
 
             # Show loading image while profile/avatar is being generated
-            await send_random_loading_image(message, caption_key="processing_caption", language=get_player_language(player_id))
+            await send_random_loading_image(message, caption_key="processing_caption", language=get_player_language(player_id), game_id=state_data["game_id"])
 
             # Avatar generation + onboarding message is handled in _generate_and_send_avatar
             if message.bot is None:
@@ -4331,6 +4342,7 @@ async def action_selection(callback: types.CallbackQuery):
     # Acknowledge callback immediately to prevent query ID expiration
     await callback.answer()
 
+    game_id = None
     try:
         # Resolve the player's game so the current turn matches their game
         profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
@@ -4368,7 +4380,7 @@ async def action_selection(callback: types.CallbackQuery):
                 logger.warning(f"Failed to update action keyboard for player {player_id}: {kb_err}")
 
         # Use the game's language for confirmation messages
-        action_lang = await get_game_language("default_game", fallback=player_lang)
+        action_lang = await get_game_language(game_id, fallback=player_lang)
         msgs = lang.get_actions(action_lang)
         if callback.message:
             await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE))
@@ -4376,10 +4388,11 @@ async def action_selection(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Failed to record action for player {player_id}: {e}", exc_info=True)
         action_lang = player_lang
-        try:
-            action_lang = await get_game_language("default_game", fallback=player_lang)
-        except Exception:
-            logger.warning("Failed to get game language for fallback, using player lang", exc_info=True)
+        if game_id:
+            try:
+                action_lang = await get_game_language(game_id, fallback=player_lang)
+            except Exception:
+                logger.warning("Failed to get game language for fallback, using player lang", exc_info=True)
         msgs = lang.get_actions(action_lang)
         if callback.message:
             await callback.message.answer(msgs["error"].format(error=str(e)))

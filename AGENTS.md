@@ -124,10 +124,9 @@ comments for removed code, etc. If you are certain that something is unused, you
   once routed a player's action to the wrong game's turn: the bot fetched
   the current turn for `default_game` (a stale, completed game) but
   submitted the action for the player's real game — 404 "No active game
-  turn". The only legitimate uses of the literal `"default_game"` are
-  seeding it in `init_db()` and the global shared bucket for loading/splash
-  images (`_generate_loading_images` / `_generate_splash_images`), and even
-  there it is passed explicitly as `game_id="default_game"`. When a
+  turn". The only legitimate use of the literal `"default_game"` is
+  seeding it in `init_db()`. Loading/splash images use a global pool
+  under `game_id="all"`, not `"default_game"`. When a
   `game_id` parameter would otherwise sit after an optional parameter,
   make it keyword-only (`*, game_id: str`) instead of reordering — this
   keeps existing positional callers valid.

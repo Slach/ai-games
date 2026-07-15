@@ -765,7 +765,7 @@ def generate_player_profile_from_answers(
 async def _generate_loading_images():
     """Generate loading images in background at startup."""
     try:
-        existing = get_game_image_count("loading", game_id="default_game", turn=None)
+        existing = get_game_image_count("loading", game_id="all", turn=None)
         total_needed = 5
         if existing >= total_needed:
             logger.info(f"[LOADING] {existing} loading images already in DB, skipping gen")
@@ -774,12 +774,12 @@ async def _generate_loading_images():
         remaining = total_needed - existing
         logger.info(f"[LOADING] Generating {remaining} loading images (background)...")
         image_generator = create_image_generator()
-        urls = await image_generator.generate_loading_images(count=remaining, start_index=existing, filename_prefix="loading", game_id="default_game", width=768, height=768)
+        urls = await image_generator.generate_loading_images(count=remaining, start_index=existing, filename_prefix="loading", game_id="all", width=768, height=768)
 
         saved = 0
         for url in urls:
             if url:
-                save_game_image(type="loading", image_url=url, game_id="default_game", turn=None, prompt="")
+                save_game_image(type="loading", image_url=url, game_id="all", turn=None, prompt="")
                 saved += 1
 
         logger.info(f"[LOADING] Background gen: saved {saved}/{remaining} images")
@@ -807,12 +807,13 @@ async def lifespan(app: FastAPI):
 GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
 
 
-async def _notify_scheduler(action: str) -> None:
+async def _notify_scheduler(action: str, game_id: str) -> None:
     """Fire-and-forget notification to game-scheduler after a turn event."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{GAME_SCHEDULER_URL}/scheduler/{action}",
+                params={"game_id": game_id},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 if resp.status != 200:
@@ -3482,7 +3483,7 @@ async def _analyze_turn_outcome(
                     # to the LLM. Mixing them once routed a victory to the defeat fallback.
                     gs = get_game_strings(language)
                     go_msgs = gs.get("game_over", {})
-                    outcome_label = go_msgs.get("victory_header") if mission_completed else go_msgs.get("defeat_header", outcome_type)
+                    outcome_label = go_msgs.get("victory_header", outcome_type) if mission_completed else go_msgs.get("defeat_header", outcome_type)
 
                     gm = create_game_server(language=language)
                     game_over = gm.generate_game_over_outcome(outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary, game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome")
@@ -4157,7 +4158,7 @@ async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
     try:
         result = await _run_generation_with_job(request.game_id, turn_num, "start", _original_start_game(request), resume_job_id=None)
         if result and result.get("status") == "success":
-            await _notify_scheduler("reset")
+            await _notify_scheduler("reset", game_id=request.game_id)
             await push_gm_notification(
                 game_id=request.game_id,
                 turn=turn_num,
@@ -4591,7 +4592,6 @@ async def _original_start_game(request: StartGameRequest):
                         turn_num,
                         game_id=game_id,
                         player_id=str(player_id) if player_id else participant.get("npc_key", ""),
-                        turn=turn_num,
                         kind="player_briefing",
                     )
                 )
@@ -5472,7 +5472,7 @@ async def _background_continue_wrapper(
             resume_job_id=None,
         )
         if result and result.get("status") == "success":
-            await _notify_scheduler("reset")
+            await _notify_scheduler("reset", game_id=game_id)
             await push_gm_notification(
                 game_id=game_id,
                 turn=turn_num,
@@ -5771,6 +5771,7 @@ async def _original_continue_game(
             player_name,
             turn_num,
             game_id=game_id,
+            player_id=str(participant["player_id"]) if participant.get("player_id") else participant.get("npc_key", ""),
             kind="player_briefing",
         )
         briefing = briefing_data.get("briefing", "")

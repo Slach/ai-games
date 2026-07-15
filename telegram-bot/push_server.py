@@ -272,7 +272,7 @@ async def _deliver_briefing(
     global_narrative = payload.get("global_narrative", "")
     was_restarted = payload.get("was_restarted", False)
     language = payload.get("language", language)
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload["game_id"]
 
     if not turn or not players:
         return True  # nothing to send → success
@@ -579,7 +579,7 @@ async def _deliver_outcome(
     alive_crew_count = payload.get("alive_crew_count")
     action_images = payload.get("action_images", [])
     language = payload.get("language", language)
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload["game_id"]
 
     if not turn or not alive_players:
         return True
@@ -828,7 +828,7 @@ async def _deliver_gm_notification(
     bot: Bot,
 ) -> bool:
     """Deliver a /push/gm-notification message."""
-    game_id = payload.get("game_id", "")
+    game_id = payload["game_id"]
     turn = payload.get("turn", 0)
     status = payload.get("status", "")
     error = payload.get("error", "")
@@ -886,7 +886,7 @@ async def _deliver_game_over(
     dedup survives bot restarts (previously in-memory-only → duplicate
     finales after a restart).
     """
-    game_id = payload.get("game_id", "")
+    game_id = payload["game_id"]
     if last_sent is None:
         last_sent = {}
     language = payload.get("language", "ru")
@@ -1019,7 +1019,7 @@ async def _deliver_onboarding_ready(
 ) -> bool:
     """Deliver a /push/onboarding-ready message."""
     player_id = payload.get("player_id")
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload["game_id"]
     session_id = payload.get("session_id", "")
     language = payload.get("language", "ru")
     question = payload.get("question")
@@ -1427,10 +1427,10 @@ async def handle_push_briefings(request: web.Request) -> web.Response:
 
     turn = payload.get("turn")
     players = payload.get("players", [])
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload.get("game_id")
 
-    if not turn or not players:
-        return web.json_response({"status": "error", "message": "Missing turn or players"}, status=400)
+    if not turn or not players or not game_id:
+        return web.json_response({"status": "error", "message": "Missing turn, players or game_id"}, status=400)
 
     # Update current_turns cache
     _current_turns[game_id] = turn
@@ -1475,12 +1475,12 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
 
     player_id = payload.get("player_id")
     turn = payload.get("turn")
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload.get("game_id")
     chosen_action_url = payload.get("chosen_action_url")
 
-    if not player_id or not turn or not chosen_action_url:
+    if not player_id or not turn or not chosen_action_url or not game_id:
         return web.json_response(
-            {"status": "error", "message": "Missing player_id, turn or chosen_action_url"},
+            {"status": "error", "message": "Missing player_id, turn, chosen_action_url or game_id"},
             status=400,
         )
 
@@ -1510,11 +1510,11 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
 
     turn = payload.get("turn")
     alive_players = payload.get("alive_players", [])
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload.get("game_id")
 
-    if not turn or not alive_players:
+    if not turn or not alive_players or not game_id:
         return web.json_response(
-            {"status": "error", "message": "Missing turn or alive_players"},
+            {"status": "error", "message": "Missing turn, alive_players or game_id"},
             status=400,
         )
 
@@ -1546,8 +1546,14 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
 
-    game_id = payload.get("game_id", "")
-    turn = payload.get("turn", 0)
+    game_id = payload.get("game_id")
+    turn = payload.get("turn")
+
+    if not game_id or turn is None:
+        return web.json_response(
+            {"status": "error", "message": "Missing game_id or turn"},
+            status=400,
+        )
 
     insert_push_message(
         player_id=GAME_MASTER_ID,
@@ -1574,10 +1580,10 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
 
     alive_players = payload.get("alive_players", [])
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload.get("game_id")
 
-    if not alive_players:
-        return web.json_response({"status": "error", "message": "Missing alive_players"}, status=400)
+    if not alive_players or not game_id:
+        return web.json_response({"status": "error", "message": "Missing alive_players or game_id"}, status=400)
 
     inserted = 0
     for player_id in alive_players:
@@ -1608,10 +1614,10 @@ async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     player_id = payload.get("player_id")
-    game_id = payload.get("game_id", "default_game")
+    game_id = payload.get("game_id")
 
-    if not player_id:
-        return web.json_response({"error": "Missing player_id"}, status=400)
+    if not player_id or not game_id:
+        return web.json_response({"error": "Missing player_id or game_id"}, status=400)
 
     insert_push_message(
         player_id=player_id,

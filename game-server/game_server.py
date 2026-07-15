@@ -956,7 +956,7 @@ class GameServer:
         user_prompt: str,
         response_schema: dict[str, Any],
         temperature: float,
-        max_tokens: int | None,
+        max_tokens: int,
         enable_thinking: bool,
         *,
         game_id: str | None,
@@ -983,8 +983,6 @@ class GameServer:
         """
         from logging_utils import write_llm_log
 
-        if max_tokens is None:
-            max_tokens = self.llm_max_tokens
         messages: list[ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -1236,7 +1234,7 @@ class GameServer:
             user_prompt=user,
             response_schema=ONBOARDING_QUESTIONS_SCHEMA,
             temperature=0.7,
-            max_tokens=None,
+            max_tokens=self.llm_max_tokens,
             enable_thinking=False,
             game_id=game_id,
             player_id=player_id,
@@ -1302,7 +1300,7 @@ class GameServer:
             raise ValueError("No roles available")
 
         # Build role scores from answer selections
-        role_points: dict[str, int]
+        role_points: dict[str, int] = dict.fromkeys(SHIP_ROLE_KEYS, 0)
 
         if questions:
             # Build lookup: question_id -> question data
@@ -1382,7 +1380,7 @@ class GameServer:
                 user_prompt=user,
                 response_schema=vs_response_schema(GAME_TITLE_SCHEMA),
                 temperature=0.9,
-                max_tokens=None,
+                max_tokens=self.llm_max_tokens,
                 enable_thinking=False,
                 game_id=game_id,
                 player_id=player_id,
@@ -1398,7 +1396,7 @@ class GameServer:
                 user_prompt=user,
                 response_schema=GAME_TITLE_SCHEMA,
                 temperature=0.9,
-                max_tokens=None,
+                max_tokens=self.llm_max_tokens,
                 enable_thinking=False,
                 game_id=game_id,
                 player_id=player_id,
@@ -2083,7 +2081,7 @@ class GameServer:
             return {}
 
         question_map = {q.get("id"): q for q in questions}
-        tag_counts: dict[str, int]
+        tag_counts: dict[str, int] = {}
 
         for question_id, selected_value in answers.items():
             try:
@@ -2698,6 +2696,7 @@ class GameServer:
         *,
         game_id: str | None,
         kind: str | None,
+        player_id: str,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
@@ -2707,7 +2706,6 @@ class GameServer:
         - A personal briefing (their unique perspective on the situation)
         - Action choices with visible descriptions and hidden consequences
         """
-        player_id = player_profile.get("player_id") or player_profile.get("npc_key", "?")
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
         logger.info(f"[TURN] Generating briefing for {player_id} ({player_role})")
@@ -2986,21 +2984,19 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
-        outcome_label: str | None = None,
+        outcome_label: str,
     ) -> dict[str, str]:
         """Generate a dramatic finale narrative and image prompt for game end.
 
         Args:
             outcome_type: "victory" or "defeat" — machine token, selects the fallback
-            outcome_label: human-readable header shown to the LLM (defaults to outcome_type)
+            outcome_label: human-readable header shown to the LLM
             outcome_narrative: The last turn's outcome narrative for context
             mission_summary: Summary of mission stages and their completion status
 
         Returns:
             Dict with finale_narrative and finale_image_prompt
         """
-        if outcome_label is None:
-            outcome_label = outcome_type
         logger.info(f"[GAME_OVER] Generating {outcome_type} finale, language={self.language}")
 
         system, user = build_game_over_prompts(

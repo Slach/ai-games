@@ -64,7 +64,7 @@ try:
 except (ValueError, TypeError):
     logger.warning("Invalid AUTO_ACTION_TIMEOUT_HOURS, using default 24")
     AUTO_ACTION_TIMEOUT_HOURS = 24
-GAME_ID = os.getenv("GAME_ID", "default_game")
+GAME_ID = os.getenv("GAME_ID", "all")
 
 
 def parse_schedule(schedule: str) -> tuple[str, str]:
@@ -702,7 +702,7 @@ async def handle_resume(request: web.Request) -> web.Response:
 
 async def handle_reset(request: web.Request) -> web.Response:
     scheduler: GameScheduler = request.app["scheduler"]
-    game_id = request.query.get("game_id", "") or os.getenv("GAME_ID", "default_game")
+    game_id = request.query.get("game_id")
     if not game_id:
         return web.json_response({"status": "error", "message": "No game_id"}, status=400)
     state = scheduler._games.get(game_id)
@@ -740,7 +740,7 @@ def create_app() -> web.Application:
     # Also aliased for game-specific requests via query param
     async def handle_legacy_pause(request: web.Request) -> web.Response:
         scheduler: GameScheduler = request.app["scheduler"]
-        game_id = request.query.get("game_id", "") or os.getenv("GAME_ID", "default_game")
+        game_id = request.query.get("game_id")
         if not game_id:
             return web.json_response({"status": "error", "message": "No game_id"}, status=400)
         ok = scheduler.pause_game(game_id)
@@ -748,7 +748,7 @@ def create_app() -> web.Application:
 
     async def handle_legacy_resume(request: web.Request) -> web.Response:
         scheduler: GameScheduler = request.app["scheduler"]
-        game_id = request.query.get("game_id", "") or os.getenv("GAME_ID", "default_game")
+        game_id = request.query.get("game_id")
         if not game_id:
             return web.json_response({"status": "error", "message": "No game_id"}, status=400)
         ok = scheduler.resume_game(game_id)
