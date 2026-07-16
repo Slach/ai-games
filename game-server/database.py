@@ -88,7 +88,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     ),
     (
         7,
-        "ALTER TABLE game_state ADD COLUMN last_death_turn INTEGER DEFAULT 0;",
+        "ALTER TABLE game_state ADD COLUMN last_death_day INTEGER DEFAULT 0;",
     ),
     (
         8,
@@ -116,6 +116,17 @@ MIGRATIONS: list[tuple[int, str]] = [
     ),
     (11, "ALTER TABLE player_kicks ADD COLUMN game_id TEXT NOT NULL DEFAULT 'default_game';"),
     (12, "ALTER TABLE player_briefings ADD COLUMN personal_title TEXT DEFAULT '';"),
+    # Migration 7 originally added `last_death_day`, but the codebase later
+    # renamed the concept to "turn". Migration 7 was (incorrectly) rewritten
+    # in-place to `last_death_turn`, which never re-runs on databases that
+    # had already applied version 7 — leaving them with `last_death_day`
+    # while all code references `last_death_turn`. Restore migration 7 to
+    # its actually-applied form and perform the rename here as a new step,
+    # so both fresh and existing databases converge on `last_death_turn`.
+    (
+        13,
+        "ALTER TABLE game_state RENAME COLUMN last_death_day TO last_death_turn;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
