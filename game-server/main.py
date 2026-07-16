@@ -1276,7 +1276,6 @@ async def _generate_background_library(
             logger.error("[BACKGROUND] Failed to generate %s for game %s", loc, game_id, exc_info=True)
 
 
-@app.post("/onboarding/{session_id}/complete")
 async def _generate_started_game_assets(game_id: str, language: str) -> None:
     """Generate and persist mission + bridge image for an auto-started game.
 
@@ -1351,6 +1350,7 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
         logger.error(f"[MISSION] Failed to generate mission for auto-started game {game_id}", exc_info=True)
 
 
+@app.post("/onboarding/{session_id}/complete")
 async def complete_onboarding(session_id: str):
     """Complete onboarding and trigger avatar generation"""
     session = get_onboarding_session(session_id)
