@@ -647,11 +647,11 @@ MISSION_SCHEMA = {
                 },
                 "description": {
                     "type": "string",
-                    "description": "Mission overview narrative (2-3 paragraphs)",
+                    "description": "Crew briefing before departure: what to do and why, 2-3 paragraphs, clear to the player. No spoilers — plot twists must stay hidden.",
                 },
                 "short_description": {
                     "type": "string",
-                    "description": "Condensed 1-2 sentence summary, no more than 500 characters — used for image captions with length limits",
+                    "description": "Condensed 1-2 sentence summary, no more than 500 characters — used for image captions with length limits. No spoilers.",
                 },
                 "objectives": {
                     "type": "array",

@@ -1037,9 +1037,27 @@ def build_mission_prompts(
 
     if seeds:
         if lang == LANGUAGE_RU:
-            seeds_block = f"\nОБЯЗАТЕЛЬНЫЕ элементы миссии (используй их):\n- Место: {seeds.get('setting', '')}\n- Осложнение: {seeds.get('complication', '')}\n- Возможный поворот: {seeds.get('twist', '')}\n- Награда: {seeds.get('reward', '')}\n\n"
+            seeds_block = (
+                f"\nЭлементы миссии для брифинга экипажа:\n"
+                f"- Место: {seeds.get('setting', '')}\n"
+                f"- Осложнение: {seeds.get('complication', '')}\n"
+                f"- Награда: {seeds.get('reward', '')}\n\n"
+                f"СЕКРЕТНЫЙ поворот сюжета (только для Game Master): {seeds.get('twist', '')}\n"
+                f"Этот поворот НЕ раскрывай в description и short_description — "
+                f"игрок не должен о нём знать заранее, он должен раскрыться по ходу игры. "
+                f"Описание и short_description — это то, что экипажу сообщают перед вылетом.\n\n"
+            )
         else:
-            seeds_block = f"\nMANDATORY mission elements (use them):\n- Setting: {seeds.get('setting', '')}\n- Complication: {seeds.get('complication', '')}\n- Possible twist: {seeds.get('twist', '')}\n- Reward: {seeds.get('reward', '')}\n\n"
+            seeds_block = (
+                f"\nMission elements for the crew briefing:\n"
+                f"- Setting: {seeds.get('setting', '')}\n"
+                f"- Complication: {seeds.get('complication', '')}\n"
+                f"- Reward: {seeds.get('reward', '')}\n\n"
+                f"SECRET plot twist (Game Master only): {seeds.get('twist', '')}\n"
+                f"Do NOT reveal this twist in the description or short_description — "
+                f"the player must not know about it in advance; it must unfold during play. "
+                f"The description and short_description are what the crew is told before departure.\n\n"
+            )
     else:
         seeds_block = ""
 
@@ -1053,9 +1071,12 @@ def build_mission_prompts(
             "Создай миссию с:\n"
             "1. Название миссии — только кодовое имя и описание (формат: 'Кодовое имя: описание'). "
             "ВАЖНО: слово 'Миссия' в названии НЕ пиши — оно будет добавлено автоматически в интерфейсе.\n"
-            "2. Описание — что нужно сделать, 2-3 абзаца\n"
+            "2. Описание — это брифинг для экипажа перед вылетом: что нужно сделать и зачем, "
+            "2-3 абзаца, понятное игроку. НЕ раскрывай поворот сюжета, скрытые мотивы NPC "
+            "или истинную цель — это тайна, которую игрок раскроет по ходу игры.\n"
             "3. short_description — сжатое описание миссии в 1-2 предложениях, "
-            "не более 500 символов (используется для подписей к картинкам с ограничением длины)\n"
+            "не более 500 символов (используется для подписей к картинкам с ограничением длины), "
+            "без спойлеров.\n"
             "4. 2-4 этапа с целями, каждый с success_threshold в диапазоне 3-5\n"
             "Этапы должны быть последовательными, но достижимыми нелинейно.\n"
             "Всё на русском языке."
@@ -1070,9 +1091,13 @@ def build_mission_prompts(
             "Create a mission with:\n"
             "1. Mission name — code name and description only (format: 'Code Name: description'). "
             "IMPORTANT: do NOT include the word 'Mission' in the name — it will be added automatically by the UI.\n"
-            "2. Description — what needs to be done, 2-3 paragraphs\n"
+            "2. Description — this is a briefing for the crew before departure: what needs to be "
+            "done and why, 2-3 paragraphs, clear to the player. Do NOT reveal the plot twist, "
+            "hidden NPC motives, or the true objective — that is a secret the player will uncover "
+            "during play.\n"
             "3. A short_description — condensed 1-2 sentence summary of the mission, "
-            "no more than 500 characters (used for image captions with length limits)\n"
+            "no more than 500 characters (used for image captions with length limits), "
+            "no spoilers.\n"
             "4. 2-4 stages with objectives, each with success_threshold in the range 3-5\n"
             "Stages should be sequential but achievable non-linearly."
         )
