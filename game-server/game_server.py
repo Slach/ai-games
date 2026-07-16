@@ -839,6 +839,45 @@ NPC_NAME_SCHEMA = {
 
 # ============== Game Server ==============
 
+# Each wound severity step removes one action choice from the healthy total.
+# healthy = full set (good+bad+neutral), then minor→-1, moderate→-2, critical→-3.
+# The neutral ("wait/rest") option is always preserved, so a critically wounded
+# crew member still has at least one safe choice.
+_WOUND_ACTION_PENALTY = {"minor": 1, "moderate": 2, "critical": 3}
+
+
+def _actions_for_wound(
+    wound_severity: str | None,
+    n_good: int,
+    n_bad: int,
+    n_neutral: int,
+) -> tuple[int, int, int, int]:
+    """Return (total, good, bad, neutral) action counts for a wound severity.
+
+    Reduces the action set by trimming good choices first, then bad, always
+    preserving at least one neutral choice (safe "wait/rest").
+    """
+    total = n_good + n_bad + n_neutral
+    penalty = _WOUND_ACTION_PENALTY.get(wound_severity, 0)
+    if penalty <= 0:
+        return total, n_good, n_bad, n_neutral
+
+    # Trim from good first.
+    removed_from_good = min(n_good, penalty)
+    out_good = n_good - removed_from_good
+    remaining_penalty = penalty - removed_from_good
+    # Then trim from bad.
+    out_bad = max(0, n_bad - remaining_penalty)
+    # Neutral is always preserved (at least 1) so a wounded member always has
+    # a safe "rest" option.
+    out_neutral = max(1, n_neutral)
+    final_total = out_good + out_bad + out_neutral
+    # Never go below 1 total action.
+    if final_total < 1:
+        out_neutral = 1
+        return 1, 0, 0, out_neutral
+    return final_total, out_good, out_bad, out_neutral
+
 
 class GameServer:
     """
@@ -871,9 +910,14 @@ class GameServer:
         self._init_default_npcs()
         logger.info(f"GameServer initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
 
-    def _get_player_briefing_schema(self) -> dict[str, object]:
-        """Build the player briefing JSON schema with dynamic maxItems."""
-        total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
+    def _get_player_briefing_schema(self, total_actions: int | None = None) -> dict[str, object]:
+        """Build the player briefing JSON schema with dynamic maxItems.
+
+        total_actions overrides the default healthy count when a crew member is
+        wounded (fewer choices).
+        """
+        if total_actions is None:
+            total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
         return {
             "type": "json_schema",
             "json_schema": {
@@ -2719,7 +2763,16 @@ class GameServer:
         key_events = global_circumstances.get("key_events", [])
 
         key_events_text = "\n".join([f"  - {e}" for e in key_events])
-        total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
+
+        # Wound severity reduces the number of action choices available:
+        # healthy = full set, then one fewer per step (5/4/3/2 by default).
+        wound_severity = player_profile.get("wound_severity")
+        total_actions, n_good, n_bad, n_neutral = _actions_for_wound(
+            wound_severity,
+            self.turn_good_actions,
+            self.turn_bad_actions,
+            self.turn_neutral_actions,
+        )
 
         system = build_personal_briefing_system(self.language)
         user = "Global circumstances:\n" if self.language == LANGUAGE_EN else "Общие обстоятельства дня:\n"
@@ -2728,6 +2781,11 @@ class GameServer:
             good = "хороших"
             bad = "плохое"
             neutral = "нейтральное"
+            wound_label_ru = {
+                "critical": "тяжёлое ранение",
+                "moderate": "среднее ранение",
+                "minor": "лёгкое ранение",
+            }.get(wound_severity, "здоров")
             user = (
                 f"Общие обстоятельства дня:\n"
                 f"Локация: {setting}\n"
@@ -2737,6 +2795,7 @@ class GameServer:
                 f"Персонаж:\n"
                 f"  Имя: {display_name}\n"
                 f"  Роль: {player_role}\n"
+                f"  Состояние: {wound_label_ru}\n"
                 f"  Характер: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
                 "Создай:\n"
                 "1. personal_title — уникальный, атмосферный заголовок для ПЕРСОНАЛЬНОЙ вводной этого игрока. "
@@ -2747,7 +2806,7 @@ class GameServer:
                 "2. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
                 f"3. Ровно {total_actions} вариантов действий с последствиями: "
-                f"{self.turn_good_actions} {good}, {self.turn_bad_actions} {bad}, {self.turn_neutral_actions} {neutral}.\n\n"
+                f"{n_good} {good}, {n_bad} {bad}, {n_neutral} {neutral}.\n\n"
                 "КРИТИЧЕСКИЕ ТРЕБОВАНИЯ К ВАРИАНТАМ ДЕЙСТВИЙ:\n"
                 "- Каждое действие ДОЛЖНО иметь РЕАЛЬНЫЙ РИСК. "
                 "Успех приближает к цели миссии, провал — отдаляет. Последствия должны быть РАДИКАЛЬНЫМИ.\n"
@@ -2757,10 +2816,22 @@ class GameServer:
                 "- Нейтральное действие — безопасное (ничего не делать / ждать), "
                 "оно НЕ продвигает миссию и может УХУДШИТЬ ситуацию.\n"
                 "- Разные варианты должны давать РАЗНЫЕ уровни риска и награды.\n"
-                "- Варианты должны соответствовать РОЛИ персонажа.\n\n"
-                "Всё на русском языке."
+                "- Варианты должны соответствовать РОЛИ персонажа.\n"
+                + (
+                    "- Персонаж РАНЕН — варианты должны учитывать его ограниченные физические "
+                    "возможности: меньше агрессивных/физических действий, больше осторожных, "
+                    "всегда есть безопасное нейтральное действие (отдых/лечение).\n"
+                    if wound_severity in ("critical", "moderate", "minor")
+                    else ""
+                )
+                + "\nВсё на русском языке."
             )
         else:
+            wound_label_en = {
+                "critical": "critically wounded",
+                "moderate": "moderately wounded",
+                "minor": "lightly wounded",
+            }.get(wound_severity, "healthy")
             user = (
                 f"Global circumstances:\n"
                 f"Setting: {setting}\n"
@@ -2770,18 +2841,25 @@ class GameServer:
                 f"Character:\n"
                 f"  Name: {display_name}\n"
                 f"  Role: {player_role}\n"
+                f"  Status: {wound_label_en}\n"
                 f"  Traits: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
                 "Create:\n"
                 "1. personal_title…\n"
                 f"3. Exactly {total_actions} action choices: "
-                f"{self.turn_good_actions} good, {self.turn_bad_actions} bad, {self.turn_neutral_actions} neutral.\n"
+                f"{n_good} good, {n_bad} bad, {n_neutral} neutral.\n"
+                + (
+                    "- The character is WOUNDED — fewer aggressive/physical actions, "
+                    "always include a safe neutral option (rest/treatment).\n"
+                    if wound_severity in ("critical", "moderate", "minor")
+                    else ""
+                )
             )
 
         try:
             parsed = self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=self._get_player_briefing_schema(),
+                response_schema=self._get_player_briefing_schema(total_actions),
                 temperature=0.7,
                 enable_thinking=False,
                 max_tokens=4096,
@@ -2884,7 +2962,10 @@ class GameServer:
                 cname = r.get("name", "?")
                 crole = r.get("role", "?")
                 is_dead = r.get("is_dead", False)
+                wound = r.get("wound_severity")
                 status = "DEAD" if is_dead else "ALIVE"
+                if not is_dead and wound:
+                    status += f" (WOUNDED: {wound})"
                 roster_lines.append(f"  - {cname} ({crole}) — {status}")
             roster_text = "\nFull crew roster (ONLY these characters exist on the ship):\n" + "\n".join(roster_lines) + "\n"
 
@@ -2969,6 +3050,7 @@ class GameServer:
                 "ship_shields": 100,
                 "ship_systems_offline": [],
                 "crew_injured": [],
+                "crew_healed": [],
                 "personal_outcomes": [],
             }
 

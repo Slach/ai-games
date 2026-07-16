@@ -82,6 +82,8 @@ from database import (
     is_game_started,
     is_player_kicked,
     mark_player_dead,
+    set_player_wound_severity,
+    set_npc_wound_severity,
     release_role,
     set_game_language,
     record_kick,
@@ -3094,19 +3096,22 @@ async def _analyze_turn_outcome(
                 role_name = "?"
                 entity_name = "?"
                 is_dead = False
+                wound_severity = None
                 if player_id:
                     p = get_player_profile(player_id)
                     if p:
                         role_name = p.get("role", "?")
                         entity_name = p.get("player_name", "") or str(player_id)
                         is_dead = bool(p.get("is_dead", False))
+                        wound_severity = p.get("wound_severity")
                 elif npc_key:
                     n = get_npc_profile(npc_key)
                     if n:
                         role_name = n.get("role", "?")
                         entity_name = n.get("npc_name", npc_key)
                         is_dead = not n.get("is_active", True)
-                crew_roster.append({"name": entity_name, "role": role_name, "is_dead": is_dead})
+                        wound_severity = n.get("wound_severity")
+                crew_roster.append({"name": entity_name, "role": role_name, "is_dead": is_dead, "wound_severity": wound_severity})
 
             # Analyze with LLM
             gm = create_game_server(language=language)
@@ -3194,22 +3199,46 @@ async def _analyze_turn_outcome(
 
             logger.info(f"[SHIP] Turn {turn}: hull={ship_hull}%, shields={ship_shields}%, systems_offline={ship_systems_offline}, destroyed={ship_destroyed}")
 
-            # Handle crew injuries (new structured field)
+            # Handle crew injuries — persist wound severity so it affects the
+            # number of action choices on the next turn.
             crew_injured = outcome.get("crew_injured", [])
             for injury_entry in crew_injured:
                 if isinstance(injury_entry, list) and len(injury_entry) >= 2:
                     injured_name = injury_entry[0]
                     injured_role = injury_entry[1]
-                    severity = injury_entry[2] if len(injury_entry) >= 3 else "unknown"
-                    # Try to find the player and log their injury
+                    severity = injury_entry[2] if len(injury_entry) >= 3 else "minor"
                     for d in all_decisions:
                         if d.get("name") == injured_name or d.get("role") == injured_role:
                             pid = d.get("player_id")
+                            npc_key = d.get("npc_key")
                             if pid:
-                                logger.info(f"[INJURY] Player {pid} ({injured_role}) injured: {severity}")
-                                # Critical injuries → player becomes spectator for this turn
-                                if severity == "critical":
-                                    logger.info(f"[INJURY] Player {pid} critically injured, out of action")
+                                set_player_wound_severity(pid, game_id, severity)
+                                logger.info(f"[INJURY] Player {pid} ({injured_role}) now {severity}")
+                            elif npc_key:
+                                set_npc_wound_severity(npc_key, severity)
+                                logger.info(f"[INJURY] NPC {npc_key} ({injured_role}) now {severity}")
+                            break
+
+            # Handle crew healing — only when the Medical Officer treated wounds.
+            # crew_healed entries are [name, role, new_severity] where new_severity
+            # is the improved step ('healthy' = fully healed → stored as NULL).
+            crew_healed = outcome.get("crew_healed", [])
+            for heal_entry in crew_healed:
+                if isinstance(heal_entry, list) and len(heal_entry) >= 2:
+                    healed_name = heal_entry[0]
+                    healed_role = heal_entry[1]
+                    new_severity = heal_entry[2] if len(heal_entry) >= 3 else "healthy"
+                    stored = None if new_severity in (None, "", "healthy") else new_severity
+                    for d in all_decisions:
+                        if d.get("name") == healed_name or d.get("role") == healed_role:
+                            pid = d.get("player_id")
+                            npc_key = d.get("npc_key")
+                            if pid:
+                                set_player_wound_severity(pid, game_id, stored)
+                                logger.info(f"[HEAL] Player {pid} ({healed_role}) wound now {stored or 'healthy'}")
+                            elif npc_key:
+                                set_npc_wound_severity(npc_key, stored)
+                                logger.info(f"[HEAL] NPC {npc_key} ({healed_role}) wound now {stored or 'healthy'}")
                             break
 
             # Handle crew deaths
@@ -3341,10 +3370,17 @@ async def _analyze_turn_outcome(
                 logger.warning(f"Failed to get live players for game {game_id}, falling back to all players", exc_info=True)
                 alive_players = get_players_in_game(game_id)
 
-            # Compute crew counts for outcome display
-            total_crew = len(all_briefings)  # all participants (players + NPCs)
-            dead_this_turn = len(dead_crew)
-            alive_crew = total_crew - dead_this_turn
+            # Compute crew counts for outcome display.
+            # Total crew = all players + all NPCs ever in this game (dead/inactive
+            # included), so the denominator stays stable across the whole game.
+            # Previously this used len(all_briefings), which only reflects crew who
+            # got a briefing THIS turn — dead members vanish from briefings, so the
+            # denominator shrank ("9 из 9" instead of "9 из 10").
+            all_players_total = get_players_in_game(game_id)
+            all_npcs_total = get_all_npcs(game_id)
+            total_crew = len(all_players_total) + len(all_npcs_total)
+            # Alive = live players + active NPCs (deaths already persisted above).
+            alive_crew = len(get_live_players(game_id)) + len(get_all_active_npcs(game_id))
 
             # ── Await pending action image tasks ───────────────────────
             # Ensures action images (showing the consequences of player
@@ -4563,14 +4599,19 @@ async def _original_start_game(request: StartGameRequest):
                     "personal_title": _existing.get("personal_title", ""),
                 }
             player_id = participant.get("player_id")
-            # Get player_name from profile if available
+            # Get player_name and wound severity from profile if available
             player_name = ""
+            wound_severity = None
             if player_id:
                 p = get_player_profile(player_id)
                 if p:
                     player_name = p.get("player_name", "") or ""
+                    wound_severity = p.get("wound_severity")
             elif participant.get("type") == "npc":
                 player_name = participant.get("npc_name", "") or ""
+                n = get_npc_profile(participant["npc_key"])
+                if n:
+                    wound_severity = n.get("wound_severity")
 
             gm_profile = {
                 "player_id": player_id,
@@ -4578,6 +4619,7 @@ async def _original_start_game(request: StartGameRequest):
                 "role": participant["role"],
                 "personality_traits": participant.get("personality_traits", []),
                 "role_description": participant.get("role_description", ""),
+                "wound_severity": wound_severity,
             }
             try:
                 # LLM call — run in thread pool to avoid blocking the event loop.

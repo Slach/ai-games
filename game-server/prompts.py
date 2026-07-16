@@ -194,6 +194,18 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                         ],
                     },
                 },
+                "crew_healed": {
+                    "type": "array",
+                    "description": "List of [name, role, new_severity] whose wounds improved this turn due to medical treatment. new_severity: 'minor', 'moderate', or 'healthy' (fully healed). Rare — only when the Medical Officer explicitly treats them.",
+                    "items": {
+                        "type": "array",
+                        "items": [
+                            {"type": "string"},
+                            {"type": "string"},
+                            {"type": "string"},
+                        ],
+                    },
+                },
                 "personal_outcomes": {
                     "type": "array",
                     "description": "Personal consequences for each crew member who made a decision this turn",
@@ -230,6 +242,7 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                 "ship_shields",
                 "ship_systems_offline",
                 "crew_injured",
+                "crew_healed",
                 "personal_outcomes",
             ],
             "additionalProperties": False,
@@ -290,7 +303,11 @@ _COMBINED_OUTCOME_USER_RU = (
     "10. ship_systems_offline — массив строк: какие системы корабля вышли из строя "
     "(например ['warp drive', 'life support', 'weapons', 'communications'])\n"
     "11. crew_injured — список [[name, role, severity]] раненых. severity: 'critical', 'moderate', 'minor'.\n"
-    "12. personal_outcomes — МАССИВ объектов {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
+    "12. crew_healed — список [[name, role, new_severity]] вылеченных медицинским офицером. "
+    "ТОЛЬКО если Medical Officer явно выбрал лечебное действие. new_severity — улучшенная ступень "
+    "('critical'→'moderate', 'moderate'→'minor', 'minor'→'healthy'=полное излечение). "
+    "Редкое событие; оставляй пустым, если лечения не было.\n"
+    "13. personal_outcomes — МАССИВ объектов {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
     "для КАЖДОГО персонажа, принимавшего решение.\n\n"
     "Всё на русском языке."
 )
@@ -348,7 +365,11 @@ _COMBINED_OUTCOME_USER_EN = (
     "10. ship_systems_offline — array of offline/damaged systems "
     "(e.g. ['warp drive', 'life support', 'weapons', 'communications'])\n"
     "11. crew_injured — list of [name, role, severity] injured. severity: 'critical', 'moderate', 'minor'.\n"
-    "12. personal_outcomes — ARRAY of {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
+    "12. crew_healed — list of [name, role, new_severity] healed by the Medical Officer. "
+    "ONLY when the Medical Officer explicitly chose a treatment action. new_severity is the improved step "
+    "('critical'→'moderate', 'moderate'→'minor', 'minor'→'healthy'=fully healed). "
+    "Rare event; leave empty if no treatment happened.\n"
+    "13. personal_outcomes — ARRAY of {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
     "for EVERY character who made a decision.\n"
 )
 

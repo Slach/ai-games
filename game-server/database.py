@@ -127,6 +127,13 @@ MIGRATIONS: list[tuple[int, str]] = [
         13,
         "ALTER TABLE game_state RENAME COLUMN last_death_day TO last_death_turn;",
     ),
+    (
+        14,
+        """
+        ALTER TABLE player_profiles ADD COLUMN wound_severity TEXT DEFAULT NULL;
+        ALTER TABLE npc_profiles ADD COLUMN wound_severity TEXT DEFAULT NULL;
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
@@ -800,6 +807,7 @@ def get_player_profile(player_id: int) -> dict[str, Any] | None:
         "is_dead": bool(row["is_dead"]) if row["is_dead"] is not None else False,
         "is_spectator": bool(row["is_spectator"]) if row["is_spectator"] is not None else False,
         "player_name": row["player_name"],
+        "wound_severity": row["wound_severity"],
     }
 
 
@@ -1588,6 +1596,7 @@ def get_npc_profile(npc_key: str) -> dict[str, Any] | None:
         "is_active": bool(row["is_active"]),
         "replaces_player_id": row["replaces_player_id"],
         "created_at": row["created_at"],
+        "wound_severity": row["wound_severity"],
     }
 
 
@@ -2026,6 +2035,36 @@ def mark_player_dead(player_id: int, game_id: str) -> bool:
            SET is_dead = 1, is_spectator = 1
            WHERE player_id = ? AND game_id = ?""",
         (player_id, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def set_player_wound_severity(player_id: int, game_id: str, severity: str | None) -> bool:
+    """Set a player's wound severity. None means fully healed / healthy."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE player_profiles
+           SET wound_severity = ?
+           WHERE player_id = ? AND game_id = ?""",
+        (severity, player_id, game_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def set_npc_wound_severity(npc_key: str, severity: str | None) -> bool:
+    """Set an NPC's wound severity. None means fully healed / healthy."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE npc_profiles SET wound_severity = ? WHERE npc_key = ?",
+        (severity, npc_key),
     )
     updated = cursor.rowcount > 0
     conn.commit()
