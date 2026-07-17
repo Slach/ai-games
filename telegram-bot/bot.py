@@ -17,6 +17,7 @@ Architecture:
 """
 
 import asyncio
+import io
 import logging
 import os
 import re
@@ -26,6 +27,8 @@ from urllib.parse import quote
 
 import aiohttp
 import language as lang
+import qrcode
+from qrcode.constants import ERROR_CORRECT_H
 from retry import call_with_retry
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -546,6 +549,29 @@ async def send_image_from_api_url(
     except Exception as e:
         logger.warning(f"Failed to send image from URL: {e}")
     return False
+
+
+def generate_invite_qr_png(invite_url: str) -> bytes | None:
+    """Render an invite deep link as a scannable QR code PNG.
+
+    Returns PNG bytes, or None if generation fails (caller falls back to text).
+    """
+    try:
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=ERROR_CORRECT_H,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(invite_url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning(f"Failed to generate invite QR code: {e}")
+        return None
 
 
 def get_player_language(player_id: int) -> str:
@@ -2851,14 +2877,38 @@ async def cmd_invite(message: types.Message):
             if not splash_sent:
                 await message.answer(caption, parse_mode="Markdown")
 
-        # ── Second message: forward instruction + deep link ──
+        # ── Second message: QR code with deep link + forward instruction ──
         forward_text = msgs.get(
             "invite_forward",
             "👆 Forward the message above to a friend!\n\nOr send them this link:\n{invite_url}",
         ).format(
             invite_url=escape_markdown(invite_url),
         )
-        await message.answer(forward_text, parse_mode="Markdown")
+        qr_caption = msgs.get(
+            "invite_qr_caption",
+            "📱 Scan to join!\n\n{forward}",
+        ).format(forward=forward_text)
+        qr_png = generate_invite_qr_png(invite_url)
+        if qr_png:
+            qr_sent = False
+            try:
+                await call_with_retry(
+                    lambda: message.answer_photo(
+                        photo=BufferedInputFile(qr_png, filename="invite_qr.png"),
+                        caption=qr_caption,
+                        parse_mode="Markdown",
+                    ),
+                    max_retries=3,
+                    base_delay=1.0,
+                    max_delay=10.0,
+                )
+                qr_sent = True
+            except Exception as e:
+                logger.warning(f"Failed to send invite QR photo for player {player_id}: {e}")
+            if not qr_sent:
+                await message.answer(forward_text, parse_mode="Markdown")
+        else:
+            await message.answer(forward_text, parse_mode="Markdown")
 
         logger.info(f"Sent invite to player {player_id}")
 

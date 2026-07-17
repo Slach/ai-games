@@ -20,3 +20,6 @@ python-dotenv
 typing-extensions
 
 aiogram-sqlite-storage
+
+# QR code generation for invite links
+qrcode[pil]
