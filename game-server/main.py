@@ -3378,7 +3378,15 @@ async def _analyze_turn_outcome(
             # denominator shrank ("9 из 9" instead of "9 из 10").
             all_players_total = get_players_in_game(game_id)
             all_npcs_total = get_all_npcs(game_id)
-            total_crew = len(all_players_total) + len(all_npcs_total)
+            # An NPC with replaces_player_id set holds the same seat as a player
+            # still registered in the game (e.g. a player who replaced that NPC, or
+            # a dead player replaced by the NPC). The player's row already counts
+            # the seat, so exclude such NPCs to avoid double-counting it.
+            player_ids = set(all_players_total)
+            distinct_npc_total = [
+                n for n in all_npcs_total if n.get("replaces_player_id") not in player_ids
+            ]
+            total_crew = len(all_players_total) + len(distinct_npc_total)
             # Alive = live players + active NPCs (deaths already persisted above).
             alive_crew = len(get_live_players(game_id)) + len(get_all_active_npcs(game_id))
 
@@ -3469,6 +3477,35 @@ async def _analyze_turn_outcome(
             # ── Build personal outcomes for push ────────────────────────
             personal_outcomes = outcome.get("personal_outcomes", [])
 
+            # Enrich mission_progress deltas with stage names + cumulative progress
+            # so the push can show "Этап N: <name> (progress/threshold)" instead of
+            # a bare "этап N". mission already holds updated stage_progress here
+            # (apply_mission_progress ran above).
+            mission_stages_recap: list[dict] = []
+            if mission:
+                objectives = mission.get("objectives", [])
+                stage_progress = mission.get("stage_progress", {})
+                for obj in objectives:
+                    stage = obj.get("stage")
+                    threshold = obj.get("success_threshold", 0)
+                    progress = stage_progress.get(str(stage), 0)
+                    mission_stages_recap.append({
+                        "stage": stage,
+                        "name": obj.get("name", ""),
+                        "progress": progress,
+                        "threshold": threshold,
+                        "completed": progress >= threshold,
+                    })
+                obj_by_stage = {o.get("stage"): o for o in objectives}
+                mission_progress = [
+                    {
+                        "stage": entry.get("stage"),
+                        "points": entry.get("points", 0),
+                        "name": obj_by_stage.get(entry.get("stage"), {}).get("name", ""),
+                    }
+                    for entry in mission_progress
+                ]
+
             # Push outcome synchronously so message order is deterministic
             # (outcome arrives BEFORE new turn briefings)
             try:
@@ -3480,6 +3517,7 @@ async def _analyze_turn_outcome(
                     outcome_image_url=outcome_image_url,
                     ship_status="destroyed" if ship_destroyed else "alive",
                     mission_progress=mission_progress,
+                    mission_stages_recap=mission_stages_recap,
                     death_notices=death_notices,
                     injury_notices=injury_notices,
                     personal_outcomes=personal_outcomes,
