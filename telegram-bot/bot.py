@@ -2774,6 +2774,54 @@ async def cmd_team(message: types.Message):
         await message.answer(msgs["api_error"])
 
 
+async def _send_no_game_invite(message: types.Message, language: str):
+    """Bot-level invite for a player with no game: attract image + QR + bare bot link."""
+    msgs = lang.get_onboarding(language)
+    bot_url = f"https://t.me/{BOT_USERNAME}"
+
+    # 1. Attract image (global loading pool, always has a fallback URL)
+    caption = msgs.get(
+        "invite_no_game_caption",
+        "🎮 Join a sci-fi adventure!\n\n{invite_url}",
+    ).format(invite_url=escape_markdown(bot_url))
+    image_url = None
+    try:
+        result = await api_request("GET", "/content/loading-image", data=None, params={"game_id": "all"}, timeout_total=600, ignore_codes=())
+        image_url = result.get("image_url") if result else None
+    except Exception as e:
+        logger.warning(f"Failed to fetch loading image for no-game invite: {e}")
+    sent = await send_image_from_api_url(message, image_url, caption=caption, reply_markup=None) if image_url else False
+    if not sent:
+        await message.answer(caption, parse_mode="Markdown")
+
+    # 2. QR code with bare bot link
+    forward_text = msgs.get(
+        "invite_no_game_forward",
+        "👆 Forward this to a friend!\n\n{invite_url}",
+    ).format(invite_url=escape_markdown(bot_url))
+    qr_caption = msgs.get(
+        "invite_qr_caption",
+        "📱 Point your camera at the QR code to join!\n\n{forward}",
+    ).format(forward=forward_text)
+    qr_png = generate_invite_qr_png(bot_url)
+    if qr_png:
+        try:
+            await call_with_retry(
+                lambda: message.answer_photo(
+                    photo=BufferedInputFile(qr_png, filename="invite_qr.png"),
+                    caption=qr_caption,
+                    parse_mode="Markdown",
+                ),
+                max_retries=3,
+                base_delay=1.0,
+                max_delay=10.0,
+            )
+            return
+        except Exception as e:
+            logger.warning(f"Failed to send no-game invite QR: {e}")
+    await message.answer(forward_text, parse_mode="Markdown")
+
+
 async def cmd_invite(message: types.Message):
     """Send invite: photo (bridge/splash) + text with deep link."""
     if message.from_user is None:
@@ -2782,25 +2830,6 @@ async def cmd_invite(message: types.Message):
     logger.info("[HANDLER] cmd_invite")
 
     try:
-        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
-        if not profile:
-            await message.answer(
-                lang.get_profile(get_player_language(player_id))["no_profile"],
-                reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
-            )
-            return
-
-        game_id = profile.get("game_id", "")
-        if not game_id:
-            await message.answer(
-                "No active game found. Use /start to join a game.",
-                reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
-            )
-            return
-
-        game_lang = await get_game_language(game_id, fallback=get_player_language(player_id))
-        msgs = lang.get_onboarding(game_lang)
-
         if message.bot is None:
             await message.answer(
                 "Bot username is not available. Invite links cannot be generated at this moment.",
@@ -2821,6 +2850,16 @@ async def cmd_invite(message: types.Message):
                     reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                 )
                 return
+
+        player_lang = get_player_language(player_id)
+        profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
+        game_id = profile.get("game_id", "") if profile else ""
+        if not game_id:
+            await _send_no_game_invite(message, player_lang)
+            return
+
+        game_lang = await get_game_language(game_id, fallback=player_lang)
+        msgs = lang.get_onboarding(game_lang)
 
         # Fetch game title
         game_title = ""
