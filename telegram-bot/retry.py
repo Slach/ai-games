@@ -11,8 +11,24 @@ from collections.abc import Callable
 from typing import Any
 
 import aiohttp
+from aiohttp_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError
 
 logger = logging.getLogger(__name__)
+
+# Network-level errors that warrant a retry (proxy timeouts, DNS failures,
+# connection resets). aiohttp_socks errors must be listed explicitly:
+# aiohttp_socks.ProxyTimeoutError subclasses plain Exception, not TimeoutError,
+# so it escapes the TimeoutError/Aiohttp.ClientError catch below and would
+# surface as a hard failure after a single proxy timeout (see retry loop).
+RETRYABLE_NETWORK_ERRORS = (
+    aiohttp.ClientError,
+    TimeoutError,
+    OSError,
+    asyncio.TimeoutError,
+    ProxyError,
+    ProxyTimeoutError,
+    ProxyConnectionError,
+)
 
 
 async def call_with_retry(
@@ -23,10 +39,10 @@ async def call_with_retry(
 ) -> Any:
     """Call an async function with exponential backoff on network errors.
 
-    Retries on aiohttp.ClientError, TimeoutError, OSError (covers proxy
-    timeouts, DNS failures, connection resets). All other errors (e.g.
-    Telegram API rejecting a message) are re-raised immediately since
-    they won't succeed on retry.
+    Retries on RETRYABLE_NETWORK_ERRORS (aiohttp.ClientError, TimeoutError,
+    OSError, aiohttp_socks proxy errors — covers proxy timeouts, DNS failures,
+    connection resets). All other errors (e.g. Telegram API rejecting a
+    message) are re-raised immediately since they won't succeed on retry.
 
     Args:
         fn: Async callable (no args — use lambda/wrapper).
@@ -47,7 +63,7 @@ async def call_with_retry(
     for attempt in range(max_retries + 1):
         try:
             return await fn()
-        except (aiohttp.ClientError, TimeoutError, OSError, asyncio.TimeoutError) as e:
+        except RETRYABLE_NETWORK_ERRORS as e:
             last_exc = e
             if attempt < max_retries:
                 delay = min(base_delay * (2**attempt), max_delay)
