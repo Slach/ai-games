@@ -2546,7 +2546,9 @@ async def get_loading_image(game_id: str):
     Falls back to a manually-placed default image in ComfyUI output
     if no AI-generated loading images are available yet.
     """
-    url = get_random_game_image(type="loading", game_id=game_id, turn=None)
+    # Loading images are a global pool under game_id="all" (generated at
+    # startup, not per-game), so look them up there regardless of game_id.
+    url = get_random_game_image(type="loading", game_id="all", turn=None)
     if not url:
         logger.info(f"[LOADING] No generated loading images, using fallback: {DEFAULT_LOADING_FALLBACK_URL}")
         return {
@@ -2554,7 +2556,7 @@ async def get_loading_image(game_id: str):
             "available": 0,
             "fallback": True,
         }
-    return {"image_url": url, "available": get_game_image_count("loading", game_id, None)}
+    return {"image_url": url, "available": get_game_image_count("loading", "all", None)}
 
 
 @app.get("/content/splash-image")
