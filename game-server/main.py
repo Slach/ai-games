@@ -3308,29 +3308,34 @@ async def _analyze_turn_outcome(
                 raw = json.dumps(outcome, ensure_ascii=False)
                 outcome_text = raw[:500] + ("..." if len(raw) > 500 else "")
 
-            # Build death notices for the push payload
-            # Resolve actual NPC/player names from profiles instead of using LLM-generated names
+            # Build death notices as a persistent roster from DB state — dead
+            # players plus dead (deactivated) NPCs — so losses remain visible
+            # every turn, the same way injuries do. Previously this derived
+            # notices only from the current turn's LLM output (dead_crew), so a
+            # death surfaced on the turn it happened and then disappeared.
+            all_players_total = get_players_in_game(game_id)
+            all_npcs_total = get_all_npcs(game_id)
+            player_ids = set(all_players_total)
             death_notices = []
-            for death_entry in dead_crew:
-                if isinstance(death_entry, list) and len(death_entry) >= 2:
-                    llm_name = str(death_entry[0])
-                    llm_role = str(death_entry[1])
-                    real_name = llm_name
-                    # Try to find the real NPC/player name from briefings
-                    for b in all_briefings:
-                        # Check NPC
-                        if b.get("npc_key"):
-                            n = get_npc_profile(b["npc_key"])
-                            if n and (n.get("role") == llm_role or n.get("npc_name") == llm_name):
-                                real_name = n.get("npc_name", llm_name)
-                                break
-                        # Check player
-                        if b.get("player_id"):
-                            p = get_player_profile(b["player_id"])
-                            if p and (p.get("role") == llm_role or p.get("player_name") == llm_name):
-                                real_name = p.get("player_name", "") or str(b["player_id"])
-                                break
-                    death_notices.append({"name": real_name, "role": llm_role})
+            for dead_pid in get_dead_players(game_id):
+                p = get_player_profile(dead_pid)
+                if p:
+                    death_notices.append({
+                        "name": p.get("player_name") or str(dead_pid),
+                        "role": p.get("role", ""),
+                    })
+            # An NPC whose replaces_player_id still matches a player registered
+            # in the game holds the same seat as that player (counted once via
+            # the player's row), so skip it to avoid duplicate notices.
+            for n in all_npcs_total:
+                if n.get("is_active"):
+                    continue
+                if n.get("replaces_player_id") in player_ids:
+                    continue
+                death_notices.append({
+                    "name": n.get("npc_name", ""),
+                    "role": n.get("role", ""),
+                })
 
             # ── Generate outcome scene image ──────────────────────────
             outcome_image_url = None
@@ -3376,13 +3381,12 @@ async def _analyze_turn_outcome(
             # Previously this used len(all_briefings), which only reflects crew who
             # got a briefing THIS turn — dead members vanish from briefings, so the
             # denominator shrank ("9 из 9" instead of "9 из 10").
-            all_players_total = get_players_in_game(game_id)
-            all_npcs_total = get_all_npcs(game_id)
+            # all_players_total / all_npcs_total / player_ids are already fetched
+            # above for the death-notice roster; reuse them here.
             # An NPC with replaces_player_id set holds the same seat as a player
             # still registered in the game (e.g. a player who replaced that NPC, or
             # a dead player replaced by the NPC). The player's row already counts
             # the seat, so exclude such NPCs to avoid double-counting it.
-            player_ids = set(all_players_total)
             distinct_npc_total = [
                 n for n in all_npcs_total if n.get("replaces_player_id") not in player_ids
             ]

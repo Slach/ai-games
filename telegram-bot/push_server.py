@@ -572,6 +572,7 @@ async def _deliver_outcome(
     injury_notices = payload.get("injury_notices")
     personal_outcomes = payload.get("personal_outcomes")
     mission_progress = payload.get("mission_progress")
+    mission_stages_recap = payload.get("mission_stages_recap")
     ship_hull_integrity = payload.get("ship_hull_integrity")
     ship_shields = payload.get("ship_shields")
     ship_systems_offline = payload.get("ship_systems_offline")
@@ -658,19 +659,53 @@ async def _deliver_outcome(
             name = notice.get("name", "")
             parts.append(f"• {role} — {name}")
 
-    if mission_progress:
+    if mission_stages_recap or mission_progress:
         parts.append("")
         parts.append(outcome_msgs["mission_progress_header"])
-        for entry in mission_progress:
-            stage = entry.get("stage", "?")
-            points = entry.get("points", 0)
-            if points > 0:
-                direction = "🟢 +"
-            elif points < 0:
-                direction = "🔴 "
-            else:
-                direction = "⚪ "
-            parts.append(outcome_msgs["mission_progress_item"].format(direction=direction, points=points, stage=stage))
+        # Show every stage with its name + progress/threshold, so a stage that
+        # only advanced this turn is never shown in isolation. Without this, a
+        # turn that only moves stage 3 renders a lone "этап 3" with no mention
+        # of the already-completed stages 1 and 2.
+        if mission_stages_recap:
+            delta_by_stage = {e.get("stage"): e.get("points", 0) for e in (mission_progress or [])}
+            for stage_entry in mission_stages_recap:
+                stage = stage_entry.get("stage", "?")
+                name = stage_entry.get("name", "")
+                progress = stage_entry.get("progress", 0)
+                threshold = stage_entry.get("threshold", "?")
+                done = bool(stage_entry.get("completed"))
+                points = delta_by_stage.get(stage)
+                if points is not None:
+                    if points > 0:
+                        direction = "🟢 +"
+                    elif points < 0:
+                        direction = "🔴 "
+                    else:
+                        direction = "⚪ "
+                    parts.append(outcome_msgs["mission_progress_item"].format(
+                        direction=direction, points=points, stage=stage, name=name,
+                        progress=progress, threshold=threshold))
+                elif done:
+                    parts.append(outcome_msgs["mission_stage_recap_done"].format(
+                        stage=stage, name=name, progress=progress, threshold=threshold))
+                else:
+                    parts.append(outcome_msgs["mission_stage_recap_active"].format(
+                        stage=stage, name=name, progress=progress, threshold=threshold))
+        else:
+            # Fallback: no recap available — show deltas only (legacy payload).
+            for entry in mission_progress:
+                stage = entry.get("stage", "?")
+                points = entry.get("points", 0)
+                name = entry.get("name", "")
+                if points > 0:
+                    direction = "🟢 +"
+                elif points < 0:
+                    direction = "🔴 "
+                else:
+                    direction = "⚪ "
+                parts.append(outcome_msgs["mission_progress_item"].format(
+                    direction=direction, points=points, stage=stage, name=name,
+                    progress="?", threshold="?"))
 
     if ship_systems_offline:
         parts.append("")

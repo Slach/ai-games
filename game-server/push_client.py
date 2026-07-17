@@ -255,6 +255,7 @@ async def push_turn_outcome(
     outcome_image_url: str | None,
     ship_status: str | None,
     mission_progress: dict | None,
+    mission_stages_recap: list[dict] | None,
     death_notices: list[dict] | None,
     injury_notices: list[dict] | None,
     personal_outcomes: list[dict] | None,
@@ -277,6 +278,8 @@ async def push_turn_outcome(
         outcome_image_url: Optional URL to an outcome scene image
         ship_status: Current ship status ("alive" / "destroyed")
         mission_progress: Dict with stage progress info
+        mission_stages_recap: List of all mission stages with name, progress,
+            threshold, completed flag — for the per-turn progress recap display
         death_notices: List of death notice dicts with player_id and role
         injury_notices: List of injury notice dicts with name, role, severity
         personal_outcomes: List of personal outcome dicts with character_name, role, outcome_text
@@ -303,6 +306,8 @@ async def push_turn_outcome(
         payload["ship_status"] = ship_status
     if mission_progress:
         payload["mission_progress"] = mission_progress
+    if mission_stages_recap:
+        payload["mission_stages_recap"] = mission_stages_recap
     if death_notices:
         payload["death_notices"] = death_notices
     if injury_notices:
