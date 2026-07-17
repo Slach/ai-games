@@ -4113,8 +4113,8 @@ def _get_crew_members(game_id: str) -> list[dict[str, Any]]:
     """
     crew: list[dict[str, Any]] = []
 
-    # Add real players
-    for pid in get_players_in_game(game_id):
+    # Add real players (dead players don't get crew dialogues)
+    for pid in get_live_players(game_id):
         p = get_player_profile(pid)
         if not p:
             continue
