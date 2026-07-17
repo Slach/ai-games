@@ -5442,8 +5442,26 @@ async def admin_reset_player(request: ResetPlayerRequest):
     player_id = request.player_id
     profile = get_player_profile(player_id)
     game_id = profile.get("game_id") if profile else None
-    if not game_id:
-        raise HTTPException(status_code=400, detail="Player is not in any game")
+
+    # If the player is mid-onboarding, they have no profile yet — only an
+    # onboarding session. There is nothing to replace with an NPC and no
+    # game_id to report, but we must still wipe the session so /reset can
+    # get them out of the onboarding flow.
+    if not profile:
+        sessions_deleted = delete_onboarding_sessions_for_player(player_id)
+        logger.info(
+            f"=== ADMIN RESET PLAYER COMPLETED === player_id={player_id}, "
+            f"no profile (onboarding-only), sessions_deleted={sessions_deleted}"
+        )
+        return {
+            "status": "success",
+            "player_id": player_id,
+            "game_id": None,
+            "role_replaced": None,
+            "npc_name": None,
+            "profile_deleted": False,
+            "sessions_deleted": sessions_deleted,
+        }
 
     # Replace the player with an NPC if they currently hold a role.
     npc_replaced = None

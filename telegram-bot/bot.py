@@ -1668,9 +1668,11 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
         logger.warning(f"Callback message not accessible for player {player_id}, data={data}")
         return
 
-    # Read player's stored language preference
-    state_data = await state.get_data()
-    player_lang = state_data.get("player_language", DEFAULT_LANGUAGE)
+    # Read player's language from the persistent player store, not from FSM.
+    # FSM state is cleared between games (onboarding completion, /reset, etc.),
+    # so reading from FSM here would silently fall back to DEFAULT_LANGUAGE
+    # when a player starts a new game after finishing a previous one.
+    player_lang = get_player_language(player_id)
 
     # Remove selection keyboard to avoid duplicate taps
     try:
@@ -1781,8 +1783,7 @@ async def new_game_schedule_callback(callback: types.CallbackQuery, state: FSMCo
         logger.warning(f"Schedule callback message not accessible for player {player_id}")
         return
 
-    state_data = await state.get_data()
-    player_lang = state_data.get("player_language", DEFAULT_LANGUAGE)
+    player_lang = get_player_language(player_id)
     onboarding_msgs = lang.get_onboarding(player_lang)
 
     # Custom format → switch to free-text input state
@@ -1818,8 +1819,7 @@ async def handle_custom_schedule_input(message: types.Message, state: FSMContext
     if not raw:
         return
 
-    state_data = await state.get_data()
-    player_lang = state_data.get("player_language", DEFAULT_LANGUAGE)
+    player_lang = get_player_language(player_id)
     onboarding_msgs = lang.get_onboarding(player_lang)
 
     if not _validate_schedule_format(raw):
@@ -3003,12 +3003,42 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
         )
     except Exception as e:
         logger.error(f"[RESET] API call failed for player {player_id}: {e}", exc_info=True)
+        # The server-side reset failed, but the player already confirmed they
+        # want out. Free them from any in-flight onboarding so /start doesn't
+        # trap them in "already has active onboarding session" forever. The
+        # server-side profile (if any) is left untouched.
+        try:
+            update_player_state(
+                player_id,
+                onboarding_session_id=None,
+                current_question_id=None,
+                current_options=None,
+                current_question_text=None,
+                current_question_image_url=None,
+            )
+        except Exception as clear_err:
+            logger.error(f"Failed to clear onboarding state for player {player_id}: {clear_err}", exc_info=True)
+        await state.clear()
         await message.answer(reset_msgs["error"].format(error=e))
+        await show_player_language_selection(message, state)
         return
 
     if not result or result.get("status") != "success":
         error_detail = (result or {}).get("detail", "unknown error") if result else "no API response"
+        try:
+            update_player_state(
+                player_id,
+                onboarding_session_id=None,
+                current_question_id=None,
+                current_options=None,
+                current_question_text=None,
+                current_question_image_url=None,
+            )
+        except Exception as clear_err:
+            logger.error(f"Failed to clear onboarding state for player {player_id}: {clear_err}", exc_info=True)
+        await state.clear()
         await message.answer(reset_msgs["error"].format(error=error_detail))
+        await show_player_language_selection(message, state)
         return
 
     # Clear per-(player, game) delivery dedup so a wiped profile delivers
