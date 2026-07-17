@@ -526,7 +526,12 @@ def build_onboarding_prompts(
 ) -> tuple[str, str]:
     """Build system and user prompts for onboarding question generation."""
     if language == LANGUAGE_RU:
-        system = "Ты — дизайнер игр. Генерируешь вопросы для онбординга в космической игре."
+        system = (
+            "Ты — нарративный дизайнер sci-fi-игры в жанре space opera (в духе Mass Effect, Star Trek). "
+            "Твоя задача — писать атмосферные, кинематографичные сценарные ситуации для онбординга новых игроков. "
+            "Каждая ситуация должна ставить игрока внутри живой сцены: звуки, запахи, свет, напряжение, детали окружения — "
+            "а не сухо констатировать аварию."
+        )
         hint = (
             underrepresented_hint
             if not underrepresented_hint
@@ -542,9 +547,20 @@ def build_onboarding_prompts(
             "НЕПРАВИЛЬНО: 'A', 'B', 'C' — варианты должны быть ПОЛНЫМИ описаниями действий! "
             "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
             "Каждый вариант (value) должен быть развёрнутым предложением минимум из 5-7 слов, описывающим конкретное действие. "
-            "КРИТИЧНО: Соблюдай ограничения по длине текста для Telegram! Поле text вопроса — НЕ БОЛЕЕ 160 символов. "
+            "КРИТИЧНО: Соблюдай ограничения по длине текста для Telegram! Поле text вопроса — от 150 до 350 символов. "
             "Каждый вариант ответа (поле value) — НЕ БОЛЕЕ 150 символов. "
             "Это нужно, чтобы весь текст вопроса с вариантами поместился в подпись к картинке в Telegram (лимит 1024 символа). "
+            "ПОЛЕ text ДОЛЖНО БЫТЬ АТМОСФЕРНЫМ и КИНЕМАТОГРАФИЧНЫМ — это сцена, в которую игрок проваливается. "
+            "Опиши окружение, звуки, свет, запахи, что чувствует и видит персонаж в этот момент. "
+            "НЕ ЗАКАНЧИВАЙ text риторическим вопросом вроде «Что делаешь?», «Твои действия?», «Как поступишь?», «Твой выбор?» — "
+            "варианты ответа и так описывают действия, вопрос-хвост избыточен и делает текст однообразным. "
+            "Заканчивай description-ем напряжения или развилки без вопроса. "
+            "ПРИМЕРЫ хорошего text (атмосферно, без хвоста-вопроса): "
+            "'В машинном отделении гаснет свет. Под ногами дрожит палуба, из разорванного трубопровода шипит перегретый пар. "
+            "Сквозь рёв тревоги пробивается мигание красных аварийных ламп — и твой долгожданный отпуск превращается в кошмар.'; "
+            "'На обзорном экране мостика зависает чужой корабль. Его корпус покрыт рунами, которых нет ни в одной базе данных Звёздного Флота. "
+            "Голографический интерфейс пульсирует холодным синим, а по громкой связи раздаётся голос на языке, понятном только тебе.' "
+            "ВАЖНО: эти примеры — только для поля text, НЕ копируй их дословно, создавай ОРИГИНАЛЬНЫЕ сцены. "
             "КРИТИЧНО: Все варианты ответа в одном вопросе должны быть РАЗЛИЧНЫМИ и описывать РАЗНЫЕ действия. "
             "Не допускай одинаковых или очень похожих вариантов — каждый должен представлять уникальный подход. "
             "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
@@ -567,7 +583,12 @@ def build_onboarding_prompts(
             " Отделяй русский текст вопроса от английского image_prompt. "
         )
     else:
-        system = "You are a game designer. Generate onboarding questions for a space exploration game."
+        system = (
+            "You are a narrative designer for a sci-fi space opera game (in the spirit of Mass Effect, Star Trek). "
+            "Your task is to write atmospheric, cinematic scenario situations for onboarding new players. "
+            "Each situation must place the player inside a living scene: sounds, smells, light, tension, environmental details — "
+            "not just a dry statement that something broke."
+        )
         hint = (
             underrepresented_hint
             if not underrepresented_hint
@@ -583,9 +604,20 @@ def build_onboarding_prompts(
             "INCORRECT: 'A', 'B', 'C' — options must be FULL action descriptions, NOT single letters! "
             "NEVER include role names or personality types in options — only actions. "
             "Each option (value) must be a detailed sentence of at least 5-7 words describing a specific action. "
-            "CRITICAL: Respect Telegram character limits! The text field (question text) — MAX 160 characters. "
+            "CRITICAL: Respect Telegram character limits! The text field (question text) — 150 to 350 characters. "
             "Each option value — MAX 150 characters. "
             "This is needed so the full question text with options fits in a Telegram photo caption (1024 char limit). "
+            "THE text FIELD MUST BE ATMOSPHERIC and CINEMATIC — it is a scene the player drops into. "
+            "Describe the surroundings, sounds, light, smells, what the character feels and sees in that moment. "
+            "DO NOT END text with a rhetorical question like 'What do you do?', 'Your actions?', 'How do you proceed?', 'Your choice?' — "
+            "the options already describe actions, a trailing question is redundant and makes the text repetitive. "
+            "End with a depiction of tension or the fork in the road, without a question. "
+            "EXAMPLES of good text (atmospheric, no trailing question): "
+            "'The lights in engineering die. The deck shudders underfoot, and superheated steam hisses from a ruptured conduit. "
+            "Through the blare of the alarm, the crimson pulse of emergency lamps breaks through — and your long-awaited shore leave turns into a nightmare.'; "
+            "'An unknown ship hangs motionless on the bridge's main viewscreen. Its hull is etched with runes found in no Starfleet database. "
+            "The holographic interface throbs cold blue, and over the comm comes a voice in a language only you seem to understand.' "
+            "IMPORTANT: these examples are for the text field only — DO NOT copy them verbatim, create ORIGINAL scenes. "
             "CRITICAL: All answer options for one question must be DIFFERENT and describe DIFFERENT actions. "
             "Do not allow identical or very similar options — each should represent a unique approach. "
             "Questions should cover different aspects: danger response, technical work, crew interaction, "
