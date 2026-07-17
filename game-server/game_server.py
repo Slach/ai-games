@@ -1266,25 +1266,47 @@ class GameServer:
             role_keys_str,
             example_role_scores_json,
             underrepresented_hint,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
         )
-        # Note: build_onboarding_prompts returns (system, user); user is identical below
-        _system = system
 
         # NOTE: This is a token-heavy generation (5 questions × 5 options × 10 role_scores).
         # Thinking is disabled globally via chat_template_kwargs in _call_llm.
         # max_tokens defaults to LLM_MAX_TOKENS env var (32768).
-        result = self._call_llm(
-            system_prompt=system,
-            user_prompt=user,
-            response_schema=ONBOARDING_QUESTIONS_SCHEMA,
-            temperature=0.7,
-            max_tokens=self.llm_max_tokens,
-            enable_thinking=False,
-            game_id=game_id,
-            player_id=player_id,
-            turn=turn,
-            kind=kind,
-        )
+        if self.vs_enabled:
+            vs_result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=vs_response_schema(ONBOARDING_QUESTIONS_SCHEMA),
+                temperature=0.9,
+                max_tokens=self.llm_max_tokens,
+                enable_thinking=False,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+            chosen = select_response(vs_result["responses"], self.vs_mode)
+            logger.info(
+                "[VS-ONBOARDING] Selected %d/%d p=%.3f",
+                vs_result["responses"].index(chosen) + 1,
+                len(vs_result["responses"]),
+                chosen["probability"],
+            )
+            result = chosen["text"]
+        else:
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=ONBOARDING_QUESTIONS_SCHEMA,
+                temperature=0.7,
+                max_tokens=self.llm_max_tokens,
+                enable_thinking=False,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
 
         questions = result.get("questions", [])
 

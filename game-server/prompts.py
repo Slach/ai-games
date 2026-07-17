@@ -523,6 +523,9 @@ def build_onboarding_prompts(
     role_keys_str: str,
     example_role_scores_json: str,
     underrepresented_hint: str,
+    *,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for onboarding question generation."""
     if language == LANGUAGE_RU:
@@ -560,7 +563,12 @@ def build_onboarding_prompts(
             "Сквозь рёв тревоги пробивается мигание красных аварийных ламп — и твой долгожданный отпуск превращается в кошмар.'; "
             "'На обзорном экране мостика зависает чужой корабль. Его корпус покрыт рунами, которых нет ни в одной базе данных Звёздного Флота. "
             "Голографический интерфейс пульсирует холодным синим, а по громкой связи раздаётся голос на языке, понятном только тебе.' "
-            "ВАЖНО: эти примеры — только для поля text, НЕ копируй их дословно, создавай ОРИГИНАЛЬНЫЕ сцены. "
+            "ВАЖНО: эти примеры — только ДЕМОНСТРИРУЮТ уровень атмосферности поля text, "
+            "их топики (поломка двигателя в машинном отделении, чужой корабль с рунами на мостике) "
+            "СЛИШКОМ ИЗЪЕДЕНЫ — НЕ используй эти два сценария вообще. "
+            "Также избегай и других клише онбординга: вспышка неизвестной болезни в медблоке, "
+            "потеря управления при пилотировании, тест системы безопасности. "
+            "Каждый раз выбирай СВОИ оригинальные сценарии из РАЗНЫХ локаций и с РАЗНЫМ источником угрозы. "
             "КРИТИЧНО: Все варианты ответа в одном вопросе должны быть РАЗЛИЧНЫМИ и описывать РАЗНЫЕ действия. "
             "Не допускай одинаковых или очень похожих вариантов — каждый должен представлять уникальный подход. "
             "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
@@ -617,7 +625,11 @@ def build_onboarding_prompts(
             "Through the blare of the alarm, the crimson pulse of emergency lamps breaks through — and your long-awaited shore leave turns into a nightmare.'; "
             "'An unknown ship hangs motionless on the bridge's main viewscreen. Its hull is etched with runes found in no Starfleet database. "
             "The holographic interface throbs cold blue, and over the comm comes a voice in a language only you seem to understand.' "
-            "IMPORTANT: these examples are for the text field only — DO NOT copy them verbatim, create ORIGINAL scenes. "
+            "IMPORTANT: these examples only DEMONSTRATE the level of atmosphere expected in the text field — "
+            "their topics (engine failure in engineering, alien ship with runes on the bridge) ARE TIRED CLICHES: "
+            "do NOT use those two scenarios at all. "
+            "Also avoid other onboarding cliches: a mystery outbreak in medbay, a piloting loss of control, a security system test. "
+            "Each time pick your OWN original scenarios from DIFFERENT locations and with DIFFERENT threat origins. "
             "CRITICAL: All answer options for one question must be DIFFERENT and describe DIFFERENT actions. "
             "Do not allow identical or very similar options — each should represent a unique approach. "
             "Questions should cover different aspects: danger response, technical work, crew interaction, "
@@ -635,6 +647,8 @@ def build_onboarding_prompts(
             "For EACH question generate an image_prompt — a detailed English prompt for the scene image. "
             "The prompt should be cinematic, sci-fi/space opera, 4K quality. "
         )
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["onboarding_questions"], k=vs_k)
     return system, user
 
 

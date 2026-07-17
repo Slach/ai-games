@@ -4,26 +4,11 @@ See: Zhang et al., "Verbalized Sampling: How to Mitigate Mode Collapse
 and Unlock LLM Diversity", ICLR 2026.
 """
 
-import json
 import logging
 import random as _random
 import re as _re
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class VSConfig:
-    k: int = 5
-    sampling_mode: str = "full"  # "full" | "tails"
-
-
-# Per-endpoint k overrides: some endpoints produce very large responses,
-# so we use fewer candidates to keep JSON parsable.
-VS_K_OVERRIDES: dict[str, int] = {
-    "combined_outcome": 3,
-}
 
 
 def repair_json(text: str) -> str:
@@ -123,34 +108,6 @@ def _ends_value_string(line: str) -> bool:
     return bool(_re.search(r'",?\s*$', line))
 
 
-VS_RESPONSE_SCHEMA: dict = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "vs_responses",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "responses": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "probability": {"type": "number"},
-                            "text": {"type": "string"},
-                        },
-                        "required": ["probability", "text"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["responses"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-
 def vs_response_schema(inner_schema: dict) -> dict:
     """Wrap an inner response schema into a VS distribution schema.
 
@@ -226,6 +183,23 @@ DIVERSITY_HINTS: dict[str, str] = {
         "- Overall mood (ready for action, tense standoff, routine calm, crisis)\n"
     ),
     "scene_prompt": ("Vary across these axes:\n- Color palette (cold blues, warm ambers, sickly greens, stark monochrome)\n- Atmosphere (fog, sparks, zero-g float, alien bioluminescence)\n- Scene scale (intimate close-up, expansive epic wide shot)\n"),
+    "onboarding_questions": (
+        "Vary across these axes to AVOID every session opening with the same scenes "
+        "(engine failure, unknown alien, medbay outbreak, piloting crisis, security test):\n"
+        "- Scenario archetype (diplomatic incident, scientific anomaly, social/crew conflict, "
+        "moral dilemma, exploration of the unknown, discovery, routine duty gone wrong) — "
+        "do NOT default to 'something broke' or 'an alien appeared'\n"
+        "- Location (bridge, engineering, medbay, cargo hold, shuttle bay, planet surface, "
+        "ruins, derelict, nebula, marketplace, diplomatic reception, mess hall, quarters)\n"
+        "- Threat origin (mechanical, biological, social, political, psychological, environmental, "
+        "unknown — rotate, never reuse the same origin twice in one set)\n"
+        "- Emotional register (wonder, dread, humor, grief, temptation, loyalty tested, boredom "
+        "shattered) — no two questions in a set share the same register\n"
+        "- What the player must DO (persuade, investigate, repair, command, deceive, comfort, "
+        "sacrifice, improvise, abstain)\n"
+        "The k candidate SETS must differ as wholes — different scenario mix, different "
+        "locations, different opening hook — not just rephrasings of the same five situations."
+    ),
 }
 
 
@@ -312,25 +286,3 @@ def verbalize_prompt(
     )
 
     return vs_system, vs_user
-
-
-def vs_parse_json(text: str) -> dict:
-    """Parse VS text field as JSON with graceful fallback.
-
-    If the text is valid JSON, return the parsed dict.
-    If it's not valid JSON, wrap it in {"raw": text} and log a warning.
-    """
-    try:
-        result = json.loads(text)
-        if not isinstance(result, dict):
-            logger.warning("VS text parsed as non-dict %s, wrapping", type(result).__name__)
-            return {"raw": text}
-        return result
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("VS text is not valid JSON: %s, using raw fallback", e)
-        return {"raw": text}
-
-
-def vs_k_for(endpoint: str, default: int) -> int:
-    """Return the VS k value for a given endpoint, using overrides if present."""
-    return VS_K_OVERRIDES.get(endpoint, default)
