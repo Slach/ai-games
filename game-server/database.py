@@ -545,6 +545,31 @@ def create_onboarding_session(
     }
 
 
+def reserve_onboarding_slot(session_id: str, expected_current_question: int) -> bool:
+    """Atomically advance current_question by one, but only if its current DB
+    value still equals ``expected_current_question``.
+
+    Returns True on success, False if the row no longer matches (another
+    concurrent answer already advanced the counter). This compare-and-set is
+    the server-side guard against duplicate onboarding answers racing while
+    the first one is still generating its species/gender question (the
+    generation can take 30-60s, during which the in-memory session dict is
+    stale). SQLite serialises the UPDATE, so at most one caller wins.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE onboarding_sessions
+           SET current_question = current_question + 1
+           WHERE session_id = ? AND current_question = ?""",
+        (session_id, expected_current_question),
+    )
+    advanced = cursor.rowcount == 1
+    conn.commit()
+    conn.close()
+    return advanced
+
+
 def get_onboarding_session(session_id: str) -> dict[str, Any] | None:
     """Get an onboarding session by ID"""
     conn = get_db_connection()

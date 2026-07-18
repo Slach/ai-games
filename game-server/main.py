@@ -66,6 +66,7 @@ from database import (
     get_npc_profile,
     get_onboarding_count_in_game,
     get_onboarding_session,
+    reserve_onboarding_slot,
     get_player_actions,
     get_player_briefing,
     get_player_count_in_game,
@@ -1171,6 +1172,27 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     game_id = session.get("game_id") or answers_data.get(-1) or answers_data.get("-1")
     if not game_id:
         raise HTTPException(status_code=400, detail="Session has no game_id")
+
+    # Guard against duplicate / stale answers. Question ids are assigned as
+    # current_question+1 (role questions: q.id = index+1; dynamic S/G questions:
+    # id = len(existing_questions)+1), so the only valid answer here is for the
+    # question immediately following the one the session currently points at.
+    expected_question_id = session["current_question"] + 1
+    if answer.question_id != expected_question_id:
+        logger.info(
+            f"[ONBOARDING] Stale answer rejected: session={session_id} "
+            f"got question_id={answer.question_id}, expected {expected_question_id}"
+        )
+        raise HTTPException(status_code=409, detail="Answer for a stale or already-answered question")
+
+    # Atomically reserve the next slot BEFORE the (slow, 30-60s) species/gender
+    # generation. Two concurrent answers to the same question both pass the id
+    # check above with the same in-memory snapshot, but only one CAS wins — the
+    # loser is rejected here. Without this, a player spamming the inline buttons
+    # got N parallel generations of the next question ("Ситуация 7" sent 4 times).
+    if not reserve_onboarding_slot(session_id, session["current_question"]):
+        logger.info(f"[ONBOARDING] Duplicate answer race rejected for session={session_id}")
+        raise HTTPException(status_code=409, detail="Answer for a stale or already-answered question")
 
     answers = session["answers"].copy()
     answers[answer.question_id] = answer.answer

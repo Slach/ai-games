@@ -4104,6 +4104,28 @@ async def handle_text_message(message: types.Message):
         await message.answer(msgs["error"].format(error=str(e)))
 
 
+# Players currently waiting for an onboarding answer to be processed by the
+# game-server (LLM + 8 ComfyUI images can take 30-60s). While a player's id is
+# in this set, further answer submissions are rejected client-side and the
+# server's CAS guard rejects any that still slip through. Without it, a player
+# tapping the inline buttons repeatedly spawned N parallel generations of the
+# next question (e.g. "Ситуация 7" delivered four times).
+_onboarding_answer_in_flight: set[int] = set()
+
+
+def _claim_onboarding_answer(player_id: int) -> bool:
+    """Reserve the player's onboarding answer slot. Returns False if one is
+    already in flight (the caller should alert and bail out)."""
+    if player_id in _onboarding_answer_in_flight:
+        return False
+    _onboarding_answer_in_flight.add(player_id)
+    return True
+
+
+def _release_onboarding_answer(player_id: int) -> None:
+    _onboarding_answer_in_flight.discard(player_id)
+
+
 async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: FSMContext):
     """Handle onboarding answer selection from inline keyboard buttons.
 
@@ -4195,29 +4217,37 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     answer_value = current_options[option_idx]["value"]
     logger.info(f"Matched option: idx={option_idx}, value='{answer_value}'")
 
-    # Set reaction to show processing
-    if callback.bot is not None:
+    # Reject duplicate submissions while a previous answer for this player is
+    # still being processed (LLM + ComfyUI for the next question can take
+    # 30-60s). Without this, every repeated tap spawned a fresh generation.
+    if not _claim_onboarding_answer(player_id):
+        logger.info(f"Onboarding answer already in flight for player {player_id}, ignoring duplicate (question_id={callback_question_id})")
+        await callback.answer(error_msgs["onboarding_in_progress"], show_alert=True)
+        return
+
+    try:
+        # Set reaction to show processing
+        if callback.bot is not None:
+            try:
+                await callback.bot.set_message_reaction(
+                    chat_id=player_id,
+                    message_id=msg.message_id,
+                    reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
+                    is_big=False,
+                )
+            except Exception as reaction_err:
+                logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
+
+        # Immediately update the inline keyboard to show ✅ on the selected option
         try:
-            await callback.bot.set_message_reaction(
-                chat_id=player_id,
-                message_id=msg.message_id,
-                reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
-                is_big=False,
-            )
-        except Exception as reaction_err:
-            logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
+            updated_keyboard = create_onboarding_keyboard(current_options, callback_question_id, selected_index=option_idx)
+            await msg.edit_reply_markup(reply_markup=updated_keyboard)
+        except Exception as kb_err:
+            logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
 
-    # Immediately update the inline keyboard to show ✅ on the selected option
-    try:
-        updated_keyboard = create_onboarding_keyboard(current_options, callback_question_id, selected_index=option_idx)
-        await msg.edit_reply_markup(reply_markup=updated_keyboard)
-    except Exception as kb_err:
-        logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
+        # Show a 'please wait' message before the (slow) species/gender question generation.
+        await _maybe_show_sg_progress_message(msg, state_data, player_lang)
 
-    # Show a 'please wait' message before the (slow) species/gender question generation.
-    await _maybe_show_sg_progress_message(msg, state_data, player_lang)
-
-    try:
         logger.info(f"Submitting onboarding answer (inline): session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
             "POST",
@@ -4225,12 +4255,19 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             data={"question_id": current_question_id, "answer": answer_value},
             params={"language": DEFAULT_LANGUAGE},
             timeout_total=600,
-            ignore_codes=(),
+            # 409 = server CAS guard rejected a duplicate/stale answer; the
+            # first accepted submission still drives the flow, so ignore it.
+            ignore_codes=(409,),
         )
-        logger.info(f"Onboarding answer response: {result}")
 
         if result is None:
-            raise Exception("No response from API when submitting onboarding answer")
+            # Ignored 409 — a concurrent/earlier answer for this question already
+            # advanced the session. Nothing to do; that answer delivers the next
+            # question, and the slot is released by this handler's finally.
+            logger.info(f"Onboarding answer for player {player_id} rejected as duplicate by server (409)")
+            return
+
+        logger.info(f"Onboarding answer response: {result}")
 
         # Answer processed successfully — update reaction to checkmark
         if callback.bot is None:
@@ -4287,6 +4324,8 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer (inline): {e}", exc_info=True)
         await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+    finally:
+        _release_onboarding_answer(player_id)
 
 
 async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -4392,22 +4431,30 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         await message.answer(error_msgs["invalid_format"])
         return
 
-    # Set reaction to show processing
-    if message.bot is not None:
-        try:
-            await message.bot.set_message_reaction(
-                chat_id=player_id,
-                message_id=message.message_id,
-                reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
-                is_big=False,
-            )
-        except Exception as reaction_err:
-            logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
-
-    # Show a 'please wait' message before the (slow) species/gender question generation.
-    await _maybe_show_sg_progress_message(message, state_data, get_player_language(player_id))
+    # Reject duplicate submissions while a previous answer for this player is
+    # still being processed (LLM + ComfyUI for the next question can take
+    # 30-60s). Mirrors the inline-keyboard handler.
+    if not _claim_onboarding_answer(player_id):
+        logger.info(f"Onboarding answer already in flight for player {player_id}, ignoring duplicate (question_id={current_question_id})")
+        await message.answer(error_msgs["onboarding_in_progress"])
+        return
 
     try:
+        # Set reaction to show processing
+        if message.bot is not None:
+            try:
+                await message.bot.set_message_reaction(
+                    chat_id=player_id,
+                    message_id=message.message_id,
+                    reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
+                    is_big=False,
+                )
+            except Exception as reaction_err:
+                logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
+
+        # Show a 'please wait' message before the (slow) species/gender question generation.
+        await _maybe_show_sg_progress_message(message, state_data, get_player_language(player_id))
+
         logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
             "POST",
@@ -4415,12 +4462,18 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
             data={"question_id": current_question_id, "answer": answer_value},
             params={"language": DEFAULT_LANGUAGE},
             timeout_total=600,
-            ignore_codes=(),
+            # 409 = server CAS guard rejected a duplicate/stale answer; the
+            # first accepted submission still drives the flow, so ignore it.
+            ignore_codes=(409,),
         )
-        logger.info(f"Onboarding answer response: {result}")
 
         if result is None:
-            raise Exception("No response from API when submitting onboarding answer")
+            # Ignored 409 — a concurrent/earlier answer already advanced the
+            # session. Nothing more to do here; release the slot below.
+            logger.info(f"Onboarding answer for player {player_id} rejected as duplicate by server (409)")
+            return
+
+        logger.info(f"Onboarding answer response: {result}")
 
         # Answer processed successfully — update reaction to checkmark
         if message.bot is not None:
@@ -4481,6 +4534,8 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}", exc_info=True)
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+    finally:
+        _release_onboarding_answer(player_id)
 
 
 async def action_selection(callback: types.CallbackQuery):
