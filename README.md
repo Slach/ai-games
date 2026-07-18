@@ -274,7 +274,7 @@ NPCs have distinct personalities and speech styles.
 ### Running Locally
 
 ```bash
-# Game Master API
+# Game Server API
 cd game-server
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
@@ -285,7 +285,7 @@ pip install -r requirements.txt
 export TELEGRAM_BOT_TOKEN=your_token
 python bot.py
 
-# Game Master (for debugging)
+# Game Scheduler (for debugging)
 cd game-scheduler
 pip install -r requirements.txt
 GAME_SCHEDULER_MODE=single python game_server.py
@@ -352,8 +352,6 @@ docker compose exec telegram-bot ping game-server
 
 ## Future Enhancements
 
-- [ ] SQLite persistence (in progress)
-- [ ] Redis for task queue
 - [ ] Voice message transcription
 - [ ] 3D scene generation
 - [ ] Video clips for key moments
