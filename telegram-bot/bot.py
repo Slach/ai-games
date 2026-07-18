@@ -152,6 +152,11 @@ GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001
 
 DEFAULT_LANGUAGE = "en"
 
+# Telegram media caption limit (https://core.telegram.org/bots/api#sendphoto).
+# Messages have a larger 4096-char limit, so an over-long question caption
+# must be split: image keeps the situation text, options go in a follow-up.
+TELEGRAM_CAPTION_LIMIT = 1024
+
 BOT_USERNAME: str | None = None
 
 # Game Master Telegram user ID — only this user can send GM commands
@@ -658,9 +663,11 @@ async def send_question_with_image(
         return f"{idx + 1}. {escape_markdown(opt.get('label', opt['value']))}"
 
     options_text = "\n\n".join([_option_display(opt, i) for i, opt in enumerate(options)])
-    question_text = lang.get_onboarding(language)["question_prefix"].format(id=question["id"], text=escape_markdown(question["text"]))
+    situation_text = lang.get_onboarding(language)["question_prefix"].format(id=question["id"], text=escape_markdown(question["text"]))
     if options_text:
-        question_text += f"\n\n---\n\n{options_text}"
+        question_text = f"{situation_text}\n\n---\n\n{options_text}"
+    else:
+        question_text = situation_text
 
     if image_url:
         try:
@@ -672,17 +679,38 @@ async def send_question_with_image(
                 if resp.status == 200:
                     photo_data = await resp.read()
                     photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
-                    await bot_or_message.answer_photo(
-                        photo=photo,
-                        caption=question_text,
-                        parse_mode="Markdown",
-                        reply_markup=keyboard,
-                    )
+                    if len(question_text) <= TELEGRAM_CAPTION_LIMIT:
+                        await bot_or_message.answer_photo(
+                            photo=photo,
+                            caption=question_text,
+                            parse_mode="Markdown",
+                            reply_markup=keyboard,
+                        )
+                    elif options_text and len(situation_text) <= TELEGRAM_CAPTION_LIMIT:
+                        # Caption too long: image keeps the situation, options
+                        # go in a follow-up message carrying the keyboard.
+                        await bot_or_message.answer_photo(
+                            photo=photo,
+                            caption=situation_text,
+                            parse_mode="Markdown",
+                        )
+                        await bot_or_message.answer(
+                            text=options_text,
+                            parse_mode="Markdown",
+                            reply_markup=keyboard,
+                        )
+                    else:
+                        await bot_or_message.answer_photo(photo=photo)
+                        await bot_or_message.answer(
+                            text=question_text,
+                            parse_mode="Markdown",
+                            reply_markup=keyboard,
+                        )
                     return question_text
                 else:
                     logger.warning(f"Failed to download question image (question_id={question['id']}): {resp.status}")
         except Exception as e:
-            logger.warning(f"Failed to send question image (question_id={question['id']}): {e}")
+            logger.warning(f"Failed to send question image (question_id={question['id']}): {e}", exc_info=True)
 
     # Check for option-level images (species/gender questions)
     has_option_images = any(opt.get("image_url") for opt in options)
@@ -1577,7 +1605,7 @@ async def start_onboarding_flow(
                 "language": effective_language,
             },
             params=None,
-            timeout_total=120,
+            timeout_total=600,
             ignore_codes=(),
         )
         logger.info(f"Onboarding start response: {result}")
@@ -4114,6 +4142,31 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     session_id = state_data.get("session_id")
     current_question_id = state_data.get("current_question_id")
     current_options = state_data.get("current_options")
+
+    # Fall back to the persistent player store when FSM state is empty.
+    # This happens when /onboarding/start timed out on the bot side (the
+    # LLM call survived on game-server and the question was later pushed
+    # via /push/onboarding-ready, which writes to player_store but not to
+    # FSM). Without this fallback the player sees "Ситуация 1" but every
+    # button press is rejected as a stale keyboard.
+    if not current_question_id:
+        player_state = get_player_state(player_id)
+        ps_session = player_state.get("onboarding_session_id")
+        ps_question = player_state.get("current_question_id")
+        ps_options = player_state.get("current_options")
+        if ps_session and ps_question is not None:
+            session_id = ps_session
+            current_question_id = ps_question
+            current_options = ps_options
+            await state.update_data(
+                session_id=session_id,
+                current_question_id=current_question_id,
+                current_options=current_options,
+            )
+            logger.info(
+                f"Restored onboarding FSM state from player_store for player {player_id}: "
+                f"session_id={session_id}, current_question_id={current_question_id}"
+            )
 
     logger.info(f"Inline onboarding answer: player={player_id}, callback_question_id={callback_question_id}, option_idx={option_idx}, session_id={session_id}")
 

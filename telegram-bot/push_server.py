@@ -69,6 +69,11 @@ except (ValueError, TypeError):
 
 GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
 
+# Telegram media caption limit (https://core.telegram.org/bots/api#sendphoto).
+# Messages have a larger 4096-char limit, so an over-long question caption
+# must be split: image keeps the situation text, options go in a follow-up.
+TELEGRAM_CAPTION_LIMIT = 1024
+
 
 # ── Per-player ordering & state ────────────────────────────────────
 
@@ -1138,12 +1143,14 @@ async def _deliver_onboarding_ready(
             image_url = question.get("image_url")
             question_text = question.get("text", "")
             options_text = "\n\n".join(f"{i + 1}. {_escape_md(o.get('label', o['value']))}" for i, o in enumerate(options))
-            full_text = get_onboarding(language)["question_prefix"].format(
+            situation_text = get_onboarding(language)["question_prefix"].format(
                 id=question["id"],
                 text=_escape_md(question_text),
             )
             if options_text:
-                full_text += f"\n\n---\n\n{options_text}"
+                full_text = f"{situation_text}\n\n---\n\n{options_text}"
+            else:
+                full_text = situation_text
 
             if image_url:
                 try:
@@ -1152,13 +1159,37 @@ async def _deliver_onboarding_ready(
                             if img_resp.status == 200:
                                 photo_data = await img_resp.read()
                                 photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
-                                await bot.send_photo(
-                                    chat_id=player_id,
-                                    photo=photo,
-                                    caption=full_text,
-                                    parse_mode="Markdown",
-                                    reply_markup=keyboard,
-                                )
+                                if len(full_text) <= TELEGRAM_CAPTION_LIMIT:
+                                    await bot.send_photo(
+                                        chat_id=player_id,
+                                        photo=photo,
+                                        caption=full_text,
+                                        parse_mode="Markdown",
+                                        reply_markup=keyboard,
+                                    )
+                                elif options_text and len(situation_text) <= TELEGRAM_CAPTION_LIMIT:
+                                    # Caption too long: image gets the situation, options
+                                    # go in a separate message carrying the keyboard.
+                                    await bot.send_photo(
+                                        chat_id=player_id,
+                                        photo=photo,
+                                        caption=situation_text,
+                                        parse_mode="Markdown",
+                                    )
+                                    await bot.send_message(
+                                        chat_id=player_id,
+                                        text=options_text,
+                                        parse_mode="Markdown",
+                                        reply_markup=keyboard,
+                                    )
+                                else:
+                                    await bot.send_photo(chat_id=player_id, photo=photo)
+                                    await bot.send_message(
+                                        chat_id=player_id,
+                                        text=full_text,
+                                        parse_mode="Markdown",
+                                        reply_markup=keyboard,
+                                    )
                             else:
                                 await bot.send_message(
                                     chat_id=player_id,
@@ -1171,6 +1202,7 @@ async def _deliver_onboarding_ready(
                         "[PUSH_ONBOARDING] Failed to send question image for player %d: %s",
                         player_id,
                         e,
+                        exc_info=True,
                     )
                     await bot.send_message(
                         chat_id=player_id,
