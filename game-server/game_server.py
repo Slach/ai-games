@@ -3385,15 +3385,26 @@ class GameServer:
         mission_name = mission.get("name", "Unknown mission")
         mission_desc = mission.get("description", "")
 
-        system = "You are an expert cinematic prompt engineer for AI image generation. Create detailed English prompts for a starship bridge scene with the full crew. Focus on composition, lighting, crew positioning, and space opera aesthetic."
+        system = (
+            "You are an expert cinematic prompt engineer for AI image generation. "
+            "Create detailed English prompts for a cinematic starship bridge scene "
+            "showing recognizable crew members in action. The image must depict the "
+            "crew — their faces, bodies, and poses — never a floor plan, schematic, "
+            "or architectural diagram. Focus on composition, lighting, the crew, "
+            "and a space opera aesthetic."
+        )
         user = (
             f"Mission: {mission_name}\n"
             f"Mission description: {mission_desc}\n\n"
             f"Crew on the bridge:\n{crew_desc}\n\n"
             "Create:\n"
-            "1. A detailed English image prompt for the bridge scene — cinematic, "
-            "Star Trek style, showing the crew at their stations on the bridge, "
-            "holographic displays, stars visible through the viewport, dramatic lighting, 4K.\n"
+            "1. A detailed English image prompt for the bridge scene — a cinematic, "
+            "eye-level or low-angle hero shot of the crew at their stations, Star Trek "
+            "style. Show the crew members' faces, bodies, and poses clearly as they "
+            "operate their consoles. Include holographic displays, stars visible "
+            "through the viewport, dramatic lighting, 4K. The viewpoint MUST be at "
+            "crew level — NEVER overhead, bird's-eye, top-down, isometric, satellite, "
+            "or any floor-plan / architectural-diagram view.\n"
             "2. Position descriptions for each crew member — where they are "
             "on the bridge and what they are doing at their station.\n\n"
             "Write the prompt and descriptions in English."
