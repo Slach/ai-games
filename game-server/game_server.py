@@ -59,6 +59,7 @@ from openai.types.shared_params.response_format_json_schema import (
 from pydantic import BaseModel
 
 from verbalize_sampling import DIVERSITY_HINTS, repair_json, select_response, verbalize_prompt, vs_response_schema
+from vs_config import resolve_vs_k
 
 logger = logging.getLogger(__name__)
 
@@ -1296,7 +1297,10 @@ class GameServer:
             example_role_scores_json,
             underrepresented_hint,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            # onboarding_questions is overridden to k=3 in vs_config.DEFAULT_VS_K_OVERRIDES
+            # (5 questions × 5 options × 10 role_scores per candidate set — the heaviest
+            # VS generation; k=3 mitigates the late-set quality degradation seen at k=5).
+            vs_k=resolve_vs_k("onboarding_questions", self.vs_k),
         )
 
         # NOTE: This is a token-heavy generation (5 questions × 5 options × 10 role_scores).
@@ -1467,7 +1471,7 @@ class GameServer:
         """Generate a creative game title and welcome message."""
         logger.info(f"[TITLE] Generating game title, language: {self.language}")
 
-        system, user = build_game_title_prompts(self.language, use_vs=self.vs_enabled, vs_k=self.vs_k)
+        system, user = build_game_title_prompts(self.language, use_vs=self.vs_enabled, vs_k=resolve_vs_k("game_title", self.vs_k))
 
         if self.vs_enabled:
             vs_result = self._call_llm(
@@ -1517,7 +1521,7 @@ class GameServer:
         """Generate daily story using LLM with json_schema."""
         logger.info(f"[STORY] Starting story generation for Turn {turn}, language: {self.language}")
 
-        system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role, use_vs=self.vs_enabled, vs_k=self.vs_k)
+        system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role, use_vs=self.vs_enabled, vs_k=resolve_vs_k("turn_story", self.vs_k))
 
         if self.vs_enabled:
             vs_result = self._call_llm(
@@ -1774,7 +1778,7 @@ class GameServer:
             global_circumstances_narrative=ctx.get("global_circumstances_narrative", ""),
             crew_context=ctx.get("crew_context", ""),
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("player_message", self.vs_k),
         )
 
         try:
@@ -1944,7 +1948,7 @@ class GameServer:
         )
 
         if self.vs_enabled:
-            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["avatar"], k=self.vs_k)
+            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["avatar"], k=resolve_vs_k("avatar", self.vs_k))
             parsed = self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,
@@ -2061,7 +2065,7 @@ class GameServer:
         )
 
         if self.vs_enabled:
-            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["action_prompt"], k=self.vs_k)
+            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["action_prompt"], k=resolve_vs_k("action_prompt", self.vs_k))
             parsed = self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,
@@ -2282,7 +2286,7 @@ class GameServer:
             gender_secondary,
             gender_hybrid,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("species_description", self.vs_k),
         )
 
         try:
@@ -2377,7 +2381,7 @@ class GameServer:
             gender_display,
             traits,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("role_flavour", self.vs_k),
         )
 
         try:
@@ -2588,7 +2592,7 @@ class GameServer:
         # Build the choice text for the NPC
         choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
 
-        system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text, use_vs=self.vs_enabled, vs_k=self.vs_k)
+        system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text, use_vs=self.vs_enabled, vs_k=resolve_vs_k("npc_decision", self.vs_k))
 
         try:
             if self.vs_enabled:
@@ -2704,7 +2708,7 @@ class GameServer:
             gc_settings,
             choices_text,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("npc_decision", self.vs_k),
         )
 
         try:
@@ -2827,7 +2831,7 @@ class GameServer:
             player_descriptions,
             mission_str,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("global_circumstances", self.vs_k),
         )
 
         try:
@@ -3141,7 +3145,7 @@ class GameServer:
             decisions_text=decisions_text,
             roster_text=roster_text,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("combined_outcome", self.vs_k),
         )
 
         try:
@@ -3227,7 +3231,7 @@ class GameServer:
             outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("combined_outcome", self.vs_k),
         )
 
         try:
@@ -3297,7 +3301,7 @@ class GameServer:
             archetype=mission_seeds["archetype"],
             seeds=mission_seeds["seeds"],
             use_vs=self.vs_enabled,
-            vs_k=self.vs_k,
+            vs_k=resolve_vs_k("mission", self.vs_k),
         )
 
         try:
@@ -3397,7 +3401,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["bridge_image"], k=self.vs_k)
+                vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["bridge_image"], k=resolve_vs_k("bridge_image", self.vs_k))
                 vs_result = self._call_llm(
                     system_prompt=vs_system,
                     user_prompt=vs_user,
@@ -3737,7 +3741,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_avatars"], k=self.vs_k)
+                vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_avatars"], k=resolve_vs_k("npc_avatars", self.vs_k))
                 vs_result = self._call_llm(
                     system_prompt=vs_system,
                     user_prompt=vs_user,
