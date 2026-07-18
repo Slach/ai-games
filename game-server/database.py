@@ -487,6 +487,29 @@ def reset_roles(game_id: str):
     conn.close()
 
 
+def deactivate_replacement_npcs_for_player(player_id: int, game_id: str) -> int:
+    """Deactivate active NPCs that were created to replace ``player_id`` in a game.
+
+    /admin/reset-player replaces a player with an active NPC (replaces_player_id)
+    and deletes the player's profile. If the player later re-onboards into a
+    DIFFERENT role, take_role() only deactivates NPCs for the new role_key, so
+    the old NPC stays active as a ghost duplicating the player in the team
+    roster and turn generation. This clears any such ghost. Returns the number
+    of NPCs deactivated.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE npc_profiles SET is_active = 0 "
+        "WHERE is_active = 1 AND replaces_player_id = ? AND game_id = ?",
+        (player_id, game_id),
+    )
+    deactivated = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deactivated
+
+
 def reset_active_npcs(game_id: str):
     """Deactivate all NPCs for a game so fresh ones are generated on next start."""
     conn = get_db_connection()

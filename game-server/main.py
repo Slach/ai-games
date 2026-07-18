@@ -28,6 +28,7 @@ from database import (
     create_npc_profile,
     create_onboarding_session,
     create_player_profile,
+    deactivate_replacement_npcs_for_player,
     delete_all_game_turns,
     delete_all_game_messages,
     delete_all_player_actions,
@@ -1410,6 +1411,12 @@ async def complete_onboarding(session_id: str):
         profile = get_player_profile(player_id)
         if not profile:
             raise HTTPException(status_code=500, detail="Failed to create player profile")
+        # If the player is returning (e.g. after /reset), deactivate any active
+        # NPC that was created to replace them on a previous role — otherwise it
+        # would duplicate them in the team roster and turn generation.
+        ghosts = deactivate_replacement_npcs_for_player(player_id, game_id)
+        if ghosts:
+            logger.info(f"[ONBOARDING] Deactivated {ghosts} ghost NPC(s) for returning player {player_id} in game {game_id}")
 
     # Generate avatar using ComfyUI directly
     # Step 1: Generate avatar prompt (LLM) with fallback to template
@@ -5121,11 +5128,15 @@ async def get_team_endpoint(game_id: str):
 
     # Add NPCs — include both active and dead (killed in story).
     # Exclude inactive NPCs whose role is now taken by a real player
-    # (checks ship_roles.taken_by to also handle legacy data).
+    # (checks ship_roles.taken_by to also handle legacy data), and also exclude
+    # ghost NPCs that were created to replace a player who has since returned to
+    # this game (replaces_player_id is in player_profiles for this game) —
+    # otherwise a reset-then-reonboard player would see their old NPC duplicate
+    # them in the roster.
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT n.* FROM npc_profiles n LEFT JOIN ship_roles sr ON sr.role_key = n.role_key AND sr.game_id = n.game_id WHERE n.game_id = ? AND (n.is_active = 1 OR sr.taken_by IS NULL) ORDER BY n.created_at",
+        "SELECT n.* FROM npc_profiles n LEFT JOIN ship_roles sr ON sr.role_key = n.role_key AND sr.game_id = n.game_id WHERE n.game_id = ? AND (n.is_active = 1 OR sr.taken_by IS NULL) AND n.replaces_player_id NOT IN (SELECT player_id FROM player_profiles p WHERE p.game_id = n.game_id) ORDER BY n.created_at",
         (game_id,),
     )
     npc_rows = cursor.fetchall()
