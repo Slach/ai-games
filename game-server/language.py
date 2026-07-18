@@ -1278,6 +1278,7 @@ GAME_STRINGS = {
             "mission_fallback": {
                 "name": "Первый контакт",
                 "description": "Исследовать неизвестный сигнал в секторе 7-Альфа. Установить контакт с цивилизацией.",
+                "short_description": "Исследовать загадочный сигнал в секторе 7-Альфа и установить первый контакт с неизвестной цивилизацией.",
                 "stages": [
                     {"name": "Разведка", "description": "Приблизиться к источнику сигнала"},
                     {"name": "Контакт", "description": "Установить коммуникацию"},
@@ -1359,6 +1360,7 @@ GAME_STRINGS = {
             "mission_fallback": {
                 "name": "First Contact",
                 "description": "Investigate an unknown signal in sector 7-Alpha. Establish contact with a civilization.",
+                "short_description": "Investigate a mysterious signal in sector 7-Alpha and make first contact with an unknown civilization.",
                 "stages": [
                     {"name": "Reconnaissance", "description": "Approach the signal source"},
                     {"name": "Contact", "description": "Establish communication"},

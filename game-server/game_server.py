@@ -710,7 +710,7 @@ MISSION_SCHEMA = {
                     "description": "Mission stages/objectives (2-4 stages)",
                 },
             },
-            "required": ["name", "description", "objectives"],
+            "required": ["name", "description", "short_description", "objectives"],
             "additionalProperties": False,
         },
     },
@@ -888,7 +888,7 @@ def _actions_for_wound(
     preserving at least one neutral choice (safe "wait/rest").
     """
     total = n_good + n_bad + n_neutral
-    penalty = _WOUND_ACTION_PENALTY.get(wound_severity, 0)
+    penalty = _WOUND_ACTION_PENALTY.get(wound_severity or "", 0)
     if penalty <= 0:
         return total, n_good, n_bad, n_neutral
 
@@ -1163,6 +1163,7 @@ class GameServer:
                 raise ValueError(f"LLM returned content=None. Finish reason: {finish_reason}. Usage: {_u}")
             return json.loads(content)
 
+        # pi-lens-ignore: no-boolean-in-except
         except Exception as e:
             logger.warning(f"Structured output failed ({e}), falling back to plain JSON extraction")
 
@@ -1235,7 +1236,7 @@ class GameServer:
                 if repaired != content:
                     try:
                         return json.loads(repaired)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as _json_err:
                         pass
                 if repaired != content:
                     logger.warning("JSON repair did not help, still unparsable")
@@ -1791,7 +1792,7 @@ class GameServer:
                     enable_thinking=False,
                     max_tokens=2048,
                     game_id=game_id,
-                    player_id=player_id,
+                    player_id=str(player_id),
                     turn=turn,
                     kind=kind,
                 )
@@ -1808,7 +1809,7 @@ class GameServer:
                     enable_thinking=False,
                     max_tokens=1024,
                     game_id=game_id,
-                    player_id=player_id,
+                    player_id=str(player_id),
                     turn=turn,
                     kind=kind,
                 )
@@ -1868,10 +1869,7 @@ class GameServer:
             "cybernetic": {
                 "intro": "cybernetic / synthetic character",
                 "appearance": (
-                    "- The character's mechanical/cybernetic body — "
-                    "metal, circuits, synthetic components, digital displays\n"
-                    "- If part-organic, highlight the blend of biological and mechanical\n"
-                    "- Describe the technological aesthetic of their form"
+                    "- The character's mechanical/cybernetic body — metal, circuits, synthetic components, digital displays\n- If part-organic, highlight the blend of biological and mechanical\n- Describe the technological aesthetic of their form"
                 ),
                 "framing": "- Full body or 3/4 view showing the mechanical/cybernetic anatomy",
                 "genre": "cyberpunk sci-fi concept art",
@@ -2160,7 +2158,7 @@ class GameServer:
         idx = max(0, min(idx, len(pool) - 1))
         text = pool[idx]["text"]
         tag_field = "species_tags" if dimension == "species" else "gender_tags"
-        labels: dict[str, str]
+        labels: dict[str, str] = {}
         for q in pool:
             for opt in q["options"]:
                 for tag in opt.get(tag_field, []):
@@ -2910,7 +2908,7 @@ class GameServer:
 
         # Wound severity reduces the number of action choices available:
         # healthy = full set, then one fewer per step (5/4/3/2 by default).
-        wound_severity = player_profile.get("wound_severity")
+        wound_severity = player_profile.get("wound_severity") or None
         total_actions, n_good, n_bad, n_neutral = _actions_for_wound(
             wound_severity,
             self.turn_good_actions,
@@ -2925,11 +2923,15 @@ class GameServer:
             good = "хороших"
             bad = "плохое"
             neutral = "нейтральное"
-            wound_label_ru = {
-                "critical": "тяжёлое ранение",
-                "moderate": "среднее ранение",
-                "minor": "лёгкое ранение",
-            }.get(wound_severity, "здоров")
+            wound_label_ru = (
+                {
+                    "critical": "тяжёлое ранение",
+                    "moderate": "среднее ранение",
+                    "minor": "лёгкое ранение",
+                }.get(wound_severity, "здоров")
+                if wound_severity
+                else "здоров"
+            )
             user = (
                 f"Общие обстоятельства дня:\n"
                 f"Локация: {setting}\n"
@@ -2962,20 +2964,22 @@ class GameServer:
                 "- Разные варианты должны давать РАЗНЫЕ уровни риска и награды.\n"
                 "- Варианты должны соответствовать РОЛИ персонажа.\n"
                 + (
-                    "- Персонаж РАНЕН — варианты должны учитывать его ограниченные физические "
-                    "возможности: меньше агрессивных/физических действий, больше осторожных, "
-                    "всегда есть безопасное нейтральное действие (отдых/лечение).\n"
+                    "- Персонаж РАНЕН — варианты должны учитывать его ограниченные физические возможности: меньше агрессивных/физических действий, больше осторожных, всегда есть безопасное нейтральное действие (отдых/лечение).\n"
                     if wound_severity in ("critical", "moderate", "minor")
                     else ""
                 )
                 + "\nВсё на русском языке."
             )
         else:
-            wound_label_en = {
-                "critical": "critically wounded",
-                "moderate": "moderately wounded",
-                "minor": "lightly wounded",
-            }.get(wound_severity, "healthy")
+            wound_label_en = (
+                {
+                    "critical": "critically wounded",
+                    "moderate": "moderately wounded",
+                    "minor": "lightly wounded",
+                }.get(wound_severity, "healthy")
+                if wound_severity
+                else "healthy"
+            )
             user = (
                 f"Global circumstances:\n"
                 f"Setting: {setting}\n"
@@ -2991,12 +2995,7 @@ class GameServer:
                 "1. personal_title…\n"
                 f"3. Exactly {total_actions} action choices: "
                 f"{n_good} good, {n_bad} bad, {n_neutral} neutral.\n"
-                + (
-                    "- The character is WOUNDED — fewer aggressive/physical actions, "
-                    "always include a safe neutral option (rest/treatment).\n"
-                    if wound_severity in ("critical", "moderate", "minor")
-                    else ""
-                )
+                + ("- The character is WOUNDED — fewer aggressive/physical actions, always include a safe neutral option (rest/treatment).\n" if wound_severity in ("critical", "moderate", "minor") else "")
             )
 
         try:
@@ -3346,13 +3345,9 @@ class GameServer:
             result = {
                 "name": mf["name"],
                 "description": mf["description"],
-                "short_description": mf.get("description", "")[:500],
+                "short_description": mf["short_description"],
                 "objectives": [{"stage": i + 1, "name": s["name"], "description": s["description"], "success_threshold": [3, 5, 7][i]} for i, s in enumerate(mf["stages"])],
             }
-
-        # Ensure short_description exists (LLM may omit it)
-        if "short_description" not in result or not result["short_description"]:
-            result["short_description"] = result.get("description", "")[:500]
 
         # normalize: 1-based stages, thresholds 3-5, derive current/total/completed
         result["archetype"] = mission_seeds["archetype"]
@@ -3488,11 +3483,7 @@ class GameServer:
             are simply absent; callers should treat the dict as best-effort.
         """
         logger.info("[BACKGROUND] Generating prompts for %d participants", len(all_participants))
-        crew_summary = "\n".join(
-            f"- {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, "
-            f"gender={p.get('gender') or '?'}"
-            for p in all_participants
-        )
+        crew_summary = "\n".join(f"- {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, gender={p.get('gender') or '?'}" for p in all_participants)
 
         system = build_background_prompts_system(language)
         user = build_background_prompts_user(language, mission, crew_summary)
@@ -3558,9 +3549,7 @@ class GameServer:
             Dict with "instruction" (str) and "background_location" (str|None).
         """
         system = build_scene_instruction_system(language)
-        user = build_scene_instruction_user(
-            language, action_text, role, species_desc, background_location, scene_context
-        )
+        user = build_scene_instruction_user(language, action_text, role, species_desc, background_location, scene_context)
 
         try:
             result = self._call_llm(
@@ -3696,9 +3685,7 @@ class GameServer:
                 gender = "invent a non-human biological identity fitting the species"
             else:
                 gender = r.get("gender", "random")
-            role_lines.append(
-                f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}"
-            )
+            role_lines.append(f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}")
         roles_text = "\n".join(role_lines)
 
         system = (

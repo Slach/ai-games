@@ -2915,8 +2915,7 @@ async def cmd_invite(message: types.Message):
         if mission and bridge and bridge.get("image_url"):
             # ── Mission exists: bridge photo with mission caption ──
             mission_name = mission.get("name", "")
-            # Use short_description from DB if available; fall back to truncating full description
-            short_desc = mission.get("short_description", "") or mission.get("description", "")[:500]
+            short_desc = mission.get("short_description", "")
             clean_title = game_title.strip("«»")
             caption = msgs.get(
                 "invite_mission_caption",
