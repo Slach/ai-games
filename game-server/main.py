@@ -338,7 +338,7 @@ async def generate_dynamic_onboarding_questions(
 
         # Query underrepresented roles from recent onboarding history
         try:
-            from language import SHIP_ROLES_I18N
+            from language import get_ship_role_name
 
             underrepresented = get_underrepresented_roles(game_id, n_last=10)
             if underrepresented:
@@ -346,8 +346,7 @@ async def generate_dynamic_onboarding_questions(
                 target_roles = underrepresented[:4]
                 role_names = []
                 for rk in target_roles:
-                    i18n = SHIP_ROLES_I18N.get(rk, {})
-                    name = i18n.get(language, {}).get("role_name", rk)
+                    name = get_ship_role_name(rk, language)
                     role_names.append(f"{name} ({rk})")
                 hint = ", ".join(role_names)
                 logger.info(f"Underrepresented roles: {hint}")
@@ -355,7 +354,7 @@ async def generate_dynamic_onboarding_questions(
                 hint = ""
                 logger.info("No underrepresented role history available")
         except Exception as e:
-            logger.warning(f"Failed to query underrepresented roles: {e}")
+            logger.warning(f"Failed to query underrepresented roles: {e}", exc_info=True)
             hint = ""
 
         raw_questions = game_server.generate_onboarding_questions(
@@ -682,7 +681,7 @@ def generate_player_profile_from_answers(
     if not role_data:
         raise ValueError("Could not resolve an available role for player.")
 
-    traits = role_data["personality_traits"].copy()
+    traits: list[str] = []
     for ans in answers.values():
         if ans in ("cautious", "caution"):
             traits.append("осторожный")
@@ -722,13 +721,28 @@ def generate_player_profile_from_answers(
     species_secondary_display = get_species_type_name(species_secondary, language) if species_secondary else None
     gender_secondary_display = get_gender_type_name(gender_secondary, language) if gender_secondary else None
 
+    # Generate per-character role flavour via LLM (replaces static SHIP_ROLES_I18N).
+    # Tailored to role + species + gender + onboarding-derived traits.
+    role_flavour = game_server.generate_role_flavour(
+        role_key=assigned_key,
+        role_name=role_data["role_name"],
+        species_display=species_display,
+        gender_display=gender_type_display,
+        traits=traits,
+        game_id=game_id,
+        player_id=str(player_id),
+        turn=None,
+        kind="role_flavour",
+    )
+    traits = role_flavour["personality_traits"]
+
     # Generate species+gender narrative description via LLM
     species_description = ""
     try:
         species_description = game_server.generate_species_gender_description(species_result=species_result, gender_result=gender_result, role=role_data["role_name"], game_id=game_id, player_id=str(player_id), turn=None, kind="species_description")
         logger.info(f"[SPECIES] Description generated for player {player_id}: {species_description}...")
     except Exception as e:
-        logger.warning(f"[SPECIES] Failed to generate description for player {player_id}: {e}")
+        logger.warning(f"[SPECIES] Failed to generate description for player {player_id}: {e}", exc_info=True)
         species_description = ""
 
     logger.info(f"[SPECIES] Player {player_id} species={species_primary}, gender={gender_primary}, hybrid={species_hybrid}, display={species_display}")
@@ -736,10 +750,10 @@ def generate_player_profile_from_answers(
     return {
         "player_id": player_id,
         "player_name": player_name,
-        "avatar_description": role_data["avatar_description"],
+        "avatar_description": role_flavour["avatar_description"],
         "role": role_data["role_name"],
         "role_name_en": role_data["role_name_en"],
-        "role_description": role_data["role_description"],
+        "role_description": role_flavour["role_description"],
         "personality_traits": traits,
         "game_id": game_id,
         "species": species_type_display,
@@ -4365,9 +4379,24 @@ async def _original_start_game(request: StartGameRequest):
         npc_species = _random_npc_species()
         npc_gender = _random_npc_gender(language)
 
+        # Generate per-character role flavour via LLM (replaces static
+        # SHIP_ROLES_I18N). Done before name generation so the name can
+        # match the generated personality/visual description.
+        npc_flavour = gm.generate_role_flavour(
+            role_key=role_key,
+            role_name=role_name,
+            species_display=npc_species,
+            gender_display=npc_gender,
+            traits=[],
+            game_id=game_id,
+            player_id=None,
+            turn=_npc_turn,
+            kind=f"npc_role_flavour_{role_key}",
+        )
+
         # Generate creative name via LLM (with fallback), avoid duplicates
         npc_name_attempt = gm.generate_npc_name(
-            role_key=role_key, role_name=role_name, species=npc_species, gender=npc_gender, avatar_description=role_data.get("avatar_description", ""), personality_traits=role_data.get("personality_traits", []), avoid_names=avoid_names, game_id=game_id, player_id=None, turn=_npc_turn, kind=f"npc_name_{role_key}"
+            role_key=role_key, role_name=role_name, species=npc_species, gender=npc_gender, avatar_description=npc_flavour["avatar_description"], personality_traits=npc_flavour["personality_traits"], avoid_names=avoid_names, game_id=game_id, player_id=None, turn=_npc_turn, kind=f"npc_name_{role_key}"
         )
         # If LLM returned a name WITH role prefix (e.g. "Инженер Дмитрий Волков"),
         # strip it — the role is already shown separately in UI
@@ -4384,11 +4413,11 @@ async def _original_start_game(request: StartGameRequest):
             "role_key": role_key,
             "npc_name": npc_name_attempt,
             "role": role_name,
-            "role_description": role_data.get("role_description", ""),
-            "personality_traits": role_data.get("personality_traits", []),
+            "role_description": npc_flavour["role_description"],
+            "personality_traits": npc_flavour["personality_traits"],
             "species": npc_species,
             "gender": npc_gender,
-            "avatar_description": role_data.get("avatar_description", ""),
+            "avatar_description": npc_flavour["avatar_description"],
             "game_id": game_id,
             "is_active": True,
             "replaces_player_id": None,
@@ -5157,15 +5186,15 @@ def _replace_player_with_npc(
 
     kicked_profile = get_player_profile(player_id)
     npc_name = ((kicked_profile.get("player_name", "") or "") if kicked_profile else role_data["role_name"]) or role_data["role_name"]
-    npc_traits = kicked_profile.get("personality_traits", []) if kicked_profile else role_data.get("personality_traits", [])
+    npc_traits = kicked_profile.get("personality_traits", []) if kicked_profile else []
     npc_species = (kicked_profile.get("species", "") or "") if kicked_profile else ""
     npc_gender = (kicked_profile.get("gender", "") or "") if kicked_profile else ""
     if not npc_species:
         npc_species = _random_npc_species()
     if not npc_gender:
         npc_gender = _random_npc_gender(language)
-    npc_avatar_desc = kicked_profile.get("avatar_description", "") if kicked_profile else role_data.get("avatar_description", "")
-    npc_role_description = kicked_profile.get("role_description", "") if kicked_profile else role_data.get("role_description", "")
+    npc_avatar_desc = kicked_profile.get("avatar_description", "") if kicked_profile else ""
+    npc_role_description = kicked_profile.get("role_description", "") if kicked_profile else ""
 
     # Preserve the replaced player's existing avatar image so the NPC shows up
     # in the team roster without regeneration. NPCs store the URL inside

@@ -922,6 +922,87 @@ def build_species_description_prompts(
     return system, user
 
 
+# ── Role flavour prompts ───────────────────────────────────────────
+
+
+def build_role_flavour_prompts(
+    language: str,
+    role_key: str,
+    role_name: str,
+    species_display: str,
+    gender_display: str,
+    traits: list[str],
+    *,
+    use_vs: bool,
+    vs_k: int,
+) -> tuple[str, str]:
+    """Build system and user prompts for per-character role flavour generation.
+
+    Generates role_description, avatar_description, and personality_traits
+    tailored to this specific crew member — reflecting their role, species,
+    gender, and onboarding-derived traits. Replaces the old static
+    SHIP_ROLES_I18N flavour text.
+    """
+    traits_str = ", ".join(traits) if traits else ""
+
+    if language == LANGUAGE_RU:
+        system = (
+            "Ты — креативный писатель-фантаст, создающий живые портреты членов звёздного экипажа. "
+            "Для заданной роли, вида, пола и черт характера опиши конкретного человека/существо на этой должности. "
+            "Избегай шаблонных архетипов — сделай персонажа запоминающимся. Текст должен быть кинематографичным "
+            "и атмосферным, как описание персонажа для фильма или игры."
+        )
+        user_lines = [
+            "Создай flavour-описание члена экипажа для космической игры в стиле Star Trek.\n",
+            f"Роль: {role_name} (ключ: {role_key})",
+        ]
+        if species_display:
+            user_lines.append(f"Вид: {species_display}")
+        if gender_display:
+            user_lines.append(f"Пол: {gender_display}")
+        if traits_str:
+            user_lines.append(f"Черты характера (из онбординга): {traits_str}")
+        user_lines.append("")
+        user_lines.append("Верни JSON с тремя полями:")
+        user_lines.append("- role_description: 2-4 предложения на русском — кто этот персонаж на своей должности, "
+                          "как он воспринимает свою роль и почему он здесь. Второе лицо ('вы').")
+        user_lines.append("- avatar_description: 1-2 предложения на русском — визуальное описание для генерации "
+                          "аватара: внешность, одежда/форма, окружение, поза, атмосфера. Без указания имени.")
+        user_lines.append("- personality_traits: ровно 3 прилагательных на русском, контрастных между собой, "
+                          "отражающих характер персонажа (включая черты из онбординга, но расширенные под роль).")
+        user = "\n".join(user_lines)
+    else:
+        system = (
+            "You are a creative sci-fi writer crafting vivid portraits of starship crew members. "
+            "For a given role, species, gender, and set of traits, describe a specific individual holding that post. "
+            "Avoid stock archetypes — make the character memorable. The writing should be cinematic and atmospheric, "
+            "like a character pitch for a film or game."
+        )
+        user_lines = [
+            "Create a flavour description of a crew member for a Star Trek-style space game.\n",
+            f"Role: {role_name} (key: {role_key})",
+        ]
+        if species_display:
+            user_lines.append(f"Species: {species_display}")
+        if gender_display:
+            user_lines.append(f"Gender: {gender_display}")
+        if traits_str:
+            user_lines.append(f"Traits (from onboarding): {traits_str}")
+        user_lines.append("")
+        user_lines.append("Return JSON with three fields:")
+        user_lines.append("- role_description: 2-4 sentences in English — who this character is in their role, "
+                          "how they relate to it, and why they are here. Second person ('you').")
+        user_lines.append("- avatar_description: 1-2 sentences in English — visual description for avatar "
+                          "generation: appearance, clothing/uniform, surroundings, pose, mood. No name.")
+        user_lines.append("- personality_traits: exactly 3 adjectives in English, contrasting with each other, "
+                          "capturing the character's nature (including onboarding traits but extended to fit the role).")
+        user = "\n".join(user_lines)
+
+    if use_vs:
+        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["role_flavour"], k=vs_k)
+    return system, user
+
+
 # ── NPC decision prompts
 # ── NPC decision prompts ───────────────────────────────────────────
 

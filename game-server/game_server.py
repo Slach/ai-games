@@ -44,6 +44,7 @@ from prompts import (
     build_onboarding_prompts,
     build_personal_briefing_system,
     build_player_message_prompts,
+    build_role_flavour_prompts,
     build_scene_instruction_system,
     build_scene_instruction_user,
     build_species_description_prompts,
@@ -485,6 +486,34 @@ SPECIES_GENDER_DESC_SCHEMA = {
                 "gender_description",
                 "combined_description",
             ],
+            "additionalProperties": False,
+        },
+    },
+}
+
+ROLE_FLAVOUR_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "role_flavour",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "role_description": {
+                    "type": "string",
+                    "description": "2-4 sentence second-person description of who this specific character is in their crew role, how they relate to it, and why they are here",
+                },
+                "avatar_description": {
+                    "type": "string",
+                    "description": "1-2 sentence visual description for avatar generation: appearance, clothing/uniform, surroundings, pose, mood. No character name.",
+                },
+                "personality_traits": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Exactly 3 contrasting adjectives capturing the character's nature",
+                },
+            },
+            "required": ["role_description", "avatar_description", "personality_traits"],
             "additionalProperties": False,
         },
     },
@@ -2313,6 +2342,95 @@ class GameServer:
         gender_note = gm["gender_note"].format(gender_type=gender_type)
         role_note = gm["role_note"].format(role=role)
         return f"{base}{gender_note}{role_note}"
+
+    def generate_role_flavour(
+        self,
+        role_key: str,
+        role_name: str,
+        species_display: str,
+        gender_display: str,
+        traits: list[str],
+        *,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str = "role_flavour",
+    ) -> dict[str, Any]:
+        """Generate per-character role flavour via LLM with verbalize sampling.
+
+        Produces role_description, avatar_description, and personality_traits
+        tailored to this specific crew member (role + species + gender +
+        onboarding-derived traits). Replaces the old static SHIP_ROLES_I18N
+        flavour.
+
+        Returns dict with keys role_description, avatar_description,
+        personality_traits. On LLM failure, falls back to empty descriptions
+        and the provided traits verbatim — never raises.
+        """
+        logger.info(f"[ROLE_FLAVOUR] Generating flavour for role={role_key} ({role_name}), player={player_id}")
+
+        system, user = build_role_flavour_prompts(
+            self.language,
+            role_key,
+            role_name,
+            species_display,
+            gender_display,
+            traits,
+            use_vs=self.vs_enabled,
+            vs_k=self.vs_k,
+        )
+
+        try:
+            if self.vs_enabled:
+                vs_result = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=vs_response_schema(ROLE_FLAVOUR_SCHEMA),
+                    temperature=0.8,
+                    enable_thinking=False,
+                    max_tokens=2048,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
+                )
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                parsed = chosen["text"]
+            else:
+                parsed = self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=ROLE_FLAVOUR_SCHEMA,
+                    temperature=0.8,
+                    enable_thinking=False,
+                    max_tokens=1024,
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
+                )
+            generated_traits = parsed.get("personality_traits") or []
+            if not isinstance(generated_traits, list) or not generated_traits:
+                generated_traits = list(traits)
+            # Merge: keep onboarding-derived traits, append any new ones from LLM
+            merged_traits = list(traits)
+            for t in generated_traits:
+                if t not in merged_traits:
+                    merged_traits.append(t)
+            result = {
+                "role_description": parsed.get("role_description", "") or "",
+                "avatar_description": parsed.get("avatar_description", "") or "",
+                "personality_traits": merged_traits[:6],
+            }
+            logger.info(f"[ROLE_FLAVOUR] Flavour generated for {role_key}: desc={result['role_description'][:60]}...")
+            return result
+        except Exception as e:
+            logger.warning(f"[ROLE_FLAVOUR] LLM flavour failed for role={role_key}, using fallback: {e}", exc_info=True)
+            return {
+                "role_description": "",
+                "avatar_description": "",
+                "personality_traits": list(traits),
+            }
 
     # ============== Species/Gender Option Image Prompts ==============
 

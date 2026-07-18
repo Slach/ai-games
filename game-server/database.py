@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from language import LANGUAGE_EN, LANGUAGE_RU, SHIP_ROLES_I18N, get_ship_role_i18n
+from language import LANGUAGE_EN, LANGUAGE_RU, SHIP_ROLES_KEYS, get_ship_role_name, get_ship_role_name_en
 from game_rules import normalize_mission
 
 logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     ),
 ]
 
-SHIP_ROLE_KEYS = list(SHIP_ROLES_I18N.keys())
+SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
 
 
 def init_db():
@@ -376,18 +376,11 @@ def _ensure_game_state(game_id: str):
     conn.close()
 
 
-def _enrich_role_with_i18n(role_key: str, taken_by: int | None, language: str) -> dict[str, Any]:
-    ru = get_ship_role_i18n(role_key, LANGUAGE_RU)
-    en = get_ship_role_i18n(role_key, LANGUAGE_EN)
-    localized = get_ship_role_i18n(role_key, language)
+def _enrich_role(role_key: str, taken_by: int | None, language: str) -> dict[str, Any]:
     return {
         "role_key": role_key,
-        "role_name": localized.get("role_name", ru.get("role_name", "")),
-        "role_name_en": en.get("role_name", ""),
-        "role_description": localized.get("role_description", ru.get("role_description", "")),
-        "role_description_en": en.get("role_description", ""),
-        "avatar_description": localized.get("avatar_description", ru.get("avatar_description", "")),
-        "personality_traits": localized.get("personality_traits", ru.get("personality_traits", [])),
+        "role_name": get_ship_role_name(role_key, language),
+        "role_name_en": get_ship_role_name_en(role_key),
         **({"taken_by": taken_by} if taken_by is not None else {}),
     }
 
@@ -401,7 +394,7 @@ def get_available_roles(game_id: str, language: str) -> list[dict[str, Any]]:
     )
     rows = cursor.fetchall()
     conn.close()
-    return [_enrich_role_with_i18n(row["role_key"], None, language=language) for row in rows]
+    return [_enrich_role(row["role_key"], None, language=language) for row in rows]
 
 
 def get_all_roles(game_id: str, language: str) -> list[dict[str, Any]]:
@@ -410,7 +403,7 @@ def get_all_roles(game_id: str, language: str) -> list[dict[str, Any]]:
     cursor.execute("SELECT role_key, taken_by FROM ship_roles WHERE game_id = ?", (game_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [_enrich_role_with_i18n(row["role_key"], row["taken_by"], language) for row in rows]
+    return [_enrich_role(row["role_key"], row["taken_by"], language) for row in rows]
 
 
 def take_role(role_key: str, player_id: int, game_id: str) -> bool:
@@ -483,7 +476,7 @@ def get_role_by_key(
     conn.close()
     if not row:
         return None
-    return _enrich_role_with_i18n(row["role_key"], row["taken_by"], language)
+    return _enrich_role(row["role_key"], row["taken_by"], language)
 
 
 def reset_roles(game_id: str):

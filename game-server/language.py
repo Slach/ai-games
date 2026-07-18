@@ -7,148 +7,36 @@ LANGUAGE_RU = "ru"
 LANGUAGE_EN = "en"
 
 
-# Ship roles i18n (10 crew positions)
-SHIP_ROLES_I18N = {
-    "captain": {
-        LANGUAGE_RU: {
-            "role_name": "Капитан",
-            "role_description": "Вы — командир корабля. Вам подчиняется весь экипаж. Ваши решения определяют судьбу миссии, и именно вы несёте ответственность за жизни каждого на борту. Капитан должен быть решительным, мудрым и заботиться о своей команде.",
-            "avatar_description": "Капитан в парадной форме на капитанском мостике, перед большим экраном с звёздной картой, нашивки и знаки отличия на мундире",
-            "personality_traits": ["решительный", "ответственный", "стратегический"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Captain",
-            "role_description": "You are the ship's commander. The entire crew answers to you. Your decisions determine the fate of the mission, and you bear responsibility for every life on board. A captain must be decisive, wise, and care for their team.",
-            "avatar_description": "Captain in dress uniform on the bridge, before a large viewscreen with star chart, insignia and rank badges on the uniform",
-            "personality_traits": ["decisive", "responsible", "strategic"],
-        },
-    },
-    "chief_engineer": {
-        LANGUAGE_RU: {
-            "role_name": "Инженер-механик",
-            "role_description": "Вы отвечаете за техническое состояние корабля — от варп-двигателя до систем жизнеобеспечения. Ваша способность быстро находить решения в критических ситуациях спасает экипаж.",
-            "avatar_description": "Инженер в техническом костюме с инструментами, голографические дисплеи с схемами корабля на фоне",
-            "personality_traits": ["технический", "практичный", "решительный"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Chief Engineer",
-            "role_description": "You are responsible for the ship's technical systems — from the warp drive to life support. Your ability to find quick solutions in critical situations saves the crew.",
-            "avatar_description": "Engineer in technical suit with tools, holographic displays with ship schematics in the background",
-            "personality_traits": ["technical", "practical", "decisive"],
-        },
-    },
-    "science_officer": {
-        LANGUAGE_RU: {
-            "role_name": "Научный офицер",
-            "role_description": "Вы исследуете неизвестное и анализируете данные. Ваша способность видеть закономерности открывает новые возможности для миссии.",
-            "avatar_description": "Учёный в форменной униформе с научным сканером, вокруг парят голографические графики и данные анализов",
-            "personality_traits": ["аналитический", "любопытный", "методичный"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Science Officer",
-            "role_description": "You explore the unknown and analyze data. Your ability to see patterns opens new possibilities for the mission.",
-            "avatar_description": "Scientist in uniform with a science scanner, holographic charts and analysis data floating around",
-            "personality_traits": ["analytical", "curious", "methodical"],
-        },
-    },
-    "communications_officer": {
-        LANGUAGE_RU: {
-            "role_name": "Офицер связи",
-            "role_description": "Вы — голос корабля. Ведёте переговоры с инопланетными цивилизациями и координируете действия экипажа. Ваше умение находить общий язык решает исход кризисов.",
-            "avatar_description": "Офицер связи с коммуникатором, на экранах — сигналы и частоты разных цивилизаций",
-            "personality_traits": ["коммуникабельный", "стратегический", "эмпатичный"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Communications Officer",
-            "role_description": "You are the voice of the ship. You negotiate with alien civilizations and coordinate crew actions. Your ability to find common ground resolves crises.",
-            "avatar_description": "Communications officer with communicator, screens showing signals and frequencies of different civilizations",
-            "personality_traits": ["communicative", "strategic", "empathetic"],
-        },
-    },
-    "security_chief": {
-        LANGUAGE_RU: {
-            "role_name": "Начальник безопасности",
-            "role_description": "Вы — щит экипажа. Оцениваете угрозы, планируете оборону и обеспечиваете безопасность при контактах с неизвестным.",
-            "avatar_description": "Офицер безопасности в тактическом снаряжении, за спиной — стелс-щит корабля",
-            "personality_traits": ["бдительный", "осторожный", "защитный"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Security Chief",
-            "role_description": "You are the crew's shield. You assess threats, plan defense, and ensure safety during encounters with the unknown.",
-            "avatar_description": "Security officer in tactical gear, ship's stealth shield behind",
-            "personality_traits": ["vigilant", "cautious", "protective"],
-        },
-    },
-    "navigator": {
-        LANGUAGE_RU: {
-            "role_name": "Штурман",
-            "role_description": "Вы прокладываете курс через звёздные системы. Ваше чутьё на безопасные маршруты и знание аномалий определяет путь корабля.",
-            "avatar_description": "Штурман за навигационной консолью, звёздные карты и маршруты проецируются в воздухе",
-            "personality_traits": ["ориентированный", "внимательный", "интуитивный"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Navigator",
-            "role_description": "You chart the course through star systems. Your instinct for safe routes and knowledge of anomalies guides the ship's path.",
-            "avatar_description": "Navigator at navigation console, star maps and routes projected in the air",
-            "personality_traits": ["oriented", "attentive", "intuitive"],
-        },
-    },
-    "medical_officer": {
-        LANGUAGE_RU: {
-            "role_name": "Медицинский офицер",
-            "role_description": "Вы храните здоровье экипажа в глубинах космоса. От инопланетных вирусов до травм при высадке — вы единственная надежда на исцеление.",
-            "avatar_description": "Медицинский офицер в белом халате с биосканером, на фоне — медицинский отсек с регенератором",
-            "personality_traits": ["заботливый", "наблюдательный", "стойкий"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Medical Officer",
-            "role_description": "You safeguard the crew's health in deep space. From alien viruses to landing injuries — you are the only hope for healing.",
-            "avatar_description": "Medical officer in white coat with bioscanner, medical bay with regenerator in the background",
-            "personality_traits": ["caring", "observant", "resilient"],
-        },
-    },
-    "tactical_officer": {
-        LANGUAGE_RU: {
-            "role_name": "Тактический офицер",
-            "role_description": "Вы управляете оружейными системами и щитами. В бою ваше решение в долю секунды определяет, выживет ли корабль.",
-            "avatar_description": "Тактический офицер за боевым терминалом, на экранах — схемы щитов и цели",
-            "personality_traits": ["быстрый", "решительный", "стратегический"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Tactical Officer",
-            "role_description": "You control weapons systems and shields. In battle, your split-second decisions determine whether the ship survives.",
-            "avatar_description": "Tactical officer at combat terminal, screens showing shield diagrams and targets",
-            "personality_traits": ["quick", "decisive", "strategic"],
-        },
-    },
-    "xenobiologist": {
-        LANGUAGE_RU: {
-            "role_name": "Ксенобиолог",
-            "role_description": "Вы изучаете инопланетные формы жизни. Каждый контакт с новым видом — ваша вотчина. Ваша экспертиза предотвращает катастрофы при контакте.",
-            "avatar_description": "Ксенобиолог с образцами инопланетной флоры, на фоне — изолированная лаборатория с контейнерами",
-            "personality_traits": ["исследовательский", "осторожный", "открытый"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Xenobiologist",
-            "role_description": "You study alien life forms. Every encounter with a new species is your domain. Your expertise prevents catastrophes during contact.",
-            "avatar_description": "Xenobiologist with alien flora samples, isolated laboratory with containers in the background",
-            "personality_traits": ["exploratory", "cautious", "open-minded"],
-        },
-    },
-    "pilot": {
-        LANGUAGE_RU: {
-            "role_name": "Пилот",
-            "role_description": "Вы ведёте корабль через астероидные поля и атмосферу планет. Ваши рефлексы и мастерство превращают невозможные манёвры в рутину.",
-            "avatar_description": "Пилот за штурвалом, через лобовое стекло видны звёзды и астероидное поле",
-            "personality_traits": ["дерзкий", "рефлексивный", "уверенный"],
-        },
-        LANGUAGE_EN: {
-            "role_name": "Pilot",
-            "role_description": "You fly the ship through asteroid fields and planetary atmospheres. Your reflexes and skill turn impossible maneuvers into routine.",
-            "avatar_description": "Pilot at the helm, stars and asteroid field visible through the windshield",
-            "personality_traits": ["daring", "reflexive", "confident"],
-        },
-    },
+# Ship role keys (10 crew positions). Order is canonical — derived into
+# SHIP_ROLE_KEYS in database.py and embedded in onboarding schemas.
+SHIP_ROLES_KEYS = [
+    "captain",
+    "chief_engineer",
+    "science_officer",
+    "communications_officer",
+    "security_chief",
+    "navigator",
+    "medical_officer",
+    "tactical_officer",
+    "xenobiologist",
+    "pilot",
+]
+
+# Display names only — role_key is the identity, this is just the localized
+# label shown in UI. All other role flavour (description, avatar description,
+# personality traits) is generated per-character via LLM at onboarding/NPC
+# creation time and stored in player_profiles / npc_profiles.
+SHIP_ROLE_NAMES = {
+    "captain": {LANGUAGE_RU: "Капитан", LANGUAGE_EN: "Captain"},
+    "chief_engineer": {LANGUAGE_RU: "Инженер-механик", LANGUAGE_EN: "Chief Engineer"},
+    "science_officer": {LANGUAGE_RU: "Научный офицер", LANGUAGE_EN: "Science Officer"},
+    "communications_officer": {LANGUAGE_RU: "Офицер связи", LANGUAGE_EN: "Communications Officer"},
+    "security_chief": {LANGUAGE_RU: "Начальник безопасности", LANGUAGE_EN: "Security Chief"},
+    "navigator": {LANGUAGE_RU: "Штурман", LANGUAGE_EN: "Navigator"},
+    "medical_officer": {LANGUAGE_RU: "Медицинский офицер", LANGUAGE_EN: "Medical Officer"},
+    "tactical_officer": {LANGUAGE_RU: "Тактический офицер", LANGUAGE_EN: "Tactical Officer"},
+    "xenobiologist": {LANGUAGE_RU: "Ксенобиолог", LANGUAGE_EN: "Xenobiologist"},
+    "pilot": {LANGUAGE_RU: "Пилот", LANGUAGE_EN: "Pilot"},
 }
 
 
@@ -1304,23 +1192,22 @@ GENDER_QUESTIONS_DATA = {
 }
 
 
-def get_ship_role_i18n(role_key: str, language: str) -> dict:
-    """Get localized ship role data by role_key and language.
+def get_ship_role_name(role_key: str, language: str) -> str:
+    """Get the localized display name of a ship role by role_key.
 
-    Returns dict with keys: role_name, role_description, avatar_description, personality_traits.
-    Falls back to Russian if language not found.
+    Falls back to Russian if the requested language is not defined.
+    Returns the role_key itself if the role is unknown.
     """
-    role_data = SHIP_ROLES_I18N.get(role_key, {})
-    return role_data.get(language, role_data.get(LANGUAGE_RU, {}))
+    names = SHIP_ROLE_NAMES.get(role_key, {})
+    return names.get(language, names.get(LANGUAGE_RU, role_key))
 
 
-def get_all_ship_roles_i18n(language: str) -> dict:
-    """Get all ship roles for a specific language.
+def get_ship_role_name_en(role_key: str) -> str:
+    """Get the English display name of a ship role by role_key.
 
-    Returns dict keyed by role_key, each value containing
-    role_name, role_description, avatar_description, personality_traits.
+    Returns the role_key itself if the role is unknown.
     """
-    return {role_key: data.get(language, data.get(LANGUAGE_RU, {})) for role_key, data in SHIP_ROLES_I18N.items()}
+    return SHIP_ROLE_NAMES.get(role_key, {}).get(LANGUAGE_EN, role_key)
 
 
 def get_species_type_name(species_type: str, language: str) -> str:

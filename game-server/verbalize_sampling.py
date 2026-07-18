@@ -200,6 +200,19 @@ DIVERSITY_HINTS: dict[str, str] = {
         "The k candidate SETS must differ as wholes — different scenario mix, different "
         "locations, different opening hook — not just rephrasings of the same five situations."
     ),
+    "role_flavour": (
+        "Vary across these axes so no two holders of the same role read alike:\n"
+        "- Flavour / command style (by-the-book, maverick, weary veteran, idealistic rookie, "
+        "calculating schemer, reluctant leader, haunted survivor) — never the stock archetype\n"
+        "- Source of authority (earned experience, raw charisma, technical mastery, inherited rank, "
+        "fear, prophecy, debt) — pick one and lean into it\n"
+        "- Visual archetype (battle-hardened, bookish, eccentric, austere, scarred, regal, "
+        "ascetic, flamboyant) — should clash with or subvert the obvious pick for the role\n"
+        "- How species and gender colour the role (physiology shapes the work: extra limbs in "
+        "engineering, telepathy in comms, non-humanoid cockpit ergonomics, reproductive biology "
+        "in xenobiology) — make the role read differently for a human vs a non-humanoid\n"
+        "Traits should be three concrete, contrasting adjectives — not synonyms of each other."
+    ),
 }
 
 
