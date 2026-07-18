@@ -1225,27 +1225,13 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
         questions=[q.model_dump() for q in dynamic_questions] if questions_changed else None,
     )
 
-    result = {
+    # Profile generation (role-flavour + species-description LLM calls) is
+    # deferred to /complete, so /answer returns immediately when onboarding
+    # finishes and the bot can show the "processing" message without delay.
+    return {
         "completed": completed,
         "next_question": next_question.model_dump() if next_question else None,
     }
-
-    if completed:
-        profile_answers = {k: v for k, v in answers.items() if str(k) not in ("-1", "-2")}
-        player_name = answers.get(-2) or answers.get("-2", "")
-        profile_data = generate_player_profile_from_answers(
-            session["player_id"],
-            profile_answers,
-            game_id=game_id,
-            language=effective_language,
-            questions=session_questions,
-            player_name=player_name,
-            session_id=session_id,
-        )
-        create_player_profile(profile_data)
-        result["profile"] = profile_data
-
-    return result
 
 
 async def _generate_background_library(
@@ -1382,10 +1368,26 @@ async def complete_onboarding(session_id: str):
     if not game_id:
         raise HTTPException(status_code=400, detail="Session has no game_id")
 
-    # Get player profile
+    # Build the player profile on demand (role-flavour + species-description
+    # LLM calls). Moved here from /answer so that /answer returns immediately
+    # and the bot can show the "processing" message before flavour generation.
     profile = get_player_profile(player_id)
     if not profile:
-        raise HTTPException(status_code=404, detail="Player profile not found")
+        profile_answers = {k: v for k, v in answers_data.items() if str(k) not in ("-1", "-2")}
+        player_name = answers_data.get(-2) or answers_data.get("-2", "")
+        profile_data = generate_player_profile_from_answers(
+            player_id,
+            profile_answers,
+            game_id=game_id,
+            language=session.get("language", "en"),
+            questions=session.get("questions", []),
+            player_name=player_name,
+            session_id=session_id,
+        )
+        create_player_profile(profile_data)
+        profile = get_player_profile(player_id)
+        if not profile:
+            raise HTTPException(status_code=500, detail="Failed to create player profile")
 
     # Generate avatar using ComfyUI directly
     # Step 1: Generate avatar prompt (LLM) with fallback to template

@@ -4197,12 +4197,6 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             profile = result.get("profile") or {}
             logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
 
-            try:
-                verify_profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
-                logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
-            except Exception as verify_error:
-                logger.error(f"Profile verification failed for player {player_id}: {verify_error}", exc_info=True)
-
             await state.clear()
             update_player_state(
                 player_id,
@@ -4390,12 +4384,6 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
         if result.get("completed"):
             profile = result.get("profile") or {}
             logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
-
-            try:
-                verify_profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=())
-                logger.info(f"Profile verified for player {player_id}: {verify_profile.get('role') if verify_profile else 'Unknown'}")
-            except Exception as verify_error:
-                logger.error(f"Profile verification failed for player {player_id}: {verify_error}", exc_info=True)
 
             await state.clear()
             update_player_state(
