@@ -1767,6 +1767,27 @@ def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str, *,
     }
 
 
+def clear_kicks_for_returning_player(player_id: int, game_id: str) -> int:
+    """Clear kick records for a player who has rejoined ``game_id``.
+
+    /admin/reset-player and kick flow append to player_kicks, and
+    is_player_kicked() treats any row as "still kicked". When the player
+    re-onboards into the same game, those stale rows would otherwise keep them
+    excluded from briefing pushes forever (e.g. player 281412419 never received
+    turn 2 after a reset+reonboard cycle). Returns the number of rows deleted.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM player_kicks WHERE kicked_player_id = ? AND game_id = ?",
+        (player_id, game_id),
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 def get_kicked_players() -> list[dict[str, Any]]:
     """Get all kicked players."""
     conn = get_db_connection()

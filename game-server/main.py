@@ -29,6 +29,7 @@ from database import (
     create_onboarding_session,
     create_player_profile,
     deactivate_replacement_npcs_for_player,
+    clear_kicks_for_returning_player,
     delete_all_game_turns,
     delete_all_game_messages,
     delete_all_player_actions,
@@ -113,7 +114,7 @@ from database import (
     update_player_profile_last_poll,
 )
 from game_rules import apply_mission_progress, apply_death_limits, DEATH_COOLDOWN_TURNS
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_server import create_game_server
 from image_generator import (
@@ -135,12 +136,15 @@ from prompts import (
     OnboardingQuestion,
 )
 from push_client import push_briefings, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 # Configure logging.
 # A daily file handler mirrors logs to /app/logs/ so they survive
 # container restarts/recreates (docker json-logs are wiped on recreate).
-os.makedirs("/app/logs", exist_ok=True)
+try:
+    os.makedirs("/app/logs", exist_ok=True)  # noqa: unchecked-throwing-call-python
+except OSError:
+    pass
 # Configure logging.
 # A daily file handler mirrors logs to /app/YYYY-MM-DD.log so they survive
 # container restarts/recreates (docker json-logs are wiped on recreate).
@@ -1180,10 +1184,7 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     # question immediately following the one the session currently points at.
     expected_question_id = session["current_question"] + 1
     if answer.question_id != expected_question_id:
-        logger.info(
-            f"[ONBOARDING] Stale answer rejected: session={session_id} "
-            f"got question_id={answer.question_id}, expected {expected_question_id}"
-        )
+        logger.info(f"[ONBOARDING] Stale answer rejected: session={session_id} got question_id={answer.question_id}, expected {expected_question_id}")
         raise HTTPException(status_code=409, detail="Answer for a stale or already-answered question")
 
     # Atomically reserve the next slot BEFORE the (slow, 30-60s) species/gender
@@ -1291,9 +1292,7 @@ async def _generate_background_library(
     image_gen = create_image_generator()
     for loc, prompt in prompts_by_loc.items():
         try:
-            url = await image_gen.generate_background_image(
-                prompt=prompt, location_type=loc, game_id=game_id, width=1024, height=576
-            )
+            url = await image_gen.generate_background_image(prompt=prompt, location_type=loc, game_id=game_id, width=1024, height=576)
             if url:
                 save_game_image(type=f"background_{loc}", image_url=url, prompt=prompt, game_id=game_id, turn=None)
                 logger.info("[BACKGROUND] Generated %s for game %s: %s", loc, game_id, url)
@@ -1417,6 +1416,9 @@ async def complete_onboarding(session_id: str):
         ghosts = deactivate_replacement_npcs_for_player(player_id, game_id)
         if ghosts:
             logger.info(f"[ONBOARDING] Deactivated {ghosts} ghost NPC(s) for returning player {player_id} in game {game_id}")
+        cleared_kicks = clear_kicks_for_returning_player(player_id, game_id)
+        if cleared_kicks:
+            logger.info(f"[ONBOARDING] Cleared {cleared_kicks} stale kick record(s) for returning player {player_id} in game {game_id}")
 
     # Generate avatar using ComfyUI directly
     # Step 1: Generate avatar prompt (LLM) with fallback to template
@@ -1444,7 +1446,9 @@ async def complete_onboarding(session_id: str):
         else:
             avatar_description_combined = profile.get("avatar_description", "")
 
-        avatar_prompt = game_server.generate_avatar_prompt(role=profile["role"], traits=profile["personality_traits"], avatar_description=avatar_description_combined, species_category=profile.get("species_primary_key") or "", game_id=game_id, player_id=str(player_id), turn=None, kind="avatar_prompt")
+        avatar_prompt = game_server.generate_avatar_prompt(
+            role=profile["role"], traits=profile["personality_traits"], avatar_description=avatar_description_combined, species_category=profile.get("species_primary_key") or "", game_id=game_id, player_id=str(player_id), turn=None, kind="avatar_prompt"
+        )
         logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
     except Exception as e:
         logger.warning(f"[AVATAR] LLM prompt generation failed for player {player_id}: {e}")
@@ -2311,7 +2315,9 @@ async def auto_select_action(
     # 4. Generate LLM choice
     gm = create_game_server(language=language)
     player_name = profile.get("player_name", "") or ""
-    decision = gm.generate_player_auto_choice(choices=choices, player_profile=profile, personal_briefing=briefing.get("briefing", ""), global_circumstances=global_circ, player_name=player_name, game_id=game_id, player_id=player_id, turn=turn, kind="player_auto_choice")
+    decision = gm.generate_player_auto_choice(
+        choices=choices, player_profile=profile, personal_briefing=briefing.get("briefing", ""), global_circumstances=global_circ, player_name=player_name, game_id=game_id, player_id=str(player_id), turn=turn, kind="player_auto_choice"
+    )
 
     action_id = decision.get("action_id", "")
     rationale = decision.get("rationale", "Auto-selected by Game Server")
@@ -2706,10 +2712,7 @@ async def _generate_chosen_action_image(
             bg_location = None
 
         if not instruction:
-            instruction = (
-                f"Place the character from Picture 1 performing this action: {action_text}. "
-                f"Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
-            )
+            instruction = f"Place the character from Picture 1 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
 
         # Look up a pre-generated background for the chosen location (if any)
         background_url = None
@@ -2852,10 +2855,7 @@ async def _generate_npc_chosen_action_image(
             logger.warning(f"[NPC_ACTION_IMAGE] Scene instruction failed for {npc_name}: {llm_err}")
 
         if not instruction:
-            instruction = (
-                f"Place the character from Picture 1 performing this action: {action_text}. "
-                f"Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
-            )
+            instruction = f"Place the character from Picture 1 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
 
         background_url = None
         if bg_location:
@@ -3367,10 +3367,12 @@ async def _analyze_turn_outcome(
             for dead_pid in get_dead_players(game_id):
                 p = get_player_profile(dead_pid)
                 if p:
-                    death_notices.append({
-                        "name": p.get("player_name") or str(dead_pid),
-                        "role": p.get("role", ""),
-                    })
+                    death_notices.append(
+                        {
+                            "name": p.get("player_name") or str(dead_pid),
+                            "role": p.get("role", ""),
+                        }
+                    )
             # An NPC whose replaces_player_id still matches a player registered
             # in the game holds the same seat as that player (counted once via
             # the player's row), so skip it to avoid duplicate notices.
@@ -3379,10 +3381,12 @@ async def _analyze_turn_outcome(
                     continue
                 if n.get("replaces_player_id") in player_ids:
                     continue
-                death_notices.append({
-                    "name": n.get("npc_name", ""),
-                    "role": n.get("role", ""),
-                })
+                death_notices.append(
+                    {
+                        "name": n.get("npc_name", ""),
+                        "role": n.get("role", ""),
+                    }
+                )
 
             # ── Generate outcome scene image ──────────────────────────
             outcome_image_url = None
@@ -3434,9 +3438,7 @@ async def _analyze_turn_outcome(
             # still registered in the game (e.g. a player who replaced that NPC, or
             # a dead player replaced by the NPC). The player's row already counts
             # the seat, so exclude such NPCs to avoid double-counting it.
-            distinct_npc_total = [
-                n for n in all_npcs_total if n.get("replaces_player_id") not in player_ids
-            ]
+            distinct_npc_total = [n for n in all_npcs_total if n.get("replaces_player_id") not in player_ids]
             total_crew = len(all_players_total) + len(distinct_npc_total)
             # Alive = live players + active NPCs (deaths already persisted above).
             alive_crew = len(get_live_players(game_id)) + len(get_all_active_npcs(game_id))
@@ -3540,13 +3542,15 @@ async def _analyze_turn_outcome(
                     stage = obj.get("stage")
                     threshold = obj.get("success_threshold", 0)
                     progress = stage_progress.get(str(stage), 0)
-                    mission_stages_recap.append({
-                        "stage": stage,
-                        "name": obj.get("name", ""),
-                        "progress": progress,
-                        "threshold": threshold,
-                        "completed": progress >= threshold,
-                    })
+                    mission_stages_recap.append(
+                        {
+                            "stage": stage,
+                            "name": obj.get("name", ""),
+                            "progress": progress,
+                            "threshold": threshold,
+                            "completed": progress >= threshold,
+                        }
+                    )
                 obj_by_stage = {o.get("stage"): o for o in objectives}
                 mission_progress = [
                     {
@@ -3611,7 +3615,9 @@ async def _analyze_turn_outcome(
                     outcome_label = go_msgs.get("victory_header", outcome_type) if mission_completed else go_msgs.get("defeat_header", outcome_type)
 
                     gm = create_game_server(language=language)
-                    game_over = gm.generate_game_over_outcome(outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary, game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome")
+                    game_over = gm.generate_game_over_outcome(
+                        outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary, game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome"
+                    )
 
                     finale_narrative = game_over.get("finale_narrative", "")
                     finale_image_prompt = game_over.get("finale_image_prompt", "")
@@ -4011,7 +4017,9 @@ async def generate_chosen_action_image(
             f"Cinematic space opera aesthetic, photorealistic quality, 4K."
         )
 
-    chosen_action_url = await image_generator.generate_scene_image(prompt=prompt, filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}", width=1024, height=1024, game_id=game_id, player_id=str(player_id), turn=turn_num_val, kind="player_action")
+    chosen_action_url = await image_generator.generate_scene_image(
+        prompt=prompt, filename_prefix=f"{game_id}/action_turn{turn_num_val}_p{player_id}", width=1024, height=1024, game_id=game_id, player_id=str(player_id), turn=turn_num_val, kind="player_action"
+    )
 
     # Store chosen_action_url in player's briefing for this turn (if briefing exists)
     briefing = get_player_briefing(turn_num_val, player_id, game_id)
@@ -4427,7 +4435,17 @@ async def _original_start_game(request: StartGameRequest):
 
         # Generate creative name via LLM (with fallback), avoid duplicates
         npc_name_attempt = gm.generate_npc_name(
-            role_key=role_key, role_name=role_name, species=npc_species, gender=npc_gender, avatar_description=npc_flavour["avatar_description"], personality_traits=npc_flavour["personality_traits"], avoid_names=avoid_names, game_id=game_id, player_id=None, turn=_npc_turn, kind=f"npc_name_{role_key}"
+            role_key=role_key,
+            role_name=role_name,
+            species=npc_species,
+            gender=npc_gender,
+            avatar_description=npc_flavour["avatar_description"],
+            personality_traits=npc_flavour["personality_traits"],
+            avoid_names=avoid_names,
+            game_id=game_id,
+            player_id=None,
+            turn=_npc_turn,
+            kind=f"npc_name_{role_key}",
         )
         # If LLM returned a name WITH role prefix (e.g. "Инженер Дмитрий Волков"),
         # strip it — the role is already shown separately in UI
@@ -4892,6 +4910,8 @@ async def _original_start_game(request: StartGameRequest):
                 action_text=char_action,
                 role=role,
                 species_desc=species_desc or species_type,
+                language=language,
+                background_location=bg_location,
                 scene_context=f"Setting: {setting[:300]}",
                 game_id=game_id,
                 player_id=str(pid),
@@ -4904,10 +4924,7 @@ async def _original_start_game(request: StartGameRequest):
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
 
         if not instruction:
-            instruction = (
-                f"Place the character from Picture 1 in the scene. {role} {char_action}. "
-                f"Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
-            )
+            instruction = f"Place the character from Picture 1 in the scene. {role} {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         background_url = None
         if bg_location:
@@ -5513,10 +5530,7 @@ async def admin_reset_player(request: ResetPlayerRequest):
     # get them out of the onboarding flow.
     if not profile:
         sessions_deleted = delete_onboarding_sessions_for_player(player_id)
-        logger.info(
-            f"=== ADMIN RESET PLAYER COMPLETED === player_id={player_id}, "
-            f"no profile (onboarding-only), sessions_deleted={sessions_deleted}"
-        )
+        logger.info(f"=== ADMIN RESET PLAYER COMPLETED === player_id={player_id}, no profile (onboarding-only), sessions_deleted={sessions_deleted}")
         return {
             "status": "success",
             "player_id": player_id,
@@ -5529,6 +5543,8 @@ async def admin_reset_player(request: ResetPlayerRequest):
 
     # Replace the player with an NPC if they currently hold a role.
     npc_replaced = None
+    if game_id is None:
+        raise HTTPException(status_code=400, detail="Player has no associated game")
     role_key = get_role_key_for_player(player_id, game_id)
     if role_key:
         npc_replaced = _replace_player_with_npc(
@@ -6083,10 +6099,7 @@ async def _original_continue_game(
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
 
         if not instruction:
-            instruction = (
-                f"Place the character from Picture 1 in the scene. {role} {char_action}. "
-                f"Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
-            )
+            instruction = f"Place the character from Picture 1 in the scene. {role} {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         background_url = None
         if bg_location:
@@ -6183,10 +6196,7 @@ async def _original_continue_game(
     if pre_state["status"] == "active" and pre_state["ship_alive"]:
         update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
     else:
-        logger.info(
-            f"[CONTINUE] Game already ended (status={pre_state['status']}) "
-            f"before advancing to turn {turn_num + 1}; skipping state update"
-        )
+        logger.info(f"[CONTINUE] Game already ended (status={pre_state['status']}) before advancing to turn {turn_num + 1}; skipping state update")
 
     # ── Push previous turn outcome (if applicable) ──────────────
     # Must run BEFORE pushing new turn briefings so player sees:
@@ -6201,6 +6211,8 @@ async def _original_continue_game(
         missing = get_players_who_need_to_choose(prev_turn, game_id=game_id)
         for b in missing:
             pid = b.get("player_id")
+            if pid is None:
+                continue
             try:
                 await auto_select_action(player_id=pid, turn=prev_turn, language=language, game_id=game_id)
             except Exception:
@@ -6217,10 +6229,7 @@ async def _original_continue_game(
     # new turn's briefings — players should see the finale, not turn N+1.
     post_state = get_game_state(game_id)
     if post_state["status"] != "active" or not post_state["ship_alive"]:
-        logger.info(
-            f"[CONTINUE] Game ended after analyzing turn {turn_num - 1} "
-            f"(status={post_state['status']}); not pushing turn {turn_num} briefings"
-        )
+        logger.info(f"[CONTINUE] Game ended after analyzing turn {turn_num - 1} (status={post_state['status']}); not pushing turn {turn_num} briefings")
         return {
             "status": "game_ended",
             "turn": turn_num,

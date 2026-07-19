@@ -51,6 +51,30 @@ class TestGameScopedKicks(unittest.TestCase):
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]["game_id"], "g1")
 
+    def test_clear_kicks_when_player_returns_to_same_game(self):
+        """Reproduces the player 281412419 bug: after /reset (recorded in
+        player_kicks) the player re-onboards into the SAME game. Stale kick rows
+        would otherwise keep is_player_kicked() True and exclude them from
+        briefing pushes (turn 2 never delivered)."""
+        db.record_kick(281412419, "npc_security_chief_default_game", "Player reset", game_id="default_game")
+        db.record_kick(281412419, "npc_chief_engineer_default_game", "Player reset", game_id="default_game")
+
+        self.assertTrue(db.is_player_kicked(281412419, "default_game"))
+
+        deleted = db.clear_kicks_for_returning_player(281412419, "default_game")
+        self.assertEqual(deleted, 2)
+        self.assertFalse(db.is_player_kicked(281412419, "default_game"))
+
+    def test_clear_kicks_scoped_to_game(self):
+        """Clearing kicks in one game must leave the player kicked in another."""
+        db.record_kick(444, "npc_pilot_g1", "reset", game_id="g1")
+        db.record_kick(444, "npc_pilot_g2", "reset", game_id="g2")
+
+        deleted = db.clear_kicks_for_returning_player(444, "g1")
+        self.assertEqual(deleted, 1)
+        self.assertFalse(db.is_player_kicked(444, "g1"))
+        self.assertTrue(db.is_player_kicked(444, "g2"))
+
 
 if __name__ == "__main__":
     unittest.main()
