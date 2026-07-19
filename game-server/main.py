@@ -3455,8 +3455,52 @@ async def _analyze_turn_outcome(
                     if isinstance(r, Exception):
                         logger.warning(f"[OUTCOME] Action image task {i} failed: {r}")
 
+            # ── Recover action images lost to a container restart ──────
+            # _pending_action_tasks is in-memory: if the container was
+            # restarted between a player choosing and the image finishing,
+            # the task is gone and chosen_action_url stays None forever.
+            # Catch that here by regenerating any briefing that has a
+            # selected action but no image yet.
+            all_briefings_pre = get_all_briefings_for_turn(turn, game_id) or all_briefings
+            missing = [
+                b for b in all_briefings_pre
+                if b.get("selected_action_id") and not b.get("chosen_action_url")
+            ]
+            if missing:
+                logger.warning(
+                    f"[OUTCOME] {len(missing)} briefing(s) with a selected action but no "
+                    f"chosen_action_url for turn {turn} — regenerating (likely lost to a restart)"
+                )
+                recover_tasks = []
+                for b in missing:
+                    action_id = b["selected_action_id"]
+                    if b.get("player_id"):
+                        recover_tasks.append(
+                            _generate_chosen_action_image(
+                                player_id=b["player_id"],
+                                game_id=game_id,
+                                turn=turn,
+                                action_id=action_id,
+                                language=language,
+                            )
+                        )
+                    elif b.get("npc_key"):
+                        recover_tasks.append(
+                            _generate_npc_chosen_action_image(
+                                npc_key=b["npc_key"],
+                                game_id=game_id,
+                                turn=turn,
+                                action_id=action_id,
+                            )
+                        )
+                if recover_tasks:
+                    rec_results = await asyncio.gather(*recover_tasks, return_exceptions=True)
+                    for i, r in enumerate(rec_results):
+                        if isinstance(r, Exception):
+                            logger.warning(f"[OUTCOME] Action image recovery task {i} failed: {r}")
+
             # ── Build action images array with captions ────────────────
-            # After awaiting all pending tasks, briefings now have chosen_action_url populated.
+            # After awaiting all pending/recovered tasks, briefings now have chosen_action_url populated.
             # Format: 'Ход X — Имя — Роль — Действие'
             action_images = []
             all_briefings_fresh = get_all_briefings_for_turn(turn, game_id) or all_briefings
