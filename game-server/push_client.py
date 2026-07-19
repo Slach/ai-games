@@ -254,7 +254,7 @@ async def push_turn_outcome(
     alive_players: list[int],
     outcome_image_url: str | None,
     ship_status: str | None,
-    mission_progress: dict | None,
+    mission_progress: list[dict] | None,
     mission_stages_recap: list[dict] | None,
     death_notices: list[dict] | None,
     injury_notices: list[dict] | None,
