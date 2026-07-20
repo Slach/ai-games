@@ -516,6 +516,8 @@ GM_COMMANDS = {
         "schedule_label_daily": "ежедневно в {time}",
         "schedule_label_interval": "каждые {seconds}",
         "schedule_entry": "📅 Расписание: {schedule_label}\n🕐 Следующий ход: {next_run}",
+        "invite_usage": "❌ Использование: /gm_invite <game_id>\n\nПример: /gm_invite abc123",
+        "invite_failed": "❌ Не удалось сгенерировать инвайт. Попробуйте позже.",
     },
     LANGUAGE_EN: {
         "unauthorized": "⛔ You don't have permission to use this command.",
@@ -596,6 +598,8 @@ GM_COMMANDS = {
         "schedule_label_daily": "daily at {time}",
         "schedule_label_interval": "every {seconds}",
         "schedule_entry": "📅 Schedule: {schedule_label}\n🕐 Next run: {next_run}",
+        "invite_usage": "❌ Usage: /gm_invite <game_id>\n\nExample: /gm_invite abc123",
+        "invite_failed": "❌ Failed to generate invite link. Please try again later.",
     },
 }
 

@@ -2863,6 +2863,120 @@ async def _send_no_game_invite(message: types.Message, language: str):
     await message.answer(forward_text, parse_mode="Markdown")
 
 
+async def _send_game_invite(message: types.Message, game_id: str, player_id: int, player_lang: str):
+    """Shared invite body used by /invite and /gm_invite.
+
+    Sends the invite for the given game to the chat the message came from:
+    bridge photo + mission caption (or splash image if no mission yet),
+    followed by a QR code carrying the deep link `<game_id>:<player_id>`.
+    Assumes the bot username is already resolved and `message.bot` is set.
+    """
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    msgs = lang.get_onboarding(game_lang)
+
+    # Fetch game title
+    game_title = ""
+    try:
+        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
+        if title_data and title_data.get("title"):
+            game_title = title_data["title"]
+    except Exception as e:
+        logger.error("Failed to fetch game title for invite", exc_info=e)
+
+    # Fetch mission and bridge image
+    mission = None
+    bridge = None
+    try:
+        mission = await api_request("GET", "/game/mission", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
+    except Exception as e:
+        logger.error(f"Failed to fetch mission for invite: {e}", exc_info=True)
+    try:
+        bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
+    except Exception as e:
+        logger.error(f"Failed to fetch bridge image for invite: {e}", exc_info=True)
+
+    invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
+
+    if mission and bridge and bridge.get("image_url"):
+        # ── Mission exists: bridge photo with mission caption ──
+        mission_name = mission.get("name", "")
+        short_desc = mission.get("short_description", "")
+        clean_title = game_title.strip("«»")
+        caption = msgs.get(
+            "invite_mission_caption",
+            "I invite you to the game «{game_title}»!\n\n🚀 Mission «{mission_name}»\n\n{mission_description}\n\n{invite_url}",
+        ).format(
+            game_title=escape_markdown(clean_title),
+            mission_name=escape_markdown(mission_name),
+            mission_description=escape_markdown(short_desc),
+            invite_url=escape_markdown(invite_url),
+        )
+        sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption, reply_markup=None)
+        if not sent:
+            await message.answer(caption, parse_mode="Markdown")
+    else:
+        # ── No mission: splash image with game title ──
+        clean_title = game_title.strip("«»")
+        caption = msgs.get(
+            "invite_no_mission_caption",
+            "I invite you to the game «{game_title}»!\n\n{invite_url}",
+        ).format(
+            game_title=escape_markdown(clean_title),
+            invite_url=escape_markdown(invite_url),
+        )
+        splash_sent = await send_random_splash_image(message, caption, None, game_id)
+        if not splash_sent:
+            await message.answer(caption, parse_mode="Markdown")
+
+    # ── Second message: QR code with deep link + forward instruction ──
+    forward_text = msgs.get(
+        "invite_forward",
+        "👆 Forward the message above to a friend!\n\nOr send them this link:\n{invite_url}",
+    ).format(
+        invite_url=escape_markdown(invite_url),
+    )
+    qr_caption = msgs.get(
+        "invite_qr_caption",
+        "📱 Scan to join!\n\n{forward}",
+    ).format(forward=forward_text)
+    qr_png = generate_invite_qr_png(invite_url)
+    if qr_png:
+        qr_sent = False
+        try:
+            await call_with_retry(
+                lambda: message.answer_photo(
+                    photo=BufferedInputFile(qr_png, filename="invite_qr.png"),
+                    caption=qr_caption,
+                    parse_mode="Markdown",
+                ),
+                max_retries=3,
+                base_delay=1.0,
+                max_delay=10.0,
+            )
+            qr_sent = True
+        except Exception as e:
+            logger.warning(f"Failed to send invite QR photo for player {player_id}: {e}")
+        if not qr_sent:
+            await message.answer(forward_text, parse_mode="Markdown")
+    else:
+        await message.answer(forward_text, parse_mode="Markdown")
+
+
+async def _ensure_bot_username(message: types.Message) -> bool:
+    """Resolve BOT_USERNAME on demand. Returns False if it can't be determined."""
+    global BOT_USERNAME
+    if BOT_USERNAME:
+        return True
+    try:
+        bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3, base_delay=1.0, max_delay=10.0)  # type: ignore[union-attr]
+        BOT_USERNAME = bot_me.username
+        logger.info(f"Bot username resolved on demand: {BOT_USERNAME}")
+        return True
+    except Exception as e:
+        logger.error("Failed to fetch bot username on demand", exc_info=e)
+        return False
+
+
 async def cmd_invite(message: types.Message):
     """Send invite: photo (bridge/splash) + text with deep link."""
     if message.from_user is None:
@@ -2871,26 +2985,12 @@ async def cmd_invite(message: types.Message):
     logger.info("[HANDLER] cmd_invite")
 
     try:
-        if message.bot is None:
+        if message.bot is None or not await _ensure_bot_username(message):
             await message.answer(
                 "Bot username is not available. Invite links cannot be generated at this moment.",
                 reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
             )
             return
-
-        global BOT_USERNAME
-        if not BOT_USERNAME:
-            try:
-                bot_me = await call_with_retry(lambda: message.bot.get_me(), max_retries=3, base_delay=1.0, max_delay=10.0)  # type: ignore[union-attr]
-                BOT_USERNAME = bot_me.username
-                logger.info(f"Bot username resolved on demand: {BOT_USERNAME}")
-            except Exception as e:
-                logger.error("Failed to fetch bot username on demand", exc_info=e)
-                await message.answer(
-                    "Bot username is not available. Invite links cannot be generated at this moment.",
-                    reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
-                )
-                return
 
         player_lang = get_player_language(player_id)
         profile = await api_request("GET", f"/players/{player_id}/profile", data=None, params=None, timeout_total=600, ignore_codes=(404,))
@@ -2899,96 +2999,7 @@ async def cmd_invite(message: types.Message):
             await _send_no_game_invite(message, player_lang)
             return
 
-        game_lang = await get_game_language(game_id, fallback=player_lang)
-        msgs = lang.get_onboarding(game_lang)
-
-        # Fetch game title
-        game_title = ""
-        try:
-            title_data = await api_request("GET", "/game/title", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
-            if title_data and title_data.get("title"):
-                game_title = title_data["title"]
-        except Exception as e:
-            logger.error("Failed to fetch game title for invite", exc_info=e)
-
-        # Fetch mission and bridge image
-        mission = None
-        bridge = None
-        try:
-            mission = await api_request("GET", "/game/mission", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
-        except Exception as e:
-            logger.error(f"Failed to fetch mission for invite: {e}", exc_info=True)
-        try:
-            bridge = await api_request("GET", "/game/bridge-image", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
-        except Exception as e:
-            logger.error(f"Failed to fetch bridge image for invite: {e}", exc_info=True)
-
-        invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
-
-        if mission and bridge and bridge.get("image_url"):
-            # ── Mission exists: bridge photo with mission caption ──
-            mission_name = mission.get("name", "")
-            short_desc = mission.get("short_description", "")
-            clean_title = game_title.strip("«»")
-            caption = msgs.get(
-                "invite_mission_caption",
-                "I invite you to the game «{game_title}»!\n\n🚀 Mission «{mission_name}»\n\n{mission_description}\n\n{invite_url}",
-            ).format(
-                game_title=escape_markdown(clean_title),
-                mission_name=escape_markdown(mission_name),
-                mission_description=escape_markdown(short_desc),
-                invite_url=escape_markdown(invite_url),
-            )
-            sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption, reply_markup=None)
-            if not sent:
-                await message.answer(caption, parse_mode="Markdown")
-        else:
-            # ── No mission: splash image with game title ──
-            clean_title = game_title.strip("«»")
-            caption = msgs.get(
-                "invite_no_mission_caption",
-                "I invite you to the game «{game_title}»!\n\n{invite_url}",
-            ).format(
-                game_title=escape_markdown(clean_title),
-                invite_url=escape_markdown(invite_url),
-            )
-            splash_sent = await send_random_splash_image(message, caption, None, game_id)
-            if not splash_sent:
-                await message.answer(caption, parse_mode="Markdown")
-
-        # ── Second message: QR code with deep link + forward instruction ──
-        forward_text = msgs.get(
-            "invite_forward",
-            "👆 Forward the message above to a friend!\n\nOr send them this link:\n{invite_url}",
-        ).format(
-            invite_url=escape_markdown(invite_url),
-        )
-        qr_caption = msgs.get(
-            "invite_qr_caption",
-            "📱 Scan to join!\n\n{forward}",
-        ).format(forward=forward_text)
-        qr_png = generate_invite_qr_png(invite_url)
-        if qr_png:
-            qr_sent = False
-            try:
-                await call_with_retry(
-                    lambda: message.answer_photo(
-                        photo=BufferedInputFile(qr_png, filename="invite_qr.png"),
-                        caption=qr_caption,
-                        parse_mode="Markdown",
-                    ),
-                    max_retries=3,
-                    base_delay=1.0,
-                    max_delay=10.0,
-                )
-                qr_sent = True
-            except Exception as e:
-                logger.warning(f"Failed to send invite QR photo for player {player_id}: {e}")
-            if not qr_sent:
-                await message.answer(forward_text, parse_mode="Markdown")
-        else:
-            await message.answer(forward_text, parse_mode="Markdown")
-
+        await _send_game_invite(message, game_id, player_id, player_lang)
         logger.info(f"Sent invite to player {player_id}")
 
     except Exception as e:
@@ -3155,12 +3166,14 @@ async def cmd_help(message: types.Message):
 
     msgs = lang.get_help(get_player_language(player_id))
 
-    # Fetch game title dynamically from API
+    # Fetch the player's current game title from the API
     game_title = "🎮 Game"
     try:
-        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": "all"}, timeout_total=600, ignore_codes=())
-        if title_data and title_data.get("title"):
-            game_title = f"🎮 {title_data['title']}"
+        game_id = get_player_state(player_id).get("game_id")
+        if game_id:
+            title_data = await api_request("GET", "/game/title", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=(404,))
+            if title_data and title_data.get("title"):
+                game_title = f"🎮 {title_data['title']}"
     except Exception as e:
         logger.warning(f"Failed to fetch game title for help: {e}")
         # Fallback to generic title
@@ -3267,6 +3280,46 @@ async def cmd_gm_start(message: types.Message):
         await message.answer(
             gm_msgs["start_game_failed"].format(error=e),
         )
+
+
+async def cmd_gm_invite(message: types.Message):
+    """GM command: Generate an invite link for a game by ID.
+
+    Usage: /gm_invite <game_id>
+    Shares the invite body with /invite (bridge/splash image + QR with deep
+    link `<game_id>:<GM_id>`). Only executable by the configured Game Master.
+    """
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_invite")
+    player_lang = get_player_language(player_id)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
+        logger.warning(f"Unauthorized /gm_invite attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        gm_msgs = lang.get_gm_commands(player_lang)
+        await message.answer(gm_msgs["invite_usage"])
+        return
+
+    game_id = parts[1].strip()
+    gm_msgs = lang.get_gm_commands(await get_game_language(game_id, fallback=player_lang))
+
+    if message.bot is None or not await _ensure_bot_username(message):
+        await message.answer(gm_msgs["invite_failed"])
+        return
+
+    try:
+        await _send_game_invite(message, game_id, player_id, player_lang)
+        logger.info(f"Sent GM invite for game {game_id}")
+    except Exception as e:
+        logger.error(f"Failed to send GM invite for game {game_id}: {e}", exc_info=True)
+        await message.answer(gm_msgs["invite_failed"])
 
 
 async def cmd_gm_kick(message: types.Message):
@@ -4730,6 +4783,7 @@ async def main():
     dp.message.register(cmd_reset, Command("reset"))
     dp.message.register(cmd_lang, Command("lang"))
     dp.message.register(cmd_gm_start, Command("gm_start"))
+    dp.message.register(cmd_gm_invite, Command("gm_invite"))
     dp.message.register(cmd_gm_kick, Command("gm_kick"))
     dp.message.register(cmd_gm_list, Command("gm_list"))
     dp.message.register(cmd_gm_schedule, Command("gm_schedule"))
