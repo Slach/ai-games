@@ -1655,7 +1655,7 @@ async def start_onboarding_flow(
             welcome_text = result.get("welcome_message") or msgs["welcome"]
             game_title = result.get("game_title", "")
             if game_title:
-                welcome_text = f"**{game_title}**\n\n{welcome_text}" if welcome_text else f"**{game_title}**"
+                welcome_text = f"*{game_title}*\n\n{welcome_text}" if welcome_text else f"*{game_title}*"
 
             splash_sent = await send_random_splash_image(message, welcome_text, None, game_id)
             if not splash_sent:
@@ -1785,7 +1785,7 @@ async def _finalize_new_game_creation(
         raise Exception("No game_id returned from create_new_game")
 
     onboarding_msgs = lang.get_onboarding(language)
-    await message.answer(f"🎮 **{game_name}**", parse_mode="Markdown")
+    await message.answer(f"🎮 *{game_name}*", parse_mode="Markdown")
     await message.answer(
         onboarding_msgs["schedule_set_confirm"].format(label=schedule),
         parse_mode="Markdown",
@@ -2184,12 +2184,32 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
         profile = await check_player_game_status(player_id)
 
         if profile:
-            # Deep link points to a different game than the player's current
-            # profile — ask whether to switch to the new game or stay.
             existing_game_id = profile.get("game_id", "")
+
+            # Fetch the current game's state once and reuse it below.
+            current_game_state = None
+            current_game_active = True
+            if existing_game_id:
+                game_state = await api_request(
+                    "GET", "/game/state", data=None, params={"game_id": existing_game_id}, timeout_total=600, ignore_codes=()
+                )
+                if not game_state:
+                    await message.answer(lang.get_errors(player_lang)["api_error"])
+                    return
+                current_game_state = game_state
+                current_game_active = game_state.get("status", "active") == "active"
+
+            # Deep link points to a different game than the player's current
+            # profile. Only ask whether to switch when the current game is still
+            # active — if it already ended, there is nothing to "stay" in, so
+            # go straight into the new game's onboarding.
             if game_id and existing_game_id and game_id != existing_game_id:
-                logger.info(f"Player {player_id} deep-linked to game {game_id} but has profile in {existing_game_id}; asking to switch")
-                await _show_deeplink_game_conflict(message, player_lang, game_id, existing_game_id)
+                if current_game_active:
+                    logger.info(f"Player {player_id} deep-linked to game {game_id} but has profile in {existing_game_id}; asking to switch")
+                    await _show_deeplink_game_conflict(message, player_lang, game_id, existing_game_id)
+                else:
+                    logger.info(f"Player {player_id} deep-linked to game {game_id}; previous game {existing_game_id} ended, joining new game")
+                    await _enter_name_for_game(message, state, game_id, fallback_lang=player_lang)
                 return
 
             # Check if player is dead (spectator)
@@ -2213,19 +2233,12 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                 return
 
             # Game already ended — show finale + game list instead of welcoming back
-            if existing_game_id:
-                game_state = await api_request(
-                    "GET", "/game/state", data=None, params={"game_id": existing_game_id}, timeout_total=600, ignore_codes=()
+            if existing_game_id and not current_game_active:
+                await _send_game_over_finale(
+                    message, existing_game_id, current_game_state.get("status", "active"), player_id, player_lang
                 )
-                if not game_state:
-                    await message.answer(lang.get_errors(player_lang)["api_error"])
-                    return
-                if game_state.get("status", "active") != "active":
-                    await _send_game_over_finale(
-                        message, existing_game_id, game_state.get("status", "active"), player_id, player_lang
-                    )
-                    await show_game_selection(message, state, player_lang)
-                    return
+                await show_game_selection(message, state, player_lang)
+                return
 
             # Player already has a profile - welcome back
             await send_random_loading_image(message, caption_key="loading_caption", language=player_lang, game_id=existing_game_id)
@@ -3431,7 +3444,7 @@ async def cmd_gm_list(message: types.Message):
         # Append ended games section if any
         if ended_lines:
             lines.append("")
-            lines.append(f"**{gm_msgs['game_ended_label']}:**")
+            lines.append(f"*{gm_msgs['game_ended_label']}:*")
             lines.extend(ended_lines)
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
@@ -4020,7 +4033,7 @@ async def cmd_gm_lang(message: types.Message):
             new_mission = result.get("mission_name") or ""
             success_text = gm_msgs["set_language_success"].format(game_id=game_id, lang_code=lang_code, title=new_title)
             if new_mission:
-                success_text += f"\n🎯 New mission: **{new_mission}**"
+                success_text += f"\n🎯 New mission: *{new_mission}*"
             await message.answer(success_text, parse_mode="Markdown")
         else:
             detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]

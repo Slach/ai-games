@@ -879,19 +879,19 @@ async def _deliver_gm_notification(
     safe_error = _escape_md(error)
     if status == "success":
         if language == "ru":
-            msg = f"✅ **Ход {turn} игры `{game_id}` сгенерирован!**\n\n🎯 Ход: {turn}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
+            msg = f"✅ *Ход {turn} игры `{game_id}` сгенерирован!*\n\n🎯 Ход: {turn}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
         else:
-            msg = f"✅ **Turn {turn} for game `{game_id}` generated!**\n\n🎯 Turn: {turn}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
+            msg = f"✅ *Turn {turn} for game `{game_id}` generated!*\n\n🎯 Turn: {turn}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
     elif status == "game_ended":
         if language == "ru":
-            msg = f"🏁 **Игра `{game_id}` завершена во время генерации хода {turn}.**\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."
+            msg = f"🏁 *Игра `{game_id}` завершена во время генерации хода {turn}.*\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."
         else:
-            msg = f"🏁 **Game `{game_id}` ended during turn {turn} generation.**\n\nTurn {turn} was not sent to players — the game ended on the previous turn."
+            msg = f"🏁 *Game `{game_id}` ended during turn {turn} generation.*\n\nTurn {turn} was not sent to players — the game ended on the previous turn."
     else:
         if language == "ru":
-            msg = f"❌ **Ошибка генерации хода {turn} игры `{game_id}`**\n\n{safe_error}"
+            msg = f"❌ *Ошибка генерации хода {turn} игры `{game_id}`*\n\n{safe_error}"
         else:
-            msg = f"❌ **Error generating turn {turn} for game `{game_id}`**\n\n{safe_error}"
+            msg = f"❌ *Error generating turn {turn} for game `{game_id}`*\n\n{safe_error}"
 
     if bot and GAME_MASTER_ID > 0:
         try:
@@ -1072,7 +1072,7 @@ async def _deliver_onboarding_ready(
     try:
         welcome_text = welcome_message or ""
         if game_title:
-            welcome_text = f"**{_escape_md(game_title)}**\n\n{_escape_md(welcome_text)}" if welcome_text else f"**{_escape_md(game_title)}**"
+            welcome_text = f"*{_escape_md(game_title)}*\n\n{_escape_md(welcome_text)}" if welcome_text else f"*{_escape_md(game_title)}*"
 
         # Send splash image
         splash_sent = False

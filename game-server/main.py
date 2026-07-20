@@ -5438,7 +5438,7 @@ async def admin_kick_player(request: KickPlayerRequest):
     )
 
     # Notify the kicked player (via game_messages)
-    kick_notification = f"⛔ **Вы были изгнаны с корабля!**\n\nGame Master принял решение заменить вас NPC.\n**Причина:** {request.reason}\n\nВаш персонаж заменён на {replaced['npc_name']}.\nСпасибо за игру!"
+    kick_notification = f"⛔ *Вы были изгнаны с корабля!*\n\nGame Master принял решение заменить вас NPC.\n*Причина:* {request.reason}\n\nВаш персонаж заменён на {replaced['npc_name']}.\nСпасибо за игру!"
     add_game_message(kicked_player_id, kick_notification, "kick_notification")
 
     # Remove from game but keep the profile data

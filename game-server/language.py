@@ -1245,7 +1245,7 @@ GAME_STRINGS = {
         "welcome_text_fallback": "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд.",
         "turn_prefix": "Ход {turn} — {title}",
         "turn_prefix_simple": "Ход {turn}",
-        "auto_select_notification": ("⏳ **Время вышло!**\n\nВы не успели сделать выбор, поэтому Game Master принял решение за вас:\n\nВыбрано действие: **{action_text}**\n\n_{rationale}_"),
+        "auto_select_notification": ("⏳ *Время вышло!*\n\nВы не успели сделать выбор, поэтому Game Master принял решение за вас:\n\nВыбрано действие: *{action_text}*\n\n_{rationale}_"),
         "turn_summary": {
             "ship_status": "Состояние корабля: {status}",
             "hull_shields": "Корпус: {hull}, Щиты: {shields}",
@@ -1327,7 +1327,7 @@ GAME_STRINGS = {
         "welcome_text_fallback": "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.",
         "turn_prefix": "Turn {turn} — {title}",
         "turn_prefix_simple": "Turn {turn}",
-        "auto_select_notification": ("⏳ **Time is up!**\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: **{action_text}**\n\n_{rationale}_"),
+        "auto_select_notification": ("⏳ *Time is up!*\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: *{action_text}*\n\n_{rationale}_"),
         "turn_summary": {
             "ship_status": "Ship status: {status}",
             "hull_shields": "Hull: {hull}, Shields: {shields}",
