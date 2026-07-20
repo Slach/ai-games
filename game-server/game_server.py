@@ -3519,7 +3519,6 @@ class GameServer:
     def generate_scene_instruction(
         self,
         action_text: str,
-        role: str,
         species_desc: str,
         language: str,
         background_location: str | None,
@@ -3537,7 +3536,6 @@ class GameServer:
 
         Args:
             action_text: What the character is doing (player action or scene setup).
-            role: The character's role (e.g. "Captain").
             species_desc: Short species description (informs pose/environment fit).
             language: Game content language (instruction is always English).
             background_location: Optional explicit location override.
@@ -3549,7 +3547,7 @@ class GameServer:
             Dict with "instruction" (str) and "background_location" (str|None).
         """
         system = build_scene_instruction_system(language)
-        user = build_scene_instruction_user(language, action_text, role, species_desc, background_location, scene_context)
+        user = build_scene_instruction_user(language, action_text, species_desc, background_location, scene_context)
 
         try:
             result = self._call_llm(
@@ -3571,7 +3569,7 @@ class GameServer:
             return {"instruction": instruction, "background_location": loc}
         except Exception:
             logger.warning("[SCENE_INSTRUCTION] failed, using fallback", exc_info=True)
-            fallback = f"Place the character from Picture 1 in the scene. {role} {action_text}. Cinematic lighting, photorealistic, 4K."
+            fallback = f"Place the character from Picture 1 in the scene. {action_text}. Cinematic lighting, photorealistic, 4K."
             return {"instruction": fallback, "background_location": background_location}
 
     # ============== NPC Name Generation (creative, species/gender-aware) ==============

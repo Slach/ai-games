@@ -816,12 +816,37 @@ class ImageGenerator:
                     ctx_game = game_id or "none"
                     ctx_player = str(player_id) if player_id else ""
                     ctx_turn = str(turn) if turn is not None else "0"
+                    log_kind = kind or "img2img"
+                    comfyui_req = (
+                        f"Model: img2img (denoise={denoise})\n"
+                        f"Size: {width}x{height}\n"
+                        f"Filename prefix: {filename_prefix}\n\n"
+                        f"--- PROMPT ---\n{prompt}\n\n"
+                        f"--- REFERENCE IMAGE ---\n{ref_filename}\n\n"
+                        f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
+                    )
+                    write_comfyui_log(
+                        game_id=ctx_game,
+                        player_id=ctx_player,
+                        turn=ctx_turn,
+                        kind=log_kind,
+                        log_type="request",
+                        content=comfyui_req,
+                    )
                     async with _image_semaphore:
                         prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
                         outputs = await self._wait_for_completion(prompt_id, timeout=300)
                         image_url = self._extract_image_url(outputs)
 
                     if image_url:
+                        write_comfyui_log(
+                            game_id=ctx_game,
+                            player_id=ctx_player,
+                            turn=ctx_turn,
+                            kind=log_kind,
+                            log_type="response",
+                            content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
+                        )
                         logger.info(f"[ACTION_IMAGE] Generated via img2img: {image_url}")
                         return image_url
                     else:
@@ -945,6 +970,7 @@ class ImageGenerator:
         ctx_game = game_id or "none"
         ctx_player = str(player_id) if player_id else ""
         ctx_turn = str(turn) if turn is not None else "0"
+        log_kind = kind or "qwen_edit"
 
         # Qwen-Image-Edit is the identity-preserving path. It can time out
         # under GPU contention (the ComfyUI queue backs up); before degrading
@@ -953,6 +979,24 @@ class ImageGenerator:
         max_qwen_attempts = 2
         for attempt in range(1, max_qwen_attempts + 1):
             try:
+                comfyui_req = (
+                    f"Model: Qwen-Image-Edit-2511\n"
+                    f"Size: {width}x{height}\n"
+                    f"Filename prefix: {filename_prefix}\n"
+                    f"Attempt: {attempt}/{max_qwen_attempts}\n\n"
+                    f"--- INSTRUCTION ---\n{instruction_prompt}\n\n"
+                    f"--- CHARACTER AVATAR ---\n{char_filename}\n\n"
+                    f"--- BACKGROUND ---\n{bg_filename or '(none)'}\n\n"
+                    f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
+                )
+                write_comfyui_log(
+                    game_id=ctx_game,
+                    player_id=ctx_player,
+                    turn=ctx_turn,
+                    kind=log_kind,
+                    log_type="request",
+                    content=comfyui_req,
+                )
                 async with _image_semaphore:
                     prompt_id = await self._queue_prompt(
                         workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn
@@ -960,6 +1004,14 @@ class ImageGenerator:
                     outputs = await self._wait_for_completion(prompt_id, timeout=600)
                     image_url = self._extract_image_url(outputs)
                 if image_url:
+                    write_comfyui_log(
+                        game_id=ctx_game,
+                        player_id=ctx_player,
+                        turn=ctx_turn,
+                        kind=log_kind,
+                        log_type="response",
+                        content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
+                    )
                     logger.info("[QWEN_EDIT] Generated: %s", image_url)
                     return image_url
                 logger.warning(

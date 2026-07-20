@@ -1494,12 +1494,16 @@ def build_scene_instruction_system(language: str) -> str:
 def build_scene_instruction_user(
     language: str,
     action_text: str,
-    role: str,
     species_desc: str,
     background_location: str | None,
     scene_context: str,
 ) -> str:
     """User prompt for the scene-instruction LLM call.
+
+    Note: the character's role/title is intentionally NOT included. Mentioning a
+    role like "Scientific Officer" biases Qwen-Image-Edit toward a human in
+    uniform, overriding the non-humanoid avatar in Picture 1. The model must
+    preserve the character from Picture 1 as-is.
 
     Args:
         scene_context: Free-form description of the current turn's setting and
@@ -1511,8 +1515,7 @@ def build_scene_instruction_user(
     ctx_block = f"\nScene context: {scene_context}\n" if scene_context else ""
     if language == LANGUAGE_RU:
         return (
-            f"Действие: {action_text}\n"
-            f"Роль: {role}.{bg_note}\n"
+            f"Действие: {action_text}.{bg_note}\n"
             f"Описание вида: {species_desc}{ctx_block}\n"
             "Выбери background_location исходя из того, ГДЕ происходит действие "
             "(в рубке, в инженерном отсеке, на поверхности планеты, снаружи корабля и т.д.). "
@@ -1524,8 +1527,7 @@ def build_scene_instruction_user(
             "Опиши позу, действие, освещение. Без описания внешности персонажа."
         )
     return (
-        f"Action: {action_text}\n"
-        f"Role: {role}.{bg_note}\n"
+        f"Action: {action_text}.{bg_note}\n"
         f"Species: {species_desc}{ctx_block}\n"
         "Choose background_location based on WHERE the action takes place "
         "(bridge, engineering bay, planet surface, outside the ship, etc.). "

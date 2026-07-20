@@ -2693,7 +2693,6 @@ async def _generate_chosen_action_image(
             gm = create_game_server(language=language)
             scene = gm.generate_scene_instruction(
                 action_text=action_text,
-                role=role,
                 species_desc=species_desc or species,
                 language=language,
                 background_location=None,
@@ -2839,7 +2838,6 @@ async def _generate_npc_chosen_action_image(
             gm = create_game_server(language=game_lang)
             scene = gm.generate_scene_instruction(
                 action_text=action_text,
-                role=role,
                 species_desc=npc_species,
                 language=game_lang,
                 background_location=None,
@@ -4952,7 +4950,6 @@ async def _original_start_game(request: StartGameRequest):
             scene = await asyncio.to_thread(
                 gm.generate_scene_instruction,
                 action_text=char_action,
-                role=role,
                 species_desc=species_desc or species_type,
                 language=language,
                 background_location=bg_location,
@@ -6127,7 +6124,6 @@ async def _original_continue_game(
         try:
             scene = gm.generate_scene_instruction(
                 action_text=char_action,
-                role=role,
                 species_desc=species_desc or species_type,
                 language=language,
                 background_location=None,
