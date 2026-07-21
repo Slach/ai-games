@@ -5664,9 +5664,11 @@ async def admin_list_games(include_ended: bool):
         game_id = game["game_id"]
         onboarding_count = get_onboarding_count_in_game(game_id)
         current_turn = 0
+        finale_outcome_type = ""
         if is_game_started(game_id):
             state = get_game_state(game_id)
             current_turn = state.get("turn", 0)
+            finale_outcome_type = state.get("finale_outcome_type", "")
         mission = get_mission(None, game_id=game_id)
         result.append(
             {
@@ -5680,6 +5682,7 @@ async def admin_list_games(include_ended: bool):
                 "language": get_game_language(game_id),
                 "current_turn": current_turn,
                 "archetype": mission.get("archetype", "") if mission else "",
+                "finale_outcome_type": finale_outcome_type,
             }
         )
     return {"games": result}

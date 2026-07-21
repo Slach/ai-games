@@ -3463,8 +3463,15 @@ async def cmd_gm_list(message: types.Message):
             arch_tag = f" 🎭 {archetype}" if archetype else ""
 
             if game_status != "active":
-                # Ended game — collect separately
-                ended_lines.append(f"{idx}. `{game_id}` — {title} ({gm_msgs['game_ended_label']}, 🎯 Turn: {turn}){arch_tag} {lang_flag}")
+                # Ended game — collect separately, show win/loss if available
+                outcome_type = game.get("finale_outcome_type", "")
+                if outcome_type == "victory":
+                    outcome_label = gm_msgs["ended_victory_label"]
+                elif outcome_type == "defeat":
+                    outcome_label = gm_msgs["ended_defeat_label"]
+                else:
+                    outcome_label = gm_msgs["game_ended_label"]
+                ended_lines.append(f"{idx}. `{game_id}` — {title} ({outcome_label}, 🎯 Turn: {turn}){arch_tag} {lang_flag}")
             else:
                 active_count += 1
                 started = game.get("started", False)
