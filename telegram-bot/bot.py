@@ -2857,10 +2857,12 @@ async def _send_no_game_invite(message: types.Message, language: str):
                 base_delay=1.0,
                 max_delay=10.0,
             )
+            await _send_invite_rules(message, language)
             return
         except Exception as e:
             logger.warning(f"Failed to send no-game invite QR: {e}")
     await message.answer(forward_text, parse_mode="Markdown")
+    await _send_invite_rules(message, language)
 
 
 async def _send_game_invite(message: types.Message, game_id: str, player_id: int, player_lang: str):
@@ -2960,6 +2962,20 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
             await message.answer(forward_text, parse_mode="Markdown")
     else:
         await message.answer(forward_text, parse_mode="Markdown")
+
+    await _send_invite_rules(message, game_lang)
+
+
+async def _send_invite_rules(message: types.Message, language: str):
+    """Send the short 'how to play' help block after an invite.
+
+    Uses the same `how_to_play` string as /help so the rules stay in sync
+    with the help command.
+    """
+    msgs = lang.get_help(language)
+    how_to_play = msgs.get("how_to_play")
+    if how_to_play:
+        await message.answer(how_to_play)
 
 
 async def _ensure_bot_username(message: types.Message) -> bool:
