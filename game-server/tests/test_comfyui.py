@@ -230,13 +230,13 @@ class TestQwenEditWorkflow(unittest.TestCase):
         self.assertEqual(ks["inputs"]["denoise"], 1.0)
 
     def test_layered_latent(self):
-        """EmptyQwenImageLayeredLatentImage should use layers=3."""
+        """EmptyQwenImageLayeredLatentImage should use layers=0 to avoid 5D shard output."""
         wf = _build_qwen_edit_workflow(
             instruction="t", character_filename="a.png", background_filename=None, width=768, height=1024, seed=0, filename_prefix=""
         )
         latent = wf["90"]
         self.assertEqual(latent["class_type"], "EmptyQwenImageLayeredLatentImage")
-        self.assertEqual(latent["inputs"]["layers"], 3)
+        self.assertEqual(latent["inputs"]["layers"], 0)
         self.assertEqual(latent["inputs"]["width"], 768)
         self.assertEqual(latent["inputs"]["height"], 1024)
 
