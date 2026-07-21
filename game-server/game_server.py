@@ -3712,13 +3712,36 @@ class GameServer:
         # human gender through.
         alien_species = {"non_humanoid", "energy", "symbiotic"}
 
+        # Human-readable gender is stored as a localized display label (RU/EN).
+        # Map it to explicit English appearance phrasing so the LLM can carry it
+        # into the final image prompt instead of dropping it (which silently
+        # defaults the diffusion model to a male). Keys are lowercased; unknown
+        # labels pass through verbatim.
+        gender_prompt = {
+            "женский": "a woman, feminine facial features",
+            "женщина": "a woman, feminine facial features",
+            "female": "a woman, feminine facial features",
+            "мужской": "a man, masculine facial features",
+            "мужчина": "a man, masculine facial features",
+            "male": "a man, masculine facial features",
+            "нейтральный": "an androgynous person, gender-ambiguous features",
+            "neutral": "an androgynous person, gender-ambiguous features",
+            "сменяемый": "an androgynous person with fluid, gender-ambiguous features",
+            "fluid": "an androgynous person with fluid, gender-ambiguous features",
+            "синтетический": "a genderless synthetic humanoid, smooth androgynous features",
+            "synthetic": "a genderless synthetic humanoid, smooth androgynous features",
+        }
+
         role_lines = []
         for r in npc_roles:
             sp = r.get("species", "random")
             if sp in alien_species:
                 gender = "invent a non-human biological identity fitting the species"
             else:
-                gender = r.get("gender", "random")
+                gender = gender_prompt.get(
+                    str(r.get("gender", "")).strip().lower(),
+                    r.get("gender", "random"),
+                )
             role_lines.append(f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}")
         roles_text = "\n".join(role_lines)
 
@@ -3728,7 +3751,11 @@ class GameServer:
             "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
             "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
             "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
-            "beings whose biology would not have them."
+            "beings whose biology would not have them.\n\n"
+            "For human, humanoid, and cybernetic characters: the gender line is MANDATORY. Every "
+            "prompt MUST name the gender explicitly (e.g. 'a woman', 'a man', 'an androgynous person') "
+            "and describe facial features consistent with it. Never default an unspecified human to a "
+            "man — if the gender line names a woman, the face, hair, and build must read as feminine."
         )
 
         # Species-specific instructions mirroring _species_prompt_instructions
@@ -3763,7 +3790,10 @@ class GameServer:
         user = (
             f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
             "For EACH role, generate a unique, detailed English image prompt for a character portrait.\n\n"
-            "CRITICAL: RESPECT the species specified for each role. Use that exact value — do not randomize it.\n\n"
+            "CRITICAL: RESPECT the species specified for each role. Use that exact value — do not randomize it.\n"
+            "CRITICAL: RESPECT the gender specified for each role. For human, humanoid, and cybernetic "
+            "characters, the gender in the role line MUST be carried into the prompt verbatim and the "
+            "face/hair/build must match it. Do NOT default an unspecified or female character to a man.\n\n"
             "Species-specific rules (FOLLOW THEM EXACTLY):\n"
         )
         for sp_key in ["human", "humanoid", "non_humanoid", "cybernetic", "energy", "symbiotic"]:
