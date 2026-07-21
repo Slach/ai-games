@@ -2824,7 +2824,7 @@ async def _send_no_game_invite(message: types.Message, language: str):
     caption = msgs.get(
         "invite_no_game_caption",
         "🎮 Join a sci-fi adventure!\n\n{invite_url}",
-    ).format(invite_url=escape_markdown(bot_url))
+    ).format(invite_url=escape_markdown(bot_url)) + _invite_how_to_play(language)
     image_url = None
     try:
         result = await api_request("GET", "/content/loading-image", data=None, params={"game_id": "all"}, timeout_total=600, ignore_codes=())
@@ -2857,12 +2857,10 @@ async def _send_no_game_invite(message: types.Message, language: str):
                 base_delay=1.0,
                 max_delay=10.0,
             )
-            await _send_invite_rules(message, language)
             return
         except Exception as e:
             logger.warning(f"Failed to send no-game invite QR: {e}")
     await message.answer(forward_text, parse_mode="Markdown")
-    await _send_invite_rules(message, language)
 
 
 async def _send_game_invite(message: types.Message, game_id: str, player_id: int, player_lang: str):
@@ -2899,6 +2897,8 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
 
     invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
 
+    how_to_play = _invite_how_to_play(game_lang)
+
     if mission and bridge and bridge.get("image_url"):
         # ── Mission exists: bridge photo with mission caption ──
         mission_name = mission.get("name", "")
@@ -2912,7 +2912,7 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
             mission_name=escape_markdown(mission_name),
             mission_description=escape_markdown(short_desc),
             invite_url=escape_markdown(invite_url),
-        )
+        ) + how_to_play
         sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption, reply_markup=None)
         if not sent:
             await message.answer(caption, parse_mode="Markdown")
@@ -2925,7 +2925,7 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
         ).format(
             game_title=escape_markdown(clean_title),
             invite_url=escape_markdown(invite_url),
-        )
+        ) + how_to_play
         splash_sent = await send_random_splash_image(message, caption, None, game_id)
         if not splash_sent:
             await message.answer(caption, parse_mode="Markdown")
@@ -2963,19 +2963,15 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
     else:
         await message.answer(forward_text, parse_mode="Markdown")
 
-    await _send_invite_rules(message, game_lang)
 
-
-async def _send_invite_rules(message: types.Message, language: str):
-    """Send the short 'how to play' help block after an invite.
+def _invite_how_to_play(language: str) -> str:
+    """Return the short 'how to play' block to embed into an invite caption.
 
     Uses the same `how_to_play` string as /help so the rules stay in sync
     with the help command.
     """
-    msgs = lang.get_help(language)
-    how_to_play = msgs.get("how_to_play")
-    if how_to_play:
-        await message.answer(how_to_play)
+    how_to_play = lang.get_help(language).get("how_to_play", "")
+    return f"\n\n{how_to_play}" if how_to_play else ""
 
 
 async def _ensure_bot_username(message: types.Message) -> bool:
