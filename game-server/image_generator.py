@@ -170,13 +170,17 @@ def _build_qwen_edit_workflow(
             "class_type": "CLIPTextEncode",
             "inputs": {"text": "", "clip": ["30", 0]},
         },
-        # Layered latent: layers=3 matches the two reference images + output.
+        # layers=0 produces a single 4D latent; VAEDecode then yields one image.
+        # Any layers > 0 makes EmptyQwenImageLayeredLatentImage emit a 5D tensor
+        # which VAEDecode reshapes into (4*layers+1) separate images — wasting
+        # disk and corrupting character identity (the trailing "shards" invent
+        # humanoid anatomy that doesn't match the avatar).
         "90": {
             "class_type": "EmptyQwenImageLayeredLatentImage",
             "inputs": {
                 "width": width,
                 "height": height,
-                "layers": 3,
+                "layers": 0,
                 "batch_size": 1,
             },
         },
