@@ -2713,10 +2713,10 @@ async def _generate_chosen_action_image(
         avatar_desc = profile.get("avatar_description", "")
         traits = profile.get("personality_traits", [])
 
-        # SHORT character visual reference (1 sentence max for image gen fallback)
-        character_description = role
-        if species and species not in ("Unknown", "Неизвестно"):
-            character_description += f", {species}"
+        # SHORT character visual reference (1 sentence max for image gen fallback).
+        # Avoid the role title ("Scientific Officer") — it biases text-to-image
+        # toward a human in uniform. Species only.
+        character_description = species if species and species not in ("Unknown", "Неизвестно") else ""
 
         # Generate Qwen-Image-Edit instruction via LLM (refers to the avatar as
         # "Picture 1" and the best-matching background as "Picture 2"), with a
@@ -4818,6 +4818,8 @@ async def _original_start_game(request: StartGameRequest):
                 "role": participant["role"],
                 "personality_traits": participant.get("personality_traits", []),
                 "role_description": participant.get("role_description", ""),
+                "species": participant.get("species", ""),
+                "species_description": participant.get("species_description", ""),
                 "wound_severity": wound_severity,
             }
             try:
@@ -4976,9 +4978,9 @@ async def _original_start_game(request: StartGameRequest):
         setting = global_circ.get("setting", "ship interior")
 
         # Qwen-Image-Edit instruction for placing this character in the scene.
-        # The action_text is the player's personal briefing headline/personal_title
-        # so the model knows what the character is reacting to.
-        char_action = b.get("personal_title", "") or f"reacting to the situation in {setting[:120]}"
+        # image_prompt is the LLM-generated visual-only scene description
+        # (pose/action/species, no name/role) for Qwen-Image-Edit conditioning.
+        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting[:120]}"
         instruction = ""
         bg_location = None
         try:
@@ -5000,7 +5002,7 @@ async def _original_start_game(request: StartGameRequest):
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
 
         if not instruction:
-            instruction = f"Place the character from Picture 1 in the scene. {role} {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
+            instruction = f"Place the character from Picture 1 in the scene. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         background_url = None
         if bg_location:
@@ -5008,11 +5010,13 @@ async def _original_start_game(request: StartGameRequest):
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
-        character_description = role
+        # Avoid starting with the role title ("Scientific Officer") — it biases
+        # text-to-image toward a human in uniform. Lead with species only.
+        character_description = ""
         if species_type and species_type not in ("Unknown", "Неизвестно"):
-            character_description += f", {species_type}"
+            character_description = species_type
         if species_desc:
-            character_description += f". {species_desc[:200]}"
+            character_description = f"{character_description}. {species_desc[:200]}" if character_description else species_desc[:200]
 
         url = await image_gen.generate_character_in_scene(
             instruction_prompt=instruction,
@@ -6017,6 +6021,8 @@ async def _original_continue_game(
             "role": participant["role"],
             "personality_traits": participant.get("personality_traits", []),
             "role_description": participant.get("role_description", ""),
+            "species": participant.get("species", ""),
+            "species_description": participant.get("species_description", ""),
         }
         player_name = ""
         if participant["type"] == "player" and participant.get("player_id"):
@@ -6153,7 +6159,8 @@ async def _original_continue_game(
         setting = global_circ.get("setting", "ship interior")
 
         # Qwen-Image-Edit instruction for placing this character in the scene.
-        char_action = b.get("personal_title", "") or f"reacting to the situation in {setting[:120]}"
+        # image_prompt is the LLM-generated visual-only description (no name/role).
+        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting[:120]}"
         instruction = ""
         bg_location = None
         try:
@@ -6174,7 +6181,7 @@ async def _original_continue_game(
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
 
         if not instruction:
-            instruction = f"Place the character from Picture 1 in the scene. {role} {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
+            instruction = f"Place the character from Picture 1 in the scene. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         background_url = None
         if bg_location:
@@ -6182,11 +6189,13 @@ async def _original_continue_game(
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
-        character_description = role
+        # Avoid starting with the role title ("Scientific Officer") — it biases
+        # text-to-image toward a human in uniform. Lead with species only.
+        character_description = ""
         if species_type and species_type not in ("Unknown", "Неизвестно"):
-            character_description += f", {species_type}"
+            character_description = species_type
         if species_desc:
-            character_description += f". {species_desc[:200]}"
+            character_description = f"{character_description}. {species_desc[:200]}" if character_description else species_desc[:200]
 
         url = await image_gen.generate_character_in_scene(
             instruction_prompt=instruction,

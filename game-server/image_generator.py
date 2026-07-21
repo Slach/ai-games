@@ -21,6 +21,8 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
+from logging_utils import write_comfyui_log
+
 logger = logging.getLogger(__name__)
 
 # ============== Concurrency Control ==============
@@ -460,8 +462,6 @@ class ImageGenerator:
         Returns:
             URL of the generated image, or None on failure
         """
-        from logging_utils import write_comfyui_log
-
         ctx_game = game_id or "none"
         ctx_player = str(player_id) if player_id else ""
         ctx_turn = str(turn) if turn is not None else "0"

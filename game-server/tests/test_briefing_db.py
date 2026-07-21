@@ -1,4 +1,4 @@
-"""DB-level tests for player_briefings persistence, incl. personal_title resume support."""
+"""DB-level tests for player_briefings persistence, incl. personal_title/image_prompt resume support."""
 
 import os
 import sys
@@ -27,7 +27,7 @@ class TestBriefingPersistence(unittest.TestCase):
         except (FileNotFoundError, PermissionError):
             logger.error("Failed to remove temp DB: %s", self._tmp.name, exc_info=True)
 
-    def _player_briefing(self, turn=1, player_id=100, personal_title="T1 — Captain's log"):
+    def _player_briefing(self, turn=1, player_id=100, personal_title="T1 — Captain's log", image_prompt=""):
         return {
             "turn": turn,
             "player_id": player_id,
@@ -39,6 +39,7 @@ class TestBriefingPersistence(unittest.TestCase):
             "choice_rationale": "",
             "consequence_result": {},
             "personal_title": personal_title,
+            "image_prompt": image_prompt,
         }
 
     def test_personal_title_round_trips(self):
@@ -56,6 +57,25 @@ class TestBriefingPersistence(unittest.TestCase):
         if got is None:
             self.fail("expected saved briefing")
         self.assertEqual(got["personal_title"], "")
+
+    def test_image_prompt_round_trips(self):
+        db.save_player_briefing(
+            self._player_briefing(image_prompt="A cluster of floating crystals vibrating near a console, blue glow"),
+            "g1",
+        )
+        got = db.get_player_briefing(1, 100, "g1")
+        if got is None:
+            self.fail("expected saved briefing")
+        self.assertEqual(got["image_prompt"], "A cluster of floating crystals vibrating near a console, blue glow")
+
+    def test_image_prompt_defaults_empty_when_omitted(self):
+        raw = self._player_briefing()
+        del raw["image_prompt"]
+        db.save_player_briefing(raw, "g1")
+        got = db.get_player_briefing(1, 100, "g1")
+        if got is None:
+            self.fail("expected saved briefing")
+        self.assertEqual(got["image_prompt"], "")
 
     def test_briefing_upsert_replaces_not_duplicates(self):
         """INSERT OR REPLACE must overwrite the same (turn, player, game) briefing.

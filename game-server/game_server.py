@@ -960,6 +960,10 @@ class GameServer:
                             "type": "string",
                             "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {turn} — {role} — {personal_greeting}' (Russian) or 'Turn {turn} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
                         },
+                        "image_prompt": {
+                            "type": "string",
+                            "description": "Visual-only scene description for image generation: pose, action, lighting, species appearance. NEVER include the character's name or role/title (e.g. 'officer', 'captain') — those bias the image model toward a human and break non-humanoid characters. Focus on what is visible.",
+                        },
                         "briefing": {
                             "type": "string",
                             "description": "Personal narrative for this specific player — what they see, hear, and feel from their unique perspective",
@@ -995,7 +999,7 @@ class GameServer:
                             "description": "Action choices with hidden consequences for the player to pick from",
                         },
                     },
-                    "required": ["personal_title", "briefing", "choices"],
+                    "required": ["personal_title", "image_prompt", "briefing", "choices"],
                     "additionalProperties": False,
                 },
             },
@@ -2899,6 +2903,8 @@ class GameServer:
         """
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
+        species = player_profile.get("species", "") or ""
+        species_desc = player_profile.get("species_description", "") or ""
         logger.info(f"[TURN] Generating briefing for {player_id} ({player_role})")
 
         # Use player_name if provided, otherwise fall back to role
@@ -2947,16 +2953,22 @@ class GameServer:
                 f"  Имя: {display_name}\n"
                 f"  Роль: {player_role}\n"
                 f"  Состояние: {wound_label_ru}\n"
-                f"  Характер: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
-                "Создай:\n"
+                f"  Характер: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n"
+                + (f"  Вид: {species}\n" if species else "")
+                + (f"  Внешний вид: {species_desc}\n" if species_desc else "")
+                + "\nСоздай:\n"
                 "1. personal_title — уникальный, атмосферный заголовок для ПЕРСОНАЛЬНОЙ вводной этого игрока. "
                 f"Формат: '{display_name} — {{{player_role}}} — {{персональное приветствие}}'. "
                 f"Приветствие должно включать имя персонажа ({display_name}) и его роль ({player_role}), "
                 "отражать его характер и текущую ситуацию. "
                 "Пример: 'Маркус — Инженер — твои руки помнят гул реактора лучше любого сканера'.\n"
-                "2. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
+                "2. image_prompt — описание сцены ДЛЯ ГЕНЕРАЦИИ КАРТИНКИ (на русском, 1-2 предложения): "
+                "поза, действие, освещение, атмосфера. Опиши ВИД персонажа (форма тела, материалы — "
+                "кристаллы/плазма/хитин и т.п.), но НИКОГДА не упоминай имя и роль/должность "
+                "('офицер', 'капитан', 'научный' и т.п.) — они ломают генерацию не-гуманоидных персонажей.\n"
+                "3. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
-                f"3. Ровно {total_actions} вариантов действий с последствиями: "
+                f"4. Ровно {total_actions} вариантов действий с последствиями: "
                 f"{n_good} {good}, {n_bad} {bad}, {n_neutral} {neutral}.\n"
                 f"Каждый вариант ДОЛЖЕН содержать поле consequence_kind соответственно его группе: "
                 f"ровно {n_good} со значением 'good', {n_bad} со значением 'bad', "
@@ -2998,9 +3010,16 @@ class GameServer:
                 f"  Name: {display_name}\n"
                 f"  Role: {player_role}\n"
                 f"  Status: {wound_label_en}\n"
-                f"  Traits: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n\n"
-                "Create:\n"
-                "1. personal_title…\n"
+                f"  Traits: {', '.join(traits) if isinstance(traits, list) else str(traits)}\n"
+                + (f"  Species: {species}\n" if species else "")
+                + (f"  Appearance: {species_desc}\n" if species_desc else "")
+                + "\nCreate:\n"
+                "1. personal_title — atmospheric title, format 'Turn {turn} — {role} — {greeting}'.\n"
+                "2. image_prompt — visual-only scene description FOR IMAGE GENERATION (1-2 sentences): "
+                "pose, action, lighting, atmosphere. Describe the character's SPECIES appearance "
+                "(body form, materials — crystals/plasma/chitin etc.), but NEVER mention the name or "
+                "role/title ('officer', 'captain', 'science') — those bias the image model toward a human "
+                "and break non-humanoid characters.\n"
                 f"3. Exactly {total_actions} action choices: "
                 f"{n_good} good, {n_bad} bad, {n_neutral} neutral.\n"
                 f"Each choice MUST include a consequence_kind matching its group: exactly "
@@ -3040,6 +3059,7 @@ class GameServer:
             logger.error(f"[TURN] Briefing generation failed for {player_id}: {e}", exc_info=True)
             return {
                 "personal_title": fallback_title,
+                "image_prompt": "",
                 "briefing": fallback_briefing,
                 "choices": [
                     {

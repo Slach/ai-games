@@ -154,6 +154,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON player_action_stats(player_id, game_id);
         """.strip(),
     ),
+    (16, "ALTER TABLE player_briefings ADD COLUMN image_prompt TEXT DEFAULT '';"),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -1899,8 +1900,8 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[st
     cursor.execute(
         """INSERT OR REPLACE INTO player_briefings
            (turn, player_id, npc_key, is_npc, briefing, choices,
-            selected_action_id, choice_rationale, consequence_result, chosen_action_url, personal_title, created_at, game_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            selected_action_id, choice_rationale, consequence_result, chosen_action_url, personal_title, image_prompt, created_at, game_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             briefing_data["turn"],
             briefing_data.get("player_id"),
@@ -1913,6 +1914,7 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[st
             json.dumps(briefing_data.get("consequence_result", {}), ensure_ascii=False),
             briefing_data.get("chosen_action_url"),
             briefing_data.get("personal_title", ""),
+            briefing_data.get("image_prompt", ""),
             datetime.now().isoformat(),
             game_id,
         ),
@@ -1955,6 +1957,7 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
         "consequence_result": _safe_json_loads(row["consequence_result"], {}),
         "chosen_action_url": row["chosen_action_url"],
         "personal_title": row["personal_title"] if "personal_title" in row.keys() else "",
+        "image_prompt": row["image_prompt"] if "image_prompt" in row.keys() else "",
         "created_at": row["created_at"],
         "game_id": row["game_id"],
     }
