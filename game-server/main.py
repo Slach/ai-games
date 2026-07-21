@@ -310,16 +310,11 @@ def _question_has_sg_tags(question: OnboardingQuestion) -> bool:
     return any(opt.get("species_tags") or opt.get("gender_tags") for opt in question.options)
 
 
-# Cache: (game_id, language) -> list[OnboardingQuestion]
-# Questions are identical for all players in the same game, so we generate
-# them once and reuse. Avoids LLM timeouts on /onboarding/start.
-_onboarding_questions_cache: dict[tuple[str, str], list[OnboardingQuestion]] = {}
-
-
 async def generate_dynamic_onboarding_questions(
     language: str,
     *,
     game_id: str,
+    player_id: int,
     skip_images: bool,
 ) -> list[OnboardingQuestion]:
     """Generate dynamic onboarding questions using LLM with json_schema.
@@ -330,13 +325,6 @@ async def generate_dynamic_onboarding_questions(
     """
     logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
     start_time = datetime.now()
-
-    # Check cache first — questions are identical for all players in the same game
-    cache_key = (game_id, language)
-    if cache_key in _onboarding_questions_cache:
-        cached = _onboarding_questions_cache[cache_key]
-        logger.info(f"Returning {len(cached)} cached onboarding questions (cache hit)")
-        return cached
 
     questions: list[OnboardingQuestion] = []
     try:
@@ -367,7 +355,7 @@ async def generate_dynamic_onboarding_questions(
         raw_questions = game_server.generate_onboarding_questions(
             underrepresented_hint=hint,
             game_id=game_id,
-            player_id=None,
+            player_id=player_id,
             turn=None,
             kind="onboarding_questions",
         )
@@ -394,10 +382,7 @@ async def generate_dynamic_onboarding_questions(
         logger.info(f"Question generation took {gen_time:.2f} seconds")
 
         if not skip_images:
-            await generate_onboarding_question_images(questions, game_id)
-
-        # Cache for future players of the same game
-        _onboarding_questions_cache[cache_key] = questions
+            await generate_onboarding_question_images(questions, game_id, player_id)
 
         return questions
 
@@ -409,6 +394,7 @@ async def generate_dynamic_onboarding_questions(
 async def generate_onboarding_question_images(
     questions: list[OnboardingQuestion],
     game_id: str,
+    player_id: int,
 ) -> list[OnboardingQuestion]:
     """Generate ComfyUI images for each onboarding question (in parallel).
 
@@ -429,12 +415,12 @@ async def generate_onboarding_question_images(
                 return q, None
             url = await image_generator.generate_image(
                 prompt=prompt,
-                filename_prefix=f"{game_id}/onboarding_q_{q.id}",
+                filename_prefix=f"{game_id}/onboarding_q_{player_id}_{q.id}",
                 width=768,
                 height=768,
                 max_retries=3,
                 game_id=game_id,
-                player_id=None,
+                player_id=str(player_id),
                 turn=None,
                 kind="onboarding_question",
             )
@@ -942,7 +928,7 @@ async def _background_onboarding_images(
         try:
             # 1. Generate question images
             if questions:
-                await generate_onboarding_question_images(questions, game_id)
+                await generate_onboarding_question_images(questions, game_id, player_id)
 
             # 2. Update session questions in DB with image URLs
             try:
@@ -1052,6 +1038,7 @@ async def start_onboarding(request: StartOnboardingRequest):
     role_questions = await generate_dynamic_onboarding_questions(
         language=request.language,
         game_id=request.game_id,
+        player_id=request.player_id,
         skip_images=True,
     )
     logger.info(f"Generated {len(role_questions)} role questions")
