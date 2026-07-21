@@ -3553,6 +3553,7 @@ class GameServer:
         language: str,
         background_location: str | None,
         scene_context: str,
+        species_category: str = "",
         *,
         game_id: str | None,
         player_id: str | None,
@@ -3572,12 +3573,17 @@ class GameServer:
             scene_context: Current turn setting + conflict (from global_circumstances).
                 Lets the model pick a background_location matching the scene rather
                 than guessing from action_text alone.
+            species_category: Canonical species key (human / humanoid / non_humanoid
+                / energy / cybernetic / symbiotic). For non_humanoid / energy /
+                symbiotic an anatomy guard is added to the prompt forbidding
+                human-body terms ("arms/hands/face/expression") that collapse
+                Qwen-Image-Edit back into a humanoid.
 
         Returns:
             Dict with "instruction" (str) and "background_location" (str|None).
         """
         system = build_scene_instruction_system(language)
-        user = build_scene_instruction_user(language, action_text, species_desc, background_location, scene_context)
+        user = build_scene_instruction_user(language, action_text, species_desc, background_location, scene_context, species_category)
 
         try:
             result = self._call_llm(

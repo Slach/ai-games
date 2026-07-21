@@ -1509,6 +1509,7 @@ def build_scene_instruction_user(
     species_desc: str,
     background_location: str | None,
     scene_context: str,
+    species_category: str = "",
 ) -> str:
     """User prompt for the scene-instruction LLM call.
 
@@ -1517,18 +1518,52 @@ def build_scene_instruction_user(
     uniform, overriding the non-humanoid avatar in Picture 1. The model must
     preserve the character from Picture 1 as-is.
 
+    For non-humanoid / energy / symbiotic beings (``species_category``) an
+    additional guard is emitted: Qwen-Image-Edit strongly trusts the text
+    instruction over Picture 1, so describing "arms outstretched, hands open,
+    facial expression" for a cluster of crystals collapses the form back into a
+    humanoid. The guard forbids human-anatomy terms and asks the LLM to phrase
+    the action through the physics of the being's form instead.
+
     Args:
         scene_context: Free-form description of the current turn's setting and
             situation (typically global_circumstances setting + conflict). Lets
             the model pick a background_location that actually matches the scene
             rather than guessing from the action text alone.
+        species_category: Canonical species key (human / humanoid / non_humanoid
+            / energy / cybernetic / symbiotic). Empty string = human fallback.
+            Only non_humanoid / energy / symbiotic trigger the anatomy guard.
     """
     bg_note = f" Scene location hint: {background_location}." if background_location else ""
     ctx_block = f"\nScene context: {scene_context}\n" if scene_context else ""
+    anatomy_guard_ru = ""
+    anatomy_guard_en = ""
+    if species_category in ("non_humanoid", "energy", "symbiotic"):
+        anatomy_guard_ru = (
+            "\nВАЖНО: персонаж относится к не-гуманоидному/энергетическому/симбиотическому "
+            "виду (категория " + species_category + "). "
+            "НЕ описывай человеческую анатомию — никаких «рук», «кистей», «ладоней», «ног», "
+            "«лица», «выражения лица», «глаз», «улыбки». "
+            "Qwen-Image-Edit доверяет тексту больше, чем Picture 1, и нарисует гуманоида, "
+            "если встретит эти слова. Описывай действие через физику формы персонажа: "
+            "свечение, вибрация, деформация, ориентация в пространстве, изменение структуры, "
+            "расширение/сжатие, смещение центра масс.\n"
+        )
+        anatomy_guard_en = (
+            "\nIMPORTANT: this character is a non-humanoid / energy / symbiotic being "
+            "(category " + species_category + "). "
+            "Do NOT impose human anatomy — no \"arms\", \"hands\", \"fingers\", \"legs\", "
+            "\"face\", \"facial expression\", \"eyes\", \"smile\". "
+            "Qwen-Image-Edit trusts the text instruction over Picture 1 and will render a "
+            "humanoid if it sees those words. Describe the action through the physics of the "
+            "being's form: glow, vibration, deformation, spatial orientation, structural "
+            "change, expansion/contraction, shift of the center of mass.\n"
+        )
     if language == LANGUAGE_RU:
         return (
             f"Действие: {action_text}.{bg_note}\n"
             f"Описание вида: {species_desc}{ctx_block}\n"
+            f"{anatomy_guard_ru}"
             "Выбери background_location исходя из того, ГДЕ происходит действие "
             "(в рубке, в инженерном отсеке, на поверхности планеты, снаружи корабля и т.д.). "
             "Допустимые значения: " + ", ".join(BACKGROUND_LOCATION_TYPES) + ". "
@@ -1541,6 +1576,7 @@ def build_scene_instruction_user(
     return (
         f"Action: {action_text}.{bg_note}\n"
         f"Species: {species_desc}{ctx_block}\n"
+        f"{anatomy_guard_en}"
         "Choose background_location based on WHERE the action takes place "
         "(bridge, engineering bay, planet surface, outside the ship, etc.). "
         "Valid values: " + ", ".join(BACKGROUND_LOCATION_TYPES) + ". "
