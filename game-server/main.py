@@ -96,6 +96,7 @@ from database import (
     save_game_image,
     save_game_title_and_welcome,
     save_player_action,
+    save_player_action_stats,
     save_game_finale,
     save_player_briefing,
     set_last_death_turn,
@@ -2201,10 +2202,12 @@ async def submit_player_action(request: PlayerActionRequest):
         # Find the consequence for the chosen action
         chosen_consequence = ""
         chosen_consequence_kind = ""
+        chosen_action_text = ""
         for c in briefing["choices"]:
             if c.get("id") == request.action_id:
                 chosen_consequence = c.get("consequence", "")
                 chosen_consequence_kind = c.get("consequence_kind", "")
+                chosen_action_text = c.get("text", "")
                 break
 
         # Update the briefing with the player's choice
@@ -2214,6 +2217,21 @@ async def submit_player_action(request: PlayerActionRequest):
             choice_rationale="selected by player",
             consequence_result={"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
         )
+
+        # Append to per-action analytics log with crew-health snapshot
+        try:
+            stats_crew_health = get_game_state(game_id)["crew_health"]
+            save_player_action_stats(
+                game_id=game_id,
+                player_id=request.player_id,
+                turn=request.turn,
+                action_id=request.action_id,
+                action_text=chosen_action_text,
+                consequence_kind=chosen_consequence_kind,
+                crew_health=stats_crew_health,
+            )
+        except Exception:
+            logger.warning("player_action_stats save failed", exc_info=True)
     else:
         # Legacy system: validate against game_turns.player_actions
         current_turn = get_game_turn(request.turn, game_id)
@@ -2328,10 +2346,12 @@ async def auto_select_action(
     # 5. Submit the action (same flow as submit_player_action)
     chosen_consequence = ""
     chosen_consequence_kind = ""
+    chosen_action_text = ""
     for c in choices:
         if c.get("id") == action_id:
             chosen_consequence = c.get("consequence", "")
             chosen_consequence_kind = c.get("consequence_kind", "")
+            chosen_action_text = c.get("text", "")
             break
 
     update_briefing_choice(
@@ -2340,6 +2360,21 @@ async def auto_select_action(
         choice_rationale=rationale,
         consequence_result={"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
     )
+
+    # Append to per-action analytics log with crew-health snapshot
+    try:
+        stats_crew_health = get_game_state(game_id)["crew_health"]
+        save_player_action_stats(
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            action_id=action_id,
+            action_text=chosen_action_text,
+            consequence_kind=chosen_consequence_kind,
+            crew_health=stats_crew_health,
+        )
+    except Exception:
+        logger.warning("player_action_stats save failed (auto)", exc_info=True)
 
     save_player_action(
         player_id=player_id,

@@ -1369,7 +1369,13 @@ def build_personal_briefing_system(language: str) -> str:
             "Пассивные или плохие решения → последствия: повреждения, потери, регресс миссии. "
             "Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО, а не просто 'наказать' игрока. "
             "Среди вариантов действий ВСЕГДА должен быть хотя бы один безопасный/оборонительный "
-            "выбор (прикрыть, защищаться, эвакуироваться, переждать), предсказуемо снижающий урон."
+            "выбор (прикрыть, защищаться, эвакуироваться, переждать), предсказуемо снижающий урон.\n\n"
+            "Каждый вариант действия ДОЛЖЕН содержать поле consequence_kind — его тип:\n"
+            "  'good'    — хорошее действие: успех продвигает миссию, открывает возможности;\n"
+            "  'bad'     — плохое действие: высокий риск урона, потерь, регресса миссии;\n"
+            "  'neutral' — нейтральное действие: безопасное ожидание/отдых, не продвигает миссию.\n"
+            "Количество каждого типа задаётся в запросе; consequence_kind варианта должен "
+            "соответствовать его группе."
         )
     return (
         "You are a Game Master. You create PERSONAL briefings for each player "
@@ -1381,7 +1387,13 @@ def build_personal_briefing_system(language: str) -> str:
         "Passive or bad decisions → consequences: damage, losses, mission regression. "
         "The key is INTERESTING and UNPREDICTABLE, not just 'punish' the player. "
         "Among the action choices there MUST ALWAYS be at least one safe/defensive option "
-        "(cover, defend, evacuate, wait it out) that predictably reduces incoming damage."
+        "(cover, defend, evacuate, wait it out) that predictably reduces incoming damage.\n\n"
+        "Every action choice MUST include a consequence_kind field — its type:\n"
+        "  'good'    — a good action: success advances the mission, opens opportunities;\n"
+        "  'bad'     — a bad action: high risk of damage, losses, mission regression;\n"
+        "  'neutral' — a neutral action: safe wait/rest, does not advance the mission.\n"
+        "The count of each type is specified in the request; a choice's consequence_kind "
+        "must match its group."
     )
 
 

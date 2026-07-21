@@ -134,6 +134,26 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE npc_profiles ADD COLUMN wound_severity TEXT DEFAULT NULL;
         """.strip(),
     ),
+    (
+        15,
+        """
+        CREATE TABLE IF NOT EXISTS player_action_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT NOT NULL,
+            player_id INTEGER NOT NULL,
+            turn INTEGER NOT NULL,
+            action_id TEXT NOT NULL,
+            action_text TEXT DEFAULT '',
+            consequence_kind TEXT DEFAULT '',
+            crew_health INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_player_action_stats_game
+            ON player_action_stats(game_id, turn);
+        CREATE INDEX IF NOT EXISTS idx_player_action_stats_player
+            ON player_action_stats(player_id, game_id);
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -311,6 +331,21 @@ def init_db():
     );
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_status ON generation_jobs(status);
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_lookup ON generation_jobs(game_id, turn);
+    CREATE TABLE IF NOT EXISTS player_action_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id TEXT NOT NULL,
+        player_id INTEGER NOT NULL,
+        turn INTEGER NOT NULL,
+        action_id TEXT NOT NULL,
+        action_text TEXT DEFAULT '',
+        consequence_kind TEXT DEFAULT '',
+        crew_health INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_action_stats_game
+        ON player_action_stats(game_id, turn);
+    CREATE INDEX IF NOT EXISTS idx_player_action_stats_player
+        ON player_action_stats(player_id, game_id);
     """
     )
     cursor.execute("SELECT MAX(version) FROM migrations")
@@ -1764,6 +1799,49 @@ def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str, *,
         "replaced_by_npc_key": replaced_by_npc_key,
         "reason": reason,
         "game_id": game_id,
+    }
+
+
+def save_player_action_stats(
+    *,
+    game_id: str,
+    player_id: int,
+    turn: int,
+    action_id: str,
+    action_text: str,
+    consequence_kind: str,
+    crew_health: int,
+) -> dict[str, Any]:
+    """Record one player action choice for analytics.
+
+    Append-only log of every submitted action with its pre-authored kind and the
+    crew health snapshot at the moment of choice. Lets us reconstruct a player's
+    choice history across ended games (which player_profiles.game_id loses).
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO player_action_stats
+             (game_id, player_id, turn, action_id, action_text,
+              consequence_kind, crew_health, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            game_id, player_id, turn, action_id, action_text,
+            consequence_kind, crew_health, datetime.now().isoformat(),
+        ),
+    )
+    stat_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return {
+        "id": stat_id,
+        "game_id": game_id,
+        "player_id": player_id,
+        "turn": turn,
+        "action_id": action_id,
+        "action_text": action_text,
+        "consequence_kind": consequence_kind,
+        "crew_health": crew_health,
     }
 
 

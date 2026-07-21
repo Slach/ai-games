@@ -981,8 +981,13 @@ class GameServer:
                                         "type": "string",
                                         "description": "Hidden consequence result — NOT visible to the player when making the choice",
                                     },
+                                    "consequence_kind": {
+                                        "type": "string",
+                                        "enum": ["good", "bad", "neutral"],
+                                        "description": "Classification of this action: good (success advances mission), bad (risk of damage/regression), neutral (safe wait/rest, no progress). Must match the requested count for each type.",
+                                    },
                                 },
-                                "required": ["id", "text", "consequence"],
+                                "required": ["id", "text", "consequence", "consequence_kind"],
                                 "additionalProperties": False,
                             },
                             "minItems": max(1, total_actions),
@@ -2952,7 +2957,10 @@ class GameServer:
                 "2. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
                 f"3. Ровно {total_actions} вариантов действий с последствиями: "
-                f"{n_good} {good}, {n_bad} {bad}, {n_neutral} {neutral}.\n\n"
+                f"{n_good} {good}, {n_bad} {bad}, {n_neutral} {neutral}.\n"
+                f"Каждый вариант ДОЛЖЕН содержать поле consequence_kind соответственно его группе: "
+                f"ровно {n_good} со значением 'good', {n_bad} со значением 'bad', "
+                f"{n_neutral} со значением 'neutral'.\n\n"
                 "КРИТИЧЕСКИЕ ТРЕБОВАНИЯ К ВАРИАНТАМ ДЕЙСТВИЙ:\n"
                 "- Каждое действие ДОЛЖНО иметь РЕАЛЬНЫЙ РИСК. "
                 "Успех приближает к цели миссии, провал — отдаляет. Последствия должны быть РАДИКАЛЬНЫМИ.\n"
@@ -2995,6 +3003,8 @@ class GameServer:
                 "1. personal_title…\n"
                 f"3. Exactly {total_actions} action choices: "
                 f"{n_good} good, {n_bad} bad, {n_neutral} neutral.\n"
+                f"Each choice MUST include a consequence_kind matching its group: exactly "
+                f"{n_good} with 'good', {n_bad} with 'bad', {n_neutral} with 'neutral'.\n"
                 + ("- The character is WOUNDED — fewer aggressive/physical actions, always include a safe neutral option (rest/treatment).\n" if wound_severity in ("critical", "moderate", "minor") else "")
             )
 
