@@ -5236,7 +5236,7 @@ async def get_team_endpoint(game_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT n.* FROM npc_profiles n LEFT JOIN ship_roles sr ON sr.role_key = n.role_key AND sr.game_id = n.game_id WHERE n.game_id = ? AND (n.is_active = 1 OR sr.taken_by IS NULL) AND n.replaces_player_id NOT IN (SELECT player_id FROM player_profiles p WHERE p.game_id = n.game_id) ORDER BY n.created_at",
+        "SELECT n.* FROM npc_profiles n LEFT JOIN ship_roles sr ON sr.role_key = n.role_key AND sr.game_id = n.game_id WHERE n.game_id = ? AND (n.is_active = 1 OR sr.taken_by IS NULL) AND COALESCE(n.replaces_player_id, -1) NOT IN (SELECT player_id FROM player_profiles p WHERE p.game_id = n.game_id) ORDER BY n.created_at",
         (game_id,),
     )
     npc_rows = cursor.fetchall()
