@@ -2056,7 +2056,7 @@ class GameServer:
             f"Personality traits: {', '.join(traits)}\n"
             f"Character appearance (definitive source): {avatar_context}\n\n"
             f"ACTION TO PERFORM: {action_text}\n\n"
-            f"Setting: {setting[:300]}\n\n"
+            f"Setting: {setting}\n\n"
             "The prompt should describe:\n"
             f"{instr['appearance']}\n"
             f"- The character ACTIVELY PERFORMING the action described above\n"

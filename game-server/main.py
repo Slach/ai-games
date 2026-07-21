@@ -2722,7 +2722,7 @@ async def _generate_chosen_action_image(
         # "Picture 1" and the best-matching background as "Picture 2"), with a
         # plain-text fallback if the LLM call fails.
         conflict = global_circ.get("conflict", "")
-        scene_context = f"Setting: {setting[:300]}. Situation: {conflict[:300]}" if conflict else f"Setting: {setting[:300]}"
+        scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
         gm = None
         try:
             gm = create_game_server(language=language)
@@ -2868,7 +2868,7 @@ async def _generate_npc_chosen_action_image(
         instruction = ""
         bg_location = None
         conflict = global_circ.get("conflict", "")
-        scene_context = f"Setting: {setting[:300]}. Situation: {conflict[:300]}" if conflict else f"Setting: {setting[:300]}"
+        scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
         try:
             game_lang = get_game_language(game_id)
             gm = create_game_server(language=game_lang)
@@ -4992,7 +4992,7 @@ async def _original_start_game(request: StartGameRequest):
                 species_desc=species_desc or species_type,
                 language=language,
                 background_location=bg_location,
-                scene_context=f"Setting: {setting[:300]}",
+                scene_context=f"Setting: {setting}",
                 species_category=profile.get("species_primary_key") or "",
                 game_id=game_id,
                 player_id=str(pid),
@@ -6172,7 +6172,7 @@ async def _original_continue_game(
                 species_desc=species_desc or species_type,
                 language=language,
                 background_location=None,
-                scene_context=f"Setting: {setting[:300]}",
+                scene_context=f"Setting: {setting}",
                 species_category=profile.get("species_primary_key") or "",
                 game_id=game_id,
                 player_id=str(pid),
