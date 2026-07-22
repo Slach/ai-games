@@ -17,10 +17,11 @@ comfyui/web_custom_versions/
 .sisyphus/
 .pi-lens/
 __pycache__/
+.ruff_cache/
+.superpowers/
 *.db
 *.pyc
 *.db-wal
 *.db-shm
 *.log
-# Local ZCode agent state
 .zcode/
