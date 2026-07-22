@@ -229,6 +229,47 @@ class TestQwenEditWorkflow(unittest.TestCase):
         self.assertEqual(ks["inputs"]["scheduler"], "simple")
         self.assertEqual(ks["inputs"]["denoise"], 1.0)
 
+    def test_alien_species_no_lora_8_steps(self):
+        """Non-humanoid species must skip Lightning LoRA and use 8 steps.
+
+        At strength 1.0 the Lightning LoRA suppresses avatar identity and
+        collapses non-humanoid characters into a humanoid. The LoRA node is
+        removed and the sampler runs the full 8-step schedule directly on the
+        GGUF model.
+        """
+        wf = _build_qwen_edit_workflow(
+            instruction="t", character_filename="a.png", background_filename=None,
+            width=1024, height=1024, seed=0, filename_prefix="",
+            species_category="non_humanoid",
+        )
+        self.assertNotIn("50", wf)
+        ks = wf["100"]
+        self.assertEqual(ks["inputs"]["steps"], 8)
+        self.assertEqual(ks["inputs"]["model"], ["10", 0])
+
+    def test_energy_species_no_lora_8_steps(self):
+        """Energy species must also skip Lightning LoRA and use 8 steps."""
+        wf = _build_qwen_edit_workflow(
+            instruction="t", character_filename="a.png", background_filename=None,
+            width=1024, height=1024, seed=0, filename_prefix="",
+            species_category="energy",
+        )
+        self.assertNotIn("50", wf)
+        self.assertEqual(wf["100"]["inputs"]["steps"], 8)
+        self.assertEqual(wf["100"]["inputs"]["model"], ["10", 0])
+
+    def test_human_species_keeps_lora(self):
+        """Human species must keep Lightning LoRA at strength 1.0 and 4 steps."""
+        wf = _build_qwen_edit_workflow(
+            instruction="t", character_filename="a.png", background_filename=None,
+            width=1024, height=1024, seed=0, filename_prefix="",
+            species_category="human",
+        )
+        self.assertIn("50", wf)
+        self.assertEqual(wf["50"]["inputs"]["strength_model"], 1.0)
+        self.assertEqual(wf["100"]["inputs"]["steps"], 4)
+        self.assertEqual(wf["100"]["inputs"]["model"], ["50", 0])
+
     def test_layered_latent(self):
         """EmptyQwenImageLayeredLatentImage should use layers=0 to avoid 5D shard output."""
         wf = _build_qwen_edit_workflow(

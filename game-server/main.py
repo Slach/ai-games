@@ -2757,6 +2757,7 @@ async def _generate_chosen_action_image(
             player_id=str(player_id),
             turn=turn,
             kind="player_action",
+            species_category=profile.get("species_primary_key") or "",
         )
 
         if chosen_action_url:
@@ -2896,6 +2897,7 @@ async def _generate_npc_chosen_action_image(
             player_id=None,
             turn=turn,
             kind="npc_action",
+            species_category=npc_profile.get("species", "") or "",
         )
 
         if chosen_action_url:
@@ -5020,6 +5022,7 @@ async def _original_start_game(request: StartGameRequest):
             player_id=str(pid),
             turn=turn_num,
             kind="character_scene",
+            species_category=profile.get("species_primary_key") or "",
         )
         if url:
             save_game_image(
@@ -6203,6 +6206,7 @@ async def _original_continue_game(
             player_id=str(pid),
             turn=turn_num,
             kind="character_scene",
+            species_category=profile.get("species_primary_key") or "",
         )
         if url:
             save_game_image(

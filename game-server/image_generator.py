@@ -74,13 +74,22 @@ def _build_qwen_edit_workflow(
     height: int,
     seed: int,
     filename_prefix: str,
+    *,
+    species_category: str = "",
 ) -> dict[str, Any]:
     """Build a Qwen-Image-Edit-2511 workflow for placing a character into a scene.
 
-    Uses Qwen-Image-Edit-2511 GGUF (Q4_K_M) with the Lightning LoRA for 4-step
-    generation. The character avatar is always provided; if a background image
-    is supplied it is passed as a second reference so the model composes the
-    character into that specific environment.
+    Uses Qwen-Image-Edit-2511 GGUF (Q4_K_M). For human/humanoid/cybernetic
+    characters the Lightning LoRA is applied for 4-step fast generation. For
+    non-humanoid / energy / symbiotic species (``species_category``) the LoRA
+    is skipped and the sampler runs 8 steps: at strength 1.0 the distilled LoRA
+    suppresses the avatar identity in ``image1`` and the model hallucinates a
+    humanoid from the text instruction + background, collapsing a crystalline
+    or energy being back into a human figure.
+
+    The character avatar is always provided; if a background image is supplied
+    it is passed as a second reference so the model composes the character into
+    that specific environment.
 
     Args:
         instruction: Editing instruction referring to "Picture 1" (the
@@ -92,12 +101,25 @@ def _build_qwen_edit_workflow(
         width, height: Output dimensions.
         seed: Random seed (0 = randomize).
         filename_prefix: Output filename prefix.
+        species_category: Canonical species key (human / humanoid /
+            non_humanoid / energy / cybernetic / symbiotic). When it is a
+            non-humanoid/energy/symbiotic species the Lightning LoRA is
+            disabled and the sampler uses 8 steps to preserve identity.
 
     Returns:
         ComfyUI API workflow dict.
     """
     if seed == 0:
         seed = secrets.randbelow(2**63 + 1)
+
+    # Lightning LoRA at strength 1.0 suppresses the avatar identity in image1
+    # for non-humanoid / energy / symbiotic species, collapsing them into a
+    # humanoid. Skip the LoRA and run 8 steps for those species to preserve
+    # identity (experimentally confirmed: LoRA off → crystals preserved,
+    # LoRA on → humanoid).
+    alien_species = {"non_humanoid", "energy", "symbiotic"}
+    use_lightning = species_category not in alien_species
+    sampler_steps = 4 if use_lightning else 8
 
     if background_filename:
         # Two references: image1 = character, image2 = background.
@@ -153,7 +175,8 @@ def _build_qwen_edit_workflow(
             "class_type": "LoadImage",
             "inputs": {"image": character_filename},
         },
-        # Lightning LoRA for 4-step sampling.
+        # Lightning LoRA for 4-step sampling (skipped for alien species —
+        # see use_lightning above).
         "50": {
             "class_type": "LoraLoaderModelOnly",
             "inputs": {
@@ -161,7 +184,7 @@ def _build_qwen_edit_workflow(
                 "lora_name": QWEN_EDIT_LIGHTNING_LORA,
                 "strength_model": 1.0,
             },
-        },
+        } if use_lightning else None,
         # Qwen-Image-Edit conditioning (references + instruction).
         "70": text_encode_node,
         # Empty negative (Qwen-Image-Edit does not use classifier-free guidance
@@ -188,12 +211,12 @@ def _build_qwen_edit_workflow(
             "class_type": "KSampler",
             "inputs": {
                 "seed": seed,
-                "steps": 4,
+                "steps": sampler_steps,
                 "cfg": 1.0,
                 "sampler_name": "euler",
                 "scheduler": "simple",
                 "denoise": 1.0,
-                "model": ["50", 0],
+                "model": ["50", 0] if use_lightning else ["10", 0],
                 "positive": ["70", 0],
                 "negative": ["75", 0],
                 "latent_image": ["90", 0],
@@ -210,6 +233,8 @@ def _build_qwen_edit_workflow(
     }
     if load_bg_node is not None:
         workflow["42"] = load_bg_node
+    # Drop placeholder None entries (e.g. node "50" when Lightning is skipped).
+    workflow = {k: v for k, v in workflow.items() if v is not None}
     return workflow
 
 
@@ -897,6 +922,7 @@ class ImageGenerator:
         player_id: str | None,
         turn: int | None,
         kind: str | None,
+        species_category: str = "",
     ) -> str | None:
         """Place a character into a scene via Qwen-Image-Edit-2511.
 
@@ -969,6 +995,7 @@ class ImageGenerator:
             height=height,
             seed=0,
             filename_prefix=filename_prefix,
+            species_category=species_category,
         )
 
         ctx_game = game_id or "none"
