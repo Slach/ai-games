@@ -3741,8 +3741,7 @@ class GameServer:
             "synthetic": "a genderless synthetic humanoid, smooth androgynous features",
         }
 
-        role_lines = []
-        for r in npc_roles:
+        def _role_line(r: dict[str, Any]) -> str:
             sp = r.get("species", "random")
             if sp in alien_species:
                 gender = "invent a non-human biological identity fitting the species"
@@ -3751,8 +3750,7 @@ class GameServer:
                     str(r.get("gender", "")).strip().lower(),
                     r.get("gender", "random"),
                 )
-            role_lines.append(f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}")
-        roles_text = "\n".join(role_lines)
+            return f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}"
 
         system = (
             "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
@@ -3796,21 +3794,31 @@ class GameServer:
             ),
         }
 
-        user = (
-            f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
-            "For EACH role, generate a unique, detailed English image prompt for a character portrait.\n\n"
-            "CRITICAL: RESPECT the species specified for each role. Use that exact value — do not randomize it.\n"
-            "CRITICAL: RESPECT the gender specified for each role. For human, humanoid, and cybernetic "
-            "characters, the gender in the role line MUST be carried into the prompt verbatim and the "
-            "face/hair/build must match it. Do NOT default an unspecified or female character to a man.\n\n"
-            "Species-specific rules (FOLLOW THEM EXACTLY):\n"
-        )
-        for sp_key in ["human", "humanoid", "non_humanoid", "cybernetic", "energy", "symbiotic"]:
-            if sp_key in species_rules:
-                user += f"  - {sp_key}: {species_rules[sp_key]}\n"
-        user += '\n~50 words per prompt. Cinematic lighting. 4K quality. Output as JSON array: [{"role_key": ..., "prompt": ...}]'
+        def _build_user(roles: list[dict[str, Any]]) -> str:
+            roles_text = "\n".join(_role_line(r) for r in roles)
+            prompt = (
+                f"NPC roles needing avatar prompts:\n{roles_text}\n\n"
+                "For EACH role, generate a unique, detailed English image prompt for a character portrait.\n\n"
+                "CRITICAL: RESPECT the species specified for each role. Use that exact value — do not randomize it.\n"
+                "CRITICAL: RESPECT the gender specified for each role. For human, humanoid, and cybernetic "
+                "characters, the gender in the role line MUST be carried into the prompt verbatim and the "
+                "face/hair/build must match it. Do NOT default an unspecified or female character to a man.\n\n"
+                "Species-specific rules (FOLLOW THEM EXACTLY):\n"
+            )
+            for sp_key in ["human", "humanoid", "non_humanoid", "cybernetic", "energy", "symbiotic"]:
+                if sp_key in species_rules:
+                    prompt += f"  - {sp_key}: {species_rules[sp_key]}\n"
+            prompt += (
+                f'\n~50 words per prompt. Cinematic lighting. 4K quality. Output as JSON array: [{{"role_key": ..., "prompt": ...}}]\n\n'
+                f"CRITICAL COVERAGE RULE: You MUST output a prompt for EVERY ONE of the {len(roles)} roles listed above. "
+                "Each response/option MUST contain exactly that many entries — one per role_key, none missing, none duplicated. "
+                "Do NOT split the roles across options, do NOT drop roles, do NOT merge them. Every option is an independent, "
+                "complete answer covering the full roster."
+            )
+            return prompt
 
-        try:
+        def _call(roles: list[dict[str, Any]]) -> list[dict[str, str]]:
+            user = _build_user(roles)
             if self.vs_enabled:
                 vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_avatars"], k=resolve_vs_k("npc_avatars", self.vs_k))
                 vs_result = self._call_llm(
@@ -3827,23 +3835,42 @@ class GameServer:
                 )
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-NPCAVATAR] Selected p=%.3f", chosen["probability"])
-                result = chosen["text"]
-                prompts_list = result.get("prompts", [])
-            else:
-                result = self._call_llm(
-                    system_prompt=system,
-                    user_prompt=user,
-                    response_schema=NPC_AVATAR_PROMPT_SCHEMA,
-                    max_tokens=4096,
-                    temperature=0.9,
-                    enable_thinking=False,
-                    game_id=game_id,
-                    player_id=player_id,
-                    turn=turn,
-                    kind=kind,
-                )
-                prompts_list = result.get("prompts", [])
+                return chosen["text"].get("prompts", [])
+            result = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=NPC_AVATAR_PROMPT_SCHEMA,
+                max_tokens=4096,
+                temperature=0.9,
+                enable_thinking=False,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+            return result.get("prompts", [])
+
+        try:
+            prompts_list = _call(npc_roles)
             logger.info(f"[NPC_AVATAR] Generated {len(prompts_list)} prompts")
+
+            # Retry for roles the LLM dropped. The coverage rule asks for all
+            # roles per option, but models sometimes still omit some — re-request
+            # just the missing ones instead of falling back to canned prompts.
+            max_retries = 3
+            covered = {p.get("role_key") for p in prompts_list}
+            for attempt in range(1, max_retries + 1):
+                missing = [r for r in npc_roles if r.get("role_key") not in covered]
+                if not missing:
+                    break
+                logger.warning(
+                    f"[NPC_AVATAR] Missing {len(missing)} role(s) {[r.get('role_key') for r in missing]} "
+                    f"after attempt {attempt}/{max_retries}, retrying"
+                )
+                retry_prompts = _call(missing)
+                prompts_list.extend(retry_prompts)
+                covered = {p.get("role_key") for p in prompts_list}
+
             return prompts_list
         except Exception as e:
             logger.error(f"[NPC_AVATAR] Generation failed: {e}", exc_info=True)

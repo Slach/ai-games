@@ -4674,19 +4674,22 @@ async def _original_start_game(request: StartGameRequest):
         except Exception as e:
             logger.warning(f"[NPC_AVATAR] Batch generation failed: {e}")
 
-    # 6b. Generate mission (resume: reuse if already created)
+    # 6b. Generate mission + title + welcome via the linked concept pipeline
+    # (resume: reuse if already created). After a restart the mission is gone,
+    # so this regenerates both the mission AND a title tied to it — keeping the
+    # game name consistent with its mission instead of reusing a stale title.
     mission_data = get_mission(None, game_id=game_id)
     if mission_data:
         logger.info(f"[MISSION] Resume: reusing existing mission '{mission_data.get('name', '')}'")
         mission_result = mission_data
     else:
-        mission_data = gm.generate_mission(game_id=game_id, player_id=None, turn=_npc_turn, kind="mission")
-        mission_result = create_mission(mission_data, game_id)
-        if mission_result:
-            logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages)")
+        concept = await _generate_game_concept(game_id, language)
+        mission_result = concept.get("mission") or {}
+        mission_data = mission_result
+        if mission_result.get("name"):
+            logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages), title='{concept.get('title', '')}'")
         else:
             logger.error("[MISSION] Failed to create mission", stack_info=True)
-            mission_result = {}
 
     # 6b.5 Pre-generate empty-location backgrounds (best-effort)
     try:
