@@ -809,11 +809,21 @@ async def lifespan(app: FastAPI):
     # Resume any generation interrupted by a previous shutdown/crash.
     asyncio.create_task(_resume_interrupted_generations())
 
+    # Backfill mission/archetype (and bridge/backgrounds) for started games that
+    # never received them — e.g. the auto-start background task failed or was
+    # killed by a restart before it finished.
+    asyncio.create_task(_ensure_missions_for_started_games())
+
     yield
     logger.info("Game Server API shutting down")
 
 
 GAME_SCHEDULER_URL = os.getenv("GAME_SCHEDULER_URL", "http://game-scheduler:8001")
+
+# Mission generation resilience: every started game MUST end up with a mission
+# (archetype). These control the per-call retry inside _generate_started_game_assets.
+MISSION_MAX_ATTEMPTS = 3
+MISSION_RETRY_DELAY = 2  # seconds, multiplied by attempt number (backoff)
 
 
 async def _notify_scheduler(action: str, game_id: str) -> None:
@@ -1332,12 +1342,27 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
             return
         gm = create_game_server(language=language)
 
-        # Mission (archetype + objectives)
+        # Mission (archetype + objectives). Every started game MUST end up with a
+        # mission row — the archetype is shown in /gm_list and drives the whole
+        # game. Retry the LLM call so a transient failure does not leave the game
+        # permanently archetype-less; the startup sweep also catches stragglers.
         mission_data = get_mission(None, game_id=game_id)
         if not mission_data:
-            mission_data = gm.generate_mission(all_participants, game_id=game_id, player_id=None, turn=None, kind="mission")
-            create_mission(mission_data, game_id)
-            logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
+            last_err = None
+            for attempt in range(1, MISSION_MAX_ATTEMPTS + 1):
+                try:
+                    mission_data = gm.generate_mission(all_participants, game_id=game_id, player_id=None, turn=None, kind="mission")
+                    create_mission(mission_data, game_id)
+                    logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < MISSION_MAX_ATTEMPTS:
+                        logger.warning(f"[MISSION] Attempt {attempt}/{MISSION_MAX_ATTEMPTS} failed for game {game_id}, retrying", exc_info=True)
+                        await asyncio.sleep(MISSION_RETRY_DELAY * attempt)
+            if last_err is not None:
+                logger.error(f"[MISSION] All {MISSION_MAX_ATTEMPTS} attempts failed for game {game_id}; will be retried on next startup sweep", exc_info=last_err)
 
         # Pre-generate empty-location backgrounds (used as backdrops for Qwen-Image-Edit scene compositing)
         try:
@@ -1360,6 +1385,40 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                 logger.error(f"[BRIDGE] Failed to generate bridge image for auto-started game {game_id}", exc_info=True)
     except Exception:
         logger.error(f"[MISSION] Failed to generate mission for auto-started game {game_id}", exc_info=True)
+
+
+async def _ensure_missions_for_started_games() -> None:
+    """Backfill missing mission/archetype (and other start assets) for started games.
+
+    Runs at startup. The onboarding auto-start path generates the mission + bridge
+    image + backgrounds in a fire-and-forget background task; if that task failed
+    or was killed by a restart, the game ends up started-but-mission-less and the
+    archetype never appears in /gm_list. This sweep re-runs
+    _generate_started_game_assets for any such game. That function is idempotent
+    (each asset is only generated when missing), so repeated runs are safe.
+    """
+    try:
+        games = get_all_games()
+        orphaned = []
+        for game in games:
+            if not game.get("started"):
+                continue
+            if game.get("status") != "active":
+                continue
+            game_id = game["game_id"]
+            if get_mission(None, game_id=game_id) is None:
+                orphaned.append(game_id)
+        if not orphaned:
+            return
+        logger.info(f"[MISSION] Startup sweep: {len(orphaned)} started game(s) missing a mission, regenerating: {orphaned}")
+        for game_id in orphaned:
+            language = get_game_language(game_id)
+            try:
+                await _generate_started_game_assets(game_id, language)
+            except Exception:
+                logger.error(f"[MISSION] Startup sweep failed to generate mission for game {game_id}", exc_info=True)
+    except Exception:
+        logger.error("[MISSION] Startup sweep for missing missions failed", exc_info=True)
 
 
 @app.post("/onboarding/{session_id}/complete")
