@@ -22,7 +22,7 @@ from language import (
     get_gender_questions_data,
     get_species_questions_data,
 )
-from openai import OpenAI
+from openai import AsyncOpenAI
 from prompts import (
     COMBINED_OUTCOME_SCHEMA,
     GAME_OVER_SCHEMA,
@@ -968,7 +968,7 @@ class GameServer:
         self.vs_k = _safe_int_env("VS_K", 5)
         self.vs_mode = os.getenv("VS_MODE", "full")
 
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             api_key=self.llm_api_key,
             base_url=self.llm_base_url,
         )
@@ -1069,7 +1069,7 @@ class GameServer:
 
         return team_npcs
 
-    def _call_llm(
+    async def _call_llm(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -1161,7 +1161,7 @@ class GameServer:
         response = None
         try:
             # Try structured output first
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=messages,
                 temperature=temperature,
@@ -1226,7 +1226,7 @@ class GameServer:
 
             messages[1]["content"] = user_prompt + json_instruction
 
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=messages,
                 temperature=temperature,
@@ -1310,7 +1310,7 @@ class GameServer:
 
     # ============== Onboarding ==============
 
-    def generate_onboarding_questions(
+    async def generate_onboarding_questions(
         self,
         underrepresented_hint: str,
         *,
@@ -1353,7 +1353,7 @@ class GameServer:
         # Thinking is disabled globally via chat_template_kwargs in _call_llm.
         # max_tokens defaults to LLM_MAX_TOKENS env var (32768).
         if self.vs_enabled:
-            vs_result = self._call_llm(
+            vs_result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=vs_response_schema(ONBOARDING_QUESTIONS_SCHEMA),
@@ -1374,7 +1374,7 @@ class GameServer:
             )
             result = chosen["text"]
         else:
-            result = self._call_llm(
+            result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=ONBOARDING_QUESTIONS_SCHEMA,
@@ -1506,7 +1506,7 @@ class GameServer:
             "role_points": role_points,
         }
 
-    def generate_game_title(
+    async def generate_game_title(
         self,
         *,
         game_id: str | None,
@@ -1531,7 +1531,7 @@ class GameServer:
         )
 
         if self.vs_enabled:
-            vs_result = self._call_llm(
+            vs_result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=vs_response_schema(GAME_TITLE_SCHEMA),
@@ -1547,7 +1547,7 @@ class GameServer:
             logger.info("[VS-TITLE] Selected p=%.3f", chosen["probability"])
             result = chosen["text"]
         else:
-            result = self._call_llm(
+            result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=GAME_TITLE_SCHEMA,
@@ -1565,7 +1565,7 @@ class GameServer:
 
     # ============== Daily Story ==============
 
-    def generate_turn_story(
+    async def generate_turn_story(
         self,
         turn: int,
         previous_summary: str,
@@ -1581,7 +1581,7 @@ class GameServer:
         system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role, use_vs=self.vs_enabled, vs_k=resolve_vs_k("turn_story", self.vs_k))
 
         if self.vs_enabled:
-            vs_result = self._call_llm(
+            vs_result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=vs_response_schema(STORY_SCHEMA),
@@ -1597,7 +1597,7 @@ class GameServer:
             logger.info("[VS-STORY] Selected p=%.3f", chosen["probability"])
             parsed = chosen["text"]
         else:
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=STORY_SCHEMA,
@@ -1622,7 +1622,7 @@ class GameServer:
 
     # ============== NPC Dialogues ==============
 
-    def generate_crew_dialogues(
+    async def generate_crew_dialogues(
         self,
         story: GameStory,
         player_role: str,
@@ -1698,7 +1698,7 @@ class GameServer:
                 system = f"You are {npc_name}, {npc_role}.\n{personality_block}{lang_note}"
                 user = f"Game context: {story.narrative}\nPlayer role: {player_role_display}\n\nGenerate a short in-character reaction (1-2 sentences)."
 
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=NPC_DIALOGUE_SCHEMA,
@@ -1727,7 +1727,7 @@ class GameServer:
         logger.info(f"[NPC] Generated {len(dialogues)} NPC dialogues")
         return dialogues
 
-    def generate_crew_scene_dialogue(
+    async def generate_crew_scene_dialogue(
         self,
         narrative: str,
         crew_members: list[dict[str, Any]],
@@ -1798,7 +1798,7 @@ class GameServer:
         )
 
         try:
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=CREW_DIALOGUE_SCENE_SCHEMA,
@@ -1855,7 +1855,7 @@ class GameServer:
 
     # ============== Content Prompts ==============
 
-    def generate_content_prompts(
+    async def generate_content_prompts(
         self,
         story: GameStory,
         dialogues: list[NPCDialogue],
@@ -1874,7 +1874,7 @@ class GameServer:
         system = "You are an AI art prompt engineer. Generate detailed, high-quality prompts for image/video generation."
         user = f"Story: {story.narrative}\nPlayer role: {player_role}\n\nGenerate content prompts for image, video, 3D scene, and comic strip.\n{lang_note}"
 
-        parsed = self._call_llm(
+        parsed = await self._call_llm(
             system_prompt=system,
             user_prompt=user,
             response_schema=CONTENT_PROMPTS_SCHEMA,
@@ -1898,7 +1898,7 @@ class GameServer:
 
     # ============== Player Message ==============
 
-    def _call_llm_text(self, system_prompt: str, user_prompt: str) -> str:
+    async def _call_llm_text(self, system_prompt: str, user_prompt: str) -> str:
         """Simple text completion without structured output — last-resort fallback."""
 
         messages: list[dict[str, str]] = [
@@ -1906,7 +1906,7 @@ class GameServer:
             {"role": "user", "content": user_prompt},
         ]
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.llm_model,
                 messages=messages,  # type: ignore[arg-type]
                 temperature=0.7,
@@ -1919,7 +1919,7 @@ class GameServer:
             logger.error(f"_call_llm_text failed: {e}", exc_info=True)
             return "Game Master received your message."
 
-    def process_player_message(
+    async def process_player_message(
         self,
         player_id: int,
         message: str,
@@ -1966,7 +1966,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(PLAYER_MESSAGE_SCHEMA),
@@ -1983,7 +1983,7 @@ class GameServer:
                 parsed = chosen["text"]
                 return parsed.get("response", "")
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=PLAYER_MESSAGE_SCHEMA,
@@ -1998,7 +1998,7 @@ class GameServer:
                 return parsed.get("response", "Game Master received your message.")
         except Exception as e:
             logger.error(f"Message processing failed: {e}", exc_info=True)
-            return self._call_llm_text(system, user)
+            return await self._call_llm_text(system, user)
 
     # ============== Avatar Prompt ==============
 
@@ -2071,7 +2071,7 @@ class GameServer:
         }
         return prompts.get(category, prompts["human"])
 
-    def generate_avatar_prompt(
+    async def generate_avatar_prompt(
         self,
         role: str,
         traits: list[str],
@@ -2129,7 +2129,7 @@ class GameServer:
 
         if self.vs_enabled:
             vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["avatar"], k=resolve_vs_k("avatar", self.vs_k))
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,
                 response_schema=vs_response_schema(AVATAR_PROMPT_SCHEMA),
@@ -2146,7 +2146,7 @@ class GameServer:
             avatar_prompt = inner.get("avatar_prompt", "")
             logger.info("[VS-AVATAR] Selected p=%.3f", chosen["probability"])
         else:
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=AVATAR_PROMPT_SCHEMA,
@@ -2162,7 +2162,7 @@ class GameServer:
         logger.info(f"[AVATAR] Avatar prompt generated ({species_cat}): {avatar_prompt}...")
         return avatar_prompt
 
-    def generate_chosen_action_prompt(
+    async def generate_chosen_action_prompt(
         self,
         role: str,
         traits: list[str],
@@ -2246,7 +2246,7 @@ class GameServer:
 
         if self.vs_enabled:
             vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["action_prompt"], k=resolve_vs_k("action_prompt", self.vs_k))
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,
                 response_schema=vs_response_schema(CHOSEN_ACTION_PROMPT_SCHEMA),
@@ -2263,7 +2263,7 @@ class GameServer:
             prompt = inner.get("chosen_action_prompt", "")
             logger.info("[VS-ACTION] Selected p=%.3f", chosen["probability"])
         else:
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=CHOSEN_ACTION_PROMPT_SCHEMA,
@@ -2281,7 +2281,7 @@ class GameServer:
 
     # ============== Species and Gender ==============
 
-    def generate_dynamic_species_gender_question(
+    async def generate_dynamic_species_gender_question(
         self,
         dimension: str,
         sg_step: int,
@@ -2305,7 +2305,7 @@ class GameServer:
         system, user = build_dynamic_sg_question_prompts(self.language, dimension, sg_step, accumulated_tags)
         schema = DYNAMIC_SPECIES_QUESTION_SCHEMA if dimension == "species" else DYNAMIC_GENDER_QUESTION_SCHEMA
         try:
-            result = self._call_llm(
+            result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=schema,
@@ -2435,7 +2435,7 @@ class GameServer:
 
         return {"primary": primary, "secondary": secondary, "hybrid": hybrid}
 
-    def generate_species_gender_description(
+    async def generate_species_gender_description(
         self,
         species_result: dict[str, Any],
         gender_result: dict[str, Any],
@@ -2471,7 +2471,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(SPECIES_GENDER_DESC_SCHEMA),
@@ -2486,7 +2486,7 @@ class GameServer:
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=SPECIES_GENDER_DESC_SCHEMA,
@@ -2527,7 +2527,7 @@ class GameServer:
         role_note = gm["role_note"].format(role=role)
         return f"{base}{gender_note}{role_note}"
 
-    def generate_role_flavour(
+    async def generate_role_flavour(
         self,
         role_key: str,
         role_name: str,
@@ -2566,7 +2566,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(ROLE_FLAVOUR_SCHEMA),
@@ -2581,7 +2581,7 @@ class GameServer:
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=ROLE_FLAVOUR_SCHEMA,
@@ -2618,7 +2618,7 @@ class GameServer:
 
     # ============== Species/Gender Option Image Prompts ==============
 
-    def generate_species_option_prompts(
+    async def generate_species_option_prompts(
         self,
         question: dict[str, Any],
         accumulated_tags: dict[str, int],
@@ -2665,9 +2665,9 @@ class GameServer:
             "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K quality."
         )
 
-        def _get_prompts_from_llm(prompt: str) -> dict[str, str]:
+        async def _get_prompts_from_llm(prompt: str) -> dict[str, str]:
             try:
-                result = self._call_llm(
+                result = await self._call_llm(
                     system_prompt=system_prompt,
                     user_prompt=prompt,
                     response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
@@ -2702,7 +2702,7 @@ class GameServer:
             "Each prompt MAX 30 words. "
             'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
         )
-        prompts_dict = _get_prompts_from_llm(user_prompt)
+        prompts_dict = await _get_prompts_from_llm(user_prompt)
 
         # 2. Retry for missing options
         missing_options = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
@@ -2719,7 +2719,7 @@ class GameServer:
                 f"and the option's specific trait. "
                 'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
             )
-            retry_prompts = _get_prompts_from_llm(retry_user_prompt)
+            retry_prompts = await _get_prompts_from_llm(retry_user_prompt)
             prompts_dict.update(retry_prompts)
 
         # 3. Final fallback for any remaining missing options
@@ -2738,7 +2738,7 @@ class GameServer:
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
-    def generate_npc_choice(
+    async def generate_npc_choice(
         self,
         choices: list[dict[str, Any]],
         npc_profile: dict[str, Any],
@@ -2779,7 +2779,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
@@ -2794,7 +2794,7 @@ class GameServer:
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=NPC_CHOICE_SCHEMA,
@@ -2825,7 +2825,7 @@ class GameServer:
             action_id = choices[0].get("id", "") if choices else ""
             return {"action_id": action_id, "rationale": "Fallback: system default"}
 
-    def generate_player_auto_choice(
+    async def generate_player_auto_choice(
         self,
         choices: list[dict[str, Any]],
         player_profile: dict[str, Any],
@@ -2896,7 +2896,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(NPC_CHOICE_SCHEMA),
@@ -2911,7 +2911,7 @@ class GameServer:
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=NPC_CHOICE_SCHEMA,
@@ -2942,7 +2942,7 @@ class GameServer:
 
     # ============== Restructured Game Turn Generation ==============
 
-    def generate_global_circumstances(
+    async def generate_global_circumstances(
         self,
         turn: int,
         previous_summary: str,
@@ -3019,7 +3019,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(GLOBAL_CIRCUMSTANCES_SCHEMA),
@@ -3035,7 +3035,7 @@ class GameServer:
                 logger.info("[VS-CIRCUMSTANCES] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=GLOBAL_CIRCUMSTANCES_SCHEMA,
@@ -3058,7 +3058,7 @@ class GameServer:
                 "key_events": ["Normal operations underway"],
             }
 
-    def generate_player_briefing_and_choices(
+    async def generate_player_briefing_and_choices(
         self,
         global_circumstances: dict[str, Any],
         player_profile: dict[str, Any],
@@ -3207,7 +3207,7 @@ class GameServer:
             )
 
         try:
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=self._get_player_briefing_schema(total_actions),
@@ -3259,7 +3259,7 @@ class GameServer:
                 ],
             }
 
-    def analyze_combined_outcome(
+    async def analyze_combined_outcome(
         self,
         global_circumstances: dict[str, Any],
         all_decisions: list[dict[str, Any]],
@@ -3358,7 +3358,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(COMBINED_OUTCOME_SCHEMA),
@@ -3374,7 +3374,7 @@ class GameServer:
                 logger.info("[VS-OUTCOME] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=COMBINED_OUTCOME_SCHEMA,
@@ -3408,7 +3408,7 @@ class GameServer:
 
     # ============== Game Over Generation ==============
 
-    def generate_game_over_outcome(
+    async def generate_game_over_outcome(
         self,
         outcome_type: str,
         outcome_narrative: str,
@@ -3444,7 +3444,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(GAME_OVER_SCHEMA),
@@ -3460,7 +3460,7 @@ class GameServer:
                 logger.info("[VS-GAMEOVER] Selected p=%.3f", chosen["probability"])
                 parsed = chosen["text"]
             else:
-                parsed = self._call_llm(
+                parsed = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=GAME_OVER_SCHEMA,
@@ -3483,7 +3483,7 @@ class GameServer:
 
     # ============== Mission Generation ==============
 
-    def generate_mission(
+    async def generate_mission(
         self,
         *,
         game_id: str | None,
@@ -3512,7 +3512,7 @@ class GameServer:
 
         try:
             if self.vs_enabled:
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=vs_response_schema(MISSION_SCHEMA),
@@ -3533,7 +3533,7 @@ class GameServer:
                 )
                 result = chosen["text"]
             else:
-                result = self._call_llm(
+                result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=MISSION_SCHEMA,
@@ -3565,7 +3565,7 @@ class GameServer:
 
     # ============== Bridge Image Prompt Generation ==============
 
-    def generate_bridge_image_prompt(
+    async def generate_bridge_image_prompt(
         self,
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
@@ -3615,7 +3615,7 @@ class GameServer:
         try:
             if self.vs_enabled:
                 vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["bridge_image"], k=resolve_vs_k("bridge_image", self.vs_k))
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=vs_system,
                     user_prompt=vs_user,
                     response_schema=vs_response_schema(BRIDGE_IMAGE_SCHEMA),
@@ -3631,7 +3631,7 @@ class GameServer:
                 logger.info("[VS-BRIDGE] Selected p=%.3f", chosen["probability"])
                 result = chosen["text"]
             else:
-                result = self._call_llm(
+                result = await self._call_llm(
                     system_prompt=system,
                     user_prompt=user,
                     response_schema=BRIDGE_IMAGE_SCHEMA,
@@ -3661,7 +3661,7 @@ class GameServer:
 
     # ============== Background Library Prompts ==============
 
-    def generate_background_prompts(
+    async def generate_background_prompts(
         self,
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
@@ -3696,7 +3696,7 @@ class GameServer:
         user = build_background_prompts_user(language, mission, crew_summary)
 
         try:
-            result = self._call_llm(
+            result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=BACKGROUND_PROMPTS_SCHEMA,
@@ -3723,7 +3723,7 @@ class GameServer:
 
     # ============== Scene Instruction (Qwen-Image-Edit) ==============
 
-    def generate_scene_instruction(
+    async def generate_scene_instruction(
         self,
         action_text: str,
         species_desc: str,
@@ -3763,7 +3763,7 @@ class GameServer:
         user = build_scene_instruction_user(language, action_text, species_desc, background_location, scene_context, species_category)
 
         try:
-            result = self._call_llm(
+            result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=SCENE_INSTRUCTION_SCHEMA,
@@ -3787,7 +3787,7 @@ class GameServer:
 
     # ============== NPC Name Generation (creative, species/gender-aware) ==============
 
-    def generate_npc_name(
+    async def generate_npc_name(
         self,
         role_key: str,
         role_name: str,
@@ -3834,7 +3834,7 @@ class GameServer:
         )
 
         try:
-            parsed = self._call_llm(
+            parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=NPC_NAME_SCHEMA,
@@ -3866,7 +3866,7 @@ class GameServer:
 
     # ============== NPC Avatar Prompts (simplified, random) ==============
 
-    def generate_npc_avatar_prompts(
+    async def generate_npc_avatar_prompts(
         self,
         npc_roles: list[dict[str, Any]],
         *,
@@ -3985,11 +3985,11 @@ class GameServer:
             )
             return prompt
 
-        def _call(roles: list[dict[str, Any]]) -> list[dict[str, str]]:
+        async def _call(roles: list[dict[str, Any]]) -> list[dict[str, str]]:
             user = _build_user(roles)
             if self.vs_enabled:
                 vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_avatars"], k=resolve_vs_k("npc_avatars", self.vs_k))
-                vs_result = self._call_llm(
+                vs_result = await self._call_llm(
                     system_prompt=vs_system,
                     user_prompt=vs_user,
                     response_schema=vs_response_schema(NPC_AVATAR_PROMPT_SCHEMA),
@@ -4004,7 +4004,7 @@ class GameServer:
                 chosen = select_response(vs_result["responses"], self.vs_mode)
                 logger.info("[VS-NPCAVATAR] Selected p=%.3f", chosen["probability"])
                 return chosen["text"].get("prompts", [])
-            result = self._call_llm(
+            result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
                 response_schema=NPC_AVATAR_PROMPT_SCHEMA,
@@ -4019,7 +4019,7 @@ class GameServer:
             return result.get("prompts", [])
 
         try:
-            prompts_list = _call(npc_roles)
+            prompts_list = await _call(npc_roles)
             logger.info(f"[NPC_AVATAR] Generated {len(prompts_list)} prompts")
 
             # Retry for roles the LLM dropped. The coverage rule asks for all
@@ -4035,7 +4035,7 @@ class GameServer:
                     f"[NPC_AVATAR] Missing {len(missing)} role(s) {[r.get('role_key') for r in missing]} "
                     f"after attempt {attempt}/{max_retries}, retrying"
                 )
-                retry_prompts = _call(missing)
+                retry_prompts = await _call(missing)
                 prompts_list.extend(retry_prompts)
                 covered = {p.get("role_key") for p in prompts_list}
 

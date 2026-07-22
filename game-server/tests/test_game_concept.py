@@ -37,11 +37,11 @@ class FakeGameServer:
         self.mission_calls = 0
         self.title_calls = 0
 
-    def generate_mission(self, **kwargs):
+    async def generate_mission(self, **kwargs):
         self.mission_calls += 1
         return _fake_mission()
 
-    def generate_game_title(self, *, game_id, player_id, turn, kind, mission_context=None):
+    async def generate_game_title(self, *, game_id, player_id, turn, kind, mission_context=None):
         self.title_calls += 1
         return {
             "title": f"Star Cruiser Test: {mission_context.get('short_description', '') if mission_context else 'tagline'}",

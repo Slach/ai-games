@@ -10,7 +10,7 @@ instead of falling back to canned prompts.
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -30,39 +30,40 @@ def _roles(*keys: str) -> list[dict]:
     ]
 
 
-class TestNpcAvatarCoverage(unittest.TestCase):
-    def _run(self, npc_roles, llm_returns, vs_enabled):
+class TestNpcAvatarCoverage(unittest.IsolatedAsyncioTestCase):
+    async def _run(self, npc_roles, llm_returns, vs_enabled):
         agent = GameServer(language="en")
         agent.vs_enabled = vs_enabled
-        with patch.object(GameServer, "_call_llm", side_effect=llm_returns) as calls:
-            return agent.generate_npc_avatar_prompts(
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(side_effect=llm_returns)) as calls:
+            result = await agent.generate_npc_avatar_prompts(
                 npc_roles, game_id=None, player_id=None, turn=None, kind=None
-            ), calls.call_count
+            )
+            return result, calls.call_count
 
-    def test_non_vs_retries_until_all_roles_covered(self):
+    async def test_non_vs_retries_until_all_roles_covered(self):
         roles = _roles("a", "b", "c", "d")
         first = {"prompts": [{"role_key": "a", "prompt": "pa"}, {"role_key": "b", "prompt": "pb"}]}
         second = {"prompts": [{"role_key": "c", "prompt": "pc"}, {"role_key": "d", "prompt": "pd"}]}
-        result, n_calls = self._run(roles, [first, second], vs_enabled=False)
+        result, n_calls = await self._run(roles, [first, second], vs_enabled=False)
 
         covered = {p["role_key"] for p in result}
         self.assertEqual(covered, {"a", "b", "c", "d"})
         self.assertEqual(n_calls, 2)
 
-    def test_non_vs_no_retry_when_complete_first_time(self):
+    async def test_non_vs_no_retry_when_complete_first_time(self):
         roles = _roles("a", "b")
         first = {"prompts": [{"role_key": "a", "prompt": "pa"}, {"role_key": "b", "prompt": "pb"}]}
-        result, n_calls = self._run(roles, [first], vs_enabled=False)
+        result, n_calls = await self._run(roles, [first], vs_enabled=False)
 
         self.assertEqual({p["role_key"] for p in result}, {"a", "b"})
         self.assertEqual(n_calls, 1)
 
-    def test_non_vs_gives_up_after_max_retries_without_fallback(self):
+    async def test_non_vs_gives_up_after_max_retries_without_fallback(self):
         # LLM never returns the missing role; we must NOT silently produce a
         # canned fallback prompt — we return what we got (partial) and stop.
         roles = _roles("a", "b")
         first = {"prompts": [{"role_key": "a", "prompt": "pa"}]}
-        result, n_calls = self._run(roles, [first, first, first, first], vs_enabled=False)
+        result, n_calls = await self._run(roles, [first, first, first, first], vs_enabled=False)
 
         self.assertEqual({p["role_key"] for p in result}, {"a"})
         # 1 initial + 3 retries
@@ -70,7 +71,7 @@ class TestNpcAvatarCoverage(unittest.TestCase):
         # No canned fallback text present
         self.assertFalse(any("Star Trek character portrait of" in p["prompt"] for p in result))
 
-    def test_vs_mode_retries_missing_roles(self):
+    async def test_vs_mode_retries_missing_roles(self):
         roles = _roles("a", "b", "c")
 
         def vs_response(prompts):
@@ -78,7 +79,7 @@ class TestNpcAvatarCoverage(unittest.TestCase):
 
         first = vs_response([{"role_key": "a", "prompt": "pa"}])
         second = vs_response([{"role_key": "b", "prompt": "pb"}, {"role_key": "c", "prompt": "pc"}])
-        result, n_calls = self._run(roles, [first, second], vs_enabled=True)
+        result, n_calls = await self._run(roles, [first, second], vs_enabled=True)
 
         self.assertEqual({p["role_key"] for p in result}, {"a", "b", "c"})
         self.assertEqual(n_calls, 2)

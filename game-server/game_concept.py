@@ -63,7 +63,7 @@ async def generate_game_concept(
             last_err = None
             for attempt in range(1, max_attempts + 1):
                 try:
-                    mission_data = gm.generate_mission(game_id=game_id, player_id=None, turn=None, kind="mission")
+                    mission_data = await gm.generate_mission(game_id=game_id, player_id=None, turn=None, kind="mission")
                     create_mission(mission_data, game_id)
                     logger.info(
                         "[CONCEPT] Generated mission for game %s: %s (archetype=%s)",
@@ -91,7 +91,7 @@ async def generate_game_concept(
         welcome_text = get_game_welcome_text(game_id)
         if not title or mission_just_created:
             try:
-                title_data = gm.generate_game_title(
+                title_data = await gm.generate_game_title(
                     game_id=game_id,
                     player_id=None,
                     turn=None,

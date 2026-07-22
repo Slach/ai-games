@@ -10,7 +10,7 @@ import collections
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,14 +33,14 @@ def _member(mtype, key, name, role):
     return entry
 
 
-class TestCrewDialogueScene(unittest.TestCase):
+class TestCrewDialogueScene(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.gm = GameServer(language="ru")
         self.gm.crew_dialogue_speakers = 3
 
-    def _run(self, pool, llm_return):
-        with patch.object(GameServer, "_call_llm", return_value=llm_return):
-            return self.gm.generate_crew_scene_dialogue(
+    async def _run(self, pool, llm_return):
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value=llm_return)):
+            return await self.gm.generate_crew_scene_dialogue(
                 "Корабль под атакой.",
                 pool,
                 game_id="g1",
@@ -49,13 +49,13 @@ class TestCrewDialogueScene(unittest.TestCase):
                 kind="crew_dialogue",
             )
 
-    def test_fewer_than_two_members_returns_empty(self):
+    async def test_fewer_than_two_members_returns_empty(self):
         pool = [_member("player", "1", "Соло", "Пилот")]
-        dialogues, lines = self._run(pool, {"lines": []})
+        dialogues, lines = await self._run(pool, {"lines": []})
         self.assertEqual(dialogues, [])
         self.assertEqual(lines, {})
 
-    def test_two_members_uses_all(self):
+    async def test_two_members_uses_all(self):
         pool = [
             _member("player", "1", "Аня", "Капитан"),
             _member("npc", "eng", "Бот", "Инженер"),
@@ -66,7 +66,7 @@ class TestCrewDialogueScene(unittest.TestCase):
             {"speaker": "Аня", "dialogue": "Готовь манёвр."},
             {"speaker": "Бот", "dialogue": "Принято."},
         ]}
-        dialogues, lines = self._run(pool, llm)
+        dialogues, lines = await self._run(pool, llm)
         self.assertEqual(len(dialogues), 4)
         # role embedded in the npc field
         self.assertIn("(Капитан)", dialogues[0]["npc"])
@@ -75,7 +75,7 @@ class TestCrewDialogueScene(unittest.TestCase):
         self.assertEqual(lines["player:1"], ["Доклад!", "Готовь манёвр."])
         self.assertEqual(lines["npc:eng"], ["Щиты держатся.", "Принято."])
 
-    def test_capped_at_crew_dialogue_speakers(self):
+    async def test_capped_at_crew_dialogue_speakers(self):
         self.gm.crew_dialogue_speakers = 2
         pool = [
             _member("player", "1", "Аня", "Капитан"),
@@ -87,19 +87,19 @@ class TestCrewDialogueScene(unittest.TestCase):
         # Patch the LLM to capture which speakers were passed in the prompt.
         captured = {}
 
-        def fake_call(system_prompt, user_prompt, **kwargs):
+        async def fake_call(system_prompt, user_prompt, **kwargs):
             captured["user"] = user_prompt
             return {"lines": []}
 
         with patch.object(GameServer, "_call_llm", side_effect=fake_call):
-            self.gm.generate_crew_scene_dialogue(
+            await self.gm.generate_crew_scene_dialogue(
                 "Нарратив.", pool, game_id="g1", player_id=None, turn=1, kind="crew_dialogue"
             )
         # Only 2 speaker entries ("1." and "2.") should be in the prompt.
         self.assertEqual(captured["user"].count("\n2. "), 1)
         self.assertNotIn("\n3. ", captured["user"])
 
-    def test_live_players_selected_more_often_than_npcs(self):
+    async def test_live_players_selected_more_often_than_npcs(self):
         # 3 live players + 3 NPCs, pick 3 each run. With 2x weight on players,
         # players should dominate over many runs.
         pool = [
@@ -111,9 +111,9 @@ class TestCrewDialogueScene(unittest.TestCase):
             _member("npc", "n3", "N3", "Связист"),
         ]
         selected_names = collections.Counter()
-        with patch.object(GameServer, "_call_llm", return_value={"lines": []}) as mock_call:
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"lines": []})) as mock_call:
             for _ in range(400):
-                self.gm.generate_crew_scene_dialogue(
+                await self.gm.generate_crew_scene_dialogue(
                     "Нарратив.", pool, game_id="g1", player_id=None, turn=1, kind="crew_dialogue"
                 )
             for call in mock_call.call_args_list:
@@ -126,16 +126,16 @@ class TestCrewDialogueScene(unittest.TestCase):
         # (2x weight) must outnumber NPCs.
         self.assertGreater(selected_names["player"], selected_names["npc"])
 
-    def test_empty_llm_response_returns_empty(self):
+    async def test_empty_llm_response_returns_empty(self):
         pool = [
             _member("player", "1", "Аня", "Капитан"),
             _member("npc", "eng", "Бот", "Инженер"),
         ]
-        dialogues, lines = self._run(pool, {"lines": []})
+        dialogues, lines = await self._run(pool, {"lines": []})
         self.assertEqual(dialogues, [])
         self.assertEqual(lines, {})
 
-    def test_lines_with_blank_speaker_or_text_skipped(self):
+    async def test_lines_with_blank_speaker_or_text_skipped(self):
         pool = [
             _member("player", "1", "Аня", "Капитан"),
             _member("npc", "eng", "Бот", "Инженер"),
@@ -146,7 +146,7 @@ class TestCrewDialogueScene(unittest.TestCase):
             {"speaker": "Бот", "dialogue": ""},
             {"speaker": "Бот", "dialogue": "Принято."},
         ]}
-        dialogues, lines = self._run(pool, llm)
+        dialogues, lines = await self._run(pool, llm)
         self.assertEqual(len(dialogues), 2)
         self.assertEqual(lines["player:1"], ["Вперёд."])
         self.assertEqual(lines["npc:eng"], ["Принято."])

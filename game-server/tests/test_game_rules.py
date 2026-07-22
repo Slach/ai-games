@@ -125,12 +125,12 @@ class TestApplyMissionProgress(unittest.TestCase):
         self.assertEqual(m["stage_progress"]["1"], 1)
 
 
-from unittest.mock import patch  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
 
 from game_server import GameServer  # noqa: E402
 
 
-class TestGenerateMissionNormalization(unittest.TestCase):
+class TestGenerateMissionNormalization(unittest.IsolatedAsyncioTestCase):
     def _fake_llm_result(self):
         return {
             "name": "Echo Protocol",
@@ -142,12 +142,12 @@ class TestGenerateMissionNormalization(unittest.TestCase):
             ],
         }
 
-    def test_generate_mission_normalizes_objectives_and_stages(self):
+    async def test_generate_mission_normalizes_objectives_and_stages(self):
 
         agent = GameServer(language="en")
         agent.vs_enabled = False
-        with patch.object(GameServer, "_call_llm", return_value=self._fake_llm_result()):
-            result = agent.generate_mission(game_id=None, player_id=None, turn=None, kind=None)
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value=self._fake_llm_result())):
+            result = await agent.generate_mission(game_id=None, player_id=None, turn=None, kind=None)
         self.assertEqual([o["stage"] for o in result["objectives"]], [1, 2, 3])
         self.assertEqual([o["name"] for o in result["objectives"]], ["A", "B", "C"])
         for o in result["objectives"]:
@@ -158,18 +158,18 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         self.assertFalse(result["completed"])
 
 
-class TestGameOverFallback(unittest.TestCase):
+class TestGameOverFallback(unittest.IsolatedAsyncioTestCase):
     """Regression: a victory whose LLM finale call failed used to return the
     defeat fallback narrative ("Корабль погиб...") because the caller passed
     the localized header as `outcome_type`, so `fallback_{header}` never
     matched and `.get(key, fallback_defeat)` silently returned the defeat
     text. Victory must map to fallback_victory, defeat to fallback_defeat."""
 
-    def _run_failing_finale(self, language, outcome_type, outcome_label):
+    async def _run_failing_finale(self, language, outcome_type, outcome_label):
         agent = GameServer(language=language)
         agent.vs_enabled = False
-        with patch.object(GameServer, "_call_llm", side_effect=RuntimeError("boom")):
-            return agent.generate_game_over_outcome(
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            return await agent.generate_game_over_outcome(
                 outcome_type=outcome_type,
                 outcome_narrative="narrative",
                 mission_summary="summary",
@@ -180,31 +180,31 @@ class TestGameOverFallback(unittest.TestCase):
                 outcome_label=outcome_label,
             )
 
-    def test_victory_fallback_not_defeat_when_llm_fails(self):
-        result = self._run_failing_finale("ru", "victory", "🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!")
+    async def test_victory_fallback_not_defeat_when_llm_fails(self):
+        result = await self._run_failing_finale("ru", "victory", "🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!")
         self.assertIn("Миссия выполнена", result["finale_narrative"])
         self.assertNotIn("Корабль погиб", result["finale_narrative"])
 
-    def test_defeat_fallback_when_llm_fails(self):
-        result = self._run_failing_finale("ru", "defeat", "💀 КОРАБЛЬ УНИЧТОЖЕН — ПОРАЖЕНИЕ")
+    async def test_defeat_fallback_when_llm_fails(self):
+        result = await self._run_failing_finale("ru", "defeat", "💀 КОРАБЛЬ УНИЧТОЖЕН — ПОРАЖЕНИЕ")
         self.assertIn("Корабль погиб", result["finale_narrative"])
 
-    def test_victory_fallback_english(self):
-        result = self._run_failing_finale("en", "victory", "🏆 MISSION ACCOMPLISHED — VICTORY!")
+    async def test_victory_fallback_english(self):
+        result = await self._run_failing_finale("en", "victory", "🏆 MISSION ACCOMPLISHED — VICTORY!")
         self.assertIn("mission", result["finale_narrative"].lower())
         self.assertNotIn("perished", result["finale_narrative"].lower())
 
-    def test_outcome_label_reaches_llm_prompt_not_the_token(self):
+    async def test_outcome_label_reaches_llm_prompt_not_the_token(self):
         agent = GameServer(language="ru")
         agent.vs_enabled = False
         captured = {}
 
-        def _capture(system_prompt, user_prompt, **kwargs):
+        async def _capture(system_prompt, user_prompt, **kwargs):
             captured["user"] = user_prompt
             return {"finale_narrative": "ok", "finale_image_prompt": "ok"}
 
         with patch.object(GameServer, "_call_llm", side_effect=_capture):
-            agent.generate_game_over_outcome(
+            await agent.generate_game_over_outcome(
                 outcome_type="victory",
                 outcome_narrative="narrative",
                 mission_summary="summary",
