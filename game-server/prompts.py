@@ -769,6 +769,80 @@ def build_npc_dialogue_lang_note(language: str, player_role: str) -> tuple[str, 
     return "Respond in English.", player_role or "Crew member"
 
 
+def build_crew_dialogue_prompts(
+    language: str,
+    narrative: str,
+    speakers: list[dict[str, Any]],
+    rounds: int,
+) -> tuple[str, str]:
+    """Build system and user prompts for a single cohesive crew dialogue scene.
+
+    Args:
+        narrative: The turn's shared narrative (setting/conflict/events).
+        speakers: Participants with 'name', 'role', 'personality', 'species'.
+        rounds: How many times each speaker takes the floor (~lines per speaker).
+
+    Returns:
+        (system_prompt, user_prompt). The model returns an ordered list of
+        ``{speaker, dialogue}`` lines forming a connected conversation.
+    """
+    speaker_lines = []
+    for i, s in enumerate(speakers, start=1):
+        name = s.get("name", f"Speaker {i}")
+        role = s.get("role", "Crew")
+        personality = s.get("personality", "") or "professional"
+        species = s.get("species", "") or ""
+        species_part = f", вид: {species}" if species and language == LANGUAGE_RU else (
+            f", species: {species}" if species else ""
+        )
+        speaker_lines.append(f"{i}. {name} — {role} (характер: {personality}{species_part})"
+                             if language == LANGUAGE_RU
+                             else f"{i}. {name} — {role} (personality: {personality}{species_part})")
+    speakers_block = "\n".join(speaker_lines)
+
+    if language == LANGUAGE_RU:
+        system = (
+            "Ты — сценарист космической игры в стиле Star Trek. Твоя задача — написать "
+            "СВЯЗНЫЙ ДИАЛОГ между членами экипажа: реплики должны быть живой беседой, "
+            "где каждый реагирует на сказанное другими — спорит, поддерживает, предлагает, "
+            "возражает. Это НЕ набор независимых выкриков в пустоту. "
+            "Каждая реплика — 1-2 предложения, в характере говорящего. "
+            "Диалог должен быть осмысленной реакцией на события хода и продвигать "
+            "напряжённость или принятие решений."
+        )
+        user = (
+            f"События хода:\n{narrative}\n\n"
+            f"Участники разговора:\n{speakers_block}\n\n"
+            f"Напиши связный диалог в {rounds} раунда(-ов): каждый участник "
+            f"произносит {rounds} реплик(и), реплики идут по очереди в порядке беседы "
+            "(не по одному раунду подряд). Каждая реплика должна реагировать на предыдущую. "
+            "Возвращай JSON: объект со списком 'lines', каждый элемент "
+            "{'speaker': <точное имя>, 'dialogue': <реплика>}. "
+            "Порядок lines = порядок произнесения в разговоре. Всё на русском языке."
+        )
+    else:
+        system = (
+            "You are a scriptwriter for a Star Trek-style space game. Your task is to write "
+            "a COHESIVE DIALOGUE between crew members: lines must form a living conversation "
+            "where each speaker reacts to what others said — argues, supports, proposes, "
+            "objects. This is NOT a set of independent shouts into the void. "
+            "Each line is 1-2 sentences, in the speaker's character. "
+            "The dialogue should be a meaningful reaction to the turn's events and advance "
+            "tension or decision-making."
+        )
+        user = (
+            f"Turn events:\n{narrative}\n\n"
+            f"Conversation participants:\n{speakers_block}\n\n"
+            f"Write a connected dialogue over {rounds} round(s): each participant speaks "
+            f"{rounds} line(s), lines come in conversational order (not one full round at a time). "
+            "Each line must react to the previous one. "
+            "Return JSON: an object with a 'lines' array, each element "
+            "{'speaker': <exact name>, 'dialogue': <line>}. "
+            "The order of lines = the order they are spoken. Respond in English."
+        )
+    return system, user
+
+
 # ── Content prompt lang note ───────────────────────────────────────
 
 
@@ -1404,7 +1478,11 @@ def build_personal_briefing_system(language: str) -> str:
             "  'bad'     — плохое действие: высокий риск урона, потерь, регресса миссии;\n"
             "  'neutral' — нейтральное действие: безопасное ожидание/отдых, не продвигает миссию.\n"
             "Количество каждого типа задаётся в запросе; consequence_kind варианта должен "
-            "соответствовать его группе."
+            "соответствовать его группе.\n\n"
+            "Если в запросе приведён контекст диалога экипажа — обязательно учти его: "
+            "брифинг и варианты действий должны отражать то, что обсуждалось, предложенные "
+            "риски и возможности. Если персонаж сам высказался в диалоге — его варианты "
+            "должны быть согласованы с его репликой."
         )
     return (
         "You are a Game Master. You create PERSONAL briefings for each player "
@@ -1422,7 +1500,11 @@ def build_personal_briefing_system(language: str) -> str:
         "  'bad'     — a bad action: high risk of damage, losses, mission regression;\n"
         "  'neutral' — a neutral action: safe wait/rest, does not advance the mission.\n"
         "The count of each type is specified in the request; a choice's consequence_kind "
-        "must match its group."
+        "must match its group.\n\n"
+        "If the request includes crew dialogue context — you MUST take it into account: "
+        "the briefing and action choices should reflect what was discussed, the risks and "
+        "opportunities raised. If the character spoke in that dialogue, their choices must "
+        "be consistent with their line."
     )
 
 

@@ -5977,6 +5977,38 @@ async def _original_continue_game(
         game_id,
     )
 
+    # ── Generate the cohesive crew dialogue scene ────────────────
+    # Done BEFORE per-player briefings so the conversation can influence
+    # each player's personal action choices. The dialogue text (and the
+    # player's own lines, if they were a speaker) is fed into the briefing
+    # prompt as crew_dialogue_context.
+    crew_speakers_pool = [
+        {
+            "type": p["type"],
+            "player_id": p.get("player_id"),
+            "npc_key": p.get("npc_key"),
+            "name": p.get("player_name") or p.get("npc_name") or p.get("role", "Crew"),
+            "role": p.get("role", "Crew Member"),
+            "species": p.get("species", ""),
+            "personality_traits": p.get("personality_traits", []),
+        }
+        for p in all_participants
+    ]
+    narrative_text = global_circ.get("narrative", "")
+    try:
+        crew_dialogues_list, crew_lines_by_key = gm.generate_crew_scene_dialogue(
+            narrative_text,
+            crew_speakers_pool,
+            game_id=game_id,
+            player_id=None,
+            turn=turn_num,
+            kind="crew_dialogue",
+        )
+    except Exception:
+        logger.error("[CREW_DIALOG] generation failed", exc_info=True)
+        crew_dialogues_list, crew_lines_by_key = [], {}
+    logger.info(f"[CREW_DIALOG] {len(crew_dialogues_list)} lines for turn {turn_num}; speakers with lines: {list(crew_lines_by_key)}")
+
     # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
     scene_url = get_random_game_image(type="scene", game_id=game_id, turn=turn_num)
     if scene_url:
@@ -6029,6 +6061,26 @@ async def _original_continue_game(
 
     # Step B: Generate per-player briefings
     all_briefings = []
+
+    # Shared crew-dialogue context: the full conversation text, fed into every
+    # participant's briefing so their action choices reflect what was discussed.
+    crew_dialogue_shared_context = ""
+    if crew_dialogues_list:
+        if language == LANGUAGE_RU:
+            joined = "\n".join(f"— {d['npc']}: {d['dialogue']}" for d in crew_dialogues_list)
+            crew_dialogue_shared_context = (
+                "\n\nКонтекст обсуждения экипажа (только что состоялся разговор):\n"
+                f"{joined}\n"
+                "Учти этот разговор при создании брифинга и вариантов действий.\n"
+            )
+        else:
+            joined = "\n".join(f"— {d['npc']}: {d['dialogue']}" for d in crew_dialogues_list)
+            crew_dialogue_shared_context = (
+                "\n\nCrew discussion context (a conversation just took place):\n"
+                f"{joined}\n"
+                "Take this conversation into account when building the briefing and action choices.\n"
+            )
+
     # Resume support: reuse existing briefings from an interrupted run.
     existing_by_key: dict[str, dict[str, Any]] = {}
     for _b in get_all_briefings_for_turn(turn_num, game_id):
@@ -6083,6 +6135,30 @@ async def _original_continue_game(
                 player_name = p.get("player_name", "") or ""
         elif participant["type"] == "npc":
             player_name = participant.get("npc_name", "") or ""
+
+        # Personal crew-dialogue context: if this participant spoke in the
+        # crew dialogue, remind them of their own lines so their action
+        # choices stay consistent with what they said.
+        crew_dialogue_context = crew_dialogue_shared_context
+        _pkey = f"player:{participant['player_id']}" if participant.get("player_id") else (
+            f"npc:{participant['npc_key']}" if participant.get("npc_key") else None
+        )
+        my_lines = crew_lines_by_key.get(_pkey) if _pkey else None
+        if my_lines:
+            mine = "; ".join(my_lines)
+            if language == LANGUAGE_RU:
+                crew_dialogue_context = (
+                    crew_dialogue_shared_context
+                    + f"\nТы уже высказался в этом разговоре: \"{mine}\". "
+                    "Твои варианты действий должны быть согласованы с этой позицией.\n"
+                )
+            else:
+                crew_dialogue_context = (
+                    crew_dialogue_shared_context
+                    + f"\nYou already spoke in this conversation: \"{mine}\". "
+                    "Your action choices must be consistent with this stance.\n"
+                )
+
         briefing_data = gm.generate_player_briefing_and_choices(
             global_circ,
             gm_profile,
@@ -6091,6 +6167,7 @@ async def _original_continue_game(
             game_id=game_id,
             player_id=str(participant["player_id"]) if participant.get("player_id") else participant.get("npc_key", ""),
             kind="player_briefing",
+            crew_dialogue_context=crew_dialogue_context or None,
         )
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])
@@ -6108,6 +6185,7 @@ async def _original_continue_game(
                 player_id=participant.get("npc_key", ""),
                 turn=turn_num,
                 kind="npc_choice",
+                crew_dialogue_context=crew_dialogue_context or None,
             )
             selected_id = npc_decision.get("action_id", "")
             rationale = npc_decision.get("rationale", "")
@@ -6285,31 +6363,8 @@ async def _original_continue_game(
             elif isinstance(url_or_err, Exception):
                 logger.warning(f"[CHAR_IMAGE] Failed for player {b.get('player_id')}: {url_or_err}")
 
-    # NPC dialogues
-    player_role = all_participants[0]["role"] if all_participants else "Crew Member"
-    from game_server import GameStory
-
-    dialog_story = GameStory(
-        turn=turn_num,
-        setting=global_circ.get("setting", ""),
-        conflict=global_circ.get("conflict", ""),
-        narrative=global_circ.get("narrative", ""),
-        decision_points=[],
-    )
-    try:
-        dialogues = gm.generate_crew_dialogues(
-            story=dialog_story,
-            player_role=player_role,
-            crew_members=_get_crew_members(game_id),
-            game_id=game_id,
-            player_id=None,
-            turn=turn_num,
-            kind="crew_dialogue",
-        )
-        crew_dialogues_list = [{"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues]
-    except Exception as e:
-        logger.warning(f"NPC dialogue generation failed: {e}")
-        crew_dialogues_list = []
+    # crew_dialogues_list + crew_lines_by_key are generated above, before the
+    # per-player briefing loop, so the dialogue can influence each briefing.
 
     # Step E: Create game turn record
     new_turn = {

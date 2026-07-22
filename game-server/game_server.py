@@ -8,6 +8,7 @@ Compatible with llama.cpp / vLLM / any OpenAI-compatible endpoint.
 import json
 import logging
 import os
+import random
 import re
 from typing import Any, cast
 
@@ -31,6 +32,7 @@ from prompts import (
     build_background_prompts_user,
     build_combined_outcome_prompts,
     build_content_prompt_note,
+    build_crew_dialogue_prompts,
     build_turn_story_prompts,
     build_dynamic_sg_question_prompts,
     build_game_over_prompts,
@@ -347,6 +349,39 @@ NPC_DIALOGUE_SCHEMA = {
                 },
             },
             "required": ["dialogue", "emotion"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+CREW_DIALOGUE_SCENE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "crew_dialogue_scene",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "speaker": {
+                                "type": "string",
+                                "description": "Exact speaker name",
+                            },
+                            "dialogue": {
+                                "type": "string",
+                                "description": "In-character line reacting to the conversation, 1-2 sentences",
+                            },
+                        },
+                        "required": ["speaker", "dialogue"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["lines"],
             "additionalProperties": False,
         },
     },
@@ -924,6 +959,7 @@ class GameServer:
         self.turn_good_actions = _safe_int_env("GAME_TURN_GOOD_ACTIONS", 3)
         self.turn_bad_actions = _safe_int_env("GAME_TURN_BAD_ACTIONS", 1)
         self.turn_neutral_actions = _safe_int_env("GAME_TURN_NEUTRAL_ACTIONS", 1)
+        self.crew_dialogue_speakers = max(2, _safe_int_env("GAME_CREW_DIALOGUE_SPEAKERS", 3))
         self.language = language
         self.npcs: dict[str, dict[str, Any]] = {}
 
@@ -1690,6 +1726,132 @@ class GameServer:
 
         logger.info(f"[NPC] Generated {len(dialogues)} NPC dialogues")
         return dialogues
+
+    def generate_crew_scene_dialogue(
+        self,
+        narrative: str,
+        crew_members: list[dict[str, Any]],
+        *,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
+    ) -> tuple[list[dict[str, str]], dict[str, list[str]]]:
+        """Generate a single cohesive crew dialogue scene for a turn.
+
+        Selects a random subset of speakers (live players weighted 2x over NPCs),
+        then makes one LLM call that produces an ordered, connected conversation.
+
+        Args:
+            narrative: The turn's shared narrative text.
+            crew_members: Roster entries with at least 'name', 'role', optional
+                'personality_traits'/'species', and 'type' ('player'|'npc') plus
+                'player_id' or 'npc_key' for keying the lines map.
+
+        Returns:
+            (dialogues, lines_by_key) where:
+              - dialogues: list of {"npc": "Name (Role)", "dialogue": "..."} in
+                spoken order, compatible with the existing crew_dialogues UI format.
+              - lines_by_key: {"player:<id>": [...]} / {"npc:<key>": [...]} mapping
+                each participant to their spoken lines, for briefing influence.
+            Both are empty ([], {}) if fewer than 2 members are available.
+        """
+        # Filter out members lacking a name (defensive).
+        pool = [m for m in crew_members if m.get("name") or m.get("player_name") or m.get("npc_name")]
+        if len(pool) < 2:
+            logger.info(f"[CREW_DIALOG] Skipped: only {len(pool)} members available")
+            return [], {}
+
+        n = min(self.crew_dialogue_speakers, len(pool))
+        weights = [2 if m.get("type") == "player" else 1 for m in pool]
+        # Weighted sample without replacement. random.sample doesn't support
+        # weights, so use cumulative-selection (population is small: a crew).
+        chosen: list[dict[str, Any]] = []
+        candidates = list(range(len(pool)))
+        candidate_weights = list(weights)
+        for _ in range(n):
+            sel = random.choices(candidates, weights=candidate_weights, k=1)[0]
+            chosen.append(pool[sel])
+            # remove selected index from candidates and weights
+            idx = candidates.index(sel)
+            candidates.pop(idx)
+            candidate_weights.pop(idx)
+
+        speaker_names = {self._crew_member_name(m) for m in chosen}
+        logger.info(f"[CREW_DIALOG] Selected {len(chosen)} speakers: {speaker_names}")
+
+        speakers_for_prompt = []
+        for m in chosen:
+            traits = m.get("personality_traits", []) or []
+            if isinstance(traits, str):
+                traits = []
+            speakers_for_prompt.append({
+                "name": self._crew_member_name(m),
+                "role": m.get("role", "Crew Member"),
+                "personality": ", ".join(traits) if traits else "professional",
+                "species": m.get("species", "") or "",
+            })
+
+        rounds = 2
+        system, user = build_crew_dialogue_prompts(
+            self.language, narrative, speakers_for_prompt, rounds
+        )
+
+        try:
+            parsed = self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=CREW_DIALOGUE_SCENE_SCHEMA,
+                temperature=0.9,
+                enable_thinking=False,
+                max_tokens=1024,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+        except Exception:
+            logger.error("[CREW_DIALOG] LLM call failed", exc_info=True)
+            return [], {}
+
+        raw_lines = parsed.get("lines", []) if isinstance(parsed, dict) else []
+        if not raw_lines:
+            logger.warning("[CREW_DIALOG] Empty dialogue returned")
+            return [], {}
+
+        # Build name -> member lookup (by display name) to recover the key.
+        name_to_member: dict[str, dict[str, Any]] = {
+            self._crew_member_name(m): m for m in pool
+        }
+        lines_by_key: dict[str, list[str]] = {}
+        dialogues: list[dict[str, str]] = []
+        for line in raw_lines:
+            speaker = line.get("speaker", "").strip()
+            text = line.get("dialogue", "").strip()
+            if not speaker or not text:
+                continue
+            member = name_to_member.get(speaker)
+            role = member.get("role", "") if member else ""
+            display = f"{speaker} ({role})" if role else speaker
+            dialogues.append({"npc": display, "dialogue": text})
+            if member is not None:
+                key = self._crew_member_key(member)
+                lines_by_key.setdefault(key, []).append(text)
+
+        logger.info(f"[CREW_DIALOG] Generated {len(dialogues)} dialogue lines for {len(lines_by_key)} speakers")
+        return dialogues, lines_by_key
+
+    @staticmethod
+    def _crew_member_name(m: dict[str, Any]) -> str:
+        return m.get("name") or m.get("npc_name") or m.get("player_name") or m.get("role", "Crew")
+
+    @staticmethod
+    def _crew_member_key(m: dict[str, Any]) -> str:
+        if m.get("type") == "player" and m.get("player_id"):
+            return f"player:{m['player_id']}"
+        if m.get("npc_key"):
+            return f"npc:{m['npc_key']}"
+        return GameServer._crew_member_name(m)
 
     # ============== Content Prompts ==============
 
@@ -2585,6 +2747,7 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
+        crew_dialogue_context: str | None = None,
     ) -> dict[str, Any]:
         """NPC makes a choice using LLM without seeing the consequences.
 
@@ -2611,6 +2774,8 @@ class GameServer:
         choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
 
         system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text, use_vs=self.vs_enabled, vs_k=resolve_vs_k("npc_decision", self.vs_k))
+        if crew_dialogue_context:
+            user = user + "\n" + crew_dialogue_context
 
         try:
             if self.vs_enabled:
@@ -2903,6 +3068,7 @@ class GameServer:
         game_id: str | None,
         kind: str | None,
         player_id: str,
+        crew_dialogue_context: str | None = None,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
@@ -2999,6 +3165,7 @@ class GameServer:
                     if wound_severity in ("critical", "moderate", "minor")
                     else ""
                 )
+                + (crew_dialogue_context if crew_dialogue_context else "")
                 + "\nВсё на русском языке."
             )
         else:
@@ -3036,6 +3203,7 @@ class GameServer:
                 f"Each choice MUST include a consequence_kind matching its group: exactly "
                 f"{n_good} with 'good', {n_bad} with 'bad', {n_neutral} with 'neutral'.\n"
                 + ("- The character is WOUNDED — fewer aggressive/physical actions, always include a safe neutral option (rest/treatment).\n" if wound_severity in ("critical", "moderate", "minor") else "")
+                + (crew_dialogue_context if crew_dialogue_context else "")
             )
 
         try:
