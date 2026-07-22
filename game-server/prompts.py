@@ -666,8 +666,27 @@ def build_onboarding_prompts(
 # ── Game title generation prompts ──────────────────────────────────
 
 
-def build_game_title_prompts(language: str, *, use_vs: bool, vs_k: int) -> tuple[str, str]:
-    """Build system and user prompts for game title generation."""
+def build_game_title_prompts(
+    language: str,
+    mission_context: dict | None,
+    *,
+    use_vs: bool,
+    vs_k: int,
+) -> tuple[str, str]:
+    """Build system and user prompts for game title generation.
+
+    When ``mission_context`` (a mission dict with ``archetype`` and
+    ``short_description``) is provided, the title tagline and welcome text are
+    tied to that mission so the game name and its mission stay consistent.
+    """
+    mission_hint = ""
+    if mission_context:
+        archetype = mission_context.get("archetype", "")
+        short_desc = (mission_context.get("short_description") or "").strip()
+        parts = [p for p in [archetype, short_desc] if p]
+        if parts:
+            mission_hint = " | ".join(parts)
+
     if language == LANGUAGE_RU:
         system = "Ты — креативный писатель-фантаст. Придумываешь названия и описания для космических приключений."
         user = (
@@ -677,8 +696,13 @@ def build_game_title_prompts(language: str, *, use_vs: bool, vs_k: int) -> tuple
             "Приветствие должно быть атмосферным — будто игрок заходит на борт корабля. "
             "ВАЖНО: не используй символы звёздочка (*) или подчёркивание (_) в тексте приветствия — "
             "они сломают форматирование при отправке игроку. Используй только обычный текст. "
-            "Все тексты на русском языке."
         )
+        if mission_hint:
+            user += (
+                "Подзаголовок миссии в названии и атмосфера приветствия ОБЯЗАТЕЛЬНО должны отражать "
+                f"эту миссию: {mission_hint}. Название корабля тоже подбери в духе миссии. "
+            )
+        user += "Все тексты на русском языке."
     else:
         system = "You are a creative sci-fi writer. You create titles and descriptions for space adventures."
         user = (
@@ -688,8 +712,13 @@ def build_game_title_prompts(language: str, *, use_vs: bool, vs_k: int) -> tuple
             "The welcome should be atmospheric — as if the player is stepping aboard the ship. "
             "IMPORTANT: do not use asterisk (*) or underscore (_) characters in the welcome text — "
             "they will break formatting when sent to the player. Use plain text only. "
-            "All text in English."
         )
+        if mission_hint:
+            user += (
+                "The mission tagline in the title and the atmosphere of the welcome MUST reflect "
+                f"this mission: {mission_hint}. Pick the ship name in the spirit of the mission too. "
+            )
+        user += "All text in English."
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["game_title"], k=vs_k)
     return system, user
@@ -1176,7 +1205,6 @@ def build_global_circumstances_prompts(
 
 def build_mission_prompts(
     language: str,
-    crew_desc: str,
     archetype: str | None,
     seeds: dict | None,
     *,
@@ -1185,8 +1213,11 @@ def build_mission_prompts(
 ) -> tuple[str, str]:
     """Build system and user prompts for mission generation.
 
-    When archetype/seeds are provided they are injected to force variety (P2);
-    a banned-trope list and a balanced threshold range are always included.
+    The mission is purely plot-driven (archetype + seeds): it describes the
+    ship, the situation and the briefing, not specific crew members, so the
+    crew composition is intentionally not part of the prompt. When
+    archetype/seeds are provided they are injected to force variety (P2); a
+    banned-trope list and a balanced threshold range are always included.
     """
     lang = LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN
     forbidden = ", ".join(FORBIDDEN_OPENINGS[lang])
@@ -1223,7 +1254,6 @@ def build_mission_prompts(
     if lang == LANGUAGE_RU:
         system = "Ты — Game Master космической игры. Создаёшь миссию для экипажа звёздного корабля. Миссия делится на 2-4 этапа (stages), каждый с прогрессом от 1 до 10." + (f"\nАрхетип миссии: {arch_hint}" if arch_hint else "")
         user = (
-            f"Экипаж:\n{crew_desc}\n\n"
             f"{seeds_block}"
             "ЗАПРЕЩЕНО начинать миссию с клише про сигнал бедствия / перехваченный сигнал / "
             f"неопознанную передачу. Запрещённые завязки: {forbidden}.\n"
@@ -1243,7 +1273,6 @@ def build_mission_prompts(
     else:
         system = "You are a Game Master. Create a mission for a starship crew. The mission is divided into 2-4 stages, each with progress from 1 to 10." + (f"\nMission archetype: {arch_hint}" if arch_hint else "")
         user = (
-            f"Crew:\n{crew_desc}\n\n"
             f"{seeds_block}"
             "DO NOT start the mission with the cliché of a distress signal / intercepted signal / "
             f"unidentified transmission. Forbidden openings: {forbidden}.\n"

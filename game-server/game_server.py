@@ -1477,11 +1477,22 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
+        mission_context: dict | None = None,
     ) -> dict[str, str]:
-        """Generate a creative game title and welcome message."""
+        """Generate a creative game title and welcome message.
+
+        When ``mission_context`` (a mission dict) is given, the title tagline
+        and welcome are tied to that mission so the game name stays consistent
+        with its mission.
+        """
         logger.info(f"[TITLE] Generating game title, language: {self.language}")
 
-        system, user = build_game_title_prompts(self.language, use_vs=self.vs_enabled, vs_k=resolve_vs_k("game_title", self.vs_k))
+        system, user = build_game_title_prompts(
+            self.language,
+            mission_context,
+            use_vs=self.vs_enabled,
+            vs_k=resolve_vs_k("game_title", self.vs_k),
+        )
 
         if self.vs_enabled:
             vs_result = self._call_llm(
@@ -3306,7 +3317,6 @@ class GameServer:
 
     def generate_mission(
         self,
-        all_participants: list[dict[str, Any]],
         *,
         game_id: str | None,
         player_id: str | None,
@@ -3315,18 +3325,17 @@ class GameServer:
     ) -> dict[str, Any]:
         """Generate a mission with stages/objectives for the game.
 
-        Objectives are normalized (1-based, thresholds 3-5) and the mission
-        carries current_stage=1 / total_stages=len(objectives) so it is
-        completable from the start (spec defect A fix).
+        The mission is plot-driven (archetype + seeds) and does not depend on
+        the crew composition. Objectives are normalized (1-based, thresholds
+        3-5) and the mission carries current_stage=1 /
+        total_stages=len(objectives) so it is completable from the start
+        (spec defect A fix).
         """
-        logger.info(f"[MISSION] Generating mission for {len(all_participants)} participants")
-
-        crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')})" for p in all_participants])
+        logger.info("[MISSION] Generating mission (archetype + seeds)")
 
         mission_seeds = select_mission_seeds(self.language, None)
         system, user = build_mission_prompts(
             self.language,
-            crew_desc,
             archetype=mission_seeds["archetype"],
             seeds=mission_seeds["seeds"],
             use_vs=self.vs_enabled,

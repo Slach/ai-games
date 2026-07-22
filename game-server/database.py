@@ -155,6 +155,13 @@ MIGRATIONS: list[tuple[int, str]] = [
         """.strip(),
     ),
     (16, "ALTER TABLE player_briefings ADD COLUMN image_prompt TEXT DEFAULT '';"),
+    (
+        17,
+        # Enforce one mission per game so concurrent generation cannot create
+        # duplicate/orphaned mission rows. Safe to apply: existing DBs verified
+        # to have no game_id duplicates before this migration.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_mission ON game_missions(game_id);",
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -2078,13 +2085,19 @@ def update_game_turn_global_circumstances(turn: int, circumstances: str, game_id
 
 
 def create_mission(mission_data: dict[str, Any], game_id: str) -> dict[str, Any] | None:
-    """Create a mission for a game."""
+    """Create a mission for a game.
+
+    Enforces one mission per game via the ``uq_game_mission`` unique index: if
+    a concurrent caller already inserted a mission for this game, the INSERT
+    is a no-op and the existing mission is returned instead.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO game_missions
            (game_id, name, description, short_description, objectives, stage_progress, current_stage, total_stages, completed, archetype, seeds, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+           ON CONFLICT(game_id) DO NOTHING""",
         (
             game_id,
             mission_data["name"],
@@ -2102,7 +2115,9 @@ def create_mission(mission_data: dict[str, Any], game_id: str) -> dict[str, Any]
     mission_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return get_mission(mission_id, game_id=game_id)
+    # lastrowid is None/0 when ON CONFLICT skipped the insert — fall back to
+    # the latest mission for this game.
+    return get_mission(mission_id or None, game_id=game_id)
 
 
 def get_mission(mission_id: int | None, *, game_id: str) -> dict[str, Any] | None:

@@ -782,17 +782,6 @@ async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
         return None
 
 
-def _build_share_text(msgs: dict, game_title: str) -> str:
-    """Build pre-filled text for t.me/share/url?text= parameter."""
-    base = msgs.get("share_text", "Join the game")
-    if game_title:
-        # Strip any existing guillemets from the title to avoid double-wrapping
-        # e.g. incoming «Title» wrapped again produces ««Title»»
-        clean_title = game_title.strip("«»")
-        return f"{base} «{clean_title}»!"
-    return f"{base}!"
-
-
 async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
     """Generate avatar, then send onboarding complete message with avatar, then notify others."""
     try:
@@ -1011,7 +1000,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
                     except Exception as e:
                         logger.warning(f"Failed to send mission info to player {player_id}: {e}")
 
-        # Send invite link if bot username and game ID are available
+        # Send invite (mission + rules, same format as /invite) so the first
+        # player can forward it to friends. Requires the bot username for the
+        # deep link.
         global BOT_USERNAME
         if not BOT_USERNAME:
             try:
@@ -1023,31 +1014,9 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         if BOT_USERNAME:
             game_id = profile.get("game_id", "")
             if game_id:
-                invite_url = await create_start_link(bot, f"{game_id}:{player_id}", encode=True)
-                share_text = _build_share_text(onboarding_msgs, game_title)
-                share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(share_text, safe='')}"
-                # Escape the URL for Markdown to handle underscores in bot username
-                invite_text = onboarding_msgs["invite_title"] + "\n\n" + onboarding_msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
-
-                invite_keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=onboarding_msgs["invite_button"],
-                                url=share_url,
-                            )
-                        ]
-                    ]
-                )
-
                 try:
-                    await bot.send_message(
-                        chat_id=player_id,
-                        text=invite_text,
-                        parse_mode="Markdown",
-                        reply_markup=invite_keyboard,
-                    )
-                    logger.info(f"Sent invite link to player {player_id}: {invite_url}")
+                    await _send_game_invite_to_chat(bot, player_id, game_id, player_id, game_language)
+                    logger.info(f"Sent invite to player {player_id} for game {game_id}")
                 except Exception as e:
                     logger.warning(f"Failed to send invite to player {player_id}: {e}")
 
@@ -2282,7 +2251,8 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE),
                 )
 
-            # Send invite link for existing player
+            # Send invite (mission + rules, same format as /invite) for the
+            # returning player's existing game.
             global BOT_USERNAME
             if not BOT_USERNAME and message.bot is not None:
                 try:
@@ -2294,38 +2264,8 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
             if BOT_USERNAME:
                 game_id = profile.get("game_id", "")
                 if game_id and message.bot is not None:
-                    # Fetch game title for share text
-                    game_title = ""
                     try:
-                        title_data = await api_request("GET", "/game/title", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
-                        if title_data and title_data.get("title"):
-                            game_title = title_data["title"]
-                    except Exception as e:
-                        logger.error("Failed to fetch game title for invite", exc_info=e)
-
-                    # Use game's language for invite, not player's language
-                    game_lang = await get_game_language(game_id, fallback=player_lang)
-                    invite_msgs = lang.get_onboarding(game_lang)
-
-                    invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
-                    share_url = f"https://t.me/share/url?url={quote(invite_url, safe='')}&text={quote(_build_share_text(invite_msgs, game_title), safe='')}"
-                    invite_text = invite_msgs["invite_title"] + "\n\n" + invite_msgs["invite_message"].format(invite_url=escape_markdown(invite_url))
-                    invite_keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=invite_msgs["invite_button"],
-                                    url=share_url,
-                                )
-                            ]
-                        ]
-                    )
-                    try:
-                        await message.answer(
-                            invite_text,
-                            parse_mode="Markdown",
-                            reply_markup=invite_keyboard,
-                        )
+                        await _send_game_invite_to_chat(message.bot, message.chat.id, game_id, player_id, player_lang)
                     except Exception as e:
                         logger.warning(f"Failed to send invite to player {player_id}: {e}")
 
@@ -2863,13 +2803,13 @@ async def _send_no_game_invite(message: types.Message, language: str):
     await message.answer(forward_text, parse_mode="Markdown")
 
 
-async def _send_game_invite(message: types.Message, game_id: str, player_id: int, player_lang: str):
-    """Shared invite body used by /invite and /gm_invite.
+async def _send_game_invite_to_chat(bot: Bot, chat_id: int, game_id: str, player_id: int, player_lang: str):
+    """Send the game invite to a chat: bridge photo + mission caption (or
+    splash image if no mission yet) + QR code carrying the deep link.
 
-    Sends the invite for the given game to the chat the message came from:
-    bridge photo + mission caption (or splash image if no mission yet),
-    followed by a QR code carrying the deep link `<game_id>:<player_id>`.
-    Assumes the bot username is already resolved and `message.bot` is set.
+    Chat-based variant usable from both command handlers (which have a
+    ``message``) and background flows like post-onboarding (which only have
+    a ``bot`` + ``chat_id``). Assumes the bot username is already resolved.
     """
     game_lang = await get_game_language(game_id, fallback=player_lang)
     msgs = lang.get_onboarding(game_lang)
@@ -2895,9 +2835,34 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
     except Exception as e:
         logger.error(f"Failed to fetch bridge image for invite: {e}", exc_info=True)
 
-    invite_url = await create_start_link(message.bot, f"{game_id}:{player_id}", encode=True)
+    invite_url = await create_start_link(bot, f"{game_id}:{player_id}", encode=True)
 
     how_to_play = _invite_how_to_play(game_lang)
+
+    async def _send_image(image_url: str | None, caption: str) -> bool:
+        """Fetch an image URL and send it as a photo to chat_id."""
+        if not image_url:
+            return False
+        try:
+            async with aiohttp.ClientSession() as session:
+                resp = await session.get(image_url, timeout=aiohttp.ClientTimeout(total=30))
+                if resp.status == 200:
+                    photo_data = await resp.read()
+                    await call_with_retry(
+                        lambda: bot.send_photo(
+                            chat_id=chat_id,
+                            photo=BufferedInputFile(photo_data, filename="image.png"),
+                            caption=caption,
+                            parse_mode="Markdown",
+                        ),
+                        max_retries=3,
+                        base_delay=1.0,
+                        max_delay=10.0,
+                    )
+                    return True
+        except Exception as e:
+            logger.warning(f"Failed to send invite image for player {player_id}: {e}")
+        return False
 
     if mission and bridge and bridge.get("image_url"):
         # ── Mission exists: bridge photo with mission caption ──
@@ -2913,11 +2878,11 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
             mission_description=escape_markdown(short_desc),
             invite_url=escape_markdown(invite_url),
         ) + how_to_play
-        sent = await send_image_from_api_url(message, bridge["image_url"], caption=caption, reply_markup=None)
+        sent = await _send_image(bridge.get("image_url"), caption)
         if not sent:
-            await message.answer(caption, parse_mode="Markdown")
+            await bot.send_message(chat_id=chat_id, text=caption, parse_mode="Markdown")
     else:
-        # ── No mission: splash image with game title ──
+        # ── No bridge: try a random splash image with game title ──
         clean_title = game_title.strip("«»")
         caption = msgs.get(
             "invite_no_mission_caption",
@@ -2926,9 +2891,16 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
             game_title=escape_markdown(clean_title),
             invite_url=escape_markdown(invite_url),
         ) + how_to_play
-        splash_sent = await send_random_splash_image(message, caption, None, game_id)
-        if not splash_sent:
-            await message.answer(caption, parse_mode="Markdown")
+        splash_url = None
+        try:
+            params = {"game_id": game_id} if game_id else None
+            result = await api_request("GET", "/content/splash-image", data=None, params=params, timeout_total=600, ignore_codes=())
+            splash_url = result.get("image_url") if result else None
+        except Exception as e:
+            logger.warning(f"Failed to fetch splash image for invite: {e}")
+        sent = await _send_image(splash_url, caption)
+        if not sent:
+            await bot.send_message(chat_id=chat_id, text=caption, parse_mode="Markdown")
 
     # ── Second message: QR code with deep link + forward instruction ──
     forward_text = msgs.get(
@@ -2946,7 +2918,8 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
         qr_sent = False
         try:
             await call_with_retry(
-                lambda: message.answer_photo(
+                lambda: bot.send_photo(
+                    chat_id=chat_id,
                     photo=BufferedInputFile(qr_png, filename="invite_qr.png"),
                     caption=qr_caption,
                     parse_mode="Markdown",
@@ -2959,9 +2932,19 @@ async def _send_game_invite(message: types.Message, game_id: str, player_id: int
         except Exception as e:
             logger.warning(f"Failed to send invite QR photo for player {player_id}: {e}")
         if not qr_sent:
-            await message.answer(forward_text, parse_mode="Markdown")
+            await bot.send_message(chat_id=chat_id, text=forward_text, parse_mode="Markdown")
     else:
-        await message.answer(forward_text, parse_mode="Markdown")
+        await bot.send_message(chat_id=chat_id, text=forward_text, parse_mode="Markdown")
+
+
+async def _send_game_invite(message: types.Message, game_id: str, player_id: int, player_lang: str):
+    """Shared invite body used by /invite and /gm_invite.
+
+    Thin wrapper over ``_send_game_invite_to_chat`` for command handlers
+    that have a ``message`` context. Assumes the bot username is already
+    resolved and ``message.bot`` is set.
+    """
+    await _send_game_invite_to_chat(message.bot, message.chat.id, game_id, player_id, player_lang)
 
 
 def _invite_how_to_play(language: str) -> str:

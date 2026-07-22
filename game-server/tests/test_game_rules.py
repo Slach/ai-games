@@ -147,7 +147,7 @@ class TestGenerateMissionNormalization(unittest.TestCase):
         agent = GameServer(language="en")
         agent.vs_enabled = False
         with patch.object(GameServer, "_call_llm", return_value=self._fake_llm_result()):
-            result = agent.generate_mission([{"role": "Pilot", "type": "player"}], game_id=None, player_id=None, turn=None, kind=None)
+            result = agent.generate_mission(game_id=None, player_id=None, turn=None, kind=None)
         self.assertEqual([o["stage"] for o in result["objectives"]], [1, 2, 3])
         self.assertEqual([o["name"] for o in result["objectives"]], ["A", "B", "C"])
         for o in result["objectives"]:
@@ -262,13 +262,13 @@ from prompts import build_mission_prompts  # noqa: E402
 class TestMissionPromptInjection(unittest.TestCase):
     def test_prompt_includes_archetype_and_seeds(self):
         seeds = select_mission_seeds(language="en", rng=_random.Random(7))
-        system, user = build_mission_prompts("en", "  - Pilot (player)", archetype=seeds["archetype"], seeds=seeds["seeds"], use_vs=True, vs_k=5)
+        system, user = build_mission_prompts("en", archetype=seeds["archetype"], seeds=seeds["seeds"], use_vs=True, vs_k=5)
         self.assertIn(seeds["archetype"], system + user)
         for value in seeds["seeds"].values():
             self.assertIn(value, system + user)
 
     def test_prompt_lists_forbidden_openings_and_threshold_range(self):
-        _, user = build_mission_prompts("ru", "  - Пилот (игрок)", archetype=None, seeds=None, use_vs=True, vs_k=5)
+        _, user = build_mission_prompts("ru", archetype=None, seeds=None, use_vs=True, vs_k=5)
         self.assertIn("3-5", user)
         self.assertIn("сигнал", user)  # forbidden list mentions the banned trope
 

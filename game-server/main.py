@@ -118,6 +118,7 @@ from game_rules import apply_mission_progress, apply_death_limits, DEATH_COOLDOW
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_server import create_game_server
+from game_concept import generate_game_concept, get_game_concept_lock
 from image_generator import (
     DEFAULT_LOADING_FALLBACK_URL,
     DEFAULT_SPLASH_FALLBACK_URL,
@@ -1065,40 +1066,15 @@ async def start_onboarding(request: StartOnboardingRequest):
         q.id = i
     logger.info(f"Total onboarding questions: {len(dynamic_questions)} role (+ up to {SPECIES_GENDER_QUESTIONS_TOTAL} dynamic species/gender)")
 
-    # Reuse the title + welcome generated once at game creation (they describe the
-    # shared ship and must be identical for every player). Only generate+persist
-    # when missing (e.g. legacy games created before this existed).
-    existing_title = get_game_title(request.game_id)
-    existing_welcome = get_game_welcome_text(request.game_id)
-    game_title_data = {}
-    if existing_title:
-        logger.info(f"Reusing existing game title: {existing_title}")
-        gs = get_game_strings(request.language)
-        game_title_data = {
-            "title": existing_title,
-            "welcome_text": existing_welcome or gs["welcome_text_fallback"],
-        }
-    else:
-        try:
-            gm = create_game_server(language=request.language)
-            game_title_data = gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title")
-
-            if game_title_data.get("title"):
-                save_game_title_and_welcome(
-                    request.game_id,
-                    game_title_data["title"],
-                    game_title_data.get("welcome_text", ""),
-                )
-                logger.info(f"Game title saved to DB: {game_title_data['title']}")
-        except Exception as e:
-            logger.warning(f"Game title generation failed: {e}")
-            gs = get_game_strings(request.language)
-            game_title_data = {
-                "title": gs["game_title_fallback"],
-                "welcome_text": gs["welcome_text_fallback"],
-            }
-            # Save fallback title to database
-            update_game_title(request.game_id, game_title_data["title"])
+    # Generate the linked game concept (mission + title + welcome) once per
+    # game. The title tagline and welcome are derived from the mission so the
+    # game name, its welcome and the mission stay consistent. Idempotent and
+    # concurrency-safe (per-game lock + uq_game_mission index).
+    concept = await _generate_game_concept(request.game_id, request.language)
+    game_title_data = {
+        "title": concept["title"],
+        "welcome_text": concept["welcome_text"],
+    }
 
     # Create session with pre-generated questions (no images yet) and shuffle_seed
     session = create_onboarding_session(
@@ -1256,6 +1232,17 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
     }
 
 
+async def _generate_game_concept(game_id: str, language: str) -> dict:
+    """Thin wrapper over game_concept.generate_game_concept, passing the
+    main-configured retry parameters."""
+    return await generate_game_concept(
+        game_id,
+        language,
+        max_attempts=MISSION_MAX_ATTEMPTS,
+        retry_delay=MISSION_RETRY_DELAY,
+    )
+
+
 async def _generate_background_library(
     game_id: str,
     mission_data: dict,
@@ -1299,92 +1286,89 @@ async def _generate_background_library(
 
 
 async def _generate_started_game_assets(game_id: str, language: str) -> None:
-    """Generate and persist mission + bridge image for an auto-started game.
+    """Generate and persist bridge image + background library for an
+    auto-started game.
 
-    The manual /admin/start-game flow (_original_start_game) creates NPCs, a
-    bridge image and the mission. The onboarding auto-start path is lighter —
-    it only flips the started flag and registers the scheduler — so without
-    this the game proceeds with no mission/archetype and no bridge image.
-    Safe to call repeatedly: each asset is generated only when missing.
+    The mission (and title/welcome) is produced earlier, by
+    ``_generate_game_concept`` at onboarding start. This function only fills
+    in the remaining per-game visuals that depend on the crew composition,
+    which is only known once the game starts. Guarded by the per-game concept
+    lock so the startup sweep cannot race an in-flight call. Safe to call
+    repeatedly: each asset is generated only when missing.
     """
-    try:
-        all_participants = []
-        for pid in get_players_in_game(game_id):
-            p = get_player_profile(pid)
-            if p:
+    lock = get_game_concept_lock(game_id)
+    async with lock:
+        try:
+            all_participants = []
+            for pid in get_players_in_game(game_id):
+                p = get_player_profile(pid)
+                if p:
+                    all_participants.append(
+                        {
+                            "type": "player",
+                            "player_id": pid,
+                            "player_name": p.get("player_name", "") or "",
+                            "role": p["role"],
+                            "species": p.get("species", ""),
+                            "personality_traits": p.get("personality_traits", []),
+                            "role_description": p.get("role_description", ""),
+                            "avatar_description": _extract_avatar_prompt(p.get("avatar_description", "") or ""),
+                            "species_description": p.get("species_description", "") or "",
+                        }
+                    )
+            for npc in get_all_active_npcs(game_id):
                 all_participants.append(
                     {
-                        "type": "player",
-                        "player_id": pid,
-                        "player_name": p.get("player_name", "") or "",
-                        "role": p["role"],
-                        "species": p.get("species", ""),
-                        "personality_traits": p.get("personality_traits", []),
-                        "role_description": p.get("role_description", ""),
-                        "avatar_description": _extract_avatar_prompt(p.get("avatar_description", "") or ""),
-                        "species_description": p.get("species_description", "") or "",
+                        "type": "npc",
+                        "npc_key": npc["npc_key"],
+                        "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
+                        "role": npc["role"],
+                        "species": npc.get("species", ""),
+                        "personality_traits": npc.get("personality_traits", []),
+                        "role_description": npc.get("role_description", ""),
+                        "avatar_description": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
                     }
                 )
-        for npc in get_all_active_npcs(game_id):
-            all_participants.append(
-                {
-                    "type": "npc",
-                    "npc_key": npc["npc_key"],
-                    "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
-                    "role": npc["role"],
-                    "species": npc.get("species", ""),
-                    "personality_traits": npc.get("personality_traits", []),
-                    "role_description": npc.get("role_description", ""),
-                    "avatar_description": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
-                }
-            )
-        if not all_participants:
-            return
-        gm = create_game_server(language=language)
+            if not all_participants:
+                return
+            gm = create_game_server(language=language)
 
-        # Mission (archetype + objectives). Every started game MUST end up with a
-        # mission row — the archetype is shown in /gm_list and drives the whole
-        # game. Retry the LLM call so a transient failure does not leave the game
-        # permanently archetype-less; the startup sweep also catches stragglers.
-        mission_data = get_mission(None, game_id=game_id)
-        if not mission_data:
-            last_err = None
-            for attempt in range(1, MISSION_MAX_ATTEMPTS + 1):
+            # Mission is created at game concept time; backfill it here only for
+            # legacy games that predate the concept pipeline. We already hold
+            # the per-game concept lock here, so generate the mission directly
+            # (without re-entering _generate_game_concept, which would deadlock
+            # on the same non-reentrant lock).
+            mission_data = get_mission(None, game_id=game_id)
+            if not mission_data:
                 try:
-                    mission_data = gm.generate_mission(all_participants, game_id=game_id, player_id=None, turn=None, kind="mission")
+                    mission_data = gm.generate_mission(game_id=game_id, player_id=None, turn=None, kind="mission")
                     create_mission(mission_data, game_id)
-                    logger.info(f"[MISSION] Generated mission for auto-started game {game_id}: {mission_data.get('name', '')} (archetype={mission_data.get('archetype', '')})")
-                    last_err = None
-                    break
-                except Exception as e:
-                    last_err = e
-                    if attempt < MISSION_MAX_ATTEMPTS:
-                        logger.warning(f"[MISSION] Attempt {attempt}/{MISSION_MAX_ATTEMPTS} failed for game {game_id}, retrying", exc_info=True)
-                        await asyncio.sleep(MISSION_RETRY_DELAY * attempt)
-            if last_err is not None:
-                logger.error(f"[MISSION] All {MISSION_MAX_ATTEMPTS} attempts failed for game {game_id}; will be retried on next startup sweep", exc_info=last_err)
+                    logger.info("[MISSION] Backfilled mission for legacy game %s: %s", game_id, mission_data.get("name", ""))
+                except Exception:
+                    logger.error("[MISSION] Backfill failed for legacy game %s", game_id, exc_info=True)
+                mission_data = get_mission(None, game_id=game_id)
 
-        # Pre-generate empty-location backgrounds (used as backdrops for Qwen-Image-Edit scene compositing)
-        try:
-            await _generate_background_library(game_id, mission_data or {}, all_participants, gm, language)
-        except Exception:
-            logger.error(f"[BACKGROUND] Library generation failed for auto-started game {game_id}", exc_info=True)
-
-        # Bridge image (needs the mission for crew positioning context)
-        if not get_random_game_image(type="bridge", game_id=game_id, turn=None):
+            # Pre-generate empty-location backgrounds (used as backdrops for Qwen-Image-Edit scene compositing)
             try:
-                bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
-                bridge_prompt = bridge_result.get("bridge_prompt", "")
-                if bridge_prompt:
-                    image_gen = create_image_generator()
-                    bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge", width=1024, height=1024, game_id=game_id, player_id=None, turn=None, kind="bridge")
-                    if bridge_url:
-                        save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt, game_id=game_id, turn=None)
-                        logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
+                await _generate_background_library(game_id, mission_data or {}, all_participants, gm, language)
             except Exception:
-                logger.error(f"[BRIDGE] Failed to generate bridge image for auto-started game {game_id}", exc_info=True)
-    except Exception:
-        logger.error(f"[MISSION] Failed to generate mission for auto-started game {game_id}", exc_info=True)
+                logger.error(f"[BACKGROUND] Library generation failed for auto-started game {game_id}", exc_info=True)
+
+            # Bridge image (needs the mission for crew positioning context)
+            if not get_random_game_image(type="bridge", game_id=game_id, turn=None):
+                try:
+                    bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
+                    bridge_prompt = bridge_result.get("bridge_prompt", "")
+                    if bridge_prompt:
+                        image_gen = create_image_generator()
+                        bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge", width=1024, height=1024, game_id=game_id, player_id=None, turn=None, kind="bridge")
+                        if bridge_url:
+                            save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt, game_id=game_id, turn=None)
+                            logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
+                except Exception:
+                    logger.error(f"[BRIDGE] Failed to generate bridge image for auto-started game {game_id}", exc_info=True)
+        except Exception:
+            logger.error(f"[MISSION] Failed to generate mission for auto-started game {game_id}", exc_info=True)
 
 
 async def _ensure_missions_for_started_games() -> None:
@@ -1674,6 +1658,7 @@ async def complete_onboarding(session_id: str):
         "game_just_started": game_was_started,
         "player_count": player_count,
         "other_player_ids": other_players,
+        "game_title": get_game_title(game_id) or "",
         "language": get_game_language(game_id),
     }
 
@@ -3844,19 +3829,15 @@ async def admin_create_game(request: CreateGameRequest):
     if request.schedule:
         await _register_game_in_scheduler(game_id, request.schedule)
 
-    # Generate and persist title + welcome text once, at game creation.
-    # These describe the ship shared by all players and must stay stable across onboardings.
+    # Generate the linked game concept (mission + title + welcome) once, at
+    # game creation. The title tagline and welcome are derived from the
+    # mission so they stay consistent; subsequent onboardings reuse them.
     try:
-        gm = create_game_server(language=request.language)
-        title_data = gm.generate_game_title(game_id=game_id, player_id=None, turn=None, kind="game_title")
-        if title_data.get("title"):
-            save_game_title_and_welcome(
-                game_id,
-                title_data["title"],
-                title_data.get("welcome_text", ""),
-            )
-    except Exception as e:
-        logger.warning(f"Title generation for new game {game_id} failed: {e}")
+        concept = await _generate_game_concept(game_id, request.language)
+        if concept["mission"]:
+            await _generate_started_game_assets(game_id, request.language)
+    except Exception:
+        logger.warning("Game concept generation for new game %s failed", game_id, exc_info=True)
 
     return {
         "status": "success",
@@ -3885,20 +3866,9 @@ async def admin_set_language(request: SetLanguageRequest):
 
     gm = create_game_server(language=request.language)
 
-    # Regenerate game title in the new language
+    # Regenerate mission first, then title (tied to that mission) + bridge image.
     new_title = ""
     new_welcome = ""
-    try:
-        title_data = gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title")
-        new_title = title_data.get("title", "")
-        new_welcome = title_data.get("welcome_text", "")
-        if new_title:
-            save_game_title_and_welcome(request.game_id, new_title, new_welcome)
-            logger.info(f"Regenerated game title in {request.language}: {new_title}")
-    except Exception as e:
-        logger.warning(f"Failed to regenerate game title for {request.game_id}: {e}")
-
-    # Regenerate mission and bridge image
     new_mission_name = ""
     try:
         # Build participant list from live players + active NPCs
@@ -3941,11 +3911,21 @@ async def admin_set_language(request: SetLanguageRequest):
             delete_game_images(request.game_id)
 
             # Generate new mission
-            mission_data = gm.generate_mission(all_participants, game_id=request.game_id, player_id=None, turn=None, kind="mission")
+            mission_data = gm.generate_mission(game_id=request.game_id, player_id=None, turn=None, kind="mission")
             mission_result = create_mission(mission_data, request.game_id)
             if mission_result:
                 new_mission_name = mission_result.get("name", "")
                 logger.info(f"Regenerated mission in {request.language}: {new_mission_name}")
+                # Regenerate title tied to the new mission
+                try:
+                    title_data = gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title", mission_context=mission_result)
+                    new_title = title_data.get("title", "")
+                    new_welcome = title_data.get("welcome_text", "")
+                    if new_title:
+                        save_game_title_and_welcome(request.game_id, new_title, new_welcome)
+                        logger.info(f"Regenerated game title in {request.language}: {new_title}")
+                except Exception:
+                    logger.warning("Failed to regenerate game title for %s", request.game_id, exc_info=True)
                 # Generate new bridge image
                 try:
                     bridge_result = gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=request.game_id, player_id=None, turn=None, kind="bridge_image_prompt")
@@ -3975,6 +3955,20 @@ async def admin_set_language(request: SetLanguageRequest):
                     logger.warning(f"Failed to regenerate bridge image: {e}")
     except Exception as e:
         logger.warning(f"Failed to regenerate mission for {request.game_id}: {e}")
+
+    # If there were no participants (mission not regenerated), still refresh
+    # the title in the new language, tied to any pre-existing mission.
+    if not new_title:
+        try:
+            existing_mission = get_mission(None, game_id=request.game_id)
+            title_data = gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title", mission_context=existing_mission)
+            new_title = title_data.get("title", "")
+            new_welcome = title_data.get("welcome_text", "")
+            if new_title:
+                save_game_title_and_welcome(request.game_id, new_title, new_welcome)
+                logger.info(f"Regenerated game title in {request.language}: {new_title}")
+        except Exception:
+            logger.warning("Failed to regenerate game title for %s", request.game_id, exc_info=True)
 
     return {
         "status": "success",
@@ -4686,7 +4680,7 @@ async def _original_start_game(request: StartGameRequest):
         logger.info(f"[MISSION] Resume: reusing existing mission '{mission_data.get('name', '')}'")
         mission_result = mission_data
     else:
-        mission_data = gm.generate_mission(all_participants, game_id=game_id, player_id=None, turn=_npc_turn, kind="mission")
+        mission_data = gm.generate_mission(game_id=game_id, player_id=None, turn=_npc_turn, kind="mission")
         mission_result = create_mission(mission_data, game_id)
         if mission_result:
             logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages)")
