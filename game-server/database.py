@@ -1949,6 +1949,21 @@ def get_player_briefing(turn: int, player_id: int, game_id: str) -> dict[str, An
     return _briefing_row_to_dict(row)
 
 
+def get_npc_briefing(turn: int, npc_key: str, game_id: str) -> dict[str, Any] | None:
+    """Get an NPC's briefing for a specific turn."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM player_briefings WHERE turn = ? AND npc_key = ? AND game_id = ? AND is_npc = 1",
+        (turn, npc_key, game_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return _briefing_row_to_dict(row)
+
+
 def _briefing_row_to_dict(row) -> dict[str, Any]:
     """Convert a player_briefings row from the database to a dict."""
     return {
@@ -1984,6 +1999,25 @@ def get_all_briefings_for_turn(turn: int, game_id: str) -> list[dict[str, Any]]:
     for row in rows:
         result.append(_briefing_row_to_dict(row))
     return result
+
+
+def delete_briefing(turn: int, npc_key: str, game_id: str) -> bool:
+    """Delete an NPC briefing row for a specific turn.
+
+    Used when a player inherits an NPC's role mid-game: the NPC's briefing is
+    cloned into the player's slot, and the original NPC row is removed so the
+    turn outcome resolves only the player's decision (no double-counting).
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM player_briefings WHERE turn = ? AND npc_key = ? AND game_id = ? AND is_npc = 1",
+        (turn, npc_key, game_id),
+    )
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 def update_briefing_choice(

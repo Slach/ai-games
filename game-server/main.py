@@ -39,6 +39,7 @@ from database import (
     delete_onboarding_sessions_for_player,
     delete_player_actions_for_turn,
     delete_player_briefings_for_turn,
+    delete_briefing,
     delete_player_profile,
     end_game,
     fail_generation_job,
@@ -71,6 +72,7 @@ from database import (
     get_player_actions,
     get_player_briefing,
     get_player_count_in_game,
+    get_npc_briefing,
     get_player_profile,
     should_reset_profile_for_reonboarding,
     get_players_in_game,
@@ -1645,6 +1647,13 @@ async def complete_onboarding(session_id: str):
 
     game_started = is_game_started(game_id)
 
+    # If joining an already-running game (this onboarding did not start it),
+    # let the player inherit the current turn's NPC briefing so they can
+    # participate immediately instead of waiting for the next generated turn.
+    if game_started and not game_was_started:
+        game_lang = get_game_language(game_id)
+        asyncio.create_task(_inherit_npc_briefing_for_player(player_id, game_id, game_lang))
+
     # Get all other players in the game (for notification)
     all_players = get_players_in_game(game_id)
     other_players = [p for p in all_players if p != player_id]
@@ -2827,6 +2836,57 @@ async def _generate_chosen_action_image(
             logger.warning(f"[ACTION_IMAGE] Generation returned None for player {player_id}")
     except Exception as e:
         logger.error(f"[ACTION_IMAGE] Failed to generate: {e}", exc_info=True)
+
+
+async def _inherit_npc_briefing_for_player(player_id: int, game_id: str, language: str) -> None:
+    """Let a late-joining player inherit the current turn's NPC briefing.
+
+    When a player completes onboarding into an already-running game and takes a
+    role held by an NPC, the NPC's briefing for the current turn is cloned into
+    the player's slot (with the auto-choice cleared, so the player chooses
+    themselves) and the original NPC row is removed so the turn outcome
+    resolves only the player's decision.
+    """
+    try:
+        role_key = get_role_key_for_player(player_id, game_id)
+        if not role_key:
+            return
+        npc_key = f"npc_{role_key}_{game_id}"
+
+        # Game state tracks the NEXT turn to generate; the latest completed turn
+        # is the one a player joining now would expect to participate in.
+        current_turn = max(1, get_game_state(game_id)["turn"] - 1)
+        npc_briefing = get_npc_briefing(current_turn, npc_key, game_id)
+        if not npc_briefing:
+            return
+
+        save_player_briefing(
+            {
+                "turn": current_turn,
+                "player_id": player_id,
+                "npc_key": None,
+                "is_npc": False,
+                "briefing": npc_briefing["briefing"],
+                "choices": npc_briefing.get("choices", []),
+                "selected_action_id": None,
+                "choice_rationale": "",
+                "consequence_result": {},
+                "chosen_action_url": None,
+                "personal_title": npc_briefing.get("personal_title", ""),
+                "image_prompt": npc_briefing.get("image_prompt", ""),
+            },
+            game_id,
+        )
+        delete_briefing(current_turn, npc_key, game_id)
+        logger.info(
+            f"[INHERIT] player {player_id} inherited turn {current_turn} from {npc_key} in game {game_id}"
+        )
+        # The player's chosen-action image is generated when they submit their
+        # choice via /game/actions (reusing the existing pipeline), so nothing
+        # more to do here — the player polls, sees the inherited briefing, and
+        # picks an action like any other player.
+    except Exception as e:
+        logger.error(f"[INHERIT] Failed for player {player_id} game {game_id}: {e}", exc_info=True)
 
 
 async def _generate_npc_chosen_action_image(
