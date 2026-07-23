@@ -905,43 +905,45 @@ NPC_NAME_SCHEMA = {
 # ============== Game Server ==============
 
 # Each wound severity step removes one action choice from the healthy total.
-# healthy = full set (good+bad+neutral), then minor→-1, moderate→-2, critical→-3.
-# The neutral ("wait/rest") option is always preserved, so a critically wounded
-# crew member still has at least one safe choice.
+# healthy = full set (progress+injury+fatal), then minor→-1, moderate→-2, critical→-3.
+# Trimming order: fatal first (a wounded crew member shouldn't be forced toward a
+# deadly option), then injury, preserving progress actions last.
 _WOUND_ACTION_PENALTY = {"minor": 1, "moderate": 2, "critical": 3}
 
 
 def _actions_for_wound(
     wound_severity: str | None,
-    n_good: int,
-    n_bad: int,
-    n_neutral: int,
+    n_progress: int,
+    n_injury: int,
+    n_fatal: int,
 ) -> tuple[int, int, int, int]:
-    """Return (total, good, bad, neutral) action counts for a wound severity.
+    """Return (total, progress, injury, fatal) action counts for a wound severity.
 
-    Reduces the action set by trimming good choices first, then bad, always
-    preserving at least one neutral choice (safe "wait/rest").
+    Reduces the action set by trimming fatal choices first, then injury,
+    preserving progress (mission-advancing) actions last. Never goes below
+    1 total action.
     """
-    total = n_good + n_bad + n_neutral
+    total = n_progress + n_injury + n_fatal
     penalty = _WOUND_ACTION_PENALTY.get(wound_severity or "", 0)
     if penalty <= 0:
-        return total, n_good, n_bad, n_neutral
+        return total, n_progress, n_injury, n_fatal
 
-    # Trim from good first.
-    removed_from_good = min(n_good, penalty)
-    out_good = n_good - removed_from_good
-    remaining_penalty = penalty - removed_from_good
-    # Then trim from bad.
-    out_bad = max(0, n_bad - remaining_penalty)
-    # Neutral is always preserved (at least 1) so a wounded member always has
-    # a safe "rest" option.
-    out_neutral = max(1, n_neutral)
-    final_total = out_good + out_bad + out_neutral
-    # Never go below 1 total action.
+    # Trim from fatal first.
+    removed_from_fatal = min(n_fatal, penalty)
+    out_fatal = n_fatal - removed_from_fatal
+    remaining_penalty = penalty - removed_from_fatal
+    # Then trim from injury.
+    removed_from_injury = min(n_injury, remaining_penalty)
+    out_injury = n_injury - removed_from_injury
+    remaining_penalty -= removed_from_injury
+    # Progress is preserved last.
+    out_progress = max(0, n_progress - remaining_penalty)
+    final_total = out_progress + out_injury + out_fatal
+    # Never go below 1 total action — keep one progress option if possible,
+    # otherwise the single remaining action of whatever type.
     if final_total < 1:
-        out_neutral = 1
-        return 1, 0, 0, out_neutral
-    return final_total, out_good, out_bad, out_neutral
+        return 1, max(1, n_progress), 0, 0
+    return final_total, out_progress, out_injury, out_fatal
 
 
 class GameServer:
@@ -956,9 +958,9 @@ class GameServer:
         self.llm_model = os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B")
         self.llm_max_tokens = _safe_int_env("LLM_MAX_TOKENS", 32768)
         self.llm_max_avatar_tokens = _safe_int_env("LLM_MAX_AVATAR_TOKENS", 4096)
-        self.turn_good_actions = _safe_int_env("GAME_TURN_GOOD_ACTIONS", 3)
-        self.turn_bad_actions = _safe_int_env("GAME_TURN_BAD_ACTIONS", 1)
-        self.turn_neutral_actions = _safe_int_env("GAME_TURN_NEUTRAL_ACTIONS", 1)
+        self.turn_progress_actions = _safe_int_env("GAME_TURN_PROGRESS_ACTIONS", 2)
+        self.turn_injury_actions = _safe_int_env("GAME_TURN_INJURY_ACTIONS", 2)
+        self.turn_fatal_actions = _safe_int_env("GAME_TURN_FATAL_ACTIONS", 1)
         self.crew_dialogue_speakers = max(2, _safe_int_env("GAME_CREW_DIALOGUE_SPEAKERS", 3))
         self.language = language
         self.npcs: dict[str, dict[str, Any]] = {}
@@ -983,7 +985,7 @@ class GameServer:
         wounded (fewer choices).
         """
         if total_actions is None:
-            total_actions = self.turn_good_actions + self.turn_bad_actions + self.turn_neutral_actions
+            total_actions = self.turn_progress_actions + self.turn_injury_actions + self.turn_fatal_actions
         return {
             "type": "json_schema",
             "json_schema": {
@@ -1023,8 +1025,8 @@ class GameServer:
                                     },
                                     "consequence_kind": {
                                         "type": "string",
-                                        "enum": ["good", "bad", "neutral"],
-                                        "description": "Classification of this action: good (success advances mission), bad (risk of damage/regression), neutral (safe wait/rest, no progress). Must match the requested count for each type.",
+                                        "enum": ["progress", "injury", "fatal"],
+                                        "description": "Classification of this action: progress (success advances the mission, opens opportunities), injury (leads to a wound, no death), fatal (death of a crew member). Must match the requested count for each type.",
                                     },
                                 },
                                 "required": ["id", "text", "consequence", "consequence_kind"],
@@ -3096,21 +3098,19 @@ class GameServer:
 
         # Wound severity reduces the number of action choices available:
         # healthy = full set, then one fewer per step (5/4/3/2 by default).
+        # Fatal is trimmed first, then injury; progress is preserved last.
         wound_severity = player_profile.get("wound_severity") or None
-        total_actions, n_good, n_bad, n_neutral = _actions_for_wound(
+        total_actions, n_progress, n_injury, n_fatal = _actions_for_wound(
             wound_severity,
-            self.turn_good_actions,
-            self.turn_bad_actions,
-            self.turn_neutral_actions,
+            self.turn_progress_actions,
+            self.turn_injury_actions,
+            self.turn_fatal_actions,
         )
 
         system = build_personal_briefing_system(self.language)
         user = "Global circumstances:\n" if self.language == LANGUAGE_EN else "Общие обстоятельства дня:\n"
         # Build user prompt based on language inline (complex formatting with instance state)
         if self.language == LANGUAGE_RU:
-            good = "хороших"
-            bad = "плохое"
-            neutral = "нейтральное"
             wound_label_ru = (
                 {
                     "critical": "тяжёлое ранение",
@@ -3146,22 +3146,25 @@ class GameServer:
                 "3. briefing — персональная вводная — что этот конкретный персонаж видит, слышит, чувствует. "
                 "Как его роль и характер влияют на восприятие ситуации. (2-3 предложения)\n"
                 f"4. Ровно {total_actions} вариантов действий с последствиями: "
-                f"{n_good} {good}, {n_bad} {bad}, {n_neutral} {neutral}.\n"
+                f"{n_progress} продвигающих миссию (progress), {n_injury} с ранением (injury), "
+                f"{n_fatal} смертельное (fatal).\n"
                 f"Каждый вариант ДОЛЖЕН содержать поле consequence_kind соответственно его группе: "
-                f"ровно {n_good} со значением 'good', {n_bad} со значением 'bad', "
-                f"{n_neutral} со значением 'neutral'.\n\n"
+                f"ровно {n_progress} со значением 'progress', {n_injury} со значением 'injury', "
+                f"{n_fatal} со значением 'fatal'.\n\n"
                 "КРИТИЧЕСКИЕ ТРЕБОВАНИЯ К ВАРИАНТАМ ДЕЙСТВИЙ:\n"
-                "- Каждое действие ДОЛЖНО иметь РЕАЛЬНЫЙ РИСК. "
-                "Успех приближает к цели миссии, провал — отдаляет. Последствия должны быть РАДИКАЛЬНЫМИ.\n"
-                "- Последствия НЕ ДОЛЖНЫ быть очевидны из текста действия! Игрок ВЫБИРАЕТ вслепую.\n"
-                "- Последствия могут включать: гибель членов экипажа, повреждение систем корабля, "
-                "потерю ресурсов, ранения.\n"
-                "- Нейтральное действие — безопасное (ничего не делать / ждать), "
-                "оно НЕ продвигает миссию и может УХУДШИТЬ ситуацию.\n"
+                "- 'progress' — действие, успех которого ПРОДВИГАЕТ миссию (новые открытия, продвижение "
+                "к цели, открытые возможности). Это осмысленный риск ради награды.\n"
+                "- 'injury' — действие, ведущее к РАНЕНИЮ персонажа (без гибели): "
+                "травма, ущерб здоровью, временная нетрудоспособность.\n"
+                "- 'fatal' — СМЕРТЕЛЬНОЕ действие: его провал (или иной исход) ведёт к гибели "
+                "члена экипажа (самого персонажа или другого).\n"
+                "- Последствия НЕ ДОЛЖНЫ быть очевидны из текста действия! Игрок ВЫБИРАЕТ вслепую — "
+                "текст действия не должен выдавать его consequence_kind.\n"
                 "- Разные варианты должны давать РАЗНЫЕ уровни риска и награды.\n"
                 "- Варианты должны соответствовать РОЛИ персонажа.\n"
                 + (
-                    "- Персонаж РАНЕН — варианты должны учитывать его ограниченные физические возможности: меньше агрессивных/физических действий, больше осторожных, всегда есть безопасное нейтральное действие (отдых/лечение).\n"
+                    "- Персонаж РАНЕН — варианты должны учитывать его ограниченные физические возможности: "
+                    "меньше агрессивных/физических действий, более осторожные формулировки.\n"
                     if wound_severity in ("critical", "moderate", "minor")
                     else ""
                 )
@@ -3199,10 +3202,18 @@ class GameServer:
                 "role/title ('officer', 'captain', 'science') — those bias the image model toward a human "
                 "and break non-humanoid characters.\n"
                 f"3. Exactly {total_actions} action choices: "
-                f"{n_good} good, {n_bad} bad, {n_neutral} neutral.\n"
+                f"{n_progress} progress, {n_injury} injury, {n_fatal} fatal.\n"
                 f"Each choice MUST include a consequence_kind matching its group: exactly "
-                f"{n_good} with 'good', {n_bad} with 'bad', {n_neutral} with 'neutral'.\n"
-                + ("- The character is WOUNDED — fewer aggressive/physical actions, always include a safe neutral option (rest/treatment).\n" if wound_severity in ("critical", "moderate", "minor") else "")
+                f"{n_progress} with 'progress', {n_injury} with 'injury', {n_fatal} with 'fatal'.\n"
+                "- 'progress' — an action whose success ADVANCES the mission (discoveries, progress "
+                "toward the goal, new opportunities). A meaningful risk for a reward.\n"
+                "- 'injury' — an action that leads to a WOUND (no death): trauma, health damage, "
+                "temporary incapacitation.\n"
+                "- 'fatal' — a DEADLY action: its failure (or other outcome) leads to the death of "
+                "a crew member (the character themselves or another).\n"
+                "- The consequence MUST NOT be obvious from the action text! The player chooses BLIND — "
+                "the text must not reveal its consequence_kind.\n"
+                + ("- The character is WOUNDED — fewer aggressive/physical actions, more cautious phrasing.\n" if wound_severity in ("critical", "moderate", "minor") else "")
                 + (crew_dialogue_context if crew_dialogue_context else "")
             )
 

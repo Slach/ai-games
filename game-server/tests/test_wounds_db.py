@@ -92,35 +92,38 @@ class TestWoundPersistence(unittest.TestCase):
 
 class TestActionsForWound(unittest.TestCase):
     def test_healthy_full_set(self):
-        # default env: 3 good, 1 bad, 1 neutral = 5
-        total, g, b, n = _actions_for_wound(None, 3, 1, 1)
-        self.assertEqual((total, g, b, n), (5, 3, 1, 1))
+        # default env: 2 progress, 2 injury, 1 fatal = 5
+        total, p, i, f = _actions_for_wound(None, 2, 2, 1)
+        self.assertEqual((total, p, i, f), (5, 2, 2, 1))
 
     def test_minor_removes_one(self):
-        total, g, b, n = _actions_for_wound("minor", 3, 1, 1)
+        total, p, i, f = _actions_for_wound("minor", 2, 2, 1)
         self.assertEqual(total, 4)
-        # good trimmed first.
-        self.assertEqual(g, 2)
-        self.assertEqual(b, 1)
-        self.assertEqual(n, 1)
+        # fatal trimmed first.
+        self.assertEqual(f, 0)
+        self.assertEqual(p, 2)
+        self.assertEqual(i, 2)
 
     def test_moderate_removes_two(self):
-        total, g, b, n = _actions_for_wound("moderate", 3, 1, 1)
+        total, p, i, f = _actions_for_wound("moderate", 2, 2, 1)
         self.assertEqual(total, 3)
-        self.assertEqual(g, 1)
-        self.assertEqual(b, 1)
-        self.assertEqual(n, 1)
+        # fatal (1) then one injury trimmed; progress preserved.
+        self.assertEqual(f, 0)
+        self.assertEqual(i, 1)
+        self.assertEqual(p, 2)
 
-    def test_critical_never_below_one_neutral(self):
-        total, g, b, n = _actions_for_wound("critical", 3, 1, 1)
+    def test_critical_never_below_one(self):
+        total, p, i, f = _actions_for_wound("critical", 2, 2, 1)
+        # fatal (1) + both injury (2) = 3 trimmed; progress preserved at 2.
         self.assertEqual(total, 2)
-        # neutral always preserved; good trimmed first then bad.
-        self.assertGreaterEqual(n, 1)
-        self.assertEqual(total, g + b + n)
+        self.assertEqual(p, 2)
+        self.assertEqual(i, 0)
+        self.assertEqual(f, 0)
+        self.assertEqual(total, p + i + f)
 
     def test_unknown_severity_treated_as_healthy(self):
-        total, g, b, n = _actions_for_wound("garbage", 3, 1, 1)
-        self.assertEqual((total, g, b, n), (5, 3, 1, 1))
+        total, p, i, f = _actions_for_wound("garbage", 2, 2, 1)
+        self.assertEqual((total, p, i, f), (5, 2, 2, 1))
 
 
 if __name__ == "__main__":

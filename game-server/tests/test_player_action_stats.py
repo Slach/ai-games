@@ -62,11 +62,11 @@ class TestPlayerActionStats(unittest.TestCase):
             turn=2,
             action_id="action_3",
             action_text="Заложить заряд в реактор",
-            consequence_kind="bad",
+            consequence_kind="injury",
             crew_health=84,
         )
         self.assertEqual(result["game_id"], "g1")
-        self.assertEqual(result["consequence_kind"], "bad")
+        self.assertEqual(result["consequence_kind"], "injury")
         self.assertEqual(result["crew_health"], 84)
 
         rows = _query_all()
@@ -77,7 +77,7 @@ class TestPlayerActionStats(unittest.TestCase):
         self.assertEqual(row["turn"], 2)
         self.assertEqual(row["action_id"], "action_3")
         self.assertEqual(row["action_text"], "Заложить заряд в реактор")
-        self.assertEqual(row["consequence_kind"], "bad")
+        self.assertEqual(row["consequence_kind"], "injury")
         self.assertEqual(row["crew_health"], 84)
         self.assertTrue(row["created_at"])
 
@@ -85,11 +85,11 @@ class TestPlayerActionStats(unittest.TestCase):
         """Stats for one game must not show up under another game's player history."""
         db.save_player_action_stats(
             game_id="default_game", player_id=222, turn=1,
-            action_id="action_1", action_text="a", consequence_kind="good", crew_health=100,
+            action_id="action_1", action_text="a", consequence_kind="progress", crew_health=100,
         )
         db.save_player_action_stats(
             game_id="wjptt8", player_id=222, turn=1,
-            action_id="action_2", action_text="b", consequence_kind="neutral", crew_health=95,
+            action_id="action_2", action_text="b", consequence_kind="fatal", crew_health=95,
         )
 
         conn = db.get_db_connection()
@@ -108,9 +108,9 @@ class TestPlayerActionStats(unittest.TestCase):
             conn.close()
 
         self.assertEqual(len(default), 1)
-        self.assertEqual(default[0]["consequence_kind"], "good")
+        self.assertEqual(default[0]["consequence_kind"], "progress")
         self.assertEqual(len(new), 1)
-        self.assertEqual(new[0]["consequence_kind"], "neutral")
+        self.assertEqual(new[0]["consequence_kind"], "fatal")
 
     def test_index_on_game_and_turn_exists(self):
         """The (game_id, turn) index must exist for per-turn slices."""
@@ -148,7 +148,7 @@ class TestBriefingSchemaConsequenceKind(unittest.TestCase):
     def test_consequence_kind_is_enum(self):
         prop = self._choice_item_schema()["properties"]["consequence_kind"]
         self.assertEqual(prop["type"], "string")
-        self.assertEqual(set(prop["enum"]), {"good", "bad", "neutral"})
+        self.assertEqual(set(prop["enum"]), {"progress", "injury", "fatal"})
 
     def test_additional_properties_still_false(self):
         """Strict mode: required must list every property, and extra keys forbidden."""
