@@ -2864,11 +2864,10 @@ async def _send_game_invite_to_chat(bot: Bot, chat_id: int, game_id: str, player
             logger.warning(f"Failed to send invite image for player {player_id}: {e}")
         return False
 
-    if mission and bridge and bridge.get("image_url"):
-        # ── Mission exists: bridge photo with mission caption ──
+    clean_title = game_title.strip("«»")
+    if mission:
         mission_name = mission.get("name", "")
         short_desc = mission.get("short_description", "")
-        clean_title = game_title.strip("«»")
         caption = msgs.get(
             "invite_mission_caption",
             "I invite you to the game «{game_title}»!\n\n🚀 Mission «{mission_name}»\n\n{mission_description}\n\n{invite_url}",
@@ -2878,12 +2877,7 @@ async def _send_game_invite_to_chat(bot: Bot, chat_id: int, game_id: str, player
             mission_description=escape_markdown(short_desc),
             invite_url=escape_markdown(invite_url),
         ) + how_to_play
-        sent = await _send_image(bridge.get("image_url"), caption)
-        if not sent:
-            await bot.send_message(chat_id=chat_id, text=caption, parse_mode="Markdown")
     else:
-        # ── No bridge: try a random splash image with game title ──
-        clean_title = game_title.strip("«»")
         caption = msgs.get(
             "invite_no_mission_caption",
             "I invite you to the game «{game_title}»!\n\n{invite_url}",
@@ -2891,16 +2885,19 @@ async def _send_game_invite_to_chat(bot: Bot, chat_id: int, game_id: str, player
             game_title=escape_markdown(clean_title),
             invite_url=escape_markdown(invite_url),
         ) + how_to_play
-        splash_url = None
+
+    image_url = bridge.get("image_url") if (bridge and mission) else None
+    if not image_url:
+        # ── No bridge: try a random splash image with game title ──
         try:
             params = {"game_id": game_id} if game_id else None
             result = await api_request("GET", "/content/splash-image", data=None, params=params, timeout_total=600, ignore_codes=())
-            splash_url = result.get("image_url") if result else None
+            image_url = result.get("image_url") if result else None
         except Exception as e:
             logger.warning(f"Failed to fetch splash image for invite: {e}")
-        sent = await _send_image(splash_url, caption)
-        if not sent:
-            await bot.send_message(chat_id=chat_id, text=caption, parse_mode="Markdown")
+    sent = await _send_image(image_url, caption)
+    if not sent:
+        await bot.send_message(chat_id=chat_id, text=caption, parse_mode="Markdown")
 
     # ── Second message: QR code with deep link + forward instruction ──
     forward_text = msgs.get(
