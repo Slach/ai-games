@@ -3312,10 +3312,11 @@ class GameServer:
             action = d.get("action_id", "")
             action_text = d.get("action_text", "")
             consequence = d.get("consequence", "")
+            consequence_kind = d.get("consequence_kind", "")
             rationale = d.get("rationale", "")
             is_player = bool(d.get("player_id"))
             weight = "HIGH (PLAYER)" if is_player else "NORMAL (NPC)"
-            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role})\nChose: {action_text} ({action})\nRationale: {rationale}\nHIDDEN CONSEQUENCE: {consequence}\n"
+            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role})\nChose: {action_text} ({action})\nRationale: {rationale}\nHIDDEN CONSEQUENCE: [{consequence_kind}] {consequence}\n"
 
         # Full crew roster — prevents the LLM from inventing non-existent crew members
         roster_text = ""
