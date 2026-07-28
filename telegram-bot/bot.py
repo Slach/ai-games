@@ -1749,11 +1749,14 @@ async def _finalize_new_game_creation(
     schedule: str,
 ) -> None:
     """Create the new game with the chosen schedule and proceed to name input."""
+    onboarding_msgs = lang.get_onboarding(language)
+    # create_new_game blocks on mission + title + asset generation (~1 min).
+    # Tell the player up front so the wait is not silent.
+    await message.answer(onboarding_msgs["game_generating"], parse_mode="Markdown")
     game_id, game_name = await create_new_game(player_id, language=language, schedule=schedule)
     if not game_id:
         raise Exception("No game_id returned from create_new_game")
 
-    onboarding_msgs = lang.get_onboarding(language)
     await message.answer(f"🎮 *{game_name}*", parse_mode="Markdown")
     await message.answer(
         onboarding_msgs["schedule_set_confirm"].format(label=schedule),

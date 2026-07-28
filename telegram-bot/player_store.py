@@ -197,6 +197,38 @@ def update_player_state(player_id: int, **kwargs: Any) -> None:
 
         params.append(player_id)  # WHERE clause
 
+        # If the player_state row was previously deleted (e.g. by /reset →
+        # delete_player_state), the UPDATE below matches 0 rows and the caller's
+        # intent is silently lost. Recreate a default row first so the UPDATE
+        # always lands. Without this, /reset then language selection wrote into
+        # nothing and the next get_player_language fell back to DEFAULT_LANGUAGE.
+        existing = conn.execute(
+            "SELECT 1 FROM player_states WHERE player_id = ?", (player_id,)
+        ).fetchone()
+        if existing is None:
+            now = datetime.now().isoformat()
+            conn.execute(
+                """
+                INSERT INTO player_states
+                    (player_id, game_id, onboarding_session_id,
+                     current_question_id, current_options, current_question_text,
+                     current_question_image_url, last_poll, pending_updates, language)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    player_id,
+                    DEFAULT_STATE["game_id"],
+                    DEFAULT_STATE["onboarding_session_id"],
+                    DEFAULT_STATE["current_question_id"],
+                    json.dumps(DEFAULT_STATE["current_options"]) if DEFAULT_STATE["current_options"] else None,
+                    DEFAULT_STATE["current_question_text"],
+                    DEFAULT_STATE["current_question_image_url"],
+                    now,
+                    "[]",
+                    DEFAULT_STATE["language"],
+                ),
+            )
+
         conn.execute(
             """UPDATE player_states SET
                 game_id = CASE WHEN ? THEN ? ELSE game_id END,
