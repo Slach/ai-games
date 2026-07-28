@@ -362,9 +362,11 @@ def get_team(language: str):
 NOTIFICATIONS = {
     LANGUAGE_RU: {
         "game_restarted": ("⚠️ *Игра была перезапущена Game Master-ом!*\n\nВсе предыдущие ходы удалены. История начинается заново.\nВаш персонаж и роль сохранены.\n"),
+        "language_changed": ("🌐 *Game Master изменил язык игры на {language} {flag}.*\n\nМиссия, название и заставки будут перегенерированы на новом языке."),
     },
     LANGUAGE_EN: {
         "game_restarted": ("⚠️ *The game has been restarted by the Game Master!*\n\nAll previous turns have been deleted. The story begins anew.\nYour character and role are preserved.\n"),
+        "language_changed": ("🌐 *The Game Master has changed the game language to {language} {flag}.*\n\nThe mission, title and splash images will be regenerated in the new language."),
     },
 }
 
@@ -503,6 +505,7 @@ GM_COMMANDS = {
         "set_language_invalid": "❌ Язык должен быть `ru` или `en`.",
         "set_language_progress": "⏳ Меняю язык игры `{game_id}` на `{lang_code}`, генерирую название и миссию...",
         "set_language_success": "✅ *Язык игры `{game_id}` изменён на `{lang_code}`*\n\n🌐 Название игры: *{title}*",
+        "set_language_started": "❌ Игра `{game_id}` уже стартовала — язык менять нельзя.",
         "set_language_error": "❌ Ошибка: {detail}",
         "next_turn_at": "Следующий ход: {time}",
         "next_turn_auto": "Следующий авто-ход: {time}",
@@ -587,6 +590,7 @@ GM_COMMANDS = {
         "set_language_invalid": "❌ Language must be `ru` or `en`.",
         "set_language_progress": "⏳ Changing game `{game_id}` language to `{lang_code}`, regenerating title and mission...",
         "set_language_success": "✅ *Game `{game_id}` language changed to `{lang_code}`*\n\n🌐 Game title: *{title}*",
+        "set_language_started": "❌ Game `{game_id}` has already started — language cannot be changed.",
         "set_language_error": "❌ Error: {detail}",
         "next_turn_at": "Next turn: {time}",
         "next_turn_auto": "Next auto-turn: {time}",

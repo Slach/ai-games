@@ -2470,6 +2470,31 @@ def get_onboarding_count_in_game(game_id: str) -> int:
         conn.close()
 
 
+def get_onboarding_player_ids_in_game(game_id: str) -> list[int]:
+    """Get player IDs who started onboarding but haven't completed it for a game.
+
+    The game_id is stored in the onboarding_sessions.answers JSON as key "-1".
+    Returns distinct player_ids with completed=0 whose answers match the game.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """SELECT DISTINCT player_id
+               FROM onboarding_sessions
+               WHERE completed = 0
+                 AND json_extract(answers, '$."-1"') = ?""",
+            (game_id,),
+        )
+        rows = cursor.fetchall()
+        return [row["player_id"] for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to get onboarding player ids for game {game_id}: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
 def delete_game_images(game_id: str) -> int:
     """Delete all images associated with a game (splash, bridge, etc.),
     but preserve loading images since they are shared."""

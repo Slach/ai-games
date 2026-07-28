@@ -36,6 +36,8 @@ from language import (
     get_actions,
     get_bridge,
     get_current_turn,
+    get_language_flag,
+    get_language_name,
     get_notifications,
     get_onboarding,
     get_push_outcome,
@@ -908,6 +910,39 @@ async def _deliver_gm_notification(
     return True
 
 
+async def _deliver_language_changed(
+    payload: dict[str, Any],
+    bot: Bot,
+) -> bool:
+    """Deliver a /push/language-changed notification to one player.
+
+    game-server queues one push_queue row per player (handler inlines the
+    target player_id into the payload), so this only sends to that player.
+    Telegram errors (blocked bot, etc.) are handled centrally by _dispatch_one.
+    """
+    player_id = payload.get("player_id")
+    language = payload.get("language", "ru")
+    if not player_id or not bot:
+        return True
+
+    notif_msgs = get_notifications(language)
+    template = notif_msgs.get("language_changed", "")
+    if not template:
+        return True
+    text = template.format(
+        language=get_language_name(language, language),
+        flag=get_language_flag(language),
+    )
+    await call_with_retry(
+        lambda: bot.send_message(
+            chat_id=player_id,
+            text=text,
+            parse_mode="Markdown",
+        )
+    , max_retries=3, base_delay=1.0, max_delay=10.0)
+    return True
+
+
 async def _deliver_game_over(
     payload: dict[str, Any],
     bot: Bot,
@@ -1248,6 +1283,7 @@ _DELIVER_FNS = {
     "gm_notification": _deliver_gm_notification,
     "game_over": _deliver_game_over,
     "onboarding": _deliver_onboarding_ready,
+    "language_changed": _deliver_language_changed,
 }
 
 
@@ -1672,6 +1708,45 @@ async def handle_push_game_over(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "queued": inserted})
 
 
+async def handle_push_language_changed(request: web.Request) -> web.Response:
+    """Handle POST /push/language-changed — save to push_queue, return immediately.
+
+    One push_queue row per player_id is created, with the target player_id
+    inlined into the payload so _deliver_language_changed knows the recipient.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        logger.warning("[PUSH_LANGUAGE] Invalid JSON in request", exc_info=True)
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    game_id = payload.get("game_id")
+    player_ids = payload.get("player_ids", [])
+
+    if not game_id or not player_ids:
+        return web.json_response({"error": "Missing game_id or player_ids"}, status=400)
+
+    inserted = 0
+    for player_id in player_ids:
+        per_player_payload = {**payload, "player_id": player_id}
+        insert_push_message(
+            player_id=player_id,
+            push_type="language_changed",
+            payload=json.dumps(per_player_payload, ensure_ascii=False),
+            turn=None,
+            game_id=game_id,
+            db_path=DB_PATH,
+        )
+        inserted += 1
+
+    logger.info(
+        "[PUSH_LANGUAGE] Queued %d language-changed message(s) for game %s",
+        inserted,
+        game_id,
+    )
+    return web.json_response({"status": "ok", "queued": inserted})
+
+
 async def handle_push_onboarding_ready(request: web.Request) -> web.Response:
     """Handle POST /push/onboarding-ready — save to push_queue, return immediately."""
     try:
@@ -1805,6 +1880,7 @@ async def start_push_server(
     app.router.add_post("/push/outcome", handle_push_outcome)
     app.router.add_post("/push/game-over", handle_push_game_over)
     app.router.add_post("/push/gm-notification", handle_gm_notification)
+    app.router.add_post("/push/language-changed", handle_push_language_changed)
     app.router.add_post("/push/onboarding-ready", handle_push_onboarding_ready)
     app.router.add_get("/health", handle_health)
 

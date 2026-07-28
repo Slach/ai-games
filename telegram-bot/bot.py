@@ -4081,9 +4081,12 @@ async def cmd_gm_lang(message: types.Message):
             data={"game_id": game_id, "language": lang_code},
             params=None,
             timeout_total=120,
-            ignore_codes=(),
+            ignore_codes=(409,),
         )
-        if result and result.get("status") == "success":
+        if result is None:
+            # 409 — game already started, language is locked
+            await message.answer(gm_msgs["set_language_started"].format(game_id=game_id))
+        elif result.get("status") == "success":
             new_title = result.get("title", "")
             new_mission = result.get("mission_name") or ""
             success_text = gm_msgs["set_language_success"].format(game_id=game_id, lang_code=lang_code, title=new_title)
@@ -4091,7 +4094,7 @@ async def cmd_gm_lang(message: types.Message):
                 success_text += f"\n🎯 New mission: *{new_mission}*"
             await message.answer(success_text, parse_mode="Markdown")
         else:
-            detail = result.get("detail", gm_msgs["unknown_error"]) if result else gm_msgs["no_api_response"]
+            detail = result.get("detail", gm_msgs["unknown_error"])
             await message.answer(gm_msgs["set_language_error"].format(detail=detail))
     except Exception as e:
         logger.error(f"Failed to set language for game {game_id}: {e}", exc_info=True)

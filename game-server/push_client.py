@@ -35,6 +35,10 @@ TELEGRAM_BOT_ONBOARDING_READY_URL = os.getenv(
     "TELEGRAM_BOT_ONBOARDING_READY_URL",
     "http://telegram-bot:9090/push/onboarding-ready",
 )
+TELEGRAM_BOT_LANGUAGE_CHANGED_URL = os.getenv(
+    "TELEGRAM_BOT_LANGUAGE_CHANGED_URL",
+    "http://telegram-bot:9090/push/language-changed",
+)
 try:
     PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
 except (ValueError, TypeError):
@@ -245,6 +249,34 @@ async def push_gm_notification(
     }
     label = f"gm-notification game={game_id} turn={turn} status={status}"
     return await _post_with_retry(TELEGRAM_BOT_GM_NOTIFICATION_URL, payload, label)
+
+
+async def push_language_changed(
+    game_id: str,
+    player_ids: list[int],
+    language: str,
+) -> bool:
+    """Notify players that the Game Master changed the game language.
+
+    Called from /admin/set-language after regenerating mission/title/splash,
+    so players who started or finished onboarding know the content was
+    regenerated in the new language.
+
+    Args:
+        game_id: Game identifier
+        player_ids: Telegram chat ids (= player_ids) to notify
+        language: New game language code ("ru"/"en") for the message text.
+
+    Returns:
+        True if delivered to the bot's push queue, False after all retries.
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "player_ids": player_ids,
+        "language": language,
+    }
+    label = f"language-changed game={game_id} lang={language} players={len(player_ids)}"
+    return await _post_with_retry(TELEGRAM_BOT_LANGUAGE_CHANGED_URL, payload, label)
 
 
 async def push_turn_outcome(

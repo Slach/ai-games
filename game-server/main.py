@@ -67,6 +67,7 @@ from database import (
     get_npc_by_role,
     get_npc_profile,
     get_onboarding_count_in_game,
+    get_onboarding_player_ids_in_game,
     get_onboarding_session,
     reserve_onboarding_slot,
     get_player_actions,
@@ -138,7 +139,7 @@ from language import (
 from prompts import (
     OnboardingQuestion,
 )
-from push_client import push_briefings, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action
+from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action
 from pydantic import BaseModel, TypeAdapter
 
 # Configure logging.
@@ -3909,7 +3910,9 @@ async def admin_create_game(request: CreateGameRequest):
 
 @app.post("/admin/set-language")
 async def admin_set_language(request: SetLanguageRequest):
-    """Set the language for a game and regenerate its title, mission and bridge image."""
+    """Set the language for a game and regenerate its title, mission, splash and
+    bridge image. Blocked once the game has started (turns reference the mission
+    stages, so regenerating would desync the story)."""
     game = get_game(request.game_id)
     if not game:
         raise HTTPException(status_code=404, detail=f"Game {request.game_id} not found")
@@ -3920,18 +3923,21 @@ async def admin_set_language(request: SetLanguageRequest):
             detail=f"Invalid language '{request.language}'. Supported: ru, en",
         )
 
+    if is_game_started(request.game_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Game {request.game_id} already started; cannot change language",
+        )
+
     set_game_language(request.game_id, request.language)
     logger.info(f"Language for game {request.game_id} set to '{request.language}'")
 
     gm = create_game_server(language=request.language)
 
-    # Regenerate mission first, then title (tied to that mission) + bridge image.
-    new_title = ""
-    new_welcome = ""
-    new_mission_name = ""
+    # Build participant list from live players + active NPCs (used only for the
+    # crew-aware bridge image; mission/title/splash are plot-driven).
+    all_participants = []
     try:
-        # Build participant list from live players + active NPCs
-        all_participants = []
         for pid in get_live_players(request.game_id):
             profile = get_player_profile(pid)
             if profile:
@@ -3963,71 +3969,95 @@ async def admin_set_language(request: SetLanguageRequest):
                     "avatar_description": avatar_desc,
                 }
             )
+    except Exception:
+        logger.warning("Failed to build participants for %s", request.game_id, exc_info=True)
 
-        if all_participants:
-            # Delete old mission and bridge image
-            delete_mission(request.game_id)
-            delete_game_images(request.game_id)
+    # Mission + title + splash are plot-driven: regenerate regardless of
+    # whether participants exist yet (before the game starts nobody may have
+    # finished onboarding, but the concept must match the new language).
+    # Old mission and images (splash/bridge/background_*) are removed first.
+    delete_mission(request.game_id)
+    delete_game_images(request.game_id)
 
-            # Generate new mission
-            mission_data = await gm.generate_mission(game_id=request.game_id, player_id=None, turn=None, kind="mission")
-            mission_result = create_mission(mission_data, request.game_id)
-            if mission_result:
-                new_mission_name = mission_result.get("name", "")
-                logger.info(f"Regenerated mission in {request.language}: {new_mission_name}")
-                # Regenerate title tied to the new mission
-                try:
-                    title_data = await gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title", mission_context=mission_result)
-                    new_title = title_data.get("title", "")
-                    new_welcome = title_data.get("welcome_text", "")
-                    if new_title:
-                        save_game_title_and_welcome(request.game_id, new_title, new_welcome)
-                        logger.info(f"Regenerated game title in {request.language}: {new_title}")
-                except Exception:
-                    logger.warning("Failed to regenerate game title for %s", request.game_id, exc_info=True)
-                # Generate new bridge image
-                try:
-                    bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=request.game_id, player_id=None, turn=None, kind="bridge_image_prompt")
-                    bridge_prompt = bridge_result.get("bridge_prompt", "")
-                    if bridge_prompt:
-                        image_gen = create_image_generator()
-                        bridge_url = await image_gen.generate_scene_image(
-                            prompt=bridge_prompt,
-                            filename_prefix=f"{request.game_id}/bridge",
-                            width=1024,
-                            height=1024,
-                            game_id=request.game_id,
-                            player_id=None,
-                            turn=None,
-                            kind="bridge",
-                        )
-                        if bridge_url:
-                            save_game_image(
-                                type="bridge",
-                                image_url=bridge_url,
-                                game_id=request.game_id,
-                                turn=None,
-                                prompt=bridge_prompt,
-                            )
-                            logger.info(f"Regenerated bridge image: {bridge_url}")
-                except Exception as e:
-                    logger.warning(f"Failed to regenerate bridge image: {e}")
-    except Exception as e:
-        logger.warning(f"Failed to regenerate mission for {request.game_id}: {e}")
+    new_title = ""
+    new_welcome = ""
+    new_mission_name = ""
+    mission_data: dict | None = None
+    try:
+        mission_data = await gm.generate_mission(game_id=request.game_id, player_id=None, turn=None, kind="mission")
+        mission_result = create_mission(mission_data, request.game_id)
+        if mission_result:
+            new_mission_name = mission_result.get("name", "")
+            logger.info(f"Regenerated mission in {request.language}: {new_mission_name}")
+            try:
+                title_data = await gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title", mission_context=mission_result)
+                new_title = title_data.get("title", "")
+                new_welcome = title_data.get("welcome_text", "")
+                if new_title:
+                    save_game_title_and_welcome(request.game_id, new_title, new_welcome)
+                    logger.info(f"Regenerated game title in {request.language}: {new_title}")
+            except Exception:
+                logger.warning("Failed to regenerate game title for %s", request.game_id, exc_info=True)
+    except Exception:
+        logger.warning("Failed to regenerate mission for %s", request.game_id, exc_info=True)
 
-    # If there were no participants (mission not regenerated), still refresh
-    # the title in the new language, tied to any pre-existing mission.
-    if not new_title:
+    # Regenerate splash images (deleted above) from the new title/welcome.
+    if new_title:
         try:
-            existing_mission = get_mission(None, game_id=request.game_id)
-            title_data = await gm.generate_game_title(game_id=request.game_id, player_id=None, turn=None, kind="game_title", mission_context=existing_mission)
-            new_title = title_data.get("title", "")
-            new_welcome = title_data.get("welcome_text", "")
-            if new_title:
-                save_game_title_and_welcome(request.game_id, new_title, new_welcome)
-                logger.info(f"Regenerated game title in {request.language}: {new_title}")
+            logger.info(f"[SPLASH] Regenerating 3 splash images for {request.game_id} ({request.language})")
+            image_gen = create_image_generator()
+            urls = await image_gen.generate_splash_images(
+                game_title=new_title,
+                welcome_text=new_welcome,
+                count=3,
+                filename_prefix="splash",
+                game_id=request.game_id,
+                width=1024,
+                height=768,
+            )
+            saved = sum(1 for url in urls if url and save_game_image(type="splash", image_url=url, game_id=request.game_id, turn=None, prompt=""))
+            logger.info(f"[SPLASH] Saved {saved}/3 splash images for {request.game_id}")
         except Exception:
-            logger.warning("Failed to regenerate game title for %s", request.game_id, exc_info=True)
+            logger.error(f"[SPLASH] Regeneration failed for {request.game_id}", exc_info=True)
+
+    # Bridge image is crew-aware: only regenerate once participants exist.
+    if all_participants:
+        try:
+            bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=request.game_id, player_id=None, turn=None, kind="bridge_image_prompt")
+            bridge_prompt = bridge_result.get("bridge_prompt", "")
+            if bridge_prompt:
+                image_gen = create_image_generator()
+                bridge_url = await image_gen.generate_scene_image(
+                    prompt=bridge_prompt,
+                    filename_prefix=f"{request.game_id}/bridge",
+                    width=1024,
+                    height=1024,
+                    game_id=request.game_id,
+                    player_id=None,
+                    turn=None,
+                    kind="bridge",
+                )
+                if bridge_url:
+                    save_game_image(
+                        type="bridge",
+                        image_url=bridge_url,
+                        game_id=request.game_id,
+                        turn=None,
+                        prompt=bridge_prompt,
+                    )
+                    logger.info(f"Regenerated bridge image: {bridge_url}")
+        except Exception as e:
+            logger.warning(f"Failed to regenerate bridge image: {e}")
+
+    # Notify players who started or finished onboarding that the language
+    # changed (best-effort, fire-and-forget — does not block the HTTP response).
+    try:
+        player_ids = list(dict.fromkeys(get_onboarding_player_ids_in_game(request.game_id) + get_live_players(request.game_id)))
+        if player_ids:
+            asyncio.create_task(push_language_changed(request.game_id, player_ids, request.language))
+            logger.info(f"[PUSH] Queued language-changed notification to {len(player_ids)} player(s) for {request.game_id}")
+    except Exception:
+        logger.warning("Failed to queue language-changed push for %s", request.game_id, exc_info=True)
 
     return {
         "status": "success",
