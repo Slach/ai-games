@@ -1740,3 +1740,63 @@ def build_scene_instruction_user(
         "starting with 'Place the character from Picture 1...'. "
         "Describe pose, action, lighting. Do not describe the character's appearance."
     )
+
+
+def build_death_notice_prompts(
+    language: str,
+    character_name: str,
+    role: str,
+    death_narrative: str,
+    outcome_narrative: str,
+) -> tuple[str, str]:
+    """Build system and user prompts for a dramatic per-character death notice.
+
+    Returns a short evocative title (e.g. «Последний вдох КхаГара») and a
+    1-3 sentence dramatic rendering of how the character died, addressed to
+    the player in second person. Replaces the canned "Вы погибли при
+    исполнении!" line with content tailored to the actual death.
+
+    Args:
+        language: Game content language (LANGUAGE_RU / LANGUAGE_EN).
+        character_name: Dead character's name (player_name).
+        role: Dead character's ship role.
+        death_narrative: Personal death description from the LLM's
+            personal_outcomes entry (the cause of death).
+        outcome_narrative: General outcome narrative (shared context for tone).
+
+    Returns:
+        (system_prompt, user_prompt) tuple.
+    """
+    if language == LANGUAGE_RU:
+        system = (
+            "Ты — драматичный писатель-фантаст. Описываешь гибель персонажа "
+            "эмоционально и кинематографично, обращаясь к игроку на «ты»."
+        )
+        user = (
+            f"Персонаж: {character_name}, роль: {role}.\n"
+            f"Причина гибели: {death_narrative}\n"
+            f"Контекст хода: {outcome_narrative}\n\n"
+            "Сформируй краткий драматичный заголовок (3-7 слов, без звёздочек и "
+            "кавычек) и короткое описание гибели (1-3 предложения) от второго "
+            "лица, как эпитафию герою. Описание должно передавать, КАК именно "
+            "он погиб, опираясь на причину гибели. "
+            "ВАЖНО: не используй символы звёздочка (*) или подчёркивание (_) — "
+            "они сломают форматирование. Только обычный текст. Все тексты на русском."
+        )
+    else:
+        system = (
+            "You are a dramatic sci-fi writer. You describe a character's death "
+            "emotionally and cinematically, addressing the player in second person."
+        )
+        user = (
+            f"Character: {character_name}, role: {role}.\n"
+            f"Cause of death: {death_narrative}\n"
+            f"Turn context: {outcome_narrative}\n\n"
+            "Compose a short dramatic title (3-7 words, no asterisks or quotes) "
+            "and a brief description of the death (1-3 sentences) in second "
+            "person, like an epitaph for the hero. The description must convey "
+            "HOW exactly they died, based on the cause of death. "
+            "IMPORTANT: do not use asterisk (*) or underscore (_) characters — "
+            "they break formatting. Plain text only."
+        )
+    return system, user

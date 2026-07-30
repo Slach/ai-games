@@ -27,6 +27,10 @@ TELEGRAM_BOT_GM_NOTIFICATION_URL = os.getenv(
     "TELEGRAM_BOT_GM_NOTIFICATION_URL",
     "http://telegram-bot:9090/push/gm-notification",
 )
+TELEGRAM_BOT_PLAYER_DEATH_URL = os.getenv(
+    "TELEGRAM_BOT_PLAYER_DEATH_URL",
+    "http://telegram-bot:9090/push/player-death",
+)
 TELEGRAM_BOT_GAME_OVER_URL = os.getenv(
     "TELEGRAM_BOT_GAME_OVER_URL",
     "http://telegram-bot:9090/push/game-over",
@@ -209,6 +213,55 @@ async def push_player_chosen_action(
     }
     label = f"action player={player_id} turn={turn}"
     return await _post_with_retry(TELEGRAM_BOT_ACTION_URL, payload, label)
+
+
+async def push_player_death(
+    player_id: int,
+    turn: int,
+    game_id: str,
+    death_title: str,
+    death_narrative: str,
+    outcome_narrative: str,
+    character_name: str,
+    role: str,
+    death_image_url: str | None,
+    *,
+    language: str,
+) -> bool:
+    """Push a one-time death notice to the player who just died this turn.
+
+    Args:
+        player_id: Telegram chat id of the dead player.
+        turn: Turn number on which the death occurred.
+        game_id: Game identifier.
+        death_title: Dramatic per-character death title (replaces the canned
+            "You died in the line of duty!" header). May be empty.
+        death_narrative: Dramatic rendering of how the character died.
+        outcome_narrative: General outcome narrative (shared context).
+        character_name: Dead character's name (player_name).
+        role: Dead character's ship role.
+        death_image_url: Optional URL of a generated death scene image.
+        language: Game language code for the message text.
+
+    Returns:
+        True if delivered to the bot's push queue, False after all retries.
+    """
+    payload: dict = {
+        "player_id": player_id,
+        "turn": turn,
+        "game_id": game_id,
+        "death_narrative": death_narrative,
+        "outcome_narrative": outcome_narrative,
+        "character_name": character_name,
+        "role": role,
+        "language": language,
+    }
+    if death_title:
+        payload["death_title"] = death_title
+    if death_image_url:
+        payload["death_image_url"] = death_image_url
+    label = f"player-death player={player_id} turn={turn}"
+    return await _post_with_retry(TELEGRAM_BOT_PLAYER_DEATH_URL, payload, label)
 
 
 async def push_gm_notification(

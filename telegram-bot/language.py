@@ -321,12 +321,12 @@ BRIDGE = {
 # Spectator (dead player) messages
 SPECTATOR = {
     LANGUAGE_RU: {
-        "player_dead": "💀 *Вы погибли при исполнении!*\n\nВаш персонаж пал в бою. Вы остаётесь зрителем и можете наблюдать за развитием сюжета.\n\nЧтобы присоединиться к новой игре или вернуться в текущую в новой роли, нажмите /start",
+        "player_dead": "💀 *Вы погибли при исполнении!*\n\nВаш персонаж погиб. Вы остаётесь зрителем и продолжите получать итоги ходов, но больше не можете влиять на события.\n\nЧтобы присоединиться к новой игре или вернуться в текущую в новой роли, нажмите /start",
         "still_watching": "👁 *Вы наблюдаете за развитием событий...*\n\nКак зритель, вы видите сюжет, но не можете влиять на него.\nНажмите /start чтобы присоединиться к новой игре или вернуться в новой роли.",
         "start_over_button": "🔄 Начать заново / Start Over",
     },
     LANGUAGE_EN: {
-        "player_dead": "💀 *You died in the line of duty!*\n\nYour character fell in battle. You remain a spectator and can watch the story unfold.\n\nTo join a new game or return to the current one in a new role, press /start",
+        "player_dead": "💀 *You died in the line of duty!*\n\nYour character has died. You remain a spectator and will keep receiving turn outcomes, but can no longer influence events.\n\nTo join a new game or return to the current one in a new role, press /start",
         "still_watching": "👁 *You are watching the story unfold...*\n\nAs a spectator, you see the plot but cannot influence it.\nPress /start to join a new game or return in a new role.",
         "start_over_button": "🔄 Start Over",
     },

@@ -41,6 +41,7 @@ from language import (
     get_notifications,
     get_onboarding,
     get_push_outcome,
+    get_spectator,
 )
 from retry import call_with_retry
 
@@ -554,6 +555,101 @@ async def _deliver_player_action(
     finally:
         if event_key in _pending_action_events:
             _pending_action_events[event_key].set()
+
+
+async def _deliver_player_death(
+    payload: dict[str, Any],
+    bot: Bot,
+    language: str,
+) -> bool:
+    """Deliver a one-time /push/player-death message to the dead player.
+
+    Order of blocks: cause of death (dramatic narrative) → turn scene (shared
+    outcome context) → spectator status (how to restart). The header is a
+    dynamic per-character title from the LLM, falling back to the canned
+    spectator line when absent.
+    """
+    player_id = payload.get("player_id")
+    turn = payload.get("turn")
+    death_title = payload.get("death_title", "")
+    death_narrative = payload.get("death_narrative", "")
+    outcome_narrative = payload.get("outcome_narrative", "")
+    death_image_url = payload.get("death_image_url")
+    character_name = payload.get("character_name", "")
+    role = payload.get("role", "")
+    language = payload.get("language", language)
+
+    if not player_id or not turn:
+        return True
+
+    spec = get_spectator(language)
+    current = get_current_turn(language)
+    outcome_title = current.get("outcome_title", "Turn {turn} - Outcome").format(turn=turn)
+
+    # Dynamic title falls back to the canned spectator header when the LLM
+    # produced nothing.
+    header = death_title if death_title else spec["player_dead"]
+
+    # Block order: cause → scene → status.
+    parts: list[str] = []
+    if death_narrative:
+        parts.append(f"*{header}*")
+        parts.append("")
+        parts.append(death_narrative)
+        parts.append("")
+    if outcome_narrative:
+        parts.append(outcome_title)
+        parts.append(outcome_narrative)
+        parts.append("")
+    parts.append(spec["player_dead"])
+
+    death_message = "\n".join(parts)
+
+    try:
+        # Death scene image first (caption = dynamic header), then the full
+        # text below — same order as the outcome push (image, then text).
+        if death_image_url:
+            img_data = await _download_image(death_image_url, 30)
+            if img_data:
+                photo = BufferedInputFile(img_data, filename="death_image.png")
+                await call_with_retry(
+                    lambda: bot.send_photo(
+                        chat_id=player_id,
+                        photo=photo,
+                        caption=header,
+                    )
+                , max_retries=3, base_delay=1.0, max_delay=10.0)
+        await call_with_retry(
+            lambda: bot.send_message(
+                chat_id=player_id,
+                text=death_message,
+            )
+        , max_retries=3, base_delay=1.0, max_delay=10.0)
+        return True
+    except TelegramBadRequest as e:
+        if "USER_IS_BLOCKED" in str(e):
+            logger.warning(
+                "[PUSH_DEATH] Player %d blocked the bot, auto-kicking",
+                player_id,
+            )
+            asyncio.create_task(_auto_kick_blocked_player(player_id))
+            return True
+        logger.error(
+            "[PUSH_DEATH] TelegramBadRequest for player %d turn %s: %s",
+            player_id,
+            turn,
+            e,
+            exc_info=True,
+        )
+        return False
+    except Exception:
+        logger.error(
+            "[PUSH_DEATH] Unexpected error for player %d turn %s",
+            player_id,
+            turn,
+            exc_info=True,
+        )
+        return False
 
 
 async def _deliver_outcome(
@@ -1295,6 +1391,7 @@ async def _deliver_onboarding_ready(
 _DELIVER_FNS = {
     "briefing": _deliver_briefing,
     "action": _deliver_player_action,
+    "player_death": _deliver_player_death,
     "outcome": _deliver_outcome,
     "gm_notification": _deliver_gm_notification,
     "game_over": _deliver_game_over,
@@ -1346,6 +1443,8 @@ async def _dispatch_one(
         elif push_type == "outcome":
             success = await deliver_fn(payload, bot, language, last_sent_outcome, player_id, mark_outcome_sent_fn)
         elif push_type == "action":
+            success = await deliver_fn(payload, bot, language)
+        elif push_type == "player_death":
             success = await deliver_fn(payload, bot, language)
         elif push_type == "game_over":
             success = await deliver_fn(payload, bot, player_id, last_sent_game_over, mark_game_over_sent_fn)
@@ -1614,6 +1713,40 @@ async def handle_push_player_chosen_action(request: web.Request) -> web.Response
 
     logger.info(
         "[PUSH_ACTION] Queued action image for player %d, turn %d",
+        player_id,
+        turn,
+    )
+    return web.json_response({"status": "ok", "queued": 1})
+
+
+async def handle_push_player_death(request: web.Request) -> web.Response:
+    """Handle POST /push/player-death — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    player_id = payload.get("player_id")
+    turn = payload.get("turn")
+    game_id = payload.get("game_id")
+
+    if not player_id or not turn or not game_id:
+        return web.json_response(
+            {"status": "error", "message": "Missing player_id, turn or game_id"},
+            status=400,
+        )
+
+    insert_push_message(
+        player_id=player_id,
+        push_type="player_death",
+        payload=json.dumps(payload, ensure_ascii=False),
+        turn=turn,
+        game_id=game_id,
+        db_path=DB_PATH,
+    )
+
+    logger.info(
+        "[PUSH_DEATH] Queued death notice for player %d, turn %d",
         player_id,
         turn,
     )
@@ -1893,6 +2026,7 @@ async def start_push_server(
 
     app.router.add_post("/push/briefings", handle_push_briefings)
     app.router.add_post("/push/player-action", handle_push_player_chosen_action)
+    app.router.add_post("/push/player-death", handle_push_player_death)
     app.router.add_post("/push/outcome", handle_push_outcome)
     app.router.add_post("/push/game-over", handle_push_game_over)
     app.router.add_post("/push/gm-notification", handle_gm_notification)

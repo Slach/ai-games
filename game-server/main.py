@@ -139,7 +139,7 @@ from language import (
 from prompts import (
     OnboardingQuestion,
 )
-from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action
+from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action, push_player_death
 from pydantic import BaseModel, TypeAdapter
 
 # Configure logging.
@@ -2839,6 +2839,108 @@ async def _generate_chosen_action_image(
         logger.error(f"[ACTION_IMAGE] Failed to generate: {e}", exc_info=True)
 
 
+async def _generate_death_image(
+    player_id: int,
+    game_id: str,
+    turn: int,
+    death_narrative: str,
+    outcome_narrative: str,
+    language: str,
+) -> str | None:
+    """Generate an image depicting the player's death this turn.
+
+    Uses the dead character's avatar as a visual reference (so the image shows
+    THAT character dying, not a generic figure) composed into a scene built from
+    the personal death narrative. Mirrors _generate_chosen_action_image: an LLM
+    crafts a Qwen-Image-Edit instruction, then generate_character_in_scene
+    renders it with the avatar as "Picture 1".
+
+    Returns the image URL, or None on failure (the death notice is still pushed
+    without an image).
+    """
+    try:
+        profile = get_player_profile(player_id)
+        if not profile:
+            logger.warning(f"[DEATH_IMAGE] Player {player_id} not found, skipping")
+            return None
+
+        # Scene context: the personal death narrative is the most specific cue;
+        # fall back to the shared outcome narrative if absent.
+        action_text = death_narrative or outcome_narrative or ""
+
+        # Turn setting/conflict for background selection.
+        turn_data = get_game_turn(turn, game_id=game_id)
+        global_circ_str = turn_data.get("global_circumstances", "{}") if turn_data else "{}"
+        try:
+            global_circ = json.loads(global_circ_str)
+        except (json.JSONDecodeError, TypeError):
+            global_circ = {}
+        setting = global_circ.get("setting", "") or (turn_data.get("story", "") if turn_data else "")
+        conflict = global_circ.get("conflict", "")
+        scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
+
+        species = profile.get("species", "")
+        species_desc = profile.get("species_description", "")
+        character_description = species if species and species not in ("Unknown", "Неизвестно") else ""
+
+        gm = create_game_server(language=language)
+        instruction = ""
+        bg_location = None
+        try:
+            scene = await gm.generate_scene_instruction(
+                action_text=action_text,
+                species_desc=species_desc or species,
+                language=language,
+                background_location=None,
+                scene_context=scene_context,
+                species_category=profile.get("species_primary_key") or "",
+                game_id=game_id,
+                player_id=str(player_id),
+                turn=turn,
+                kind="player_death",
+            )
+            instruction = scene.get("instruction", "")
+            bg_location = scene.get("background_location")
+        except Exception as llm_err:
+            logger.warning(f"[DEATH_IMAGE] Scene instruction failed for {player_id}: {llm_err}, using fallback")
+
+        if not instruction:
+            instruction = (
+                f"Show the character from Picture 1 in their final moment: {action_text}. "
+                f"Dramatic, somber cinematic sci-fi scene, dramatic lighting, "
+                f"space opera aesthetic, photorealistic, 4K."
+            )
+
+        background_url = None
+        if bg_location:
+            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id, turn=None)
+
+        avatar_url = profile.get("avatar_url") or None
+        image_gen = create_image_generator()
+        death_image_url = await image_gen.generate_character_in_scene(
+            instruction_prompt=instruction,
+            character_avatar_url=avatar_url,
+            background_url=background_url,
+            character_description=character_description,
+            filename_prefix=f"{game_id}/death_turn{turn}_p{player_id}",
+            width=1024,
+            height=1024,
+            game_id=game_id,
+            player_id=str(player_id),
+            turn=turn,
+            kind="player_death",
+            species_category=profile.get("species_primary_key") or "",
+        )
+        if death_image_url:
+            logger.info(f"[DEATH_IMAGE] Generated for player {player_id} turn {turn}: {death_image_url}")
+        else:
+            logger.warning(f"[DEATH_IMAGE] Generation returned None for player {player_id}")
+        return death_image_url
+    except Exception as e:
+        logger.error(f"[DEATH_IMAGE] Failed to generate for player {player_id}: {e}", exc_info=True)
+        return None
+
+
 async def _inherit_npc_briefing_for_player(player_id: int, game_id: str, language: str) -> None:
     """Let a late-joining player inherit the current turn's NPC briefing.
 
@@ -3418,6 +3520,10 @@ async def _analyze_turn_outcome(
 
             # Handle crew deaths
             dead_crew = outcome.get("dead_crew_members", [])
+            # Player ids who died on THIS turn — used to deliver a one-time
+            # death notice. NPCs land in a separate roster (deactivated) and
+            # never receive a push, so only players are collected here.
+            newly_dead: set[int] = set()
             for death_entry in dead_crew:
                 # death_entry could be [name, role]
                 if isinstance(death_entry, list) and len(death_entry) >= 2:
@@ -3430,6 +3536,7 @@ async def _analyze_turn_outcome(
                             pid = d.get("player_id")
                             if pid:
                                 mark_player_dead(pid, game_id)
+                                newly_dead.add(pid)
                                 logger.info(f"[DEATH] Player {pid} ({entity_role}) marked as dead")
                                 found = True
                             break
@@ -3547,12 +3654,14 @@ async def _analyze_turn_outcome(
             except Exception as img_err:
                 logger.warning(f"[OUTCOME] Failed to generate outcome image for turn {turn}: {img_err}")
 
-            # Get alive players
-            try:
-                alive_players = get_live_players(game_id)
-            except Exception:
-                logger.warning(f"Failed to get live players for game {game_id}, falling back to all players", exc_info=True)
-                alive_players = get_players_in_game(game_id)
+            # Outcome recipients = ALL players in the game. Dead players become
+            # spectators: they no longer act (excluded from generation and
+            # briefings) but keep receiving turn outcomes so they can follow the
+            # story. Previously the push went to alive players only, so a player
+            # killed on turn N never learned what happened — not even their own
+            # death. The alive-crew count (computed below via get_live_players)
+            # is unaffected.
+            outcome_recipients = get_players_in_game(game_id)
 
             # Compute crew counts for outcome display.
             # Total crew = all players + all NPCs ever in this game (dead/inactive
@@ -3702,6 +3811,63 @@ async def _analyze_turn_outcome(
             # ── Build personal outcomes for push ────────────────────────
             personal_outcomes = outcome.get("personal_outcomes", [])
 
+            # ── One-time death notice to players who died this turn ────
+            # The main outcome push goes to alive players only, so a just-killed
+            # player would otherwise learn nothing. Match each newly-dead player
+            # to their personal_outcomes entry (by name, then role) to surface
+            # the cause of death, and push it directly to that player.
+            for pid in newly_dead:
+                p = get_player_profile(pid) or {}
+                pname = p.get("player_name", "") or str(pid)
+                prole = p.get("role", "")
+                death_text = ""
+                for po in personal_outcomes:
+                    if po.get("character_name") == pname or po.get("role") == prole:
+                        death_text = po.get("outcome_text", "")
+                        break
+                # Dramatic per-character death notice (title + narrative) instead
+                # of the canned "You died in the line of duty!" line.
+                death_notice = await gm.generate_death_notice(
+                    language=language,
+                    character_name=pname,
+                    role=prole,
+                    death_narrative=death_text,
+                    outcome_narrative=outcome_text,
+                    game_id=game_id,
+                    player_id=str(pid),
+                    turn=turn,
+                    kind="death_notice",
+                )
+                death_title = death_notice.get("title", "") or ""
+                death_narrative = death_notice.get("narrative", "") or death_text
+                # Generate a death scene image (character avatar as reference).
+                # Done before the push so the image URL rides along; a None URL
+                # means the notice is still delivered, just without an image.
+                death_image_url = await _generate_death_image(
+                    player_id=pid,
+                    game_id=game_id,
+                    turn=turn,
+                    death_narrative=death_narrative,
+                    outcome_narrative=outcome_text,
+                    language=language,
+                )
+                try:
+                    await push_player_death(
+                        player_id=pid,
+                        turn=turn,
+                        game_id=game_id,
+                        death_title=death_title,
+                        death_narrative=death_narrative,
+                        outcome_narrative=outcome_text,
+                        death_image_url=death_image_url,
+                        character_name=pname,
+                        role=prole,
+                        language=language,
+                    )
+                    logger.info(f"[DEATH] Death notice pushed to player {pid} for turn {turn}")
+                except Exception:
+                    logger.error(f"[DEATH] Failed to push death notice to player {pid}", exc_info=True)
+
             # Enrich mission_progress deltas with stage names + cumulative progress
             # so the push can show "Этап N: <name> (progress/threshold)" instead of
             # a bare "этап N". mission already holds updated stage_progress here
@@ -3740,7 +3906,7 @@ async def _analyze_turn_outcome(
                     game_id=game_id,
                     turn=turn,
                     outcome_text=outcome_text,
-                    alive_players=alive_players,
+                    alive_players=outcome_recipients,
                     outcome_image_url=outcome_image_url,
                     ship_status="destroyed" if ship_destroyed else "alive",
                     mission_progress=mission_progress,
@@ -3756,7 +3922,7 @@ async def _analyze_turn_outcome(
                     total_crew_count=total_crew,
                     alive_crew_count=alive_crew,
                 )
-                logger.info(f"[OUTCOME] Outcome delivered for turn {turn} to {len(alive_players)} players")
+                logger.info(f"[OUTCOME] Outcome delivered for turn {turn} to {len(outcome_recipients)} players")
             except Exception as push_err:
                 logger.error(f"[OUTCOME] Failed to deliver outcome for turn {turn}: {push_err}", exc_info=True)
 
@@ -3842,11 +4008,11 @@ async def _analyze_turn_outcome(
                         finale_narrative=finale_narrative or outcome_text[:1000],
                         finale_image_url=finale_image_url,
                         outcome_type=outcome_type,
-                        alive_players=alive_players,
+                        alive_players=outcome_recipients,
                         available_games=available_games,
                         language=language,
                     )
-                    logger.info(f"[GAME_OVER] Finale delivered to {len(alive_players)} players: {outcome_type}")
+                    logger.info(f"[GAME_OVER] Finale delivered to {len(outcome_recipients)} players: {outcome_type}")
 
                     # Persist finale so /turn can replay it later
                     save_game_finale(

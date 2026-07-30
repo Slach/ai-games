@@ -33,6 +33,7 @@ from prompts import (
     build_combined_outcome_prompts,
     build_content_prompt_note,
     build_crew_dialogue_prompts,
+    build_death_notice_prompts,
     build_turn_story_prompts,
     build_dynamic_sg_question_prompts,
     build_game_over_prompts,
@@ -841,6 +842,30 @@ SCENE_INSTRUCTION_SCHEMA = {
                 },
             },
             "required": ["instruction", "background_location"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+DEATH_NOTICE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "death_notice",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Short dramatic title (3-7 words), no asterisks or quotes.",
+                },
+                "narrative": {
+                    "type": "string",
+                    "description": "1-3 sentence dramatic description of how the character died, second person.",
+                },
+            },
+            "required": ["title", "narrative"],
             "additionalProperties": False,
         },
     },
@@ -3796,6 +3821,53 @@ class GameServer:
             logger.warning("[SCENE_INSTRUCTION] failed, using fallback", exc_info=True)
             fallback = f"Place the character from Picture 1 in the scene. {action_text}. Cinematic lighting, photorealistic, 4K."
             return {"instruction": fallback, "background_location": background_location}
+
+    async def generate_death_notice(
+        self,
+        language: str,
+        character_name: str,
+        role: str,
+        death_narrative: str,
+        outcome_narrative: str,
+        *,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
+    ) -> dict[str, str]:
+        """Generate a dramatic per-character death notice (title + narrative).
+
+        Replaces the canned "You died in the line of duty!" header with a short
+        evocative title and a second-person rendering of how the character died.
+
+        Returns:
+            Dict with "title" and "narrative" strings. Falls back to the raw
+            death_narrative (and a generic title) if the LLM call fails.
+        """
+        system, user = build_death_notice_prompts(
+            language, character_name, role, death_narrative, outcome_narrative
+        )
+        try:
+            result = await self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=DEATH_NOTICE_SCHEMA,
+                max_tokens=512,
+                temperature=0.8,
+                enable_thinking=False,
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+            title = (result.get("title") or "").strip()
+            narrative = (result.get("narrative") or "").strip()
+            if not narrative:
+                narrative = death_narrative
+            return {"title": title, "narrative": narrative}
+        except Exception:
+            logger.warning("[DEATH_NOTICE] failed, using fallback", exc_info=True)
+            return {"title": "", "narrative": death_narrative}
 
     # ============== NPC Name Generation (creative, species/gender-aware) ==============
 
