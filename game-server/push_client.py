@@ -220,6 +220,8 @@ async def push_gm_notification(
     npcs: int,
     *,
     language: str,
+    title: str = "",
+    mission_name: str = "",
 ) -> bool:
     """Push a notification to the Game Server about turn generation status.
 
@@ -229,11 +231,14 @@ async def push_gm_notification(
     Args:
         game_id: Game identifier
         turn: Turn number number that was being generated
-        status: "success" or "error"
-        error: Error message (only when status="error")
+        status: "success" or "error", or "language_changed" /
+            "language_changed_error" for the async language-change flow.
+        error: Error message (only when status indicates an error)
         players: Number of players (only when status="success")
         npcs: Number of NPCs (only when status="success")
         language: Game language code for the notification message.
+        title: Regenerated game title (only for status="language_changed").
+        mission_name: Regenerated mission name (only for status="language_changed").
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -246,6 +251,8 @@ async def push_gm_notification(
         "players": players,
         "npcs": npcs,
         "language": language,
+        "title": title,
+        "mission_name": mission_name,
     }
     label = f"gm-notification game={game_id} turn={turn} status={status}"
     return await _post_with_retry(TELEGRAM_BOT_GM_NOTIFICATION_URL, payload, label)

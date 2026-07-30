@@ -889,6 +889,22 @@ async def _deliver_gm_notification(
             msg = f"🏁 *Игра `{game_id}` завершена во время генерации хода {turn}.*\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."
         else:
             msg = f"🏁 *Game `{game_id}` ended during turn {turn} generation.*\n\nTurn {turn} was not sent to players — the game ended on the previous turn."
+    elif status == "language_changed":
+        title = _escape_md(payload.get("title", ""))
+        mission_name = _escape_md(payload.get("mission_name", ""))
+        if language == "ru":
+            msg = f"✅ *Язык игры `{game_id}` изменён на `{language}`*\n\n🌐 Название игры: *{title}*"
+            if mission_name:
+                msg += f"\n🎯 Миссия: *{mission_name}*"
+        else:
+            msg = f"✅ *Game `{game_id}` language changed to `{language}`*\n\n🌐 Game title: *{title}*"
+            if mission_name:
+                msg += f"\n🎯 Mission: *{mission_name}*"
+    elif status == "language_changed_error":
+        if language == "ru":
+            msg = f"❌ *Ошибка смены языка игры `{game_id}`*\n\n{safe_error}"
+        else:
+            msg = f"❌ *Error changing language for game `{game_id}`*\n\n{safe_error}"
     else:
         if language == "ru":
             msg = f"❌ *Ошибка генерации хода {turn} игры `{game_id}`*\n\n{safe_error}"
