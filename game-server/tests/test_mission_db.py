@@ -69,25 +69,5 @@ class TestMissionPersistence(unittest.TestCase):
         self.assertEqual(got["seeds"]["complication"], "pirates")
 
 
-class TestLastDeathTurn(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self._tmp.close()
-        db.DB_PATH = Path(self._tmp.name)
-        db.init_db()
-
-    def tearDown(self):
-        try:
-            os.unlink(self._tmp.name)
-        except (FileNotFoundError, PermissionError):
-            logger.error("Failed to remove temp DB: %s", self._tmp.name, exc_info=True)
-
-    def test_get_returns_zero_default_and_set_persists(self):
-        state = db.get_game_state("gd1")
-        self.assertEqual(state["last_death_turn"], 0)
-        db.set_last_death_turn("gd1", 7)
-        self.assertEqual(db.get_game_state("gd1")["last_death_turn"], 7)
-
-
 if __name__ == "__main__":
     unittest.main()

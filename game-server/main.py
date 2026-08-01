@@ -101,7 +101,6 @@ from database import (
     save_player_action_stats,
     save_game_finale,
     save_player_briefing,
-    set_last_death_turn,
     start_game,
     start_generation_job,
     take_role,
@@ -116,7 +115,7 @@ from database import (
     update_onboarding_session,
     update_player_profile_last_poll,
 )
-from game_rules import apply_mission_progress, apply_death_limits, DEATH_COOLDOWN_TURNS
+from game_rules import apply_mission_progress
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_server import create_game_server
@@ -3446,23 +3445,6 @@ async def _analyze_turn_outcome(
                     end_game("mission_complete", game_id=game_id)
                     logger.info("[MISSION] MISSION COMPLETE! Game ended.")
                 mission = updated_mission
-
-            # Rate-limit crew deaths through the rules layer (P3):
-            # at most one death per DEATH_COOLDOWN_TURNS, never below min_alive;
-            # excess proposed deaths are demoted to critical injuries.
-            state = get_game_state(game_id)
-            alive_count = sum(1 for r in crew_roster if not r.get("is_dead"))
-            outcome, new_last_death_turn = apply_death_limits(
-                outcome,
-                turn=turn,
-                last_death_turn=int(state.get("last_death_turn", 0) or 0),
-                alive_count=alive_count,
-                min_alive=1,
-                cooldown=DEATH_COOLDOWN_TURNS,
-            )
-            if new_last_death_turn != int(state.get("last_death_turn", 0) or 0):
-                set_last_death_turn(game_id, new_last_death_turn)
-                logger.info(f"[DEATH] Cooldown window starts at turn {new_last_death_turn}")
 
             # ========== Process ship damage from new structured fields ==========
             ship_hull = outcome.get("ship_hull_integrity", 100)

@@ -350,61 +350,7 @@ def select_mission_seeds(language: str, rng: random.Random | None) -> dict:
     return {"archetype": archetype, "seeds": seeds, "language": lang}
 
 
-# ── Crew death rate-limiting (P3) ──────────────────────────────────
-
-DEATH_COOLDOWN_TURNS = 4  # minimum turns between crew deaths in a game
-
-
-def _demote_to_critical(entry) -> list:
-    """Turn a rejected [name, role] death into a [name, role, 'critical'] injury."""
-    if isinstance(entry, list):
-        name = entry[0] if len(entry) > 0 else "Unknown"
-        role = entry[1] if len(entry) > 1 else "Unknown"
-    else:
-        name = role = "Unknown"
-    return [name, role, "critical"]
-
-
-def apply_death_limits(
-    outcome: dict,
-    turn: int,
-    last_death_turn: int,
-    alive_count: int | None,
-    min_alive: int,
-    cooldown: int,
-) -> tuple[dict, int]:
-    """Enforce crew-death rate limits on a raw combined outcome (P3).
-
-    - At most one crew death per `cooldown` turns; extra proposed deaths are
-      demoted to 'critical' injuries (appended to crew_injured).
-    - Never accept a death that would drop the living roster below `min_alive`.
-    - Whole-ship destruction (``ship_destroyed``) is NOT throttled.
-
-    Returns (new_outcome, new_last_death_turn). Input is not mutated.
-    """
-    result = dict(outcome)
-    proposed = result.get("dead_crew_members", []) or []
-    if result.get("ship_destroyed") or not proposed:
-        return result, last_death_turn
-
-    on_cooldown = bool(last_death_turn) and (turn - last_death_turn) < cooldown
-    accepted: list = []
-    demoted: list = []
-
-    for entry in proposed:
-        slot_available = (not on_cooldown) and len(accepted) == 0
-        leaves_enough = alive_count is None or (alive_count - len(accepted)) > min_alive
-        if slot_available and leaves_enough:
-            accepted.append(entry)
-            on_cooldown = True
-        else:
-            demoted.append(_demote_to_critical(entry))
-
-    result["dead_crew_members"] = accepted
-    if demoted:
-        injuries = list(result.get("crew_injured", []) or [])
-        injuries.extend(demoted)
-        result["crew_injured"] = injuries
-
-    new_last_death_turn = turn if accepted else last_death_turn
-    return result, new_last_death_turn
+# ── Crew deaths ─────────────────────────────────────────────────────
+# The game can be brutal: every death the LLM assigns in dead_crew_members is
+# applied as-is — no per-turn cap, no cooldown. If the whole crew dies, the
+# crew_wiped check in main.py ends the game.

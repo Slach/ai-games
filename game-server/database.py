@@ -1179,21 +1179,6 @@ def update_game_state(
     return get_game_state(game_id)
 
 
-def set_last_death_turn(game_id: str, turn: int) -> bool:
-    """Record the turn of the most recent crew death (death cooldown tracking)."""
-    _ensure_game_state(game_id)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE game_state SET last_death_turn = ? WHERE game_id = ?",
-        (turn, game_id),
-    )
-    updated = cursor.rowcount > 0
-    conn.commit()
-    conn.close()
-    return updated
-
-
 def is_game_active(game_id: str) -> bool:
     """Check if game is still active (ship and crew alive)"""
     state = get_game_state(game_id)
