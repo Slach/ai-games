@@ -2184,7 +2184,17 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     await _enter_name_for_game(message, state, game_id, fallback_lang=player_lang)
                 return
 
-            # Check if player is dead (spectator)
+            # Game already ended — show finale + game list instead of welcoming back.
+            # Checked before the dead/spectator branch below: a spectator whose game
+            # has ended should pick a new game, not be told to keep watching a dead game.
+            if existing_game_id and not current_game_active:
+                await _send_game_over_finale(
+                    message, existing_game_id, current_game_state.get("status", "active"), player_id, player_lang
+                )
+                await show_game_selection(message, state, player_lang)
+                return
+
+            # Check if player is dead (spectator) in an *active* game
             if profile.get("is_dead") or profile.get("is_spectator"):
                 spectator_msgs = lang.get_spectator(player_lang)
                 keyboard = InlineKeyboardMarkup(
@@ -2202,14 +2212,6 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     parse_mode="Markdown",
                     reply_markup=keyboard,
                 )
-                return
-
-            # Game already ended — show finale + game list instead of welcoming back
-            if existing_game_id and not current_game_active:
-                await _send_game_over_finale(
-                    message, existing_game_id, current_game_state.get("status", "active"), player_id, player_lang
-                )
-                await show_game_selection(message, state, player_lang)
                 return
 
             # Player already has a profile - welcome back
