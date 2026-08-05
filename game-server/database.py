@@ -2046,13 +2046,20 @@ def update_briefing_chosen_action_url(briefing_id: int, chosen_action_url: str |
 
 
 def get_players_who_need_to_choose(turn: int, game_id: str) -> list[dict[str, Any]]:
-    """Get real players who haven't made their choice for the turn yet."""
+    """Get real players who haven't made their choice for the turn yet.
+
+    Dead/spectator players are excluded so their (possibly stale, leftover
+    from the death race) briefing doesn't block the turn outcome forever.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """SELECT * FROM player_briefings
-           WHERE turn = ? AND game_id = ? AND is_npc = 0 AND selected_action_id IS NULL
-           ORDER BY created_at""",
+        """SELECT pb.* FROM player_briefings pb
+           LEFT JOIN player_profiles pp ON pp.player_id = pb.player_id AND pp.game_id = pb.game_id
+           WHERE pb.turn = ? AND pb.game_id = ? AND pb.is_npc = 0 AND pb.selected_action_id IS NULL
+             AND (pp.is_dead IS NULL OR pp.is_dead = 0)
+             AND (pp.is_spectator IS NULL OR pp.is_spectator = 0)
+           ORDER BY pb.created_at""",
         (turn, game_id),
     )
     rows = cursor.fetchall()

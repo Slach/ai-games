@@ -540,36 +540,19 @@ class GameScheduler:
             return False
 
     async def get_players_in_game(self, game_id: str) -> list[int]:
+        """Get live (non-dead) player IDs for a game.
+
+        Used to find players who may still need an auto-selected action.
+        Dead players never act, so /players/{game_id}/live is the right source.
+        """
         try:
             async with aiohttp.ClientSession() as session:
-                endpoints = [
-                    f"{self.api_url}/players/{game_id}/players",
-                    f"{self.api_url}/players/{game_id}/list",
-                    f"{self.api_url}/players",
-                ]
-                for endpoint in endpoints:
-                    async with session.get(endpoint) as resp:
-                        if resp.status != 200:
-                            continue
-                        result = await resp.json()
-                        if isinstance(result, list):
-                            player_ids = []
-                            for item in result:
-                                if isinstance(item, dict):
-                                    pid = item.get("player_id")
-                                    if pid is not None:
-                                        player_ids.append(int(pid))
-                                elif isinstance(item, (int, str)):
-                                    player_ids.append(int(item))
-                            if player_ids:
-                                return player_ids
-                            continue
-                        if isinstance(result, dict):
-                            player_ids = result.get("player_ids", []) or result.get("players", []) or []
-                            if player_ids:
-                                return player_ids
-                            continue
-                return []
+                async with session.get(f"{self.api_url}/players/{game_id}/live") as resp:
+                    if resp.status != 200:
+                        logger.error(f"get_players_in_game '{game_id}': /players/{game_id}/live returned {resp.status}")
+                        return []
+                    result = await resp.json()
+                    return [int(pid) for pid in result.get("live_player_ids", [])]
         except Exception as e:
             logger.error(f"Failed to get players in game '{game_id}': {e}", exc_info=True)
             return []

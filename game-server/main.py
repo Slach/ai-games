@@ -2226,6 +2226,8 @@ async def submit_player_action(request: PlayerActionRequest):
     profile = get_player_profile(request.player_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Player profile not found")
+    if profile.get("is_dead") or profile.get("is_spectator"):
+        raise HTTPException(status_code=403, detail="Dead/spectator players cannot submit actions")
     game_id = profile.get("game_id")
     if not game_id:
         raise HTTPException(status_code=400, detail="Player is not in any game")
@@ -2332,6 +2334,16 @@ async def auto_select_action(
     language = get_game_language(game_id) or language
     logger.info(f"[AUTO_ACTION] Auto-selecting action for player {player_id}, turn {turn}")
 
+    # Dead/spectator players never act. Without this guard the scheduler's
+    # auto-select would submit a choice on behalf of a player who died on an
+    # earlier turn (and may even have a leftover briefing from the race that
+    # generated a turn before their death was applied), keeping them in the
+    # "needs to choose" roster forever.
+    profile = get_player_profile(player_id)
+    if profile and (profile.get("is_dead") or profile.get("is_spectator")):
+        logger.info(f"[AUTO_ACTION] Player {player_id} is dead/spectator, skipping auto-select")
+        return {"status": "skipped_dead"}
+
     # 1. Get player's briefing with choices
     briefing = get_player_briefing(turn, player_id, game_id)
     if not briefing:
@@ -2354,8 +2366,7 @@ async def auto_select_action(
             detail=f"No choices available for player {player_id} turn {turn}",
         )
 
-    # 2. Get player profile
-    profile = get_player_profile(player_id)
+    # 2. Player profile already fetched above (is_dead guard).
     if not profile:
         raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
 
@@ -3421,9 +3432,12 @@ async def _analyze_turn_outcome(
                 except Exception as retry_err:
                     logger.error(f"[OUTCOME] Retry failed: {retry_err}", exc_info=True)
 
-            # Save the combined outcome
-            update_game_turn_outcome(turn, json.dumps(outcome, ensure_ascii=False), game_id)
-            logger.info(f"[OUTCOME] Combined outcome saved for Turn {turn}")
+            # NOTE: combined_outcome is persisted AFTER all turn effects
+            # (deaths, end_game, ship state) are applied below. The presence of
+            # combined_outcome in the DB is the "turn fully closed" signal that
+            # continue-game waits on before generating the next turn — so it must
+            # not be written until mark_player_dead / end_game have run.
+            outcome_json = json.dumps(outcome, ensure_ascii=False)
 
             # Apply mission progress through the rules layer (P0+P1):
             # normalizes objectives, accumulates with regression caps + tempo floor,
@@ -3563,6 +3577,14 @@ async def _analyze_turn_outcome(
             # Log ship systems offline
             if ship_systems_offline:
                 logger.info(f"[SHIP] Systems offline: {', '.join(ship_systems_offline)}")
+
+            # Persist combined_outcome now that ALL turn effects (deaths,
+            # end_game, ship state, crew_health) are applied. This is the
+            # "turn fully closed" signal: continue-game blocks until the
+            # previous turn's combined_outcome exists, so a death resolved on
+            # turn N is visible in player_profiles before turn N+1 starts.
+            update_game_turn_outcome(turn, outcome_json, game_id)
+            logger.info(f"[OUTCOME] Combined outcome saved for Turn {turn}")
 
             # ── Push outcome to all alive players ──────────────────────
             # Build outcome text from the LLM result
@@ -6165,6 +6187,46 @@ async def _original_continue_game(
             detail="Game is not active (ship destroyed or status is not 'active')",
         )
 
+    # ── Close the previous turn BEFORE generating the next one ──────────
+    # The previous turn's outcome (deaths, ship state, end_game) must be
+    # applied to player_profiles BEFORE we read them to build the roster for
+    # turn N+1. Otherwise a player who died on turn N is still is_dead=0 here,
+    # so they get a briefing + action choices + crew-dialogue lines on turn N+1
+    # — after their death notice. This also auto-selects actions for players
+    # who never responded on turn N (they get a consequence in the outcome),
+    # then computes the combined outcome. If that ends the game, abort before
+    # generating anything.
+    if turn_num > 1:
+        prev_turn = turn_num - 1
+        missing = get_players_who_need_to_choose(prev_turn, game_id=game_id)
+        for b in missing:
+            pid = b.get("player_id")
+            if pid is None:
+                continue
+            try:
+                await auto_select_action(player_id=pid, turn=prev_turn, language=language, game_id=game_id)
+            except Exception:
+                logger.warning(f"[AUTO_ACTION] Auto-select failed for player {pid} turn {prev_turn}", exc_info=True)
+
+        await _analyze_turn_outcome(
+            turn=prev_turn,
+            language=language,
+            game_id=game_id,
+            force=False,
+        )
+
+        post_state = get_game_state(game_id)
+        if post_state["status"] != "active" or not post_state["ship_alive"]:
+            logger.info(f"[CONTINUE] Game ended after analyzing turn {prev_turn} (status={post_state['status']}); not generating turn {turn_num}")
+            return {
+                "status": "game_ended",
+                "turn": turn_num,
+                "total_participants": 0,
+                "players": 0,
+                "npcs": 0,
+                "crew_dialogues": [],
+            }
+
     # Get all participants (players + NPCs)
     player_ids = get_players_in_game(game_id)
     npcs = get_all_active_npcs(game_id)
@@ -6664,47 +6726,6 @@ async def _original_continue_game(
         update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
     else:
         logger.info(f"[CONTINUE] Game already ended (status={pre_state['status']}) before advancing to turn {turn_num + 1}; skipping state update")
-
-    # ── Push previous turn outcome (if applicable) ──────────────
-    # Must run BEFORE pushing new turn briefings so player sees:
-    #   Итоги хода N-1 → Вводная хода N → Ход N + действия
-    if turn_num > 1:
-        # Auto-select actions for players who haven't chosen yet on the
-        # previous turn. Without this, _analyze_turn_outcome skips their
-        # briefings (selected_action_id IS NULL) and they never appear in
-        # personal_outcomes — so non-responders silently vanish from the
-        # "Последствия хода" list.
-        prev_turn = turn_num - 1
-        missing = get_players_who_need_to_choose(prev_turn, game_id=game_id)
-        for b in missing:
-            pid = b.get("player_id")
-            if pid is None:
-                continue
-            try:
-                await auto_select_action(player_id=pid, turn=prev_turn, language=language, game_id=game_id)
-            except Exception:
-                logger.warning(f"[AUTO_ACTION] Auto-select failed for player {pid} turn {prev_turn}", exc_info=True)
-
-        await _analyze_turn_outcome(
-            turn=prev_turn,
-            language=language,
-            game_id=game_id,
-            force=False,
-        )
-
-    # If analyzing the previous turn just ended the game, do NOT push the
-    # new turn's briefings — players should see the finale, not turn N+1.
-    post_state = get_game_state(game_id)
-    if post_state["status"] != "active" or not post_state["ship_alive"]:
-        logger.info(f"[CONTINUE] Game ended after analyzing turn {turn_num - 1} (status={post_state['status']}); not pushing turn {turn_num} briefings")
-        return {
-            "status": "game_ended",
-            "turn": turn_num,
-            "total_participants": len(all_participants),
-            "players": len(player_ids),
-            "npcs": len(npcs),
-            "crew_dialogues": crew_dialogues_list,
-        }
 
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
