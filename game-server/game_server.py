@@ -2121,12 +2121,17 @@ class GameServer:
         is_human_like = species_cat in ("human", "humanoid")
         if is_human_like:
             anatomy_contract = (
-                "ANATOMY CONTRACT: this is a HUMAN/HUMANOID. The avatar MUST have two arms, "
-                "two legs, and a human face. If the character description below mentions "
-                "non-human anatomy (extra legs, carapaces, plasma, absence of face), IGNORE "
-                "those parts — they contradict the species. Keep only the human-compatible "
-                "details (role, uniform, mood, environment)."
+                "ANATOMY CONTRACT (HIGHEST PRIORITY — overrides anything in the description): "
+                "this character is a HUMAN/HUMANOID. The avatar MUST depict a human: exactly two "
+                "arms ending in hands, exactly two legs, a human face with eyes/nose/mouth, human "
+                "skin. The output prompt MUST NOT contain any of: extra legs, six legs, tentacles, "
+                "carapace, exoskeleton, plasma, energy body, absence of face, sensor cluster, "
+                "swarm/colony/hive form, parasitic form, symbiotic form. If the character "
+                "description below mentions any such non-human element, DISCARD it entirely and "
+                "describe a human crew member in a Starfleet uniform for the given role instead. "
+                "The traits and description are flavour only — the species is human."
             )
+            species_line = "MANDATORY SPECIES: HUMAN/HUMANOID (do not contradict this under any circumstance)"
         else:
             anatomy_contract = (
                 "CRITICAL RULE: The character description below is the DEFINITIVE source for "
@@ -2134,6 +2139,7 @@ class GameServer:
                 "or symbiotic being — describe their ACTUAL form, NOT human anatomy. "
                 'Never default to "face, hair, eyes, upper body" for non-human characters.'
             )
+            species_line = f"MANDATORY SPECIES: {species_cat.upper()} (alien/non-human)"
 
         system = (
             "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
@@ -2148,9 +2154,10 @@ class GameServer:
 
         user = (
             f"Generate an image prompt for a {instr['genre']} {instr['intro']}.\n"
+            f"{species_line}\n"
             f"Role: {role}\n"
             f"Personality traits: {', '.join(traits)}\n"
-            f"Character description (flavour; subject to the anatomy contract above): {avatar_description}\n\n"
+            f"Character description (flavour ONLY; subject to the anatomy contract above): {avatar_description}\n\n"
             "The prompt should describe:\n"
             f"{instr['appearance']}\n"
             "- Environment setting (ship interior, lab, planet surface, etc.)\n"
@@ -2162,7 +2169,22 @@ class GameServer:
         )
 
         if self.vs_enabled:
-            vs_system, vs_user = verbalize_prompt(system, user, DIVERSITY_HINTS["avatar"], k=resolve_vs_k("avatar", self.vs_k))
+            if is_human_like:
+                # Keep all 5 options human — the default avatar hint forces
+                # "at least 3 of 5 MUST be non-humanoid", which would violate
+                # the anatomy contract for a Human species.
+                avatar_hint = (
+                    "Vary across these axes:\n"
+                    "- Age and build (young/lean, middle-aged/sturdy, older/weathered)\n"
+                    "- Expression (calm, intense, weary, cheerful)\n"
+                    "- Camera angle (portrait, 3/4, full body, dynamic pose)\n"
+                    "- Environment (ship interior, lab, planet surface, void)\n"
+                    "CRITICAL: ALL options MUST be human/humanoid (two arms, two legs, a human face). "
+                    "No non-humanoid forms, no alien body plans."
+                )
+            else:
+                avatar_hint = DIVERSITY_HINTS["avatar"]
+            vs_system, vs_user = verbalize_prompt(system, user, avatar_hint, k=resolve_vs_k("avatar", self.vs_k))
             parsed = await self._call_llm(
                 system_prompt=vs_system,
                 user_prompt=vs_user,

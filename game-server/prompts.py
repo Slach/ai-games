@@ -3,6 +3,7 @@ LLM prompt constants for Game Server API
 All prompt strings organized by language (ru/en)
 """
 
+import re
 from typing import Any
 
 from language import (
@@ -1017,8 +1018,14 @@ def build_species_description_prompts(
     # bodies) even for a Human species — which then contradicted species in the
     # avatar pipeline. Frame non-human/hybrid species as alien creatures, but
     # human/humanoid as a Starfleet crew member.
-    species_lower = species_display.lower()
-    is_human_like = any(k in species_lower for k in ("человек", "гуманоид", "human", "humanoid"))
+    # Match whole words only, and reject negated forms: "негуманоид" and
+    # "non-humanoid" must NOT match the "гуманоид"/"humanoid" substring.
+    _neg = re.search(r"\b(не|non|not)\b", species_display.lower()) or species_display.lower().startswith(("не", "non"))
+    _has_token = any(
+        re.search(rf"\b{tok}\b", species_display.lower())
+        for tok in ("человек", "гуманоид", "human", "humanoid")
+    )
+    is_human_like = _has_token and not _neg
     if language == LANGUAGE_RU:
         species_note = f"Тип расы: {species_display}" + (f" (гибрид с {species_secondary})" if species_hybrid else "") + f"\nТип пола: {gender_display}" + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
         if is_human_like:
@@ -1074,7 +1081,20 @@ def build_species_description_prompts(
             f"Text in English, 3-5 sentences, atmospheric and cinematic."
         )
     if use_vs:
-        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["species_description"], k=vs_k)
+        if is_human_like:
+            # For humans the diversity axes are human traits only — never
+            # non-humanoid body plans or alien textures (the default hint
+            # would push the LLM back into inventing alien physiology).
+            hint = (
+                "Vary across these axes:\n"
+                "- Age and build (young/lean, middle-aged/sturdy, older/weathered)\n"
+                "- Ethnicity and complexion (varied human phenotypes)\n"
+                "- Demeanor (calm, intense, weary, cheerful)\n"
+                "- All options MUST remain human: two arms, two legs, a human face.\n"
+            )
+        else:
+            hint = DIVERSITY_HINTS["species_description"]
+        system, user = verbalize_prompt(system, user, hint, k=vs_k)
     return system, user
 
 
@@ -1101,13 +1121,33 @@ def build_role_flavour_prompts(
     """
     traits_str = ", ".join(traits) if traits else ""
 
+    # The species decides whether this is a human crew member or an alien
+    # being. Without this guard the LLM invents non-human traits/descriptions
+    # (parasitic, plasma, extra limbs) even for a Human, which then corrupts
+    # the downstream avatar prompt.
+    _neg = bool(re.search(r"\b(не|non|not)\b", species_display.lower())) or species_display.lower().startswith(("не", "non"))
+    _has_token = any(re.search(rf"\b{t}\b", species_display.lower()) for t in ("человек", "гуманоид", "human", "humanoid"))
+    is_human_like = _has_token and not _neg
+
     if language == LANGUAGE_RU:
-        system = (
-            "Ты — креативный писатель-фантаст, создающий живые портреты членов звёздного экипажа. "
-            "Для заданной роли, вида, пола и черт характера опиши конкретного человека/существо на этой должности. "
-            "Избегай шаблонных архетипов — сделай персонажа запоминающимся. Текст должен быть кинематографичным "
-            "и атмосферным, как описание персонажа для фильма или игры."
-        )
+        if is_human_like:
+            system = (
+                "Ты — креативный писатель-фантаст, создающий живые портреты членов звёздного экипажа. "
+                "Для заданной роли, вида, пола и черт характера опиши конкретного ЧЕЛОВЕКА на этой должности. "
+                "Это человек/гуманоид: две руки, две ноги, человеческое лицо. НЕ придумывай нечеловеческую "
+                "физиологию (никаких щупалец, панцирей, плазмы, лишних конечностей, паразитизма, "
+                "симбиозов, энергетических форм). Черты характера и визуальное описание должны быть "
+                "применимы к живому человеку в форме Starfleet. Избегай шаблонных архетипов — сделай "
+                "персонажа запоминающимся. Текст кинематографичный и атмосферный."
+            )
+        else:
+            system = (
+                "Ты — креативный писатель-фантаст, создающий живые портреты членов звёздного экипажа. "
+                "Для заданной роли, вида, пола и черт характера опиши конкретное инопланетное существо на этой должности. "
+                "Опиши его нечеловеческую физиологию в соответствии с видом. Избегай шаблонных архетипов — сделай "
+                "персонажа запоминающимся. Текст должен быть кинематографичным "
+                "и атмосферным, как описание персонажа для фильма или игры."
+            )
         user_lines = [
             "Создай flavour-описание члена экипажа для космической игры в стиле Star Trek.\n",
             f"Роль: {role_name} (ключ: {role_key})",
@@ -1118,6 +1158,10 @@ def build_role_flavour_prompts(
             user_lines.append(f"Пол: {gender_display}")
         if traits_str:
             user_lines.append(f"Черты характера (из онбординга): {traits_str}")
+        if is_human_like:
+            user_lines.append("ВАЖНО: это человек/гуманоид. avatar_description должен описывать человека "
+                              "(внешность, форма, окружение, поза), а personality_traits — человеческие черты "
+                              "характера. Никаких нечеловеческих элементов.")
         user_lines.append("")
         user_lines.append("Верни JSON с тремя полями:")
         user_lines.append("- role_description: 2-4 предложения на русском — кто этот персонаж на своей должности, "
@@ -1128,12 +1172,23 @@ def build_role_flavour_prompts(
                           "отражающих характер персонажа (включая черты из онбординга, но расширенные под роль).")
         user = "\n".join(user_lines)
     else:
-        system = (
-            "You are a creative sci-fi writer crafting vivid portraits of starship crew members. "
-            "For a given role, species, gender, and set of traits, describe a specific individual holding that post. "
-            "Avoid stock archetypes — make the character memorable. The writing should be cinematic and atmospheric, "
-            "like a character pitch for a film or game."
-        )
+        if is_human_like:
+            system = (
+                "You are a creative sci-fi writer crafting vivid portraits of starship crew members. "
+                "For a given role, species, gender, and set of traits, describe a specific HUMAN holding that post. "
+                "This is a human/humanoid: two arms, two legs, a human face. Do NOT invent non-human physiology "
+                "(no tentacles, carapaces, plasma, extra limbs, parasitism, symbiosis, or energy forms). Traits "
+                "and the visual description must apply to a living person in a Starfleet uniform. Avoid stock "
+                "archetypes — make the character memorable. The writing should be cinematic and atmospheric, "
+                "like a character pitch for a film or game."
+            )
+        else:
+            system = (
+                "You are a creative sci-fi writer crafting vivid portraits of starship crew members. "
+                "For a given role, species, gender, and set of traits, describe a specific alien being holding that post. "
+                "Describe its non-human physiology per its species. Avoid stock archetypes — make the character memorable. "
+                "The writing should be cinematic and atmospheric, like a character pitch for a film or game."
+            )
         user_lines = [
             "Create a flavour description of a crew member for a Star Trek-style space game.\n",
             f"Role: {role_name} (key: {role_key})",
@@ -1144,6 +1199,10 @@ def build_role_flavour_prompts(
             user_lines.append(f"Gender: {gender_display}")
         if traits_str:
             user_lines.append(f"Traits (from onboarding): {traits_str}")
+        if is_human_like:
+            user_lines.append("IMPORTANT: this is a human/humanoid. avatar_description must describe a human "
+                              "(appearance, uniform, surroundings, pose), and personality_traits must be human "
+                              "character traits. No non-human elements whatsoever.")
         user_lines.append("")
         user_lines.append("Return JSON with three fields:")
         user_lines.append("- role_description: 2-4 sentences in English — who this character is in their role, "
