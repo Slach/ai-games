@@ -1011,28 +1011,64 @@ def build_species_description_prompts(
     vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for species description generation."""
+    # A human/humanoid must be described as a person, not as an alien being.
+    # The unconditional "describe how alien beings look" framing used to make
+    # the LLM invent non-human physiology (extra limbs, carapaces, plasma
+    # bodies) even for a Human species — which then contradicted species in the
+    # avatar pipeline. Frame non-human/hybrid species as alien creatures, but
+    # human/humanoid as a Starfleet crew member.
+    species_lower = species_display.lower()
+    is_human_like = any(k in species_lower for k in ("человек", "гуманоид", "human", "humanoid"))
     if language == LANGUAGE_RU:
         species_note = f"Тип расы: {species_display}" + (f" (гибрид с {species_secondary})" if species_hybrid else "") + f"\nТип пола: {gender_display}" + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
-        system = "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. Опиши, как выглядят и ощущают себя существа такого типа. Будь атмосферным и детальным."
+        if is_human_like:
+            system = (
+                "Ты — креативный писатель-фантаст, создающий описания членов звёздного экипажа. "
+                "Опиши человека/гуманоида — внешность, манеру держаться, атмосферу вокруг него. "
+                "Будь атмосферным и детальным. НЕ придумывай нечеловеческую физиологию (никаких "
+                "щупалец, панцирей, плазмы, лишних конечностей) — это человекообразный персонаж."
+            )
+            anatomy_guard = "Это человек/гуманоид: две руки, две ноги, человеческое лицо. Опиши его как живого человека в форме Starfleet."
+        else:
+            system = (
+                "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. "
+                "Опиши, как выглядят и ощущают себя существа такого типа. Будь атмосферным и детальным."
+            )
+            anatomy_guard = "Это инопланетное существо: опиши его нечеловеческую физиологию по типу расы."
         user = (
             f"Создай яркое нарративное описание персонажа для космической игры Star Trek.\n\n"
             f"Роль: {role}\n"
-            f"{species_note}\n\n"
+            f"{species_note}\n"
+            f"{anatomy_guard}\n\n"
             f"Опиши:\n"
-            f"1. Как выглядит и ощущает себя это существо (внешность, физиология, текстура, свечение и т.д.)\n"
+            f"1. Как выглядит и ощущает себя этот персонаж (внешность, физиология, текстура, свечение и т.д.)\n"
             f"2. Как пол/форма размножения проявляется в их культуре и самовосприятии\n"
             f"3. Единый образ — как расовые и половые черты сливаются в одну личность\n\n"
             f"Текст на русском языке, 3-5 предложений, атмосферный и кинематографичный."
         )
     else:
         species_note = f"Species type: {species_display}" + (f" (hybrid with {species_secondary})" if species_hybrid else "") + f"\nGender type: {gender_display}" + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
-        system = "You are a creative sci-fi writer crafting descriptions of alien characters. Describe how beings of this type look and feel. Be atmospheric and detailed."
+        if is_human_like:
+            system = (
+                "You are a creative sci-fi writer crafting descriptions of starship crew members. "
+                "Describe a human/humanoid — their appearance, bearing, and the atmosphere around them. "
+                "Be atmospheric and detailed. Do NOT invent non-human physiology (no tentacles, "
+                "carapaces, plasma, or extra limbs) — this is a human-shaped character."
+            )
+            anatomy_guard = "This is a human/humanoid: two arms, two legs, a human face. Describe them as a living person in a Starfleet uniform."
+        else:
+            system = (
+                "You are a creative sci-fi writer crafting descriptions of alien characters. "
+                "Describe how beings of this type look and feel. Be atmospheric and detailed."
+            )
+            anatomy_guard = "This is an alien being: describe its non-human physiology per its species type."
         user = (
             f"Create a vivid narrative description of a character for a Star Trek-style space game.\n\n"
             f"Role: {role}\n"
-            f"{species_note}\n\n"
+            f"{species_note}\n"
+            f"{anatomy_guard}\n\n"
             f"Describe:\n"
-            f"1. How this being looks and feels (appearance, physiology, texture, glow, etc.)\n"
+            f"1. How this character looks and feels (appearance, physiology, texture, glow, etc.)\n"
             f"2. How their gender/reproductive form manifests in their culture and self-perception\n"
             f"3. A unified image — how species and gender traits merge into one personality\n\n"
             f"Text in English, 3-5 sentences, atmospheric and cinematic."

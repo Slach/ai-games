@@ -2112,13 +2112,34 @@ class GameServer:
         logger.info(f"[AVATAR] Using species category: {species_cat}")
         instr = self._species_prompt_instructions(species_cat)
 
+        # The species category is the ANATOMY CONTRACT: it decides whether the
+        # avatar is a human (two arms, two legs, human face) or an alien being.
+        # The free-text character description is flavour, but it MUST NOT
+        # contradict the species category — a Human is never drawn as a six-
+        # legged machine even if the description rambles about carapaces, and a
+        # non-humanoid alien is never collapsed back into a uniformed human.
+        is_human_like = species_cat in ("human", "humanoid")
+        if is_human_like:
+            anatomy_contract = (
+                "ANATOMY CONTRACT: this is a HUMAN/HUMANOID. The avatar MUST have two arms, "
+                "two legs, and a human face. If the character description below mentions "
+                "non-human anatomy (extra legs, carapaces, plasma, absence of face), IGNORE "
+                "those parts — they contradict the species. Keep only the human-compatible "
+                "details (role, uniform, mood, environment)."
+            )
+        else:
+            anatomy_contract = (
+                "CRITICAL RULE: The character description below is the DEFINITIVE source for "
+                "the character's appearance. If it describes an alien, non-humanoid, energy, "
+                "or symbiotic being — describe their ACTUAL form, NOT human anatomy. "
+                'Never default to "face, hair, eyes, upper body" for non-human characters.'
+            )
+
         system = (
             "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
             "Generate detailed, cinematic-quality image prompts for character avatars.\n\n"
-            "CRITICAL RULE: The character description below is the DEFINITIVE source for the "
-            "character's appearance. If it describes an alien, non-humanoid, energy, cybernetic, "
-            "or symbiotic being — describe their ACTUAL form, NOT human anatomy.\n"
-            'Never default to "face, hair, eyes, upper body" for non-human characters.\n\n'
+            + anatomy_contract
+            + "\n\n"
             "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
             "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
             "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
@@ -2129,7 +2150,7 @@ class GameServer:
             f"Generate an image prompt for a {instr['genre']} {instr['intro']}.\n"
             f"Role: {role}\n"
             f"Personality traits: {', '.join(traits)}\n"
-            f"Character description (definitive source): {avatar_description}\n\n"
+            f"Character description (flavour; subject to the anatomy contract above): {avatar_description}\n\n"
             "The prompt should describe:\n"
             f"{instr['appearance']}\n"
             "- Environment setting (ship interior, lab, planet surface, etc.)\n"
