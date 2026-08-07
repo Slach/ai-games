@@ -563,17 +563,15 @@ class TestComfyUiConfig(unittest.TestCase):
         """An unlisted kind should resolve to the default model."""
         self.assertEqual(comfyui_config.resolve_txt2img_model("splash"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
-    def test_default_is_z_image_turbo(self):
-        """Out of the box the default model should be z_image_turbo."""
-        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "z_image_turbo")
+    def test_default_is_flux_dev(self):
+        """Out of the box the default model should be flux_dev_gguf_q4."""
+        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux_dev_gguf_q4")
 
     def test_env_override_changes_default(self):
         """COMFYUI_TXT2IMG_MODEL env should override the default model key."""
-        with patch.object(comfyui_config, "DEFAULT_TXT2IMG_MODEL", "flux_dev_gguf_q4"):
-            # With the default flipped, an unknown kind now resolves to FLUX.
-            self.assertEqual(comfyui_config.resolve_txt2img_model("splash"), "flux_dev_gguf_q4")
-            # An explicit override still wins over the flipped default.
-            self.assertEqual(comfyui_config.resolve_txt2img_model("avatar"), "flux_dev_gguf_q4")
+        with patch.object(comfyui_config, "DEFAULT_TXT2IMG_MODEL", "z_image_turbo"):
+            # With the default flipped to Z-Image, an unknown kind resolves to it.
+            self.assertEqual(comfyui_config.resolve_txt2img_model("splash"), "z_image_turbo")
 
     def test_get_model_config_known(self):
         """get_model_config should return a ModelConfig for registered keys."""

@@ -83,16 +83,14 @@ MODELS: dict[str, ModelConfig] = {
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
-DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "z_image_turbo")
+DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "flux_dev_gguf_q4")
 
 # Per-kind overrides for txt2img AND img2img. Kinds not listed fall back
 # to DEFAULT_TXT2IMG_MODEL. A key here also acts as a prefix: "npc_avatar"
 # covers every "npc_avatar_<role>" kind (see _prefix_override).
+# FLUX.1 [dev] is now the global default for all kinds; the Z-Image Turbo
+# entry stays registered so it can be re-selected via COMFYUI_TXT2IMG_MODEL.
 KIND_MODEL_OVERRIDES: dict[str, str] = {
-    # Avatars of non-humanoid / alien characters benefit from FLUX, which
-    # follows anatomy prompts far better than the Z-Image Turbo default.
-    "avatar": "flux_dev_gguf_q4",
-    "npc_avatar": "flux_dev_gguf_q4",
 }
 
 
