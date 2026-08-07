@@ -2,12 +2,23 @@
 Image Generator - Direct ComfyUI API integration for image generation
 
 Calls ComfyUI /prompt API directly for image generation.
-Uses Z-Image Turbo model for text-to-image generation.
 
-Model combination (verified working):
-  UNET: z_image_turbo_bf16.safetensors
-  CLIP: qwen_3_4b.safetensors (type: lumina2)
-  VAE:  ae.safetensors
+The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
+(``resolve_txt2img_model`` → ``_TXT2IMG_BUILDERS``). Registered models:
+
+  z_image_turbo (default for most kinds):
+    UNET: z_image_turbo_bf16.safetensors
+    CLIP: qwen_3_4b.safetensors (type: lumina2)
+    VAE:  ae.safetensors
+
+  flux_dev (used for avatar / npc_avatar — non-humanoid anatomy):
+    UNET: flux1-dev-Q4_K_S.gguf (via ComfyUI-GGUF UnetLoaderGGUF)
+    CLIP: clip_l.safetensors + t5xxl_fp8_e4m3fn.safetensors (DualCLIPLoader, type=flux)
+    VAE:  ae.safetensors
+
+img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
+(``_build_qwen_edit_workflow``) have their own fixed model combinations
+and are not routed through ``comfyui_config``.
 """
 
 import asyncio
@@ -21,6 +32,14 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
+from comfyui_config import (
+    EditModelConfig,
+    get_edit_model_config,
+    get_model_config,
+    resolve_edit_model,
+    resolve_img2img_model,
+    resolve_txt2img_model,
+)
 from logging_utils import write_comfyui_log
 
 logger = logging.getLogger(__name__)
@@ -59,11 +78,9 @@ DEFAULT_LOADING_FALLBACK_URL = os.getenv(
 # background image, and renders the character into the scene via a text
 # instruction prompt. Preserves identity far better than img2img because it
 # understands the subject semantically rather than treating the avatar as noise.
-# GGUF Q4_K_M (13 GB) fits 24 GB VRAM where the bf16 (40 GB) cannot.
-QWEN_EDIT_UNET_GGUF = "qwen-image-edit-2511-Q4_K_M.gguf"
-QWEN_EDIT_CLIP = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
-QWEN_EDIT_VAE = "qwen_image_vae.safetensors"
-QWEN_EDIT_LIGHTNING_LORA = "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+# File references (UNET/CLIP/VAE/LoRA) live in comfyui_config.EDIT_MODELS so a
+# future edit model (e.g. a FLUX-Kontext variant) can be added there without
+# touching this builder.
 
 
 def _build_qwen_edit_workflow(
@@ -74,6 +91,7 @@ def _build_qwen_edit_workflow(
     height: int,
     seed: int,
     filename_prefix: str,
+    cfg: EditModelConfig,
     *,
     species_category: str = "",
 ) -> dict[str, Any]:
@@ -155,20 +173,20 @@ def _build_qwen_edit_workflow(
         # Load the GGUF model.
         "10": {
             "class_type": "UnetLoaderGGUF",
-            "inputs": {"unet_name": QWEN_EDIT_UNET_GGUF},
+            "inputs": {"unet_name": cfg.unet},
         },
         # Qwen2.5-VL text encoder (handles vision tokens + instruction).
         "30": {
             "class_type": "CLIPLoader",
             "inputs": {
-                "clip_name": QWEN_EDIT_CLIP,
+                "clip_name": cfg.clip,
                 "type": "qwen_image",
             },
         },
         # Qwen-Image VAE (separate from the Z-Image-Turbo ae.safetensors).
         "29": {
             "class_type": "VAELoader",
-            "inputs": {"vae_name": QWEN_EDIT_VAE},
+            "inputs": {"vae_name": cfg.vae},
         },
         # Load character avatar.
         "41": {
@@ -181,7 +199,7 @@ def _build_qwen_edit_workflow(
             "class_type": "LoraLoaderModelOnly",
             "inputs": {
                 "model": ["10", 0],
-                "lora_name": QWEN_EDIT_LIGHTNING_LORA,
+                "lora_name": cfg.lora,
                 "strength_model": 1.0,
             },
         } if use_lightning else None,
@@ -347,6 +365,145 @@ def _build_zimage_turbo_workflow(
     }
 
 
+def _build_flux_dev_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a FLUX.1 [dev] GGUF Q4_K_S text-to-image workflow for ComfyUI API.
+
+    FLUX follows non-humanoid / multi-limbed / energy-being anatomy prompts
+    far better than the Z-Image Turbo default, which collapses them into a
+    bipedal humanoid. This workflow is selected for avatar / npc_avatar kinds
+    via ``comfyui_config.resolve_txt2img_model``.
+
+    Model combination:
+      UNET: flux1-dev-Q4_K_S.gguf (~6.8 GB, via ComfyUI-GGUF ``UnetLoaderGGUF``)
+      CLIP: clip_l.safetensors + t5xxl_fp8_e4m3fn.safetensors (``DualCLIPLoader``, type=flux)
+      VAE:  ae.safetensors (shared with Z-Image Turbo)
+      Sampler: 20 steps, cfg 1.0, euler/simple, shift 1.73
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+
+    return {
+        # Load GGUF UNET (ComfyUI-GGUF custom node, already installed)
+        "10": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {
+                "unet_name": "flux1-dev-Q4_K_S.gguf",
+            },
+        },
+        # Dual CLIP text encoder: clip_l + t5xxl_fp8, type=flux
+        "30": {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": "clip_l.safetensors",
+                "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
+                "type": "flux",
+            },
+        },
+        # Load VAE (shared with Z-Image Turbo)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {
+                "vae_name": "ae.safetensors",
+            },
+        },
+        # Encode positive prompt
+        "27": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": prompt,
+                "clip": ["30", 0],
+            },
+        },
+        # Create empty latent image
+        "13": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "batch_size": 1,
+            },
+        },
+        # ModelSamplingAuraFlow with FLUX recommended shift=1.73
+        "11": {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {
+                "model": ["10", 0],
+                "shift": 1.73,
+            },
+        },
+        # KSampler — FLUX dev, 20 steps, cfg 1.0, euler/simple
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 20,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["11", 0],
+                "positive": ["27", 0],
+                "negative": ["33", 0],
+                "latent_image": ["13", 0],
+            },
+        },
+        # ConditioningZeroOut for negative (FLUX uses empty/negative guidance)
+        "33": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": {
+                "conditioning": ["27", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": ["3", 0],
+                "vae": ["29", 0],
+            },
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": filename_prefix,
+                "images": ["8", 0],
+            },
+        },
+    }
+
+
+# Registry mapping comfyui_config.ModelConfig.builder -> workflow builder fn.
+# Each builder has the signature (prompt, width, height, seed, filename_prefix)
+# and returns a ComfyUI API workflow dict.
+_TXT2IMG_BUILDERS = {
+    "z_image_turbo": _build_zimage_turbo_workflow,
+    "flux_dev": _build_flux_dev_workflow,
+}
+
+# Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
+# builder fn. Each builder takes (instruction, character_filename,
+# background_filename, width, height, seed, filename_prefix, cfg, *,
+# species_category) where cfg is the EditModelConfig carrying the file refs.
+_EDIT_BUILDERS = {
+    "qwen_image_edit": _build_qwen_edit_workflow,
+}
+
+# img2img builders are instance methods (they live on ImageGenerator because
+# they share VAE/CLIP nodes with the txt2img path). Dispatch is done by
+# builder-key -> method name in _IMG2IMG_BUILDER_METHODS below.
+_IMG2IMG_BUILDER_METHODS = {
+    "z_image_turbo": "_build_img2img_workflow",
+    "flux_dev": "_build_flux_dev_img2img_workflow",
+}
+
+
 class ImageGenerator:
     """
     Generates images using ComfyUI API directly via Z-Image Turbo model.
@@ -495,19 +652,24 @@ class ImageGenerator:
         ctx_player = str(player_id) if player_id else ""
         ctx_turn = str(turn) if turn is not None else "0"
 
+        model_key = resolve_txt2img_model(kind)
+        model_cfg = get_model_config(model_key)
+        build_workflow = _TXT2IMG_BUILDERS[model_cfg.builder]
+
         logger.info(
-            "ComfyUI [%s] game=%s player=%s turn=%s | size=%dx%d prefix=%s retries=%d",
+            "ComfyUI [%s] game=%s player=%s turn=%s | model=%s | size=%dx%d prefix=%s retries=%d",
             kind or "unspecified",
             ctx_game,
             ctx_player,
             ctx_turn,
+            model_cfg.label,
             width,
             height,
             filename_prefix,
             max_retries,
         )
 
-        logger.info("[IMAGE] Generating image via Z-Image Turbo")
+        logger.info(f"[IMAGE] Generating image via {model_cfg.label}")
         logger.info(f"[IMAGE] Size: {width}x{height}, max_retries={max_retries}")
         logger.info(f"[IMAGE] Acquiring ComfyUI semaphore ({_image_semaphore._value}/{COMFYUI_IMAGE_CONCURRENCY} slots available)...")
 
@@ -515,7 +677,7 @@ class ImageGenerator:
             logger.info("[IMAGE] Semaphore acquired, starting generation")
             for attempt in range(1, max_retries + 1):
                 try:
-                    workflow = _build_zimage_turbo_workflow(
+                    workflow = build_workflow(
                         prompt=prompt,
                         width=width,
                         height=height,
@@ -524,7 +686,7 @@ class ImageGenerator:
                     )
 
                     comfyui_req = (
-                        f"Model: Z-Image Turbo (8-step distilled)\n"
+                        f"Model: {model_cfg.label}\n"
                         f"Size: {width}x{height}\n"
                         f"Filename prefix: {filename_prefix}\n"
                         f"Attempt: {attempt}/{max_retries}\n\n"
@@ -792,6 +954,117 @@ class ImageGenerator:
             },
         }
 
+    def _build_flux_dev_img2img_workflow(
+        self,
+        prompt: str,
+        reference_filename: str,
+        denoise: float,
+        width: int,
+        height: int,
+        seed: int,
+        filename_prefix: str,
+    ) -> dict[str, Any]:
+        """Build a FLUX.1 [dev] GGUF img2img workflow using a reference latent.
+
+        Mirrors :meth:`_build_img2img_workflow` (Z-Image Turbo) but loads the
+        FLUX GGUF UNET + dual CLIP (clip_l/t5xxl) and uses FLUX sampler
+        settings. The reference image is VAE-encoded into latent space and
+        partially denoised so the action prompt can reshape the scene while
+        retaining some character structure from the reference. Selected when
+        ``resolve_img2img_model(kind)`` returns FLUX — keeping the img2img
+        fallback stylistically consistent with FLUX avatars.
+
+        Args:
+            prompt: Text prompt for the scene.
+            reference_filename: Uploaded filename in ComfyUI input folder.
+            denoise: How much to denoise (0.0=no change, 1.0=completely new).
+            width, height: Output dimensions.
+            seed: Random seed (0 = randomize).
+            filename_prefix: Output filename prefix.
+
+        Returns:
+            ComfyUI workflow dict ready for /prompt API.
+        """
+        if seed == 0:
+            seed = secrets.randbelow(2**63 + 1)
+
+        return {
+            # Load reference image (uploaded to ComfyUI input folder)
+            "40": {
+                "class_type": "LoadImage",
+                "inputs": {"image": reference_filename},
+            },
+            # VAE Encode reference image to latent space
+            "41": {
+                "class_type": "VAEEncode",
+                "inputs": {"pixels": ["40", 0], "vae": ["29", 0]},
+            },
+            # Load GGUF UNET (ComfyUI-GGUF custom node)
+            "10": {
+                "class_type": "UnetLoaderGGUF",
+                "inputs": {"unet_name": "flux1-dev-Q4_K_S.gguf"},
+            },
+            # Dual CLIP text encoder: clip_l + t5xxl_fp8, type=flux
+            "30": {
+                "class_type": "DualCLIPLoader",
+                "inputs": {
+                    "clip_name1": "clip_l.safetensors",
+                    "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
+                    "type": "flux",
+                },
+            },
+            # Load VAE (shared with Z-Image Turbo)
+            "29": {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": "ae.safetensors"},
+            },
+            # Encode positive prompt
+            "27": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": ["30", 0]},
+            },
+            # ModelSamplingAuraFlow with FLUX recommended shift=1.73
+            "11": {
+                "class_type": "ModelSamplingAuraFlow",
+                "inputs": {"model": ["10", 0], "shift": 1.73},
+            },
+            # KSampler — img2img with partial denoising.
+            # Latent comes from VAEEncode of reference image (node 41).
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": seed,
+                    "steps": 20,
+                    "cfg": 1.0,
+                    "sampler_name": "euler",
+                    "scheduler": "simple",
+                    "denoise": denoise,
+                    "model": ["11", 0],
+                    "positive": ["27", 0],
+                    "negative": ["33", 0],
+                    "latent_image": ["41", 0],
+                },
+            },
+            # ConditioningZeroOut for negative (FLUX uses empty/negative guidance)
+            "33": {
+                "class_type": "ConditioningZeroOut",
+                "inputs": {"conditioning": ["27", 0]},
+            },
+            # Decode latent to image
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+            },
+            # Save image
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "filename_prefix": filename_prefix,
+                    "images": ["8", 0],
+                },
+            },
+        }
+
     async def generate_action_image_with_reference(
         self,
         prompt: str,
@@ -832,7 +1105,10 @@ class ImageGenerator:
             try:
                 ref_filename = self._extract_filename_from_url(reference_image_url)
                 if ref_filename:
-                    workflow = self._build_img2img_workflow(
+                    model_key = resolve_img2img_model(kind)
+                    model_cfg = get_model_config(model_key)
+                    builder_method = _IMG2IMG_BUILDER_METHODS[model_cfg.builder]
+                    workflow = getattr(self, builder_method)(
                         prompt=prompt,
                         reference_filename=ref_filename,
                         width=width,
@@ -847,7 +1123,7 @@ class ImageGenerator:
                     ctx_turn = str(turn) if turn is not None else "0"
                     log_kind = kind or "img2img"
                     comfyui_req = (
-                        f"Model: img2img (denoise={denoise})\n"
+                        f"Model: {model_cfg.label} (img2img, denoise={denoise})\n"
                         f"Size: {width}x{height}\n"
                         f"Filename prefix: {filename_prefix}\n\n"
                         f"--- PROMPT ---\n{prompt}\n\n"
@@ -987,7 +1263,10 @@ class ImageGenerator:
                 kind=kind,
             )
 
-        workflow = _build_qwen_edit_workflow(
+        edit_model_key = resolve_edit_model(kind)
+        edit_cfg = get_edit_model_config(edit_model_key)
+        edit_builder = _EDIT_BUILDERS[edit_cfg.builder]
+        workflow = edit_builder(
             instruction=instruction_prompt,
             character_filename=char_filename,
             background_filename=bg_filename,
@@ -995,6 +1274,7 @@ class ImageGenerator:
             height=height,
             seed=0,
             filename_prefix=filename_prefix,
+            cfg=edit_cfg,
             species_category=species_category,
         )
 
@@ -1003,18 +1283,18 @@ class ImageGenerator:
         ctx_turn = str(turn) if turn is not None else "0"
         log_kind = kind or "qwen_edit"
 
-        # Qwen-Image-Edit is the identity-preserving path. It can time out
-        # under GPU contention (the ComfyUI queue backs up); before degrading
-        # to img2img (which loses the character's identity at denoise=0.75),
-        # retry once so the prompt re-enters the queue after contention clears.
-        max_qwen_attempts = 2
-        for attempt in range(1, max_qwen_attempts + 1):
+        # The edit path is identity-preserving. It can time out under GPU
+        # contention (the ComfyUI queue backs up); before degrading to img2img
+        # (which loses the character's identity at denoise=0.75), retry once so
+        # the prompt re-enters the queue after contention clears.
+        max_edit_attempts = 2
+        for attempt in range(1, max_edit_attempts + 1):
             try:
                 comfyui_req = (
-                    f"Model: Qwen-Image-Edit-2511\n"
+                    f"Model: {edit_cfg.label}\n"
                     f"Size: {width}x{height}\n"
                     f"Filename prefix: {filename_prefix}\n"
-                    f"Attempt: {attempt}/{max_qwen_attempts}\n\n"
+                    f"Attempt: {attempt}/{max_edit_attempts}\n\n"
                     f"--- INSTRUCTION ---\n{instruction_prompt}\n\n"
                     f"--- CHARACTER AVATAR ---\n{char_filename}\n\n"
                     f"--- BACKGROUND ---\n{bg_filename or '(none)'}\n\n"
@@ -1046,14 +1326,14 @@ class ImageGenerator:
                     logger.info("[QWEN_EDIT] Generated: %s", image_url)
                     return image_url
                 logger.warning(
-                    "[QWEN_EDIT] No output (attempt %d/%d)", attempt, max_qwen_attempts
+                    "[QWEN_EDIT] No output (attempt %d/%d)", attempt, max_edit_attempts
                 )
             except Exception:
-                if attempt < max_qwen_attempts:
+                if attempt < max_edit_attempts:
                     logger.warning(
                         "[QWEN_EDIT] attempt %d/%d failed, retrying before img2img fallback",
                         attempt,
-                        max_qwen_attempts,
+                        max_edit_attempts,
                         exc_info=True,
                     )
                     await asyncio.sleep(5)

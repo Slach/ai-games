@@ -54,3 +54,12 @@ https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image
 
 # Lightning LoRA for Qwen-Image-Edit-2511 — enables 4-step generation
 https://huggingface.co/alibaba-pai/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors -> loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+
+# ============== FLUX.1 [dev] (avatars / non-humanoid anatomy) ==============
+# Selected for avatar + npc_avatar kinds via comfyui_config.resolve_txt2img_model.
+# FLUX follows non-humanoid / multi-limbed anatomy prompts far better than Z-Image Turbo.
+# GGUF Q4_K_S (~6.8 GB) fits 32 GB VRAM; loaded via ComfyUI-GGUF UnetLoaderGGUF.
+https://huggingface.co/city96/FLUX.1-dev-gguf/resolve/main/flux1-dev-Q4_K_S.gguf -> unet/flux1-dev-Q4_K_S.gguf
+
+# t5xxl fp8 text encoder for FLUX (DualCLIPLoader pairs it with clip_l, already above).
+https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors -> text_encoders/t5xxl_fp8_e4m3fn.safetensors
