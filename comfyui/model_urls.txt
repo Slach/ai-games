@@ -7,25 +7,12 @@ https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/z_image_tu
 # and Z-Image Turbo (CLIPLoader type=lumina2)
 https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors -> text_encoders/qwen_3_4b.safetensors
 
-# Standard CLIP-L (required for some IP-Adapter models)
+# Standard CLIP-L
 https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors -> text_encoders/clip_l.safetensors
 
 # ============== VAE ==============
 https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/ae.safetensors -> vae/ae.safetensors
 https://huggingface.co/black-forest-labs/FLUX.2-dev/resolve/main/split_files/vae/flux2-vae.safetensors -> vae/flux2-vae.safetensors
-
-# ============== CLIP Vision (for IP-Adapter) ==============
-# OpenCLIP ViT-H-14 for IP-Adapter image encoding
-https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/clip-vit-h-14-laion2B-s32B-b79K.safetensors -> clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors
-
-# ============== IP-Adapter Models ==============
-# IP-Adapter SDXL (works with many models)
-https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors -> ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors
-https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors -> ipadapter/ip-adapter-plus-face_sdxl_vit-h.safetensors
-
-# IP-Adapter SD1.5 (already have plus variant)
-https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors -> ipadapter/ip-adapter-plus_sd15.safetensors
-https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-faceid-plusv2_sd15.bin -> ipadapter/ip-adapter-faceid-plusv2_sd15.bin
 
 # ============== LoRAs ==============
 https://huggingface.co/ByteDance/Z-Image-Turbo-LoRAs/resolve/main/pixel_art_style_z_image_turbo.safetensors -> loras/pixel_art_style_z_image_turbo.safetensors
