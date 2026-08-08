@@ -619,12 +619,7 @@ async def _deliver_player_death(
                         caption=header,
                     )
                 , max_retries=3, base_delay=1.0, max_delay=10.0)
-        await call_with_retry(
-            lambda: bot.send_message(
-                chat_id=player_id,
-                text=death_message,
-            )
-        , max_retries=3, base_delay=1.0, max_delay=10.0)
+        await _send_long_message(bot, player_id, death_message)
         return True
     except TelegramBadRequest as e:
         if "USER_IS_BLOCKED" in str(e):
