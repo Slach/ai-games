@@ -6,15 +6,15 @@ Calls ComfyUI /prompt API directly for image generation.
 The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
 (``resolve_txt2img_model`` → ``_TXT2IMG_BUILDERS``). Registered models:
 
-  z_image_turbo (default for most kinds):
+  z_image_turbo (8-step distilled):
     UNET: z_image_turbo_bf16.safetensors
     CLIP: qwen_3_4b.safetensors (type: lumina2)
     VAE:  ae.safetensors
 
-  flux_dev (used for avatar / npc_avatar — non-humanoid anatomy):
-    UNET: flux1-dev-Q4_K_S.gguf (via ComfyUI-GGUF UnetLoaderGGUF)
-    CLIP: clip_l.safetensors + t5xxl_fp8_e4m3fn.safetensors (DualCLIPLoader, type=flux)
-    VAE:  ae.safetensors
+  flux2_klein_4b (distilled, 4 steps — global default, fastest + Apache 2.0):
+    UNET: flux-2-klein-4b-Q4_K_S.gguf (via ComfyUI-GGUF UnetLoaderGGUF)
+    CLIP: qwen_3_4b.safetensors (CLIPLoader, type=flux2)
+    VAE:  flux2-vae.safetensors
 
 img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
 (``_build_qwen_edit_workflow``) have their own fixed model combinations
@@ -365,54 +365,52 @@ def _build_zimage_turbo_workflow(
     }
 
 
-def _build_flux_dev_workflow(
+def _build_flux2_klein_workflow(
     prompt: str,
     width: int,
     height: int,
     seed: int,
     filename_prefix: str,
 ) -> dict[str, Any]:
-    """Build a FLUX.1 [dev] GGUF Q4_K_S text-to-image workflow for ComfyUI API.
+    """Build a FLUX.2 [klein] 4B distilled GGUF Q4_K_S text-to-image workflow.
 
-    FLUX follows non-humanoid / multi-limbed / energy-being anatomy prompts
-    far better than the Z-Image Turbo default, which collapses them into a
-    bipedal humanoid. This workflow is selected for avatar / npc_avatar kinds
-    via ``comfyui_config.resolve_txt2img_model``.
+    FLUX.2 [klein] is a 4B distilled model optimized for 4-step generation.
+    Uses 128-channel latents, Qwen3-4B text encoder, and flux2 VAE.
+    Apache 2.0 license.
 
     Model combination:
-      UNET: flux1-dev-Q4_K_S.gguf (~6.8 GB, via ComfyUI-GGUF ``UnetLoaderGGUF``)
-      CLIP: clip_l.safetensors + t5xxl_fp8_e4m3fn.safetensors (``DualCLIPLoader``, type=flux)
-      VAE:  ae.safetensors (shared with Z-Image Turbo)
-      Sampler: 20 steps, cfg 1.0, euler/simple, shift 1.73
+      UNET: flux-2-klein-4b-Q4_K_S.gguf (~2.5 GB, via ComfyUI-GGUF ``UnetLoaderGGUF``)
+      CLIP: qwen_3_4b.safetensors (``CLIPLoader``, type=flux2)
+      VAE:  flux2-vae.safetensors
+      Sampler: 4 steps, cfg 1.0, euler/simple
     """
     if seed == 0:
         seed = secrets.randbelow(2**63 + 1)
 
     return {
-        # Load GGUF UNET (ComfyUI-GGUF custom node, already installed)
+        # Load GGUF UNET (ComfyUI-GGUF custom node)
         "10": {
             "class_type": "UnetLoaderGGUF",
             "inputs": {
-                "unet_name": "flux1-dev-Q4_K_S.gguf",
+                "unet_name": "flux-2-klein-4b-Q4_K_S.gguf",
             },
         },
-        # Dual CLIP text encoder: clip_l + t5xxl_fp8, type=flux
+        # CLIP text encoder: Qwen3-4B, type=flux2
         "30": {
-            "class_type": "DualCLIPLoader",
+            "class_type": "CLIPLoader",
             "inputs": {
-                "clip_name1": "clip_l.safetensors",
-                "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
-                "type": "flux",
+                "clip_name": "qwen_3_4b.safetensors",
+                "type": "flux2",
             },
         },
-        # Load VAE (shared with Z-Image Turbo)
+        # Load VAE (flux2-specific)
         "29": {
             "class_type": "VAELoader",
             "inputs": {
-                "vae_name": "ae.safetensors",
+                "vae_name": "flux2-vae.safetensors",
             },
         },
-        # Encode positive prompt
+        # Encode prompt
         "27": {
             "class_type": "CLIPTextEncode",
             "inputs": {
@@ -420,29 +418,32 @@ def _build_flux_dev_workflow(
                 "clip": ["30", 0],
             },
         },
-        # Create empty latent image
+        # Empty FLUX2 latent (128 channels, not 16!)
         "13": {
-            "class_type": "EmptySD3LatentImage",
+            "class_type": "EmptyFlux2LatentImage",
             "inputs": {
                 "width": width,
                 "height": height,
                 "batch_size": 1,
             },
         },
-        # ModelSamplingAuraFlow with FLUX recommended shift=1.73
+        # ModelSamplingFlux — shift computed from resolution
         "11": {
-            "class_type": "ModelSamplingAuraFlow",
+            "class_type": "ModelSamplingFlux",
             "inputs": {
                 "model": ["10", 0],
-                "shift": 1.73,
+                "max_shift": 1.15,
+                "base_shift": 0.5,
+                "width": width,
+                "height": height,
             },
         },
-        # KSampler — FLUX dev, 20 steps, cfg 1.0, euler/simple
+        # KSampler — FLUX.2 klein distilled, 4 steps, cfg 1.0, euler/simple
         "3": {
             "class_type": "KSampler",
             "inputs": {
                 "seed": seed,
-                "steps": 20,
+                "steps": 4,
                 "cfg": 1.0,
                 "sampler_name": "euler",
                 "scheduler": "simple",
@@ -453,7 +454,7 @@ def _build_flux_dev_workflow(
                 "latent_image": ["13", 0],
             },
         },
-        # ConditioningZeroOut for negative (FLUX uses empty/negative guidance)
+        # ConditioningZeroOut for negative (distilled FLUX uses empty negative)
         "33": {
             "class_type": "ConditioningZeroOut",
             "inputs": {
@@ -484,7 +485,7 @@ def _build_flux_dev_workflow(
 # and returns a ComfyUI API workflow dict.
 _TXT2IMG_BUILDERS = {
     "z_image_turbo": _build_zimage_turbo_workflow,
-    "flux_dev": _build_flux_dev_workflow,
+    "flux2_klein_4b": _build_flux2_klein_workflow,
 }
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
@@ -500,7 +501,7 @@ _EDIT_BUILDERS = {
 # builder-key -> method name in _IMG2IMG_BUILDER_METHODS below.
 _IMG2IMG_BUILDER_METHODS = {
     "z_image_turbo": "_build_img2img_workflow",
-    "flux_dev": "_build_flux_dev_img2img_workflow",
+    "flux2_klein_4b": "_build_flux2_klein_img2img_workflow",
 }
 
 
@@ -954,7 +955,7 @@ class ImageGenerator:
             },
         }
 
-    def _build_flux_dev_img2img_workflow(
+    def _build_flux2_klein_img2img_workflow(
         self,
         prompt: str,
         reference_filename: str,
@@ -964,26 +965,16 @@ class ImageGenerator:
         seed: int,
         filename_prefix: str,
     ) -> dict[str, Any]:
-        """Build a FLUX.1 [dev] GGUF img2img workflow using a reference latent.
+        """Build a FLUX.2 [klein] 4B distilled GGUF img2img workflow.
 
-        Mirrors :meth:`_build_img2img_workflow` (Z-Image Turbo) but loads the
-        FLUX GGUF UNET + dual CLIP (clip_l/t5xxl) and uses FLUX sampler
-        settings. The reference image is VAE-encoded into latent space and
-        partially denoised so the action prompt can reshape the scene while
-        retaining some character structure from the reference. Selected when
-        ``resolve_img2img_model(kind)`` returns FLUX — keeping the img2img
-        fallback stylistically consistent with FLUX avatars.
+        Mirrors :meth:`_build_flux2_klein_workflow` but starts from a
+        VAE-encoded reference latent (the avatar) instead of an empty latent,
+        so the action prompt reshapes the scene while retaining character
+        structure.
 
-        Args:
-            prompt: Text prompt for the scene.
-            reference_filename: Uploaded filename in ComfyUI input folder.
-            denoise: How much to denoise (0.0=no change, 1.0=completely new).
-            width, height: Output dimensions.
-            seed: Random seed (0 = randomize).
-            filename_prefix: Output filename prefix.
-
-        Returns:
-            ComfyUI workflow dict ready for /prompt API.
+        Uses the same FLUX.2 node set: Qwen3-4B CLIP (type=flux2),
+        flux2-vae, EmptyFlux2LatentImage node type for 128-channel latents,
+        ModelSamplingFlux, 4-step distilled sampling.
         """
         if seed == 0:
             seed = secrets.randbelow(2**63 + 1)
@@ -1002,31 +993,36 @@ class ImageGenerator:
             # Load GGUF UNET (ComfyUI-GGUF custom node)
             "10": {
                 "class_type": "UnetLoaderGGUF",
-                "inputs": {"unet_name": "flux1-dev-Q4_K_S.gguf"},
+                "inputs": {"unet_name": "flux-2-klein-4b-Q4_K_S.gguf"},
             },
-            # Dual CLIP text encoder: clip_l + t5xxl_fp8, type=flux
+            # CLIP text encoder: Qwen3-4B, type=flux2
             "30": {
-                "class_type": "DualCLIPLoader",
+                "class_type": "CLIPLoader",
                 "inputs": {
-                    "clip_name1": "clip_l.safetensors",
-                    "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
-                    "type": "flux",
+                    "clip_name": "qwen_3_4b.safetensors",
+                    "type": "flux2",
                 },
             },
-            # Load VAE (shared with Z-Image Turbo)
+            # Load VAE (flux2-specific)
             "29": {
                 "class_type": "VAELoader",
-                "inputs": {"vae_name": "ae.safetensors"},
+                "inputs": {"vae_name": "flux2-vae.safetensors"},
             },
             # Encode positive prompt
             "27": {
                 "class_type": "CLIPTextEncode",
                 "inputs": {"text": prompt, "clip": ["30", 0]},
             },
-            # ModelSamplingAuraFlow with FLUX recommended shift=1.73
+            # ModelSamplingFlux — shift computed from resolution
             "11": {
-                "class_type": "ModelSamplingAuraFlow",
-                "inputs": {"model": ["10", 0], "shift": 1.73},
+                "class_type": "ModelSamplingFlux",
+                "inputs": {
+                    "model": ["10", 0],
+                    "max_shift": 1.15,
+                    "base_shift": 0.5,
+                    "width": width,
+                    "height": height,
+                },
             },
             # KSampler — img2img with partial denoising.
             # Latent comes from VAEEncode of reference image (node 41).
@@ -1034,7 +1030,7 @@ class ImageGenerator:
                 "class_type": "KSampler",
                 "inputs": {
                     "seed": seed,
-                    "steps": 20,
+                    "steps": 4,
                     "cfg": 1.0,
                     "sampler_name": "euler",
                     "scheduler": "simple",
@@ -1045,7 +1041,7 @@ class ImageGenerator:
                     "latent_image": ["41", 0],
                 },
             },
-            # ConditioningZeroOut for negative (FLUX uses empty/negative guidance)
+            # ConditioningZeroOut for negative (distilled FLUX uses empty negative)
             "33": {
                 "class_type": "ConditioningZeroOut",
                 "inputs": {"conditioning": ["27", 0]},

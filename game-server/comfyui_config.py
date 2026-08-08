@@ -76,20 +76,19 @@ MODELS: dict[str, ModelConfig] = {
         label="Z-Image Turbo (8-step distilled)",
         builder="z_image_turbo",
     ),
-    "flux_dev_gguf_q4": ModelConfig(
-        label="FLUX.1 [dev] GGUF Q4_K_S",
-        builder="flux_dev",
+    "flux2_klein_4b_gguf_q4": ModelConfig(
+        label="FLUX.2 [klein] 4B distilled GGUF Q4_K_S",
+        builder="flux2_klein_4b",
     ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
-DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "flux_dev_gguf_q4")
+# FLUX.2 [klein] 4B distilled: 4-step generation, 2.5 GB UNET, Apache 2.0.
+DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "flux2_klein_4b_gguf_q4")
 
 # Per-kind overrides for txt2img AND img2img. Kinds not listed fall back
 # to DEFAULT_TXT2IMG_MODEL. A key here also acts as a prefix: "npc_avatar"
 # covers every "npc_avatar_<role>" kind (see _prefix_override).
-# FLUX.1 [dev] is now the global default for all kinds; the Z-Image Turbo
-# entry stays registered so it can be re-selected via COMFYUI_TXT2IMG_MODEL.
 KIND_MODEL_OVERRIDES: dict[str, str] = {
 }
 

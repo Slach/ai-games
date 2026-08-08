@@ -63,7 +63,7 @@ services:
       - LLM_MODEL=${LLM_MODEL:-unsloth/Qwen3.5-27B}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-32768}
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
-      - COMFYUI_TXT2IMG_MODEL=${COMFYUI_TXT2IMG_MODEL:-flux_dev_gguf_q4}
+      - COMFYUI_TXT2IMG_MODEL=${COMFYUI_TXT2IMG_MODEL:-flux2_klein_4b_gguf_q4}
       - ONBOARDING_QUESTIONS_COUNT=${ONBOARDING_QUESTIONS_COUNT:-5}
       - ONBOARDING_OPTIONS_COUNT=${ONBOARDING_OPTIONS_COUNT:-5}
       # Web server bind address (0.0.0.0 needed in Docker)

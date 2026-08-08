@@ -3,25 +3,19 @@
 https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/z_image_turbo_bf16.safetensors -> diffusion_models/z_image_turbo_bf16.safetensors
 
 # ============== Text Encoders ==============
-# Qwen2.5 3B text encoder for Z-Image Turbo
+# Qwen2.5 3B text encoder (shared by Z-Image Turbo and FLUX.2 klein)
 https://huggingface.co/Qwen/Qwen2.5-3B/resolve/main/model.safetensors -> text_encoders/qwen_3_4b.safetensors
 
 # Standard CLIP-L (required for some IP-Adapter models)
 https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors -> text_encoders/clip_l.safetensors
 
-# T5XXL FP8 (optional, for advanced prompting)
-# https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp16.safetensors -> text_encoders/t5xxl_fp16.safetensors
-
 # ============== VAE ==============
 https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/ae.safetensors -> vae/ae.safetensors
-https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/vae/flux2-vae.safetensors -> vae/flux2-vae.safetensors
+https://huggingface.co/black-forest-labs/FLUX.2-dev/resolve/main/split_files/vae/flux2-vae.safetensors -> vae/flux2-vae.safetensors
 
 # ============== CLIP Vision (for IP-Adapter) ==============
 # OpenCLIP ViT-H-14 for IP-Adapter image encoding
 https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/clip-vit-h-14-laion2B-s32B-b79K.safetensors -> clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors
-
-# CLIP Vision ViT-L for IP-Adapter SDXL
-# https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors -> clip_vision/clip-vit-large.safetensors
 
 # ============== IP-Adapter Models ==============
 # IP-Adapter SDXL (works with many models)
@@ -31,16 +25,6 @@ https://huggingface.co/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus-f
 # IP-Adapter SD1.5 (already have plus variant)
 https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors -> ipadapter/ip-adapter-plus_sd15.safetensors
 https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-faceid-plusv2_sd15.bin -> ipadapter/ip-adapter-faceid-plusv2_sd15.bin
-
-# IP-Adapter Flux (for Flux-based models like Z-Image Turbo)
-https://huggingface.co/InstantX/FLUX.1-dev-IP-Adapter/resolve/main/ip-adapter.bin -> ipadapter/ip-adapter-flux.safetensors
-https://huggingface.co/InstantX/FLUX.1-dev-IP-Adapter/resolve/main/ip-adapter-faceid.bin -> ipadapter/ip-adapter-flux-faceid.safetensors
-
-# IP-Adapter FaceID SDXL
-# https://huggingface.co/h94/IP-Adapter-FaceID/resolve/main/ip-adapter-faceid-plusv2_sdxl.bin -> ipadapter/ip-adapter-faceid-plusv2_sdxl.bin
-
-# ============== Optional: ControlNet for pose guidance ==============
-# https://huggingface.co/lllyasviel/sd_controlnet_collection/resolve/main/control_v11p_sd15_openpose.safetensors -> controlnet/control_v11p_sd15_openpose.safetensors
 
 # ============== LoRAs ==============
 https://huggingface.co/ByteDance/Z-Image-Turbo-LoRAs/resolve/main/pixel_art_style_z_image_turbo.safetensors -> loras/pixel_art_style_z_image_turbo.safetensors
@@ -55,11 +39,8 @@ https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image
 # Lightning LoRA for Qwen-Image-Edit-2511 — enables 4-step generation
 https://huggingface.co/alibaba-pai/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors -> loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
 
-# ============== FLUX.1 [dev] (avatars / non-humanoid anatomy) ==============
-# Selected for avatar + npc_avatar kinds via comfyui_config.resolve_txt2img_model.
-# FLUX follows non-humanoid / multi-limbed anatomy prompts far better than Z-Image Turbo.
-# GGUF Q4_K_S (~6.8 GB) fits 32 GB VRAM; loaded via ComfyUI-GGUF UnetLoaderGGUF.
-https://huggingface.co/city96/FLUX.1-dev-gguf/resolve/main/flux1-dev-Q4_K_S.gguf -> unet/flux1-dev-Q4_K_S.gguf
-
-# t5xxl fp8 text encoder for FLUX (DualCLIPLoader pairs it with clip_l, already above).
-https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors -> text_encoders/t5xxl_fp8_e4m3fn.safetensors
+# ============== FLUX.2 [klein] 4B distilled (global default) ==============
+# 4-step distilled model. 2.5 GB UNET, Apache 2.0 license. Uses Qwen3-4B text
+# encoder (same as Z-Image Turbo) and flux2-vae. Selected as
+# DEFAULT_TXT2IMG_MODEL for all txt2img kinds.
+https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_K_S.gguf -> unet/flux-2-klein-4b-Q4_K_S.gguf

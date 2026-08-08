@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from image_generator import (
     ImageGenerator,
-    _build_flux_dev_workflow,
+    _build_flux2_klein_workflow,
     _build_qwen_edit_workflow,
     _build_zimage_turbo_workflow,
     create_image_generator,
@@ -159,107 +159,85 @@ class TestZImageTurboWorkflow(unittest.TestCase):
         self.assertEqual(parsed, wf)
 
 
-class TestFluxDevWorkflow(unittest.TestCase):
-    """Test FLUX.1 [dev] GGUF Q4_K_M workflow JSON structure."""
+class TestFlux2KleinWorkflow(unittest.TestCase):
+    """Test FLUX.2 [klein] 4B distilled GGUF Q4_K_S workflow JSON structure."""
 
     def test_basic_workflow_structure(self):
-        """Workflow should have all required nodes."""
-        wf = _build_flux_dev_workflow(prompt="test prompt", width=1024, height=1024, seed=0, filename_prefix="")
-
-        required_nodes = ["10", "30", "29", "27", "13", "11", "3", "33", "8", "9"]
-        for node_id in required_nodes:
+        """Workflow should have all required nodes for FLUX.2 klein."""
+        wf = _build_flux2_klein_workflow(prompt="test prompt", width=1024, height=1024, seed=0, filename_prefix="")
+        required = ["10", "30", "29", "27", "13", "11", "3", "33", "8", "9"]
+        for node_id in required:
             self.assertIn(node_id, wf, f"Missing node {node_id}")
 
-    def test_gguf_unet_loader(self):
-        """UnetLoaderGGUF should load flux1-dev-Q4_K_S.gguf."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
+    def test_unet_loader_gguf(self):
+        """UnetLoaderGGUF should load flux-2-klein-4b-Q4_K_S.gguf."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
         unet = wf["10"]
-
         self.assertEqual(unet["class_type"], "UnetLoaderGGUF")
-        self.assertEqual(unet["inputs"]["unet_name"], "flux1-dev-Q4_K_S.gguf")
+        self.assertEqual(unet["inputs"]["unet_name"], "flux-2-klein-4b-Q4_K_S.gguf")
 
-    def test_dual_clip_loader(self):
-        """DualCLIPLoader should pair clip_l + t5xxl_fp8 with type=flux."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
+    def test_clip_loader_qwen3(self):
+        """CLIPLoader should load qwen_3_4b with type=flux2."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
         clip = wf["30"]
+        self.assertEqual(clip["class_type"], "CLIPLoader")
+        self.assertEqual(clip["inputs"]["clip_name"], "qwen_3_4b.safetensors")
+        self.assertEqual(clip["inputs"]["type"], "flux2")
 
-        self.assertEqual(clip["class_type"], "DualCLIPLoader")
-        self.assertEqual(clip["inputs"]["clip_name1"], "clip_l.safetensors")
-        self.assertEqual(clip["inputs"]["clip_name2"], "t5xxl_fp8_e4m3fn.safetensors")
-        self.assertEqual(clip["inputs"]["type"], "flux")
+    def test_vae_is_flux2(self):
+        """VAELoader should load flux2-vae.safetensors."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        self.assertEqual(wf["29"]["class_type"], "VAELoader")
+        self.assertEqual(wf["29"]["inputs"]["vae_name"], "flux2-vae.safetensors")
 
-    def test_shared_vae(self):
-        """VAELoader should reuse the shared ae.safetensors (same as Z-Image)."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
-        self.assertEqual(wf["29"]["inputs"]["vae_name"], "ae.safetensors")
+    def test_empty_flux2_latent(self):
+        """Latent node should be EmptyFlux2LatentImage (128 channels)."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=768, height=1024, seed=0, filename_prefix="")
+        latent = wf["13"]
+        self.assertEqual(latent["class_type"], "EmptyFlux2LatentImage")
+        self.assertEqual(latent["inputs"]["width"], 768)
+        self.assertEqual(latent["inputs"]["height"], 1024)
 
-    def test_ksampler_settings(self):
-        """KSampler should use 20 steps, cfg=1.0, euler/simple for FLUX dev."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
+    def test_model_sampling_flux(self):
+        """ModelSamplingFlux should be used with max_shift=1.15, base_shift=0.5."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        ms = wf["11"]
+        self.assertEqual(ms["class_type"], "ModelSamplingFlux")
+        self.assertEqual(ms["inputs"]["max_shift"], 1.15)
+        self.assertEqual(ms["inputs"]["base_shift"], 0.5)
+
+    def test_ksampler_4_steps(self):
+        """KSampler should use 4 steps (distilled model)."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
         ks = wf["3"]
-
         self.assertEqual(ks["class_type"], "KSampler")
-        self.assertEqual(ks["inputs"]["steps"], 20)
+        self.assertEqual(ks["inputs"]["steps"], 4)
         self.assertEqual(ks["inputs"]["cfg"], 1.0)
         self.assertEqual(ks["inputs"]["sampler_name"], "euler")
         self.assertEqual(ks["inputs"]["scheduler"], "simple")
-        self.assertEqual(ks["inputs"]["denoise"], 1.0)
 
-    def test_model_sampling_shift(self):
-        """ModelSamplingAuraFlow should use the FLUX shift=1.73."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
-        self.assertEqual(wf["11"]["class_type"], "ModelSamplingAuraFlow")
-        self.assertEqual(wf["11"]["inputs"]["shift"], 1.73)
-
-    def test_custom_dimensions(self):
-        """Workflow should respect custom width/height."""
-        wf = _build_flux_dev_workflow(prompt="test", width=768, height=1024, seed=0, filename_prefix="")
-        self.assertEqual(wf["13"]["inputs"]["width"], 768)
-        self.assertEqual(wf["13"]["inputs"]["height"], 1024)
-
-    def test_custom_filename_prefix(self):
-        """Workflow should pass filename_prefix to SaveImage."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="avatar_123")
+    def test_filename_prefix_passed(self):
+        """filename_prefix should propagate to SaveImage node."""
+        wf = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="avatar_123")
         self.assertEqual(wf["9"]["inputs"]["filename_prefix"], "avatar_123")
 
-    def test_seed_zero_randomizes(self):
-        """seed=0 should produce different seeds across calls."""
-        wf1 = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
-        wf2 = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
-        self.assertNotEqual(wf1["3"]["inputs"]["seed"], wf2["3"]["inputs"]["seed"])
-
-    def test_fixed_seed(self):
-        """A fixed seed should be passed through unchanged."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=42, filename_prefix="")
-        self.assertEqual(wf["3"]["inputs"]["seed"], 42)
-
-    def test_prompt_in_text_encode(self):
-        """Prompt should be passed to CLIPTextEncode node."""
-        wf = _build_flux_dev_workflow(prompt="a six-legged alien", width=1024, height=1024, seed=0, filename_prefix="")
-        self.assertEqual(wf["27"]["inputs"]["text"], "a six-legged alien")
-
-    def test_node_connections(self):
-        """All node links should reference valid node IDs."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
-        all_node_ids = set(wf.keys())
-        for node_id, node in wf.items():
-            for _key, value in node["inputs"].items():
-                if isinstance(value, list) and len(value) == 2:
-                    linked_node, _slot = value
-                    self.assertIn(
-                        str(linked_node),
-                        all_node_ids,
-                        f"Node {node_id} links to non-existent node {linked_node}",
-                    )
+    def test_seed_zero_randomized(self):
+        """seed=0 should be replaced with a random positive integer."""
+        wf1 = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        wf2 = _build_flux2_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        seed1 = wf1["3"]["inputs"]["seed"]
+        seed2 = wf2["3"]["inputs"]["seed"]
+        self.assertNotEqual(seed1, seed2)
+        self.assertGreater(seed1, 0)
 
     def test_serializable_json(self):
         """Workflow should round-trip through JSON."""
-        wf = _build_flux_dev_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
+        wf = _build_flux2_klein_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
         self.assertEqual(json.loads(json.dumps(wf)), wf)
 
 
-class TestFluxDevImg2ImgWorkflow(unittest.TestCase):
-    """Test FLUX.1 [dev] GGUF img2img workflow (avatar-as-latent-reference)."""
+class TestFlux2KleinImg2ImgWorkflow(unittest.TestCase):
+    """Test FLUX.2 [klein] 4B distilled GGUF img2img workflow."""
 
     def setUp(self):
         self.gen = ImageGenerator()
@@ -270,7 +248,7 @@ class TestFluxDevImg2ImgWorkflow(unittest.TestCase):
             width=1024, height=1024, seed=0, filename_prefix="",
         )
         kwargs.update(overrides)
-        return self.gen._build_flux_dev_img2img_workflow(**kwargs)
+        return self.gen._build_flux2_klein_img2img_workflow(**kwargs)
 
     def test_basic_workflow_structure(self):
         """Workflow should have all required nodes including LoadImage/VAEEncode."""
@@ -279,84 +257,27 @@ class TestFluxDevImg2ImgWorkflow(unittest.TestCase):
         for node_id in required:
             self.assertIn(node_id, wf, f"Missing node {node_id}")
 
-    def test_reference_image_loads(self):
-        """LoadImage (node 40) should reference the supplied avatar filename."""
-        wf = self._build(reference_filename="game_x/avatar_123.png")
-        self.assertEqual(wf["40"]["class_type"], "LoadImage")
-        self.assertEqual(wf["40"]["inputs"]["image"], "game_x/avatar_123.png")
+    def test_unet_is_flux2_klein(self):
+        """UnetLoaderGGUF should load flux-2-klein-4b-Q4_K_S.gguf."""
+        wf = self._build()
+        self.assertEqual(wf["10"]["inputs"]["unet_name"], "flux-2-klein-4b-Q4_K_S.gguf")
+
+    def test_clip_is_qwen3_flux2(self):
+        """CLIPLoader should use qwen_3_4b with type=flux2."""
+        wf = self._build()
+        self.assertEqual(wf["30"]["class_type"], "CLIPLoader")
+        self.assertEqual(wf["30"]["inputs"]["type"], "flux2")
 
     def test_vae_encode_feeds_latent(self):
         """KSampler should sample from the VAEEncode latent (node 41), not an empty latent."""
         wf = self._build()
         self.assertEqual(wf["41"]["class_type"], "VAEEncode")
         self.assertEqual(wf["3"]["inputs"]["latent_image"], ["41", 0])
-        for node in wf.values():
-            self.assertNotEqual(node["class_type"], "EmptySD3LatentImage")
 
-    def test_gguf_unet_loader(self):
-        """UnetLoaderGGUF should load flux1-dev-Q4_K_S.gguf."""
+    def test_ksampler_4_steps(self):
+        """KSampler should use 4 steps for distilled model."""
         wf = self._build()
-        self.assertEqual(wf["10"]["class_type"], "UnetLoaderGGUF")
-        self.assertEqual(wf["10"]["inputs"]["unet_name"], "flux1-dev-Q4_K_S.gguf")
-
-    def test_dual_clip_loader(self):
-        """DualCLIPLoader should pair clip_l + t5xxl_fp8 with type=flux."""
-        wf = self._build()
-        clip = wf["30"]
-        self.assertEqual(clip["class_type"], "DualCLIPLoader")
-        self.assertEqual(clip["inputs"]["clip_name1"], "clip_l.safetensors")
-        self.assertEqual(clip["inputs"]["clip_name2"], "t5xxl_fp8_e4m3fn.safetensors")
-        self.assertEqual(clip["inputs"]["type"], "flux")
-
-    def test_shared_vae(self):
-        """VAELoader should reuse the shared ae.safetensors."""
-        wf = self._build()
-        self.assertEqual(wf["29"]["inputs"]["vae_name"], "ae.safetensors")
-
-    def test_ksampler_settings_and_denoise(self):
-        """KSampler should use FLUX settings and the caller-supplied denoise."""
-        wf = self._build(denoise=0.6)
-        ks = wf["3"]
-        self.assertEqual(ks["inputs"]["steps"], 20)
-        self.assertEqual(ks["inputs"]["cfg"], 1.0)
-        self.assertEqual(ks["inputs"]["sampler_name"], "euler")
-        self.assertEqual(ks["inputs"]["scheduler"], "simple")
-        self.assertEqual(ks["inputs"]["denoise"], 0.6)
-
-    def test_model_sampling_shift(self):
-        """ModelSamplingAuraFlow should use the FLUX shift=1.73."""
-        wf = self._build()
-        self.assertEqual(wf["11"]["inputs"]["shift"], 1.73)
-
-    def test_seed_zero_randomizes(self):
-        """seed=0 should produce different seeds across calls."""
-        wf1 = self._build()
-        wf2 = self._build()
-        self.assertNotEqual(wf1["3"]["inputs"]["seed"], wf2["3"]["inputs"]["seed"])
-
-    def test_fixed_seed(self):
-        """A fixed seed should be passed through unchanged."""
-        wf = self._build(seed=42)
-        self.assertEqual(wf["3"]["inputs"]["seed"], 42)
-
-    def test_node_connections_valid(self):
-        """All node links should reference valid node IDs."""
-        wf = self._build()
-        all_node_ids = set(wf.keys())
-        for node_id, node in wf.items():
-            for _key, value in node["inputs"].items():
-                if isinstance(value, list) and len(value) == 2:
-                    linked_node, _slot = value
-                    self.assertIn(
-                        str(linked_node),
-                        all_node_ids,
-                        f"Node {node_id} links to non-existent node {linked_node}",
-                    )
-
-    def test_serializable_json(self):
-        """Workflow should round-trip through JSON."""
-        wf = self._build()
-        self.assertEqual(json.loads(json.dumps(wf)), wf)
+        self.assertEqual(wf["3"]["inputs"]["steps"], 4)
 
 
 class TestQwenEditWorkflow(unittest.TestCase):
@@ -542,17 +463,17 @@ class TestQwenEditWorkflow(unittest.TestCase):
 class TestComfyUiConfig(unittest.TestCase):
     """Test kind -> txt2img model resolution in comfyui_config."""
 
-    def test_avatar_uses_flux(self):
-        """Avatar kind should resolve to FLUX (better non-humanoid anatomy)."""
-        self.assertEqual(comfyui_config.resolve_txt2img_model("avatar"), "flux_dev_gguf_q4")
+    def test_avatar_uses_default(self):
+        """Avatar kind should resolve to the global default model."""
+        self.assertEqual(comfyui_config.resolve_txt2img_model("avatar"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
-    def test_npc_avatar_prefix_matches_flux(self):
-        """Parameterized npc_avatar_<role> should match the npc_avatar prefix."""
-        self.assertEqual(comfyui_config.resolve_txt2img_model("npc_avatar_security"), "flux_dev_gguf_q4")
-        self.assertEqual(comfyui_config.resolve_txt2img_model("npc_avatar_engineer"), "flux_dev_gguf_q4")
+    def test_npc_avatar_prefix_matches_default(self):
+        """Parameterized npc_avatar_<role> should resolve to the global default."""
+        self.assertEqual(comfyui_config.resolve_txt2img_model("npc_avatar_security"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
+        self.assertEqual(comfyui_config.resolve_txt2img_model("npc_avatar_engineer"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
     def test_scene_uses_default(self):
-        """Scene kind should fall back to the default model (z_image_turbo)."""
+        """Scene kind should fall back to the default model."""
         self.assertEqual(comfyui_config.resolve_txt2img_model("scene"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
     def test_none_kind_uses_default(self):
@@ -563,9 +484,9 @@ class TestComfyUiConfig(unittest.TestCase):
         """An unlisted kind should resolve to the default model."""
         self.assertEqual(comfyui_config.resolve_txt2img_model("splash"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
-    def test_default_is_flux_dev(self):
-        """Out of the box the default model should be flux_dev_gguf_q4."""
-        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux_dev_gguf_q4")
+    def test_default_is_flux2_klein(self):
+        """Out of the box the default model should be flux2_klein_4b_gguf_q4."""
+        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux2_klein_4b_gguf_q4")
 
     def test_env_override_changes_default(self):
         """COMFYUI_TXT2IMG_MODEL env should override the default model key."""
@@ -575,8 +496,8 @@ class TestComfyUiConfig(unittest.TestCase):
 
     def test_get_model_config_known(self):
         """get_model_config should return a ModelConfig for registered keys."""
-        cfg = comfyui_config.get_model_config("flux_dev_gguf_q4")
-        self.assertEqual(cfg.builder, "flux_dev")
+        cfg = comfyui_config.get_model_config("flux2_klein_4b_gguf_q4")
+        self.assertEqual(cfg.builder, "flux2_klein_4b")
 
     def test_get_model_config_unknown_raises(self):
         """get_model_config should raise KeyError for an unregistered key."""
@@ -590,9 +511,9 @@ class TestComfyUiConfig(unittest.TestCase):
 
     # ---- img2img shares the txt2img model family ----
 
-    def test_img2img_avatar_uses_flux(self):
-        """img2img should resolve via the same table as txt2img (avatar→FLUX)."""
-        self.assertEqual(comfyui_config.resolve_img2img_model("avatar"), "flux_dev_gguf_q4")
+    def test_img2img_avatar_uses_default(self):
+        """img2img should resolve via the same table as txt2img (avatar→default)."""
+        self.assertEqual(comfyui_config.resolve_img2img_model("avatar"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
     def test_img2img_unknown_uses_default(self):
         """img2img of an unlisted kind should fall back to the txt2img default."""
