@@ -11,6 +11,9 @@ The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
     CLIP: qwen_3_4b.safetensors (type: lumina2)
     VAE:  ae.safetensors
 
+  Note: both models share the same Qwen3-4B text encoder (qwen_3_4b.safetensors),
+  loaded with different CLIPLoader types (lumina2 vs flux2).
+
   flux2_klein_4b (distilled, 4 steps — global default, fastest + Apache 2.0):
     UNET: flux-2-klein-4b-Q4_K_S.gguf (via ComfyUI-GGUF UnetLoaderGGUF)
     CLIP: qwen_3_4b.safetensors (CLIPLoader, type=flux2)

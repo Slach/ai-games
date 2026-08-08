@@ -3,8 +3,9 @@
 https://huggingface.co/comfyanonymous/flux-z-image-turbo/resolve/main/z_image_turbo_bf16.safetensors -> diffusion_models/z_image_turbo_bf16.safetensors
 
 # ============== Text Encoders ==============
-# Qwen2.5 3B text encoder (shared by Z-Image Turbo and FLUX.2 klein)
-https://huggingface.co/Qwen/Qwen2.5-3B/resolve/main/model.safetensors -> text_encoders/qwen_3_4b.safetensors
+# Qwen3-4B text encoder — shared by FLUX.2 klein (CLIPLoader type=flux2)
+# and Z-Image Turbo (CLIPLoader type=lumina2)
+https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors -> text_encoders/qwen_3_4b.safetensors
 
 # Standard CLIP-L (required for some IP-Adapter models)
 https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors -> text_encoders/clip_l.safetensors
