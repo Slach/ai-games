@@ -1278,7 +1278,7 @@ async def _maybe_show_sg_progress_message(
     if not _options_have_sg_tags(current_options):
         # Role question — the species/gender phase starts right after the last one.
         if role_count and current_question_id == role_count:
-            await send_random_loading_image(message, caption_key="sg_intro_caption", language=language, game_id=state_data["game_id"])
+            await message.answer(lang.get_images(language)["sg_intro_caption"])
         return
 
     # Answering a species/gender question: skip the 'generating next question' line

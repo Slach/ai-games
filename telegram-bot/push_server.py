@@ -652,6 +652,56 @@ async def _deliver_player_death(
         return False
 
 
+async def _send_long_message(bot: Bot, chat_id: int, text: str, max_len: int = 4096) -> None:
+    """Send a message, splitting at paragraph boundaries if it exceeds max_len.
+
+    Telegram caps a single message at 4096 chars. A long outcome (narrative
+    plus per-character sections) would otherwise fail with "message is too long".
+    """
+    if len(text) <= max_len:
+        await call_with_retry(
+            lambda: bot.send_message(chat_id=chat_id, text=text),
+            max_retries=3, base_delay=1.0, max_delay=10.0,
+        )
+        return
+
+    parts: list[str] = []
+    paragraphs = text.split("\n\n")
+    current = ""
+    for para in paragraphs:
+        if current and len(current) + len(para) + 2 > max_len:
+            parts.append(current)
+            current = para
+        elif current:
+            current += "\n\n" + para
+        else:
+            # Single paragraph longer than max_len — split at line boundaries
+            if len(para) > max_len:
+                for line in para.split("\n"):
+                    if current and len(current) + len(line) + 1 > max_len:
+                        parts.append(current)
+                        current = line
+                    elif current:
+                        current += "\n" + line
+                    else:
+                        for i in range(0, len(line), max_len - 3):
+                            chunk = line[i : i + max_len - 3]
+                            if i + max_len - 3 < len(line):
+                                chunk += "..."
+                            parts.append(chunk)
+                        current = ""
+            else:
+                current = para
+    if current:
+        parts.append(current)
+
+    for part in parts:
+        await call_with_retry(
+            lambda p=part: bot.send_message(chat_id=chat_id, text=p),
+            max_retries=3, base_delay=1.0, max_delay=10.0,
+        )
+
+
 async def _deliver_outcome(
     payload: dict[str, Any],
     bot: Bot,
@@ -913,12 +963,7 @@ async def _deliver_outcome(
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
 
-            await call_with_retry(
-                lambda: bot.send_message(
-                    chat_id=player_id,
-                    text=outcome_message,
-                )
-            , max_retries=3, base_delay=1.0, max_delay=10.0)
+            await _send_long_message(bot, player_id, outcome_message)
 
             last_sent_per_player[(player_id, game_id)] = turn
             if mark_outcome_sent_fn is not None:
@@ -1809,12 +1854,17 @@ async def handle_push_outcome(request: web.Request) -> web.Response:
             status=400,
         )
 
+    # Build a per-player payload so _deliver_outcome processes only the
+    # owning player instead of re-iterating the full alive_players list
+    # (which would fan out N×N album sends — once per queue row × per player).
+    # Mirrors the per-player payload pattern used in handle_push_briefings.
     inserted = 0
     for player_id in alive_players:
+        per_player_payload = {**payload, "alive_players": [player_id]}
         insert_push_message(
             player_id=player_id,
             push_type="outcome",
-            payload=json.dumps(payload, ensure_ascii=False),
+            payload=json.dumps(per_player_payload, ensure_ascii=False),
             turn=turn,
             game_id=game_id,
             db_path=DB_PATH,

@@ -3492,8 +3492,18 @@ async def _analyze_turn_outcome(
             # fallback dict. Retry once with a fresh GM to avoid stale state issues.
             narrative = outcome.get("outcome_narrative", "")
             is_fallback = not outcome.get("mission_progress") and ("passed without major incident" in narrative or "without major incident" in narrative)
-            if is_fallback:
-                logger.warning("[OUTCOME] Got fallback outcome, retrying once...")
+            # Detect schema violation: some models obey the JSON schema but ALSO
+            # dump the structured fields (ship_status_change, mission_progress,
+            # personal_outcomes, ...) as plain text INSIDE outcome_narrative,
+            # after the real narrative. That bloats the field to >4096 chars and
+            # breaks Telegram delivery. The model should return a clean narrative
+            # only — retry when it leaks structured fields into the narrative.
+            is_schema_leak = "ship_status_change:" in narrative
+            if is_fallback or is_schema_leak:
+                if is_schema_leak:
+                    logger.warning("[OUTCOME] outcome_narrative leaked structured fields (%d chars), retrying for a clean schema...", len(narrative))
+                else:
+                    logger.warning("[OUTCOME] Got fallback outcome, retrying once...")
                 try:
                     retry_gm = create_game_server(language=language)
                     outcome = await retry_gm.analyze_combined_outcome(
@@ -3508,7 +3518,10 @@ async def _analyze_turn_outcome(
                         kind="combined_outcome",
                     )
                     retry_narrative = outcome.get("outcome_narrative", "")
-                    if not outcome.get("mission_progress") and "without major incident" in retry_narrative:
+                    retry_leak = "ship_status_change:" in retry_narrative
+                    if retry_leak:
+                        logger.error("[OUTCOME] Retry still leaked structured fields into outcome_narrative — giving up")
+                    elif not outcome.get("mission_progress") and "without major incident" in retry_narrative:
                         logger.error("[OUTCOME] Retry also returned fallback — giving up")
                     else:
                         logger.info("[OUTCOME] Retry succeeded")
