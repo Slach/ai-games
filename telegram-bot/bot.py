@@ -4396,6 +4396,13 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
                 )
                 keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
                 await send_question_with_image(msg, next_question, keyboard, player_lang)
+            elif result.get("pending_sg"):
+                # Species/gender question is being generated in the background;
+                # it will be delivered via /push/onboarding-ready. The
+                # "generating next question" heads-up was already shown before
+                # this POST, so just wait for the push.
+                logger.info(f"S/G question generating in background for player {player_id}, waiting for push")
+                await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer (inline): {e}", exc_info=True)
@@ -4606,6 +4613,13 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 )
                 keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
                 await send_question_with_image(message, next_question, keyboard, get_player_language(player_id))
+            elif result.get("pending_sg"):
+                # Species/gender question is being generated in the background;
+                # it will be delivered via /push/onboarding-ready. The
+                # "generating next question" heads-up was already shown before
+                # this POST, so just wait for the push.
+                logger.info(f"S/G question generating in background for player {player_id}, waiting for push")
+                await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
         logger.error(f"Failed to submit onboarding answer: {e}", exc_info=True)

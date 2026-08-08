@@ -1013,6 +1013,83 @@ async def _background_onboarding_images(
         logger.info(f"[ONBOARDING_BG] Background images for player {player_id} took {bg_time:.2f} seconds")
 
 
+async def _background_sg_question(
+    player_id: int,
+    game_id: str,
+    session_id: str,
+    dimension: str,
+    sg_step: int,
+    language: str,
+) -> None:
+    """Background task: generate one species/gender question (LLM + option
+    images), persist it, then push to the bot via /push/onboarding-ready.
+
+    Mirrors _background_onboarding_images but for a single dynamic S/G question
+    produced on demand during the /onboarding/{session_id}/answer flow. The
+    S/G generation (1 LLM call + 6 ComfyUI images) can exceed the bot's HTTP
+    timeout, so it runs here and the result is delivered via push rather than
+    inline in the HTTP response.
+    """
+    lock = _get_onboarding_image_lock(session_id)
+    async with lock:
+        logger.info(f"[SG_BG] Starting background S/G question for player {player_id} (session {session_id}, {dimension} step {sg_step})")
+        sg_start = datetime.now()
+
+        try:
+            sess = get_onboarding_session(session_id)
+            if not sess:
+                logger.warning(f"[SG_BG] Session {session_id} not found, aborting S/G question generation")
+                return
+            if sess.get("completed"):
+                logger.info(f"[SG_BG] Session {session_id} already completed, skipping stale S/G generation")
+                return
+
+            question_adapter = TypeAdapter(list[OnboardingQuestion])
+            existing_questions = question_adapter.validate_python(sess.get("questions", [])) if sess.get("questions") else []
+
+            question = await generate_dynamic_species_gender_question(
+                dimension=dimension,
+                sg_step=sg_step,
+                session=sess,
+                language=language,
+                game_id=game_id,
+                existing_questions=existing_questions,
+            )
+
+            # Persist the newly generated question into the session.
+            existing_questions.append(question)
+            update_onboarding_session(
+                session_id,
+                sess.get("current_question", 0),
+                sess.get("answers", {}),
+                sess.get("completed", False),
+                language,
+                questions=[q.model_dump() for q in existing_questions],
+            )
+            logger.info(f"[SG_BG] Saved S/G question {question.id} ({dimension} step {sg_step}) to session {session_id}")
+
+            # Push to the bot — no game_title/welcome here, S/G questions
+            # arrive mid-onboarding where a splash is not needed.
+            from push_client import push_onboarding_ready as _push_ready
+
+            success = await _push_ready(
+                player_id=player_id,
+                game_id=game_id,
+                session_id=session_id,
+                question=question.model_dump(),
+                game_title="",
+                welcome_message="",
+                language=language,
+            )
+            logger.info(f"[SG_BG] Push S/G question {'succeeded' if success else 'FAILED'} for player {player_id}")
+
+        except Exception as e:
+            logger.error(f"[SG_BG] Background S/G question generation failed for player {player_id}: {e}", exc_info=True)
+
+        sg_time = (datetime.now() - sg_start).total_seconds()
+        logger.info(f"[SG_BG] Background S/G question for player {player_id} took {sg_time:.2f} seconds")
+
+
 @app.post("/onboarding/start")
 async def start_onboarding(request: StartOnboardingRequest):
     """Start a new onboarding session for a player"""
@@ -1187,32 +1264,23 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
 
     next_question = None
     questions_changed = False
+    pending_sg = False
+    dimension = None
+    sg_step = None
     if not completed:
         if current_question < len(dynamic_questions):
             # Question already exists (a role question, or a species/gender question
             # built in a previous step with its option images already attached).
             next_question = dynamic_questions[current_question]
         else:
-            # Dynamic species/gender phase: build the next question on demand via LLM.
+            # Dynamic species/gender phase. The next question (LLM text + 6
+            # option images) can take several minutes when ComfyUI is busy,
+            # which exceeds the bot's HTTP timeout. Generate it in the
+            # background and deliver via push, mirroring the role-question-1
+            # flow at onboarding start.
             sg_step = current_question - role_count + 1  # 1-based within the S/G sequence
             dimension = SPECIES_GENDER_DIMENSIONS[sg_step - 1]
-            session["answers"] = answers
-            session["current_question"] = current_question
-            try:
-                next_question = await generate_dynamic_species_gender_question(
-                    dimension=dimension,
-                    sg_step=sg_step,
-                    session=session,
-                    language=effective_language,
-                    game_id=game_id,
-                    existing_questions=dynamic_questions,
-                )
-            except Exception as gen_err:
-                logger.warning(f"[SG_Q] Dynamic {dimension} question generation failed: {gen_err}")
-                next_question = None
-            if next_question is not None:
-                dynamic_questions.append(next_question)
-                questions_changed = True
+            pending_sg = True
 
     # Persist progress (and the newly generated question, if any).
     update_onboarding_session(
@@ -1224,12 +1292,27 @@ async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, la
         questions=[q.model_dump() for q in dynamic_questions] if questions_changed else None,
     )
 
+    if pending_sg:
+        player_id = session.get("player_id")
+        if player_id:
+            asyncio.create_task(
+                _background_sg_question(
+                    player_id=int(player_id),
+                    game_id=game_id,
+                    session_id=session_id,
+                    dimension=dimension,
+                    sg_step=sg_step,
+                    language=effective_language,
+                )
+            )
+
     # Profile generation (role-flavour + species-description LLM calls) is
     # deferred to /complete, so /answer returns immediately when onboarding
     # finishes and the bot can show the "processing" message without delay.
     return {
         "completed": completed,
         "next_question": next_question.model_dump() if next_question else None,
+        "pending_sg": pending_sg,
     }
 
 

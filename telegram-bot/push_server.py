@@ -1299,7 +1299,46 @@ async def _deliver_onboarding_ready(
             else:
                 full_text = situation_text
 
-            if image_url:
+            # Species/gender questions carry one image per option (no top-level
+            # image_url). Render them as a media group + a separate text/keyboard
+            # message, mirroring send_question_with_image in bot.py.
+            has_option_images = any(o.get("image_url") for o in options)
+
+            if has_option_images:
+                media_group = []
+                async with aiohttp.ClientSession() as session:
+                    for i, o in enumerate(options):
+                        opt_url = o.get("image_url")
+                        if not opt_url:
+                            continue
+                        try:
+                            async with session.get(opt_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
+                                if img_resp.status == 200:
+                                    photo_data = await img_resp.read()
+                                    media_group.append(
+                                        InputMediaPhoto(
+                                            media=BufferedInputFile(photo_data, filename=f"opt_{question['id']}_{i}.png"),
+                                            caption=f"{i + 1}. {_escape_md(o.get('label', o['value']))}",
+                                            parse_mode="Markdown",
+                                        )
+                                    )
+                                else:
+                                    logger.warning("[PUSH_ONBOARDING] Failed to download option image %d: %s", i, img_resp.status)
+                        except Exception as e:
+                            logger.warning("[PUSH_ONBOARDING] Failed to download option image %d for player %d: %s", i, player_id, e)
+                try:
+                    if media_group:
+                        await bot.send_media_group(chat_id=player_id, media=media_group)
+                        logger.info("[PUSH_ONBOARDING] Sent S/G question media group (question_id=%s, images=%d)", question.get("id"), len(media_group))
+                except Exception as e:
+                    logger.warning("[PUSH_ONBOARDING] Failed to send option media group for player %d: %s", player_id, e, exc_info=True)
+                await bot.send_message(
+                    chat_id=player_id,
+                    text=full_text,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                )
+            elif image_url:
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
