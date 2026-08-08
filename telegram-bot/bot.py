@@ -4241,30 +4241,34 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
     current_question_id = state_data.get("current_question_id")
     current_options = state_data.get("current_options")
 
-    # Fall back to the persistent player store when FSM state is empty.
-    # This happens when /onboarding/start timed out on the bot side (the
-    # LLM call survived on game-server and the question was later pushed
-    # via /push/onboarding-ready, which writes to player_store but not to
-    # FSM). Without this fallback the player sees "Ситуация 1" but every
-    # button press is rejected as a stale keyboard.
-    if not current_question_id:
-        player_state = get_player_state(player_id)
-        ps_session = player_state.get("onboarding_session_id")
-        ps_question = player_state.get("current_question_id")
-        ps_options = player_state.get("current_options")
-        if ps_session and ps_question is not None:
-            session_id = ps_session
-            current_question_id = ps_question
-            current_options = ps_options
-            await state.update_data(
-                session_id=session_id,
-                current_question_id=current_question_id,
-                current_options=current_options,
-            )
-            logger.info(
-                f"Restored onboarding FSM state from player_store for player {player_id}: "
-                f"session_id={session_id}, current_question_id={current_question_id}"
-            )
+    # The persistent player_store is the source of truth for the active
+    # onboarding question: every delivery path writes to it (inline answer,
+    # /onboarding/start, and /push/onboarding-ready). The FSM (Redis-backed,
+    # ephemeral) can lag behind — most notably after a pending_sg answer,
+    # where the species/gender question is generated in the background and
+    # delivered via /push/onboarding-ready, which updates player_store but
+    # NOT the FSM. If we trusted the stale FSM value here, every button press
+    # on the pushed question would be rejected as a stale keyboard. So always
+    # reconcile: prefer player_store, and resync the FSM when it diverges.
+    player_state = get_player_state(player_id)
+    ps_session = player_state.get("onboarding_session_id")
+    ps_question = player_state.get("current_question_id")
+    ps_options = player_state.get("current_options")
+    if ps_session and ps_question is not None and (
+        ps_question != current_question_id or not current_options
+    ):
+        session_id = ps_session
+        current_question_id = ps_question
+        current_options = ps_options
+        await state.update_data(
+            session_id=session_id,
+            current_question_id=current_question_id,
+            current_options=current_options,
+        )
+        logger.info(
+            f"Reconciled onboarding FSM state from player_store for player {player_id}: "
+            f"session_id={session_id}, current_question_id={current_question_id}"
+        )
 
     logger.info(f"Inline onboarding answer: player={player_id}, callback_question_id={callback_question_id}, option_idx={option_idx}, session_id={session_id}")
 
@@ -4483,6 +4487,31 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
     session_id = state_data.get("session_id")
     current_question_id = state_data.get("current_question_id")
     current_options = state_data.get("current_options")
+
+    # Reconcile FSM with the persistent player_store (source of truth).
+    # The species/gender question is delivered via /push/onboarding-ready,
+    # which updates player_store but NOT the FSM — so the FSM can hold a
+    # stale question id / options after a pending_sg answer. See the inline
+    # handler for the full rationale.
+    player_state = get_player_state(player_id)
+    ps_session = player_state.get("onboarding_session_id")
+    ps_question = player_state.get("current_question_id")
+    ps_options = player_state.get("current_options")
+    if ps_session and ps_question is not None and (
+        ps_question != current_question_id or not current_options
+    ):
+        session_id = ps_session
+        current_question_id = ps_question
+        current_options = ps_options
+        await state.update_data(
+            session_id=session_id,
+            current_question_id=current_question_id,
+            current_options=current_options,
+        )
+        logger.info(
+            f"Reconciled onboarding FSM state from player_store for player {player_id}: "
+            f"session_id={session_id}, current_question_id={current_question_id}"
+        )
 
     logger.info(f"State data: session_id={session_id}, question_id={current_question_id}, options_count={len(current_options) if current_options else 0}")
 
