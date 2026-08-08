@@ -1022,7 +1022,7 @@ class GameServer:
                     "properties": {
                         "personal_title": {
                             "type": "string",
-                            "description": "A unique, atmospheric title for this player's personal turn introduction. Format: 'Ход {turn} — {role} — {personal_greeting}' (Russian) or 'Turn {turn} — {role} — {personal_greeting}' (English). The greeting MUST include the player's name and role.",
+                            "description": "A unique, atmospheric title for this player's personal turn introduction. Format: '{name} — {role} — {personal_greeting}'. The greeting MUST include the player's name and role.",
                         },
                         "image_prompt": {
                             "type": "string",
@@ -3217,7 +3217,10 @@ class GameServer:
                 + (f"  Species: {species}\n" if species else "")
                 + (f"  Appearance: {species_desc}\n" if species_desc else "")
                 + "\nCreate:\n"
-                "1. personal_title — atmospheric title, format 'Turn {turn} — {role} — {greeting}'.\n"
+                f"1. personal_title — atmospheric title, format '{display_name} — {{{player_role}}} — {{greeting}}'. "
+                f"The greeting should include the character's name ({display_name}) and role ({player_role}), "
+                f"reflecting their personality and the current situation. "
+                f"Example: 'Marcus — Engineer — your hands remember the reactor's hum better than any scanner'.\n"
                 "2. image_prompt — visual-only scene description FOR IMAGE GENERATION (1-2 sentences): "
                 "pose, action, lighting, atmosphere. Describe the character's SPECIES appearance "
                 "(body form, materials — crystals/plasma/chitin etc.), but NEVER mention the name or "
