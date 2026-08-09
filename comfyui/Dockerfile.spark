@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1-labs
 ARG NPROC=8
 ARG UBUNTU_VERSION=24.04
-ARG CUDA_VERSION=13.0.2
+ARG CUDA_VERSION=13.3.1
 
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS base
 
@@ -68,4 +68,4 @@ EXPOSE 8188
 
 ENV COMFYUI_PATH=/opt/ComfyUI/
 
-CMD ["/opt/ComfyUI/.venv/bin/comfy", "--skip-prompt", "--no-enable-telemetry"]
+CMD ["/opt/ComfyUI/.venv/bin/comfy", "--skip-prompt", "--no-enable-telemetry","--cache-none"]

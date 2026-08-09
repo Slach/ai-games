@@ -26,6 +26,7 @@ services:
     command:
       - "/opt/ComfyUI/.venv/bin/python3"
       - "main.py"
+      - "--cache-none"
       - "--enable-manager"
       - "--preview-method"
       - "auto"
