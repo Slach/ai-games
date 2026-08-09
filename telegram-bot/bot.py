@@ -1805,7 +1805,7 @@ async def new_game_schedule_callback(callback: types.CallbackQuery, state: FSMCo
             await message.edit_reply_markup(reply_markup=None)
         except Exception as e:
             logger.error(f"Failed to remove schedule keyboard: {e}", exc_info=True)
-        await message.answer(onboarding_msgs["schedule_question"], parse_mode="Markdown")
+        await message.answer(onboarding_msgs["schedule_custom_prompt"], parse_mode="Markdown")
         await state.set_state(GameSelectionState.waiting_for_schedule)
         return
 
