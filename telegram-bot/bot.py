@@ -1257,7 +1257,11 @@ def _options_have_sg_tags(options: list | None) -> bool:
 
 async def _maybe_show_sg_progress_message(
     message: types.Message,
-    state_data: dict,
+    *,
+    current_options: list | None,
+    current_question_id,
+    role_count,
+    sg_count,
     language: str,
 ) -> None:
     """Show a 'please wait' heads-up before the slow species/gender question generation.
@@ -1265,16 +1269,17 @@ async def _maybe_show_sg_progress_message(
     The next species/gender question is built on demand by the LLM (30-60s) inside
     the /onboarding/answer call, so feedback must appear BEFORE that blocking call.
 
+    Callers MUST pass the reconciled question id/options (after syncing the FSM with
+    player_store). Passing the raw FSM state_data is wrong: species/gender questions
+    arrive via /push/onboarding-ready, which updates player_store but NOT the FSM, so
+    state_data can still point at the last role question — and every species/gender
+    answer would then be misclassified as the role→sg transition.
+
     - Transitioning from role questions into the species/gender phase (just answered
       the last role question): send a loading image explaining the 5 upcoming questions.
     - Already answering a species/gender question (and not the final one): send a
       short 'generating next question' message.
     """
-    current_options = state_data.get("current_options")
-    current_question_id = state_data.get("current_question_id")
-    role_count = state_data.get("role_question_count")
-    sg_count = state_data.get("species_gender_question_count")
-
     if not _options_have_sg_tags(current_options):
         # Role question — the species/gender phase starts right after the last one.
         if role_count and current_question_id == role_count:
@@ -4326,7 +4331,17 @@ async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: 
             logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
 
         # Show a 'please wait' message before the (slow) species/gender question generation.
-        await _maybe_show_sg_progress_message(msg, state_data, player_lang)
+        # Pass the reconciled current_* values (not state_data): the FSM lags behind
+        # player_store after a pending_sg answer, so state_data can still point at
+        # the last role question and misclassify this as the role→sg transition.
+        await _maybe_show_sg_progress_message(
+            msg,
+            current_options=current_options,
+            current_question_id=current_question_id,
+            role_count=state_data.get("role_question_count"),
+            sg_count=state_data.get("species_gender_question_count"),
+            language=player_lang,
+        )
 
         logger.info(f"Submitting onboarding answer (inline): session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
@@ -4565,7 +4580,17 @@ async def onboarding_answer(message: types.Message, state: FSMContext):
                 logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
 
         # Show a 'please wait' message before the (slow) species/gender question generation.
-        await _maybe_show_sg_progress_message(message, state_data, get_player_language(player_id))
+        # Pass the reconciled current_* values (not state_data): the FSM lags behind
+        # player_store after a pending_sg answer, so state_data can still point at
+        # the last role question and misclassify this as the role→sg transition.
+        await _maybe_show_sg_progress_message(
+            message,
+            current_options=current_options,
+            current_question_id=current_question_id,
+            role_count=state_data.get("role_question_count"),
+            sg_count=state_data.get("species_gender_question_count"),
+            language=get_player_language(player_id),
+        )
 
         logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
         result = await api_request(
