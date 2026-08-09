@@ -254,7 +254,7 @@ def _build_onboarding_questions_schema() -> dict:
                             "properties": {
                                 "image_prompt": {
                                     "type": "string",
-                                    "description": "A detailed English image generation prompt that visualizes the EXACT SAME scenario described in the text field — same location, same situation, same characters/objects. Cinematic, sci-fi/space opera, 4K quality.",
+                                    "description": "A detailed English image generation prompt that depicts the EXACT SAME scene as the text field. You MUST carry over EVERY concrete visual detail from text — the specific shape, size, color, light source, and any named object. NEVER replace a specific object with a generic word: if text says 'a kilometre-wide light-absorbing cube emitting a narrow beam', image_prompt must say exactly that, NOT 'an alien artifact'. If text names no object, describe the literal environment. Cinematic, sci-fi/space opera, 4K quality.",
                                 },
                                 "text": {
                                     "type": "string",

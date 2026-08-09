@@ -595,13 +595,22 @@ def build_onboarding_prompts(
             f"{example_role_scores_json}. "
             "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n" + hint + "Текст вопроса (text) и все варианты ответов (value) — строго НА РУССКОМ ЯЗЫКЕ.\n"
             "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
-            "ВАЖНО: image_prompt должен визуализировать ТУ ЖЕ САМУЮ СЦЕНУ, что описана в text — то же место, та же ситуация. "
-            "Например, если text про обнаружение сигнала снаружи корабля, image_prompt должен показывать космос/объект снаружи, а не лабораторию внутри. "
+            "КРИТИЧНО: image_prompt обязан ВИЗУАЛЬНО СОВПАДАТЬ с text — не «про ту же тему», а та же сцена с теми же объектами. "
+            "ПЕРЕНОСИ ВСЕ конкретные визуальные детали из text в image_prompt: форму, размер, цвет, источник света, "
+            "именованные объекты, материалы, позы/выражения персонажей. "
+            "ЗАПРЕЩЕНО заменять конкретный объект обобщённым словом: если text говорит «геометрически идеальный куб со стороной в километр, "
+            "поверхность поглощает свет, из центра бьёт узкий луч» — image_prompt обязан содержать «kilometre-wide geometrically perfect cube, "
+            "light-absorbing surface, narrow beam from its centre», а НЕ «massive alien artifact». "
+            "Если text не называет конкретный объект, описывай буквально окружение из text. "
             "Для КАЖДОГО вопроса сгенерируй image_prompt — детальный промпт на АНГЛИЙСКОМ для генерации изображения сцены. "
             "Промпт должен быть кинематографичным, sci-fi/space opera, 4K. "
-            "Пример ТОЛЬКО для поля image_prompt (не для текста вопроса): "
-            '"A starship bridge with holographic star maps glowing in blue light, crew members at their stations, cinematic lighting, epic sci-fi atmosphere, 4K quality."'
-            " Отделяй русский текст вопроса от английского image_prompt. "
+            "ПРИМЕР соответствия text ↔ image_prompt (только для поля image_prompt, не для текста вопроса): "
+            "если text: «На главном экране мостика зависает конструкт — геометрически идеальный куб, чёрная поверхность поглощает свет, "
+            "из центра бьёт узкий луч в сторону корабля, красные лампы аварийной тревоги», то "
+            "image_prompt: \"Starship bridge viewed through a large viewport, a geometrically perfect kilometre-wide black cube floating in space, "
+            "its surface absorbing all light, a narrow beam lancing from its centre toward the ship, red emergency lamps pulsing on the bridge, "
+            "cinematic 4K space opera.\" "
+            "Отделяй русский текст вопроса от английского image_prompt. "
         )
     else:
         system = (
@@ -660,10 +669,16 @@ def build_onboarding_prompts(
             "EXAMPLE role_scores for 'Repair the warp drive': "
             f"{example_role_scores_json}. "
             "IMPORTANT: Options in each question should give points to DIFFERENT roles — so each question helps distinguish players.\n\n" + hint + "Question text (text) and all option values — strictly in ENGLISH.\n"
-            "IMPORTANT: image_prompt must visualize the EXACT SAME SCENE as described in text — same location, same situation. "
-            "For example, if text is about detecting a signal outside the ship, image_prompt should show space/the object outside, not a lab interior. "
+            "CRITICAL: image_prompt must VISUALLY MATCH the text — not merely \"the same topic\" but the same scene with the same objects. "
+            "CARRY OVER EVERY concrete visual detail from text into image_prompt: shape, size, color, light source, named objects, materials, character poses/expressions. "
+            "NEVER replace a specific object with a generic word: if text says \"a geometrically perfect kilometre-wide cube whose surface absorbs light, with a narrow beam from its centre\", "
+            "image_prompt must say exactly that — \"a geometrically perfect kilometre-wide cube, light-absorbing surface, narrow beam from its centre\" — NOT \"a massive alien artifact\". "
+            "If text names no specific object, describe the literal environment from text. "
             "For EACH question generate an image_prompt — a detailed English prompt for the scene image. "
             "The prompt should be cinematic, sci-fi/space opera, 4K quality. "
+            "EXAMPLE of text ↔ image_prompt correspondence (image_prompt only): "
+            "if text is \"On the bridge's main screen hangs a construct — a geometrically perfect cube, its black surface absorbs light, a narrow beam lances from its centre toward the ship, red emergency lamps pulsing\", "
+            "then image_prompt: \"Starship bridge viewed through a large viewport, a geometrically perfect kilometre-wide black cube floating in space, its surface absorbing all light, a narrow beam lancing from its centre toward the ship, red emergency lamps pulsing on the bridge, cinematic 4K space opera.\" "
         )
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["onboarding_questions"], k=vs_k)
