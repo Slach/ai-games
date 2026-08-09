@@ -1645,9 +1645,17 @@ async def start_onboarding_flow(
             await state.set_state(OnboardingState.waiting_for_answer)
 
     except Exception as e:
-        logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {str(e)}", exc_info=True)
+        error_str = str(e)
+        # Server refuses re-onboarding into a game where the player already
+        # died / was replaced. Show a friendly message instead of a raw API error.
+        if "Player already played in this game" in error_str:
+            logger.info(f"Re-onboarding blocked for player {player_id} in game {game_id}: already played")
+            spectator_msgs = lang.get_spectator(effective_language)
+            await message.answer(spectator_msgs["already_played"], parse_mode="Markdown")
+            return
+        logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {error_str}", exc_info=True)
         error_msgs = lang.get_errors(effective_language)
-        await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+        await message.answer(error_msgs["onboarding_error"].format(error=error_str))
 
 
 async def game_selection_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -3970,7 +3978,12 @@ async def cmd_gm_status(message: types.Message):
         if players:
             players_parts = []
             for p in players:
-                icon = "☠" if p.get("is_dead") else ("✅" if p.get("has_chosen") else "⏳")
+                if p.get("is_dead"):
+                    icon = "☠"
+                elif p.get("is_spectator"):
+                    icon = "👁"
+                else:
+                    icon = "✅" if p.get("has_chosen") else "⏳"
                 action = p.get("chosen_action", "") or gm_msgs["waiting_label"]
                 name = p.get("player_name", "") or str(p.get("player_id", "?"))
                 players_parts.append(

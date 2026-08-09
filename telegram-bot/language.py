@@ -321,14 +321,16 @@ BRIDGE = {
 # Spectator (dead player) messages
 SPECTATOR = {
     LANGUAGE_RU: {
-        "player_dead": "💀 *Вы погибли при исполнении!*\n\nВаш персонаж погиб. Вы остаётесь зрителем и продолжите получать итоги ходов, но больше не можете влиять на события.\n\nЧтобы присоединиться к новой игре или вернуться в текущую в новой роли, нажмите /start",
-        "still_watching": "👁 *Вы наблюдаете за развитием событий...*\n\nКак зритель, вы видите сюжет, но не можете влиять на него.\nНажмите /start чтобы присоединиться к новой игре или вернуться в новой роли.",
-        "start_over_button": "🔄 Начать заново / Start Over",
+        "player_dead": "💀 *Вы погибли при исполнении!*\n\nВаш персонаж погиб. Вы остаётесь зрителем и продолжите получать итогы ходов, но больше не можете влиять на события.\n\nЧтобы присоединиться к новой игре, нажмите /start",
+        "still_watching": "👁 *Вы наблюдаете за развитием событий...*\n\nКак зритель, вы видите сюжет, но не можете влиять на него. Вернуться в эту игру в новой роли нельзя.\nНажмите /start, чтобы присоединиться к новой игре.",
+        "already_played": "🕹 *Вы уже сыграли в эту игру.*\n\nВернуться в игру, где ваш персонаж погиб, нельзя — но вы можете начать новую.\n\nНажмите /start, чтобы создать новую игру.",
+        "start_over_button": "🆕 Новая игра / New game",
     },
     LANGUAGE_EN: {
-        "player_dead": "💀 *You died in the line of duty!*\n\nYour character has died. You remain a spectator and will keep receiving turn outcomes, but can no longer influence events.\n\nTo join a new game or return to the current one in a new role, press /start",
-        "still_watching": "👁 *You are watching the story unfold...*\n\nAs a spectator, you see the plot but cannot influence it.\nPress /start to join a new game or return in a new role.",
-        "start_over_button": "🔄 Start Over",
+        "player_dead": "💀 *You died in the line of duty!*\n\nYour character has died. You remain a spectator and will keep receiving turn outcomes, but can no longer influence events.\n\nTo join a new game, press /start",
+        "still_watching": "👁 *You are watching the story unfold...*\n\nAs a spectator, you see the plot but cannot influence it. You cannot return to this game in a new role.\nPress /start to join a new game.",
+        "already_played": "🕹 *You have already played this game.*\n\nYou cannot return to a game where your character died — but you can start a new one.\n\nPress /start to create a new game.",
+        "start_over_button": "🆕 New game",
     },
 }
 

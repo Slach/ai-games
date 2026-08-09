@@ -1098,9 +1098,10 @@ async def start_onboarding(request: StartOnboardingRequest):
     logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
 
     # Check if player already has a profile.
-    # Allow re-onboarding when joining a different game, when their previous
-    # game has ended, or when they are dead/spectator. Block only when
-    # re-onboarding into the same still-active game while alive.
+    # Allow re-onboarding when joining a different game or when their previous
+    # game has ended. Block re-onboarding into the same still-active game,
+    # including for dead/spectator/replaced players (they must not be revived
+    # into a game whose current turn was generated without them).
     existing_profile = get_player_profile(request.player_id)
 
     if existing_profile:
@@ -1109,6 +1110,9 @@ async def start_onboarding(request: StartOnboardingRequest):
         if allow_reset:
             logger.info(f"Player {request.player_id} has a profile from {reason} game {old_game_id}. Deleting old profile and allowing re-onboarding.")
             delete_player_profile(request.player_id)
+        elif reason == "already_played_same_game":
+            logger.info(f"Player {request.player_id} already played (died/replaced) in active game {request.game_id}; re-onboarding blocked.")
+            raise HTTPException(status_code=400, detail="Player already played in this game")
         else:
             logger.warning(f"Player {request.player_id} already has an active profile in game {old_game_id}")
             raise HTTPException(status_code=400, detail="Player already has a profile")
@@ -2114,6 +2118,7 @@ async def get_game_status_endpoint(game_id: str):
                 "role": p.get("role", ""),
                 "species": p.get("species", ""),
                 "is_dead": bool(p.get("is_dead", False)),
+                "is_spectator": bool(p.get("is_spectator", False)),
                 "has_chosen": has_chosen,
                 "chosen_action": chosen_action_text,
             }

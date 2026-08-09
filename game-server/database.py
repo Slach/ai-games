@@ -906,6 +906,26 @@ def delete_player_profile(player_id: int) -> bool:
     return deleted
 
 
+def player_has_played_in_game(player_id: int, game_id: str) -> bool:
+    """Return True if ``player_id`` already participated in ``game_id``.
+
+    A player who died or was replaced leaves behind an NPC row in
+    ``npc_profiles`` with ``replaces_player_id = player_id`` (active or not —
+    deactivation only flips ``is_active``). Such a row is a permanent marker
+    that the player already played in this game, and is used to block
+    re-onboarding into the same still-active game after death.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM npc_profiles WHERE replaces_player_id = ? AND game_id = ? LIMIT 1",
+        (player_id, game_id),
+    )
+    found = cursor.fetchone() is not None
+    conn.close()
+    return found
+
+
 def should_reset_profile_for_reonboarding(
     existing_profile: dict[str, Any],
     requested_game_id: str,
@@ -913,10 +933,13 @@ def should_reset_profile_for_reonboarding(
     """Decide whether ``existing_profile`` should be deleted to allow re-onboarding.
 
     A player may re-onboard when joining a DIFFERENT game than their current
-    profile's game, when their previous game has ended, or when they are dead /
-    a spectator. They are blocked only when re-onboarding into the SAME
-    still-active game while alive (prevents accidental loss of an in-progress
-    character). Returns ``(allow_reset, reason)``.
+    profile's game, or when their previous game has ended. They are blocked
+    when re-onboarding into the SAME still-active game — both while alive
+    (prevents accidental loss of an in-progress character) and when dead /
+    a spectator / already replaced by an NPC (a dead player must not be
+    revived into the same active game: briefings for the current turn were
+    generated before they re-onboarded, so they end up stuck as "waiting").
+    Returns ``(allow_reset, reason)``.
     """
     old_game_id = existing_profile.get("game_id", "")
     is_dead = existing_profile.get("is_dead") or existing_profile.get("is_spectator")
@@ -935,8 +958,14 @@ def should_reset_profile_for_reonboarding(
             game_ended = False
     if game_ended:
         return (True, "ended")
-    if is_dead:
-        return (True, "dead_spectator")
+    # Same still-active game. Block dead/spectator players and anyone who
+    # already played (was replaced by an NPC) in this game from reviving.
+    player_id = existing_profile.get("player_id")
+    already_played = is_dead or (
+        player_id is not None and player_has_played_in_game(player_id, requested_game_id)
+    )
+    if already_played:
+        return (False, "already_played_same_game")
     return (False, "active_same_game")
 
 
