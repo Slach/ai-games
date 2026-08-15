@@ -168,6 +168,46 @@ MODEL_USE_CASES: dict[str, dict[str, dict[str, LLMParams]]] = {
         # Example: this model is more creative — lower temperature for narrative.
         # Add real overrides here as the model is tuned.
     },
+    # Muse-Glimmer emits reasoning (<think>) baked into its jinja chat template,
+    # which llama.cpp honors regardless of the server-side --reasoning flag.
+    # Reasoning consumes ~500-700 completion tokens before the model starts the
+    # actual JSON answer, so short use cases must carry enough headroom for the
+    # reasoning AND the structured payload, or they hit finish_reason=length and
+    # fall back to a second plain-text request every time.
+    "unsloth/Muse-Glimmer-30B": {
+        "npc_name": _use_case(
+            LLMParams(temperature=0.95, max_tokens=1024),
+            LLMParams(temperature=0.95, max_tokens=1024),
+        ),
+        "crew_dialogue": _use_case(
+            LLMParams(temperature=0.8, max_tokens=1024),
+            LLMParams(temperature=0.8, max_tokens=1024),
+        ),
+        "death_notice": _use_case(
+            LLMParams(temperature=0.8, max_tokens=1024),
+            LLMParams(temperature=0.8, max_tokens=1024),
+        ),
+        "scene_instruction": _use_case(
+            LLMParams(temperature=0.7, max_tokens=1536),
+            LLMParams(temperature=0.7, max_tokens=1536),
+        ),
+        "player_message_text": _use_case(
+            LLMParams(temperature=0.7, max_tokens=1536),
+            LLMParams(temperature=0.7, max_tokens=1536),
+        ),
+        "species_option_prompts": _use_case(
+            LLMParams(temperature=0.8, max_tokens=1536),
+            LLMParams(temperature=0.8, max_tokens=1536),
+        ),
+        "sg_question": _use_case(
+            LLMParams(temperature=0.9, max_tokens=1536),
+            LLMParams(temperature=0.9, max_tokens=1536),
+        ),
+        "role_flavour": _use_case(
+            LLMParams(temperature=0.8, max_tokens=3072),
+            LLMParams(temperature=0.8, max_tokens=2048),
+        ),
+    },
 }
 
 
