@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from database import SHIP_ROLE_KEYS
 from game_rules import normalize_mission, select_mission_seeds
-from llm_config import resolve_llm_params, resolve_max_tokens
+from llm_config import LLMParams, resolve_llm_params, resolve_max_tokens
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
@@ -74,6 +74,25 @@ def _safe_int_env(name: str, default: int) -> int:
     except (ValueError, TypeError):
         logger.warning("Invalid %s, using default %d", name, default)
         return default
+
+
+# Optional llama.cpp sampling fields on LLMParams, sent via extra_body.
+_SAMPLING_FIELDS = ("top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty")
+
+
+def _llm_extra_body(params: LLMParams) -> dict[str, Any]:
+    """llama.cpp request extras: thinking toggle plus set sampling fields."""
+    body: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": params.enable_thinking}}
+    for field in _SAMPLING_FIELDS:
+        value = getattr(params, field)
+        if value is not None:
+            body[field] = value
+    return body
+
+
+def _sampling_desc(params: LLMParams) -> str:
+    """Compact one-liner of the set sampling fields, for logs."""
+    return " ".join(f"{f}={getattr(params, f)}" for f in _SAMPLING_FIELDS if getattr(params, f) is not None)
 
 
 # ============== Pydantic Models ==============
@@ -1135,6 +1154,7 @@ class GameServer:
         temperature = params.temperature
         max_tokens = resolve_max_tokens(params.max_tokens, self)
         enable_thinking = params.enable_thinking
+        sampling_desc = _sampling_desc(params)
 
         messages: list[ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam] = [
             {"role": "system", "content": system_prompt},
@@ -1146,11 +1166,13 @@ class GameServer:
         ctx_turn = str(turn) if turn is not None else "0"
 
         if kind is not None:
+            sampling_line = f"Sampling: {sampling_desc}\n" if sampling_desc else ""
             request_log = (
                 f"Model: {self.llm_model}\n"
                 f"Temperature: {temperature}\n"
                 f"Max tokens: {max_tokens}\n"
                 f"Enable thinking: {enable_thinking}\n"
+                f"{sampling_line}"
                 f"Response schema: {json.dumps(response_schema, indent=2, ensure_ascii=False)}\n\n"
                 f"--- SYSTEM PROMPT ---\n{system_prompt}\n\n"
                 f"--- USER PROMPT ---\n{user_prompt}"
@@ -1165,7 +1187,7 @@ class GameServer:
             )
             prompt_len = len(system_prompt) + len(user_prompt)
             logger.info(
-                "LLM [%s] game=%s player=%s turn=%s | model=%s temp=%.2f max_tok=%d thinking=%s prompt_len=%d",
+                "LLM [%s] game=%s player=%s turn=%s | model=%s temp=%.2f max_tok=%d thinking=%s prompt_len=%d%s",
                 kind,
                 ctx_game,
                 ctx_player,
@@ -1175,6 +1197,7 @@ class GameServer:
                 max_tokens,
                 enable_thinking,
                 prompt_len,
+                f" {sampling_desc}" if sampling_desc else "",
             )
         else:
             logger.info("=== LLM REQUEST (structured) ===")
@@ -1191,7 +1214,7 @@ class GameServer:
                 logger.info(line)
             logger.info("=== END LLM REQUEST ===")
 
-        extra_body = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
+        extra_body = _llm_extra_body(params)
         response = None
         try:
             # Try structured output first
@@ -1928,7 +1951,7 @@ class GameServer:
                 messages=messages,  # type: ignore[arg-type]
                 temperature=params.temperature,
                 max_tokens=resolve_max_tokens(params.max_tokens, self),
-                extra_body={"chat_template_kwargs": {"enable_thinking": params.enable_thinking}},
+                extra_body=_llm_extra_body(params),
             )
             content = response.choices[0].message.content
             return content or "Game Master received your message."

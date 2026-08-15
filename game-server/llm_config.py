@@ -8,6 +8,8 @@ Resolution order in :func:`resolve_llm_params`:
 
 1. ``MODEL_USE_CASES[model][use_case]`` — a per-model override.
 2. ``DEFAULT_USE_CASES[use_case]`` — the baseline shared by all models.
+3. ``MODEL_SAMPLING_MODES[model][enable_thinking]`` — vendor-recommended
+   sampling overrides applied last (see that table's comment).
 
 A model key need only list the use cases it wants to diverge on; everything
 else falls back to :data:`DEFAULT_USE_CASES`. Each use case entry has two
@@ -23,7 +25,7 @@ still honoring the ``LLM_MAX_TOKENS`` / ``LLM_MAX_AVATAR_TOKENS`` env vars.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,12 @@ class LLMParams:
     temperature: float
     max_tokens: int | str
     enable_thinking: bool = False
+    # Optional llama.cpp sampling extensions. None = not sent, server defaults apply.
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    repetition_penalty: float | None = None
 
 
 # Sentinel values for max_tokens that resolve against GameServer instance attrs.
@@ -210,17 +218,52 @@ MODEL_USE_CASES: dict[str, dict[str, dict[str, LLMParams]]] = {
     },
 }
 
+# Vendor-recommended sampling settings keyed by the model's thinking mode
+# (the ``enable_thinking`` value the use case resolved to). Applied on top of
+# the per-use-case params in :func:`resolve_llm_params`: the matching mode
+# entry overrides the sampling fields — temperature included — while
+# ``max_tokens`` and ``enable_thinking`` keep their use-case values. Models
+# absent here send only temperature and rely on server-side defaults.
+MODEL_SAMPLING_MODES: dict[str, dict[bool, dict[str, float | int]]] = {
+    "unsloth/Qwen3.8-27B-MTP": {
+        # Thinking mode
+        True: {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 0.0,
+            "repetition_penalty": 1.0,
+        },
+        # Instruct (non-thinking) mode
+        False: {
+            "temperature": 0.7,
+            "top_p": 0.80,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "repetition_penalty": 1.0,
+        },
+    },
+}
+
 
 def resolve_llm_params(model: str, use_case: str, vs_enabled: bool) -> LLMParams:
     """Return the LLMParams for ``model`` + ``use_case``, selecting vs/non_vs.
 
     Looks up ``MODEL_USE_CASES[model][use_case]`` first, then falls back to
     ``DEFAULT_USE_CASES[use_case]``. Raises KeyError for a use case unknown to
-    both — every call site must map to a configured entry.
+    both — every call site must map to a configured entry. Finally, if the
+    model has an entry in :data:`MODEL_SAMPLING_MODES`, the branch matching
+    the resolved ``enable_thinking`` overrides the sampling fields.
     """
     table = MODEL_USE_CASES.get(model, {})
     branches = table.get(use_case) or DEFAULT_USE_CASES[use_case]
-    return branches["vs" if vs_enabled else "non_vs"]
+    params = branches["vs" if vs_enabled else "non_vs"]
+    mode_overrides = MODEL_SAMPLING_MODES.get(model, {}).get(params.enable_thinking)
+    if mode_overrides:
+        params = replace(params, **mode_overrides)
+    return params
 
 
 def resolve_max_tokens(value: int | str, instance: object) -> int:

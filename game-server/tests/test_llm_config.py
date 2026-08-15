@@ -6,6 +6,7 @@ from llm_config import (
     DEFAULT_USE_CASES,
     MAX_TOKENS_AVATAR,
     MAX_TOKENS_DEFAULT,
+    MODEL_SAMPLING_MODES,
     MODEL_USE_CASES,
     LLMParams,
     _use_case,
@@ -99,6 +100,40 @@ class LLMConfigTests(unittest.TestCase):
     def test_unknown_model_uses_default_table(self):
         params = resolve_llm_params("never-seen-model", "npc_name", vs_enabled=False)
         self.assertAlmostEqual(params.temperature, 0.95)
+
+    def test_qwen38_instruct_mode_sampling_overrides(self):
+        params = resolve_llm_params("unsloth/Qwen3.8-27B-MTP", "npc_name", vs_enabled=False)
+        self.assertAlmostEqual(params.temperature, 0.7)
+        self.assertAlmostEqual(params.top_p, 0.80)
+        self.assertEqual(params.top_k, 20)
+        self.assertAlmostEqual(params.min_p, 0.0)
+        self.assertAlmostEqual(params.presence_penalty, 1.5)
+        self.assertAlmostEqual(params.repetition_penalty, 1.0)
+        # max_tokens / enable_thinking keep their use-case values
+        self.assertEqual(params.max_tokens, 256)
+        self.assertFalse(params.enable_thinking)
+
+    def test_qwen38_thinking_mode_sampling_overrides(self):
+        params = resolve_llm_params("unsloth/Qwen3.8-27B-MTP", "combined_outcome", vs_enabled=False)
+        self.assertAlmostEqual(params.temperature, 1.0)
+        self.assertAlmostEqual(params.top_p, 0.95)
+        self.assertEqual(params.top_k, 20)
+        self.assertAlmostEqual(params.presence_penalty, 0.0)
+        self.assertAlmostEqual(params.repetition_penalty, 1.0)
+        self.assertTrue(params.enable_thinking)
+
+    def test_sampling_modes_do_not_affect_other_models(self):
+        params = resolve_llm_params("never-seen-model", "npc_name", vs_enabled=False)
+        self.assertAlmostEqual(params.temperature, 0.95)
+        self.assertIsNone(params.top_p)
+        self.assertIsNone(params.presence_penalty)
+
+    def test_every_sampling_mode_entry_lists_all_fields(self):
+        expected = {"temperature", "top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty"}
+        for model, modes in MODEL_SAMPLING_MODES.items():
+            for thinking, overrides in modes.items():
+                with self.subTest(model=model, thinking=thinking):
+                    self.assertEqual(set(overrides), expected)
 
 
 if __name__ == "__main__":
