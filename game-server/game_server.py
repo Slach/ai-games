@@ -26,10 +26,7 @@ from llm_config import LLMParams, resolve_llm_params, resolve_max_tokens
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
-    get_dimension_tags,
     get_game_strings,
-    get_gender_questions_data,
-    get_species_questions_data,
 )
 from openai import AsyncOpenAI
 from prompts import (
@@ -43,11 +40,11 @@ from prompts import (
     build_auto_choice_prompts,
     build_background_prompts_system,
     build_background_prompts_user,
+    build_character_flavour_prompts,
     build_combined_outcome_prompts,
     build_content_prompt_note,
     build_crew_dialogue_prompts,
     build_death_notice_prompts,
-    build_dynamic_sg_question_prompts,
     build_game_over_prompts,
     build_game_title_prompts,
     build_global_circumstances_prompts,
@@ -57,13 +54,11 @@ from prompts import (
     build_npc_dialogue_lang_note,
     build_npc_name_system,
     build_npc_name_user,
-    build_onboarding_prompts,
     build_personal_briefing_system,
     build_player_message_prompts,
     build_role_flavour_prompts,
     build_scene_instruction_system,
     build_scene_instruction_user,
-    build_species_description_prompts,
 )
 from openai.types.chat import (
     ChatCompletionSystemMessageParam,
@@ -138,12 +133,6 @@ class ContentPrompts(BaseModel):
     comic_prompt: str
 
 
-class OnboardingQuestions(BaseModel):
-    """Structured onboarding questions"""
-
-    questions: list[dict[str, Any]]
-
-
 # ============== NPC Role Templates ==============
 
 NPC_TEMPLATES = {
@@ -185,136 +174,6 @@ NPC_TEMPLATES = {
     },
 }
 
-
-# Onboarding configuration from environment
-try:
-    ONBOARDING_QUESTIONS_COUNT = int(os.getenv("ONBOARDING_QUESTIONS_COUNT", "5"))
-except (ValueError, TypeError):
-    logger.warning("Invalid ONBOARDING_QUESTIONS_COUNT, using default 5")
-    ONBOARDING_QUESTIONS_COUNT = 5
-
-try:
-    ONBOARDING_OPTIONS_COUNT = int(os.getenv("ONBOARDING_OPTIONS_COUNT", "5"))
-except (ValueError, TypeError):
-    logger.warning("Invalid ONBOARDING_OPTIONS_COUNT, using default 5")
-    ONBOARDING_OPTIONS_COUNT = 5
-
-# Minimum ratio of second-place tag count to first-place for hybrid detection.
-# E.g. 0.25 means if second species/gender tag has >= 25% of first-place votes,
-# the character is considered a hybrid. Range: 0.0 (always hybrid) to 1.0 (only tie).
-# Minimum ratio of second-place tag count to first-place for hybrid detection.
-# Range: 0.0 (always hybrid) to 1.0 (only tie).
-try:
-    GAME_SPECIES_HYBRID_THRESHOLD = float(os.getenv("GAME_SPECIES_HYBRID_THRESHOLD", "0.25"))
-except (ValueError, TypeError):
-    logger.warning("Invalid GAME_SPECIES_HYBRID_THRESHOLD, using default 0.25")
-    GAME_SPECIES_HYBRID_THRESHOLD = 0.25
-
-try:
-    GAME_GENDER_HYBRID_THRESHOLD = float(os.getenv("GAME_GENDER_HYBRID_THRESHOLD", "0.25"))
-except (ValueError, TypeError):
-    logger.warning("Invalid GAME_GENDER_HYBRID_THRESHOLD, using default 0.25")
-    GAME_GENDER_HYBRID_THRESHOLD = 0.25
-
-
-def _build_onboarding_questions_schema() -> dict:
-    """Build JSON schema for onboarding questions with configurable counts."""
-    role_score_properties = {key: {"type": "integer"} for key in SHIP_ROLE_KEYS}
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "onboarding_questions",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "questions": {
-                        "type": "array",
-                        "minItems": ONBOARDING_QUESTIONS_COUNT,
-                        "maxItems": ONBOARDING_QUESTIONS_COUNT,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "image_prompt": {
-                                    "type": "string",
-                                    "description": "A detailed English image generation prompt that depicts the EXACT SAME scene as the text field. You MUST carry over EVERY concrete visual detail from text — the specific shape, size, color, light source, and any named object. NEVER replace a specific object with a generic word: if text says 'a kilometre-wide light-absorbing cube emitting a narrow beam', image_prompt must say exactly that, NOT 'an alien artifact'. If text names no object, describe the literal environment. Cinematic, sci-fi/space opera, 4K quality.",
-                                },
-                                "text": {
-                                    "type": "string",
-                                    "description": "Question text about what would you do",
-                                },
-                                "options": {
-                                    "type": "array",
-                                    "minItems": ONBOARDING_OPTIONS_COUNT,
-                                    "maxItems": ONBOARDING_OPTIONS_COUNT,
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "value": {
-                                                "type": "string",
-                                                "description": "Full action description displayed to the player — e.g. 'Run to engineering and repair the warp drive'",
-                                            },
-                                            "role_scores": {
-                                                "type": "object",
-                                                "description": "Points awarded to each role when this option is selected. Keys are role_key strings, values are integers 0-3.",
-                                                "properties": role_score_properties,
-                                                "required": SHIP_ROLE_KEYS,
-                                                "additionalProperties": False,
-                                            },
-                                        },
-                                        "required": ["value", "role_scores"],
-                                        "additionalProperties": False,
-                                    },
-                                },
-                            },
-                            "required": ["image_prompt", "text", "options"],
-                            "additionalProperties": False,
-                        },
-                    }
-                },
-                "required": ["questions"],
-                "additionalProperties": False,
-            },
-        },
-    }
-
-
-ONBOARDING_QUESTIONS_SCHEMA = _build_onboarding_questions_schema()
-
-
-def _build_dynamic_sg_question_schema(dimension: str) -> dict:
-    """Build a strict JSON schema for ONE dynamically generated species/gender question.
-
-    Forces the model to return a label for EVERY canonical tag of the dimension,
-    so the caller can attach tags programmatically without any cleanup.
-    """
-    tags = get_dimension_tags(dimension)
-    label_properties = {tag: {"type": "string"} for tag in tags}
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": f"dynamic_{dimension}_question",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                    "labels": {
-                        "type": "object",
-                        "properties": label_properties,
-                        "required": tags,
-                        "additionalProperties": False,
-                    },
-                },
-                "required": ["text", "labels"],
-                "additionalProperties": False,
-            },
-        },
-    }
-
-
-DYNAMIC_SPECIES_QUESTION_SCHEMA = _build_dynamic_sg_question_schema("species")
-DYNAMIC_GENDER_QUESTION_SCHEMA = _build_dynamic_sg_question_schema("gender")
 
 NPC_DIALOGUE_SCHEMA = {
     "type": "json_schema",
@@ -458,55 +317,33 @@ CHOSEN_ACTION_PROMPT_SCHEMA = {
     },
 }
 
-ROLE_ASSIGNMENT_SCHEMA = {
+CHARACTER_FLAVOUR_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
-        "name": "role_assignment",
+        "name": "character_flavour",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "role_key": {
+                "role_description": {
                     "type": "string",
-                    "description": "The role_key of the best matching role from the available roles list",
+                    "description": "2-4 sentence second-person description of who this specific character is in their crew role, how they relate to it, and why they are here",
                 },
-                "reasoning": {
+                "avatar_description": {
                     "type": "string",
-                    "description": "Brief explanation of why this role matches the player's answers",
+                    "description": "1-2 sentence visual description for avatar generation: appearance, clothing/uniform, surroundings, pose, mood. No character name.",
                 },
-            },
-            "required": ["role_key", "reasoning"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-SPECIES_GENDER_DESC_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "species_gender_description",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
                 "species_description": {
                     "type": "string",
-                    "description": "A vivid narrative description of the character's species/race and what it means for their identity",
+                    "description": "3-5 sentence narrative of how the character looks and feels: physiology, texture, glow; how their gender/form manifests in their culture; a unified image of the personality",
                 },
-                "gender_description": {
-                    "type": "string",
-                    "description": "A vivid narrative description of the character's gender/reproductive form and how it shapes their experience",
-                },
-                "combined_description": {
-                    "type": "string",
-                    "description": "A combined 2-3 sentence narrative blending species and gender into one cohesive character concept",
+                "personality_traits": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Exactly 3 contrasting adjectives capturing the character's nature",
                 },
             },
-            "required": [
-                "species_description",
-                "gender_description",
-                "combined_description",
-            ],
+            "required": ["role_description", "avatar_description", "species_description", "personality_traits"],
             "additionalProperties": False,
         },
     },
@@ -539,40 +376,6 @@ ROLE_FLAVOUR_SCHEMA = {
         },
     },
 }
-
-SPECIES_OPTION_PROMPTS_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "species_option_prompts",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "prompts": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "option_value": {
-                                "type": "string",
-                                "description": "Exact option value from the question, returned AS-IS without any brackets, quotes, or extra formatting. Example: 's4_a' not '[s4_a]'",
-                            },
-                            "prompt": {
-                                "type": "string",
-                                "description": "Short creative image prompt in English for Stable Diffusion, ~20-30 words, cinematic sci-fi style",
-                            },
-                        },
-                        "required": ["option_value", "prompt"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["prompts"],
-            "additionalProperties": False,
-        },
-    },
-}
-
 
 GAME_TITLE_SCHEMA = {
     "type": "json_schema",
@@ -1284,198 +1087,6 @@ class GameServer:
         return cleaned.strip()
 
     # ============== Onboarding ==============
-
-    async def generate_onboarding_questions(
-        self,
-        underrepresented_hint: str,
-        *,
-        game_id: str | None,
-        player_id: str | None,
-        turn: int | str | None,
-        kind: str | None,
-    ) -> list[dict[str, Any]]:
-        """Generate dynamic onboarding questions using LLM with json_schema.
-
-        Args:
-            underrepresented_hint: Optional hint about which roles need more
-                attention based on recent onboarding history.
-                Example: "navigator, communications_officer, xenobiologist"
-        """
-        logger.info(f"Generating onboarding questions, language: {self.language}, hint: {underrepresented_hint or 'none'}")
-
-        questions_count = ONBOARDING_QUESTIONS_COUNT
-        options_count = ONBOARDING_OPTIONS_COUNT
-        role_keys_str = ", ".join(SHIP_ROLE_KEYS)
-        # Build example role_scores dynamically from actual role keys
-        _example = {k: (3 if k == "chief_engineer" else 1 if k in ("science_officer", "pilot") else 0) for k in SHIP_ROLE_KEYS}
-        example_role_scores_json = json.dumps(_example, ensure_ascii=False)
-
-        system, user = build_onboarding_prompts(
-            self.language,
-            questions_count,
-            options_count,
-            role_keys_str,
-            example_role_scores_json,
-            underrepresented_hint,
-            use_vs=self.vs_enabled,
-            # onboarding_questions is overridden to k=3 in vs_config.DEFAULT_VS_K_OVERRIDES
-            # (5 questions × 5 options × 10 role_scores per candidate set — the heaviest
-            # VS generation; k=3 mitigates the late-set quality degradation seen at k=5).
-            vs_k=resolve_vs_k("onboarding_questions", self.vs_k),
-        )
-
-        # NOTE: This is a token-heavy generation (5 questions × 5 options × 10 role_scores).
-        # Thinking is disabled globally via chat_template_kwargs in _call_llm.
-        # max_tokens defaults to LLM_MAX_TOKENS env var (32768).
-        if self.vs_enabled:
-            vs_result = await self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=vs_response_schema(ONBOARDING_QUESTIONS_SCHEMA),
-                use_case='onboarding_questions',
-                game_id=game_id,
-                player_id=player_id,
-                turn=turn,
-                kind=kind,
-            )
-            chosen = select_response(vs_result["responses"], self.vs_mode)
-            logger.info(
-                "[VS-ONBOARDING] Selected %d/%d p=%.3f",
-                vs_result["responses"].index(chosen) + 1,
-                len(vs_result["responses"]),
-                chosen["probability"],
-            )
-            result = chosen["text"]
-        else:
-            result = await self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=ONBOARDING_QUESTIONS_SCHEMA,
-                use_case='onboarding_questions',
-                game_id=game_id,
-                player_id=player_id,
-                turn=turn,
-                kind=kind,
-            )
-
-        questions = result.get("questions", [])
-
-        # Validate and fix duplicate options within each question
-        for q in questions:
-            options = q.get("options", [])
-            seen_values = set()
-            unique_options = []
-            for opt in options:
-                value = opt.get("value", "")
-                # Skip duplicate values
-                if value in seen_values:
-                    continue
-                # Skip overly short values (single letters, "A", "B", etc.)
-                if len(value.strip()) < 5:
-                    logger.warning(f"Skipping short option value: '{value}' in question: {q.get('text', '')}")
-                    continue
-                seen_values.add(value)
-                unique_options.append(opt)
-
-            # If we filtered out too many, keep original options
-            if len(unique_options) < 2 and len(options) >= 2:
-                logger.warning(f"Question had invalid options, using original: {q.get('text', '')}")
-                unique_options = options
-
-            q["options"] = unique_options
-
-        for i, q in enumerate(questions, start=1):
-            q["id"] = i
-
-        logger.info(f"Generated {len(questions)} onboarding questions")
-        return questions
-
-    def assign_role_from_answers(
-        self,
-        answers: dict[int, str],
-        available_roles: list[dict[str, Any]],
-        questions: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        """Assign role based on accumulated points from onboarding answers.
-
-        Each answer option contains role_scores (dict of role_key -> points).
-        We sum points per role across all answers and pick the available role
-        with the highest total score. No LLM call needed — fully deterministic.
-
-        Args:
-            answers: Dict mapping question_id -> selected option label text
-            available_roles: List of role dicts with at least role_key
-            questions: List of question dicts with options containing role_scores
-
-        Returns:
-            Dict with role_key and reasoning (score breakdown).
-        """
-        logger.info(f"[ROLE] Assigning role from {len(answers)} answers, {len(available_roles)} roles available, questions provided: {questions is not None}")
-
-        if not available_roles:
-            raise ValueError("No roles available")
-
-        # Build role scores from answer selections
-        role_points: dict[str, int] = dict.fromkeys(SHIP_ROLE_KEYS, 0)
-
-        if questions:
-            # Build lookup: question_id -> question data
-            question_map = {q.get("id"): q for q in questions}
-
-            for question_id, selected_label in answers.items():
-                # Answers dict keys are strings after json.loads from DB (SQLite JSON stores all keys as strings)
-                try:
-                    qid = int(question_id) if not isinstance(question_id, int) else question_id
-                except (ValueError, TypeError):
-                    logger.warning("[ROLE] Invalid question_id %r, skipping", question_id)
-                    continue
-                q_data = question_map.get(qid)
-                if not q_data:
-                    logger.warning(f"[ROLE] Question {question_id} (type={type(question_id).__name__}) not found in session data")
-                    continue
-
-                # Find the selected option by matching value
-                selected_option = None
-                for opt in q_data.get("options", []):
-                    if opt.get("value") == selected_label:
-                        selected_option = opt
-                        break
-
-                if not selected_option:
-                    logger.warning(f"[ROLE] Answer '{selected_label}' not found in options for Q{question_id}")
-                    continue
-
-                # Add role_scores from the selected option
-                scores = selected_option.get("role_scores", {})
-                for role_key, points in scores.items():
-                    if role_key in role_points:
-                        try:
-                            role_points[role_key] += int(points)
-                        except (ValueError, TypeError):
-                            logger.warning("[ROLE] Invalid points %r for role %s, skipping", points, role_key)
-
-        # Sort available roles by their accumulated points (descending)
-        available_keys = {r["role_key"] for r in available_roles}
-        scored_available = [(key, role_points.get(key, 0)) for key in sorted(role_points.keys(), key=lambda k: role_points[k], reverse=True) if key in available_keys]
-
-        if not scored_available:
-            # Fallback: pick first available
-            best_key = available_roles[0]["role_key"]
-            logger.warning(f"[ROLE] No scored roles available, falling back to {best_key}")
-        else:
-            best_key, best_score = scored_available[0]
-
-        # Build reasoning string
-        top_roles = sorted(role_points.items(), key=lambda x: x[1], reverse=True)
-        reasoning = "Points: " + ", ".join(f"{k}={v}" for k, v in top_roles)
-
-        logger.info(f"[ROLE] Point-based assignment: role_key={best_key}, {reasoning}")
-
-        return {
-            "role_key": best_key,
-            "reasoning": reasoning,
-            "role_points": role_points,
-        }
 
     async def generate_game_title(
         self,
@@ -2215,248 +1826,6 @@ class GameServer:
         logger.info(f"[ACTION_PROMPT] Generated for {role}: {prompt[:120]}...")
         return prompt
 
-    # ============== Species and Gender ==============
-
-    async def generate_dynamic_species_gender_question(
-        self,
-        dimension: str,
-        sg_step: int,
-        accumulated_tags: dict[str, int],
-        *,
-        game_id: str | None,
-        player_id: str | None,
-        turn: int | str | None,
-        kind: str | None,
-    ) -> dict[str, Any]:
-        """Generate ONE species or gender onboarding question via LLM.
-
-        Returns {"text": ..., "labels": {tag: label}} where labels covers every
-        canonical tag of the dimension. Tags themselves are NOT chosen by the LLM
-        — the caller assigns them in canonical order, which keeps the tag-counting
-        species/gender determination logic reliable.
-
-        Falls back to a static question from SPECIES/GENDER_QUESTIONS_DATA on failure.
-        """
-        logger.info(f"[SG_Q] Generating dynamic {dimension} question step {sg_step}, accumulated={accumulated_tags}")
-        system, user = build_dynamic_sg_question_prompts(self.language, dimension, sg_step, accumulated_tags)
-        schema = DYNAMIC_SPECIES_QUESTION_SCHEMA if dimension == "species" else DYNAMIC_GENDER_QUESTION_SCHEMA
-        try:
-            result = await self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=schema,
-                use_case='sg_question',
-                game_id=game_id,
-                player_id=player_id,
-                turn=turn,
-                kind=kind,
-            )
-            text = (result.get("text") or "").strip()
-            if text:
-                tags = get_dimension_tags(dimension)
-                raw_labels = result.get("labels") or {}
-                labels = {tag: str(raw_labels.get(tag, tag)).strip() for tag in tags}
-                logger.info(f"[SG_Q] LLM question ok: {text[:60]}...")
-                return {"text": text, "labels": labels}
-            logger.warning("[SG_Q] LLM returned empty text, using fallback")
-        except Exception as e:
-            logger.warning(f"[SG_Q] LLM call failed: {e}, using fallback")
-        return self._fallback_dynamic_sg_question(dimension, sg_step)
-
-    def _fallback_dynamic_sg_question(self, dimension: str, sg_step: int) -> dict[str, Any]:
-        """Pick a static species/gender question as fallback and derive per-tag labels."""
-        if dimension == "species":
-            pool = get_species_questions_data(self.language)
-            idx = sg_step // 2  # species steps 1,3,5 -> 0,1,2
-        else:
-            pool = get_gender_questions_data(self.language)
-            idx = (sg_step // 2) - 1  # gender steps 2,4 -> 0,1
-        idx = max(0, min(idx, len(pool) - 1))
-        text = pool[idx]["text"]
-        tag_field = "species_tags" if dimension == "species" else "gender_tags"
-        labels: dict[str, str] = {}
-        for q in pool:
-            for opt in q["options"]:
-                for tag in opt.get(tag_field, []):
-                    labels.setdefault(tag, opt["label"])
-        tags = get_dimension_tags(dimension)
-        logger.info(f"[SG_Q] fallback {dimension} step {sg_step}: {text[:60]}...")
-        return {"text": text, "labels": {tag: labels.get(tag, tag) for tag in tags}}
-
-    @staticmethod
-    def _count_tags_from_answers(
-        answers: dict[int, str],
-        tag_key: str,
-        questions: list[dict[str, Any]] | None,
-    ) -> dict[str, int]:
-        """Count occurrences of a given tag type across all answered questions."""
-        if not questions:
-            return {}
-
-        question_map = {q.get("id"): q for q in questions}
-        tag_counts: dict[str, int] = {}
-
-        for question_id, selected_value in answers.items():
-            try:
-                qid = int(question_id) if not isinstance(question_id, int) else question_id
-            except (ValueError, TypeError):
-                continue
-            q_data = question_map.get(qid)
-            if not q_data:
-                continue
-            selected_option = None
-            for opt in q_data.get("options", []):
-                if opt.get("value") == selected_value or opt.get("label") == selected_value:
-                    selected_option = opt
-                    break
-            if not selected_option:
-                continue
-            tags = selected_option.get(tag_key, [])
-            for tag in tags:
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-        return tag_counts
-
-    @staticmethod
-    def calculate_species_from_answers(
-        answers: dict[int, str],
-        questions: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        """Calculate species type by counting species_tags across answers.
-
-        Returns dict with primary species, secondary (for hybrid), and hybrid flag.
-        """
-        tag_counts = GameServer._count_tags_from_answers(answers, "species_tags", questions)
-        if not tag_counts:
-            return {"primary": "", "secondary": "", "hybrid": False}
-
-        sorted_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
-        primary = sorted_tags[0][0]
-        primary_count = sorted_tags[0][1]
-        secondary = ""
-        hybrid = False
-        if len(sorted_tags) > 1:
-            second_count = sorted_tags[1][1]
-            if second_count == primary_count or (second_count >= max(2, primary_count * GAME_SPECIES_HYBRID_THRESHOLD)):
-                secondary = sorted_tags[1][0]
-                hybrid = True
-
-        return {"primary": primary, "secondary": secondary, "hybrid": hybrid}
-
-    @staticmethod
-    def calculate_gender_from_answers(
-        answers: dict[int, str],
-        questions: list[dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        """Calculate gender type by counting gender_tags across answers.
-
-        Returns dict with primary gender, secondary (for hybrid), and hybrid flag.
-        """
-        tag_counts = GameServer._count_tags_from_answers(answers, "gender_tags", questions)
-        if not tag_counts:
-            return {"primary": "", "secondary": "", "hybrid": False}
-
-        sorted_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
-        primary = sorted_tags[0][0]
-        primary_count = sorted_tags[0][1]
-        secondary = ""
-        hybrid = False
-        if len(sorted_tags) > 1:
-            second_count = sorted_tags[1][1]
-            if second_count == primary_count or (second_count >= max(2, primary_count * GAME_GENDER_HYBRID_THRESHOLD)):
-                secondary = sorted_tags[1][0]
-                hybrid = True
-
-        return {"primary": primary, "secondary": secondary, "hybrid": hybrid}
-
-    async def generate_species_gender_description(
-        self,
-        species_result: dict[str, Any],
-        gender_result: dict[str, Any],
-        role: str,
-        *,
-        game_id: str | None,
-        player_id: str | None,
-        turn: int | str | None,
-        kind: str | None,
-    ) -> str:
-        """Generate a vivid narrative description of the player's species and gender using LLM."""
-        logger.info(f"[SPECIES] Generating species+gender description for role: {role}")
-
-        species_display = species_result.get("primary", "unknown")
-        gender_display = gender_result.get("primary", "undefined")
-        species_hybrid = species_result.get("hybrid", False)
-        species_secondary = species_result.get("secondary", "")
-        gender_hybrid = gender_result.get("hybrid", False)
-        gender_secondary = gender_result.get("secondary", "")
-
-        system, user = build_species_description_prompts(
-            self.language,
-            role,
-            species_display,
-            species_secondary,
-            species_hybrid,
-            gender_display,
-            gender_secondary,
-            gender_hybrid,
-            use_vs=self.vs_enabled,
-            vs_k=resolve_vs_k("species_description", self.vs_k),
-        )
-
-        try:
-            if self.vs_enabled:
-                vs_result = await self._call_llm(
-                    system_prompt=system,
-                    user_prompt=user,
-                    response_schema=vs_response_schema(SPECIES_GENDER_DESC_SCHEMA),
-                    use_case='species_description',
-                    game_id=game_id,
-                    player_id=player_id,
-                    turn=turn,
-                    kind=kind,
-                )
-                chosen = select_response(vs_result["responses"], self.vs_mode)
-                parsed = chosen["text"]
-            else:
-                parsed = await self._call_llm(
-                    system_prompt=system,
-                    user_prompt=user,
-                    response_schema=SPECIES_GENDER_DESC_SCHEMA,
-                    use_case='species_description',
-                    game_id=game_id,
-                    player_id=player_id,
-                    turn=turn,
-                    kind=kind,
-                )
-            species_desc = parsed.get("species_description", "")
-            logger.info(f"[SPECIES] Description generated: {species_desc}...")
-            return species_desc
-        except Exception as e:
-            logger.warning(f"[SPECIES] LLM description failed, using fallback: {e}")
-            return self._fallback_species_gender_description(species_display, gender_display, species_hybrid, species_secondary, role)
-
-    def _fallback_species_gender_description(
-        self,
-        species_type: str,
-        gender_type: str,
-        hybrid: bool,
-        secondary: str,
-        role: str,
-    ) -> str:
-        """Generate a fallback template-based species+gender description when LLM fails."""
-        gs = get_game_strings(self.language)
-        gm = gs["gm_fallback"]
-        species_map = gm["fallback_species"]
-        if hybrid and secondary and species_type in species_map and secondary in species_map:
-            hybrid_key = "hybrid_format_ru" if self.language == LANGUAGE_RU else "hybrid_format_en"
-            base = f"{species_map.get(species_type, species_type)}{gm[hybrid_key].format(secondary=species_map.get(secondary, secondary).lower() if self.language == LANGUAGE_RU else species_map.get(secondary, secondary))}"
-        else:
-            unknown = gm["unknown_species_format"].format(species_type=species_type)
-            base = species_map.get(species_type, unknown)
-        gender_note = gm["gender_note"].format(gender_type=gender_type)
-        role_note = gm["role_note"].format(role=role)
-        return f"{base}{gender_note}{role_note}"
-
     async def generate_role_flavour(
         self,
         role_key: str,
@@ -2542,123 +1911,88 @@ class GameServer:
                 "personality_traits": list(traits),
             }
 
-    # ============== Species/Gender Option Image Prompts ==============
-
-    async def generate_species_option_prompts(
+    async def generate_character_flavour(
         self,
-        question: dict[str, Any],
-        accumulated_tags: dict[str, int],
-        tag_type: str,
+        role_key: str,
+        role_name: str,
+        species_display: str,
+        species_secondary: str | None,
+        species_hybrid: bool,
+        gender_display: str,
+        gender_secondary: str | None,
+        gender_hybrid: bool,
         *,
         game_id: str | None,
         player_id: str | None,
         turn: int | str | None,
-        kind: str | None,
-    ) -> dict[str, str]:
-        """Generate one image per answer option for a species/gender question.
+        kind: str = "character_flavour",
+    ) -> dict[str, Any]:
+        """Generate the full flavour for a random character proposal in ONE LLM call.
 
-        Each option image shows cumulative visual effect of all previous
-        species/gender choices + this option's specific trait.
-
-        Args:
-            question: The next question to generate option images for
-            accumulated_tags: Dict of species/gender tag -> count accumulated so far
-            tag_type: 'species_tags' or 'gender_tags'
-
-        Returns:
-            Dict mapping option_value -> short image prompt (English, ~20-30 words)
+        Produces role_description, avatar_description, species_description and
+        personality_traits for the rolled role/species/gender combination. On
+        LLM failure, falls back to empty descriptions — never raises.
         """
-        question_text = question.get("text", "")
-        options = question.get("options", [])
+        logger.info(f"[CHAR_FLAVOUR] Generating flavour for role={role_key} ({role_name}), player={player_id}")
 
-        # Build aggregated tag description from accumulated tags
-        sorted_tags = sorted(accumulated_tags.items(), key=lambda x: x[1], reverse=True)
-        accumulated_desc = " and ".join(f"{tag} ({count}){' times' if count > 1 else ''}" for tag, count in sorted_tags[:3])
-
-        options_text = ""
-        for opt in options:
-            opt_value = opt.get("value", "")
-            opt_label = opt.get("label", "")
-            tags = opt.get(tag_type, [])
-            tag_str = ", ".join(tags)
-            options_text += f"  - value='{opt_value}' label='{opt_label}' tags: {tag_str}\n"
-
-        system_prompt = (
-            "You are a creative sci-fi portrait prompt writer. "
-            "Write SHORT image prompts in English for Stable Diffusion. "
-            "Each prompt shows a Star Trek character whose appearance reflects "
-            "the accumulated species/gender traits. "
-            "MAXIMUM 30 words per prompt. Cinematic, dramatic lighting, 4K quality."
+        system, user = build_character_flavour_prompts(
+            self.language,
+            role_key,
+            role_name,
+            species_display,
+            species_secondary,
+            species_hybrid,
+            gender_display,
+            gender_secondary,
+            gender_hybrid,
+            use_vs=self.vs_enabled,
+            vs_k=resolve_vs_k("role_flavour", self.vs_k),
         )
 
-        async def _get_prompts_from_llm(prompt: str) -> dict[str, str]:
-            try:
-                result = await self._call_llm(
-                    system_prompt=system_prompt,
-                    user_prompt=prompt,
-                    response_schema=SPECIES_OPTION_PROMPTS_SCHEMA,
-                    use_case='species_option_prompts',
+        try:
+            if self.vs_enabled:
+                vs_result = await self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=vs_response_schema(CHARACTER_FLAVOUR_SCHEMA),
+                    use_case='role_flavour',
                     game_id=game_id,
                     player_id=player_id,
                     turn=turn,
                     kind=kind,
                 )
-                prompts_dict = {}
-                if result and "prompts" in result:
-                    for entry in result["prompts"]:
-                        opt_val = entry.get("option_value", "").strip("[]")
-                        prompt_text = entry.get("prompt", "")
-                        if opt_val and prompt_text:
-                            prompts_dict[opt_val] = prompt_text
-                return prompts_dict
-            except Exception as e:
-                logger.warning(f"[OPTION_PROMPTS] LLM call failed: {e}")
-                return {}
-
-        # 1. Initial attempt
-        user_prompt = (
-            f"Question: {question_text}\n"
-            f"Accumulated traits so far: {accumulated_desc or 'none yet'}\n"
-            f"Options (each with its own trait tags):\n{options_text}\n\n"
-            f"IMPORTANT: You must generate exactly {len(options)} prompts, one for each option listed above.\n"
-            "For EACH option, write a short English image prompt showing a "
-            "character with the accumulated traits AND the option's specific trait. "
-            "Each prompt MAX 30 words. "
-            'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
-        )
-        prompts_dict = await _get_prompts_from_llm(user_prompt)
-
-        # 2. Retry for missing options
-        missing_options = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
-
-        if missing_options:
-            logger.info(f"[OPTION_PROMPTS] Missing {len(missing_options)} prompts. Retrying for: {missing_options}")
-            retry_user_prompt = (
-                f"You previously missed some options. Please generate prompts ONLY for these "
-                f"specific option values: {missing_options}. "
-                f"You MUST return exactly {len(options)} objects in total in your JSON array "
-                f"(including the ones you already provided). "
-                f"Each prompt MUST be a short English image prompt (~20-30 words) "
-                f"reflecting the accumulated traits: {accumulated_desc or 'none yet'} "
-                f"and the option's specific trait. "
-                'Output as JSON array: [{"option_value": ..., "prompt": ...}].'
-            )
-            retry_prompts = await _get_prompts_from_llm(retry_user_prompt)
-            prompts_dict.update(retry_prompts)
-
-        # 3. Final fallback for any remaining missing options
-        final_missing = [opt.get("value") for opt in options if opt.get("value") not in prompts_dict]
-        if final_missing:
-            logger.warning(f"[OPTION_PROMPTS] Still missing {len(final_missing)} prompts after retry. Using fallback.")
-            for opt in options:
-                opt_val = opt.get("value")
-                if opt_val not in prompts_dict:
-                    tags = opt.get(tag_type, [])
-                    tag_str = ", ".join(tags) if tags else "character"
-                    prompts_dict[opt_val] = f"Star Trek character portrait, {tag_str} traits, cinematic lighting, uniform, 4K quality, portrait, upper_body."
-
-        logger.info(f"[OPTION_PROMPTS] Successfully resolved {len(prompts_dict)}/{len(options)} prompts")
-        return prompts_dict
+                chosen = select_response(vs_result["responses"], self.vs_mode)
+                parsed = chosen["text"]
+            else:
+                parsed = await self._call_llm(
+                    system_prompt=system,
+                    user_prompt=user,
+                    response_schema=CHARACTER_FLAVOUR_SCHEMA,
+                    use_case='role_flavour',
+                    game_id=game_id,
+                    player_id=player_id,
+                    turn=turn,
+                    kind=kind,
+                )
+            generated_traits = parsed.get("personality_traits") or []
+            if not isinstance(generated_traits, list) or not generated_traits:
+                generated_traits = []
+            result = {
+                "role_description": parsed.get("role_description", "") or "",
+                "avatar_description": parsed.get("avatar_description", "") or "",
+                "species_description": parsed.get("species_description", "") or "",
+                "personality_traits": generated_traits[:3],
+            }
+            logger.info(f"[CHAR_FLAVOUR] Flavour generated for {role_key}: desc={result['role_description'][:60]}...")
+            return result
+        except Exception as e:
+            logger.warning(f"[CHAR_FLAVOUR] LLM flavour failed for role={role_key}: {e}", exc_info=True)
+            return {
+                "role_description": "",
+                "avatar_description": "",
+                "species_description": "",
+                "personality_traits": [],
+            }
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 

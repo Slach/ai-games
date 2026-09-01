@@ -545,25 +545,32 @@ async def push_onboarding_ready(
     player_id: int,
     game_id: str,
     session_id: str,
-    question: dict | None,
+    proposal: dict | None,
     game_title: str,
     welcome_message: str,
     *,
     language: str,
+    final: bool = False,
+    completion: dict | None = None,
 ) -> bool:
-    """Push that onboarding images are ready to the telegram-bot with retry.
+    """Push a character proposal card to the telegram-bot with retry.
 
-    Called from background task after images are generated. The bot uses this
-    to send/update the first question with images to the player.
+    Called from the background task after the proposal (flavour + avatar) is
+    generated. The bot uses this to send the character card with yes/no
+    buttons to the player. When ``final`` is set, the card carries no buttons
+    and ``completion`` holds the /onboarding/complete payload so the bot can
+    show the welcome-aboard message directly.
 
     Args:
         player_id: Player's Telegram ID
         game_id: Game identifier
-        session_id: Onboarding session UUID
-        question: First onboarding question (with image_url now populated)
-        game_title: Game title text
-        welcome_message: Welcome text
+        session_id: Onboarding session ID
+        proposal: Character proposal dict (role, species, gender, avatar_url, ...)
+        game_title: Game title text (first proposal only)
+        welcome_message: Welcome text (first proposal only)
         language: Game language code
+        final: True when the character was force-assigned after 3 rejections
+        completion: Completion payload for final pushes
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -573,13 +580,16 @@ async def push_onboarding_ready(
         "game_id": game_id,
         "session_id": session_id,
         "language": language,
+        "final": final,
     }
-    if question:
-        payload["question"] = question
+    if proposal:
+        payload["proposal"] = proposal
     if game_title:
         payload["game_title"] = game_title
     if welcome_message:
         payload["welcome_message"] = welcome_message
+    if completion:
+        payload["completion"] = completion
 
     label = f"onboarding-ready player={player_id} session={session_id}"
     return await _post_with_retry(TELEGRAM_BOT_ONBOARDING_READY_URL, payload, label)

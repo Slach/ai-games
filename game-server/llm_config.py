@@ -58,10 +58,6 @@ def _use_case(vs: LLMParams, non_vs: LLMParams) -> dict[str, LLMParams]:
 # Verbalized-Sampling branch; ``non_vs`` is the single-shot branch. When a use
 # case has no VS branch, both entries are identical and only ``non_vs`` is used.
 DEFAULT_USE_CASES: dict[str, dict[str, LLMParams]] = {
-    "onboarding_questions": _use_case(
-        LLMParams(temperature=0.9, max_tokens=MAX_TOKENS_DEFAULT),
-        LLMParams(temperature=0.7, max_tokens=MAX_TOKENS_DEFAULT),
-    ),
     "game_title": _use_case(
         LLMParams(temperature=0.9, max_tokens=MAX_TOKENS_DEFAULT),
         LLMParams(temperature=0.9, max_tokens=MAX_TOKENS_DEFAULT),
@@ -90,20 +86,8 @@ DEFAULT_USE_CASES: dict[str, dict[str, LLMParams]] = {
         LLMParams(temperature=0.7, max_tokens=MAX_TOKENS_AVATAR),
         LLMParams(temperature=0.7, max_tokens=MAX_TOKENS_AVATAR),
     ),
-    "sg_question": _use_case(
-        LLMParams(temperature=0.9, max_tokens=1024),
-        LLMParams(temperature=0.9, max_tokens=1024),
-    ),
-    "species_description": _use_case(
-        LLMParams(temperature=0.8, max_tokens=2048),
-        LLMParams(temperature=0.8, max_tokens=1024),
-    ),
     "role_flavour": _use_case(
         LLMParams(temperature=0.8, max_tokens=2048),
-        LLMParams(temperature=0.8, max_tokens=1024),
-    ),
-    "species_option_prompts": _use_case(
-        LLMParams(temperature=0.8, max_tokens=1024),
         LLMParams(temperature=0.8, max_tokens=1024),
     ),
     "npc_choice": _use_case(
@@ -198,14 +182,6 @@ MODEL_USE_CASES: dict[str, dict[str, dict[str, LLMParams]]] = {
         "player_message_text": _use_case(
             LLMParams(temperature=0.7, max_tokens=1536),
             LLMParams(temperature=0.7, max_tokens=1536),
-        ),
-        "species_option_prompts": _use_case(
-            LLMParams(temperature=0.8, max_tokens=1536),
-            LLMParams(temperature=0.8, max_tokens=1536),
-        ),
-        "sg_question": _use_case(
-            LLMParams(temperature=0.9, max_tokens=1536),
-            LLMParams(temperature=0.9, max_tokens=1536),
         ),
         "role_flavour": _use_case(
             LLMParams(temperature=0.8, max_tokens=3072),

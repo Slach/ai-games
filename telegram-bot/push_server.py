@@ -41,6 +41,7 @@ from language import (
     get_language_name,
     get_notifications,
     get_onboarding,
+    get_profile,
     get_push_outcome,
     get_spectator,
     get_turn_reminder,
@@ -78,6 +79,16 @@ GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
 # Messages have a larger 4096-char limit, so an over-long question caption
 # must be split: image keeps the situation text, options go in a follow-up.
 TELEGRAM_CAPTION_LIMIT = 1024
+
+# Hook set by bot.py at startup (avoids a circular import): delivers the full
+# onboarding completion flow (welcome-aboard message, mission info, invites,
+# broadcasts) for force-assigned characters. Receives (bot, player_id, payload).
+_onboarding_completion_fn: Callable | None = None
+
+
+def set_onboarding_completion_fn(fn: Callable) -> None:
+    global _onboarding_completion_fn
+    _onboarding_completion_fn = fn
 
 
 # ── Per-player ordering & state ────────────────────────────────────
@@ -1327,14 +1338,15 @@ async def _deliver_onboarding_ready(
     payload: dict[str, Any],
     bot: Bot,
 ) -> bool:
-    """Deliver a /push/onboarding-ready message."""
+    """Deliver a /push/onboarding-ready character proposal card."""
     player_id = payload.get("player_id")
     game_id = payload["game_id"]
     session_id = payload.get("session_id", "")
     language = payload.get("language", "ru")
-    question = payload.get("question")
+    proposal = payload.get("proposal")
     game_title = payload.get("game_title", "")
     welcome_message = payload.get("welcome_message", "")
+    final = payload.get("final", False)
 
     if not player_id:
         return True
@@ -1344,7 +1356,7 @@ async def _deliver_onboarding_ready(
         if game_title:
             welcome_text = f"*{_escape_md(game_title)}*\n\n{_escape_md(welcome_text)}" if welcome_text else f"*{_escape_md(game_title)}*"
 
-        # Send splash image
+        # Send splash image (first proposal of a game only)
         splash_sent = False
         try:
             async with (
@@ -1384,110 +1396,65 @@ async def _deliver_onboarding_ready(
                 parse_mode="Markdown",
             )
 
-        # Send first question with images
-        if question:
+        # Send the character proposal card: avatar photo + role/species/gender,
+        # with yes/no buttons (or without them when force-assigned).
+        if proposal:
             from player_store import update_player_state
 
             update_player_state(
                 player_id,
                 onboarding_session_id=session_id,
                 game_id=game_id,
-                current_question_id=question.get("id", 1),
-                current_options=question.get("options", []),
-                current_question_text=question.get("text", ""),
-                current_question_image_url=question.get("image_url"),
                 language=language,
             )
 
-            options = question.get("options", [])
-            buttons = []
-            for i in range(len(options)):
-                buttons.append(
-                    InlineKeyboardButton(
-                        text=str(i + 1),
-                        callback_data=f"onb_ans:{question['id']}:{i}",
-                    )
-                )
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons])
+            onboarding_msgs = get_onboarding(language)
+            profile_msgs = get_profile(language)
 
-            image_url = question.get("image_url")
-            question_text = question.get("text", "")
-            options_text = "\n\n".join(f"{i + 1}. {_escape_md(o.get('label', o['value']))}" for i, o in enumerate(options))
-            situation_text = get_onboarding(language)["question_prefix"].format(
-                id=question["id"],
-                text=_escape_md(question_text),
+            species = proposal.get("species") or "—"
+            if proposal.get("species_secondary"):
+                species = profile_msgs["hybrid_species"].format(
+                    primary=species, secondary=_escape_md(proposal["species_secondary"])
+                )
+            gender = proposal.get("gender") or "—"
+
+            card_key = "character_card_forced" if final else "character_card"
+            card_text = onboarding_msgs[card_key].format(
+                role=_escape_md(proposal.get("role", "")),
+                species=_escape_md(species),
+                gender=_escape_md(gender),
+                role_description=_escape_md(proposal.get("role_description", "")),
+                traits=_escape_md("\n- ".join(proposal.get("personality_traits", []))),
             )
-            if options_text:
-                full_text = f"{situation_text}\n\n---\n\n{options_text}"
-            else:
-                full_text = situation_text
 
-            # Species/gender questions carry one image per option (no top-level
-            # image_url). Render them as a media group + a separate text/keyboard
-            # message, mirroring send_question_with_image in bot.py.
-            has_option_images = any(o.get("image_url") for o in options)
+            keyboard = None
+            if not final:
+                buttons = [
+                    InlineKeyboardButton(
+                        text=onboarding_msgs["character_accept_button"],
+                        callback_data=f"onb_dec:{session_id}:yes",
+                    ),
+                    InlineKeyboardButton(
+                        text=onboarding_msgs["character_reroll_button"],
+                        callback_data=f"onb_dec:{session_id}:no",
+                    ),
+                ]
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[buttons])
 
-            if has_option_images:
-                media_group = []
-                async with aiohttp.ClientSession() as session:
-                    for i, o in enumerate(options):
-                        opt_url = o.get("image_url")
-                        if not opt_url:
-                            continue
-                        try:
-                            async with session.get(opt_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
-                                if img_resp.status == 200:
-                                    photo_data = await img_resp.read()
-                                    media_group.append(
-                                        InputMediaPhoto(
-                                            media=BufferedInputFile(photo_data, filename=f"opt_{question['id']}_{i}.png"),
-                                            caption=f"{i + 1}. {_escape_md(o.get('label', o['value']))}",
-                                            parse_mode="Markdown",
-                                        )
-                                    )
-                                else:
-                                    logger.warning("[PUSH_ONBOARDING] Failed to download option image %d: %s", i, img_resp.status)
-                        except Exception as e:
-                            logger.warning("[PUSH_ONBOARDING] Failed to download option image %d for player %d: %s", i, player_id, e)
-                try:
-                    if media_group:
-                        await bot.send_media_group(chat_id=player_id, media=media_group)
-                        logger.info("[PUSH_ONBOARDING] Sent S/G question media group (question_id=%s, images=%d)", question.get("id"), len(media_group))
-                except Exception as e:
-                    logger.warning("[PUSH_ONBOARDING] Failed to send option media group for player %d: %s", player_id, e, exc_info=True)
-                await bot.send_message(
-                    chat_id=player_id,
-                    text=full_text,
-                    parse_mode="Markdown",
-                    reply_markup=keyboard,
-                )
-            elif image_url:
+            avatar_url = proposal.get("avatar_url")
+            sent = False
+            if avatar_url:
                 try:
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
+                        async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
                             if img_resp.status == 200:
                                 photo_data = await img_resp.read()
-                                photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
-                                if len(full_text) <= TELEGRAM_CAPTION_LIMIT:
+                                photo = BufferedInputFile(photo_data, filename=f"character_{session_id}.png")
+                                if len(card_text) <= TELEGRAM_CAPTION_LIMIT:
                                     await bot.send_photo(
                                         chat_id=player_id,
                                         photo=photo,
-                                        caption=full_text,
-                                        parse_mode="Markdown",
-                                        reply_markup=keyboard,
-                                    )
-                                elif options_text and len(situation_text) <= TELEGRAM_CAPTION_LIMIT:
-                                    # Caption too long: image gets the situation, options
-                                    # go in a separate message carrying the keyboard.
-                                    await bot.send_photo(
-                                        chat_id=player_id,
-                                        photo=photo,
-                                        caption=situation_text,
-                                        parse_mode="Markdown",
-                                    )
-                                    await bot.send_message(
-                                        chat_id=player_id,
-                                        text=options_text,
+                                        caption=card_text,
                                         parse_mode="Markdown",
                                         reply_markup=keyboard,
                                     )
@@ -1495,37 +1462,32 @@ async def _deliver_onboarding_ready(
                                     await bot.send_photo(chat_id=player_id, photo=photo)
                                     await bot.send_message(
                                         chat_id=player_id,
-                                        text=full_text,
+                                        text=card_text,
                                         parse_mode="Markdown",
                                         reply_markup=keyboard,
                                     )
+                                sent = True
                             else:
-                                await bot.send_message(
-                                    chat_id=player_id,
-                                    text=full_text,
-                                    parse_mode="Markdown",
-                                    reply_markup=keyboard,
-                                )
+                                logger.warning("[PUSH_ONBOARDING] Failed to download character avatar: HTTP %s", img_resp.status)
                 except Exception as e:
-                    logger.warning(
-                        "[PUSH_ONBOARDING] Failed to send question image for player %d: %s",
-                        player_id,
-                        e,
-                        exc_info=True,
-                    )
-                    await bot.send_message(
-                        chat_id=player_id,
-                        text=full_text,
-                        parse_mode="Markdown",
-                        reply_markup=keyboard,
-                    )
-            else:
+                    logger.warning("[PUSH_ONBOARDING] Failed to send character avatar for player %d: %s", player_id, e, exc_info=True)
+
+            if not sent:
                 await bot.send_message(
                     chat_id=player_id,
-                    text=full_text,
+                    text=card_text,
                     parse_mode="Markdown",
                     reply_markup=keyboard,
                 )
+
+        # Force-assigned character: the push carries the completion payload, so
+        # the player gets the welcome-aboard message right after the card.
+        completion = payload.get("completion")
+        if final and completion:
+            if _onboarding_completion_fn is None:
+                logger.error("[PUSH_ONBOARDING] No completion fn registered, cannot deliver forced completion for player %d", player_id, stack_info=True)
+            else:
+                await _onboarding_completion_fn(bot, player_id, completion)
 
         return True
     except TelegramBadRequest as e:

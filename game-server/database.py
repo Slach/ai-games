@@ -208,6 +208,13 @@ MIGRATIONS: list[tuple[int, str]] = [
         # players who never chose. NULL = unknown (e.g. first turn).
         "ALTER TABLE game_turns ADD COLUMN deadline TEXT DEFAULT NULL;",
     ),
+    (
+        24,
+        # Onboarding 2.0: the current character proposal (role/species/gender
+        # dice + LLM flavour + avatar URL) shown to the player with yes/no
+        # buttons. current_question now counts rejections ("no" presses).
+        "ALTER TABLE onboarding_sessions ADD COLUMN proposal TEXT DEFAULT NULL;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -618,8 +625,6 @@ def reset_active_npcs(game_id: str):
 def create_onboarding_session(
     player_id: int,
     language: str,
-    shuffle_seed: int,
-    questions: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     """Create a new onboarding session"""
     conn = get_db_connection()
@@ -630,14 +635,12 @@ def create_onboarding_session(
 
     cursor.execute(
         """INSERT INTO onboarding_sessions
-           (session_id, player_id, current_question, answers, completed, language, questions, shuffle_seed, created_at)
-           VALUES (?, ?, 0, '{}', 0, ?, ?, ?, ?)""",
+           (session_id, player_id, current_question, answers, completed, language, created_at)
+           VALUES (?, ?, 0, '{}', 0, ?, ?)""",
         (
             session_id,
             player_id,
             language,
-            json.dumps(questions, ensure_ascii=False) if questions else "[]",
-            shuffle_seed,
             created_at,
         ),
     )
@@ -652,8 +655,7 @@ def create_onboarding_session(
         "answers": {},
         "completed": False,
         "language": language,
-        "questions": questions or [],
-        "shuffle_seed": shuffle_seed,
+        "proposal": None,
         "created_at": created_at,
     }
 
@@ -662,12 +664,11 @@ def reserve_onboarding_slot(session_id: str, expected_current_question: int) -> 
     """Atomically advance current_question by one, but only if its current DB
     value still equals ``expected_current_question``.
 
-    Returns True on success, False if the row no longer matches (another
-    concurrent answer already advanced the counter). This compare-and-set is
-    the server-side guard against duplicate onboarding answers racing while
-    the first one is still generating its species/gender question (the
-    generation can take 30-60s, during which the in-memory session dict is
-    stale). SQLite serialises the UPDATE, so at most one caller wins.
+    current_question counts character rejections ("no" presses). Returns True
+    on success, False if the row no longer matches (another concurrent "no"
+    already advanced the counter). SQLite serialises the UPDATE, so at most
+    one caller wins — this is the server-side guard against a player tapping
+    the reroll button repeatedly while the first proposal is still generating.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -702,8 +703,7 @@ def get_onboarding_session(session_id: str) -> dict[str, Any] | None:
         "answers": _safe_json_loads(row["answers"], {}),
         "completed": bool(row["completed"]),
         "language": row["language"] or "en",
-        "questions": _safe_json_loads(row["questions"], []),
-        "shuffle_seed": row["shuffle_seed"] or 0,
+        "proposal": _safe_json_loads(row["proposal"], None),
         "created_at": row["created_at"],
     }
 
@@ -714,23 +714,23 @@ def update_onboarding_session(
     answers: dict[int, str],
     completed: bool,
     language: str | None,
-    questions: list | None,
+    proposal: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Update an onboarding session"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    if language and questions:
+    if language and proposal is not None:
         cursor.execute(
             """UPDATE onboarding_sessions
-               SET current_question = ?, answers = ?, completed = ?, language = ?, questions = ?
+               SET current_question = ?, answers = ?, completed = ?, language = ?, proposal = ?
                WHERE session_id = ?""",
             (
                 current_question,
                 json.dumps(answers, ensure_ascii=False),
                 1 if completed else 0,
                 language,
-                json.dumps(questions, ensure_ascii=False),
+                json.dumps(proposal, ensure_ascii=False),
                 session_id,
             ),
         )
@@ -747,16 +747,16 @@ def update_onboarding_session(
                 session_id,
             ),
         )
-    elif questions:
+    elif proposal is not None:
         cursor.execute(
             """UPDATE onboarding_sessions
-               SET current_question = ?, answers = ?, completed = ?, questions = ?
+               SET current_question = ?, answers = ?, completed = ?, proposal = ?
                WHERE session_id = ?""",
             (
                 current_question,
                 json.dumps(answers, ensure_ascii=False),
                 1 if completed else 0,
-                json.dumps(questions, ensure_ascii=False),
+                json.dumps(proposal, ensure_ascii=False),
                 session_id,
             ),
         )
@@ -777,83 +777,6 @@ def update_onboarding_session(
     conn.close()
 
     return get_onboarding_session(session_id)
-
-
-def update_onboarding_role_scores(
-    session_id: str,
-    role_scores: dict[str, int],
-) -> dict[str, Any] | None:
-    """Save role_score_history to an onboarding session after role assignment."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """UPDATE onboarding_sessions
-           SET role_score_history = ?
-           WHERE session_id = ?""",
-        (json.dumps(role_scores, ensure_ascii=False), session_id),
-    )
-    conn.commit()
-    conn.close()
-    return get_onboarding_session(session_id)
-
-
-def get_recent_role_score_history(
-    game_id: str,
-    limit: int,
-) -> list[dict[str, int]]:
-    """Get the last N completed onboarding sessions' role_score_history for a game.
-
-    Returns a list of dicts {role_key: points} most recent first.
-    Only returns sessions that have non-empty role_score_history.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """SELECT osh.role_score_history
-           FROM onboarding_sessions osh
-           LEFT JOIN player_profiles pp ON pp.player_id = osh.player_id
-           WHERE osh.completed = 1
-             AND osh.role_score_history IS NOT NULL
-             AND osh.role_score_history != '{}'
-             AND pp.game_id = ?
-           ORDER BY osh.created_at DESC
-           LIMIT ?""",
-        (game_id, limit),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        try:
-            scores = json.loads(row["role_score_history"])
-            if scores:
-                result.append(scores)
-        except (json.JSONDecodeError, TypeError):
-            continue
-    return result
-
-
-def get_underrepresented_roles(
-    game_id: str,
-    n_last: int,
-) -> list[str]:
-    """Find roles that received the least total points across recent onboarding sessions.
-
-    Returns a list of role_keys sorted by total points ascending (most underrepresented first).
-    """
-    history = get_recent_role_score_history(game_id, limit=n_last)
-    if not history:
-        return []
-
-    totals: dict[str, int] = dict.fromkeys(SHIP_ROLE_KEYS, 0)
-    for scores in history:
-        for role_key, points in scores.items():
-            if role_key in totals:
-                totals[role_key] += points
-
-    # Sort by total points ascending (most underrepresented first)
-    sorted_roles = sorted(totals.keys(), key=lambda k: totals[k])
-    return sorted_roles
 
 
 def delete_onboarding_sessions_for_player(player_id: int) -> int:

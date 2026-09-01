@@ -9,9 +9,6 @@ from typing import Any
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
-    get_dimension_tag_field,
-    get_dimension_tags,
-    get_tag_display_name,
 )
 from game_rules import (
     FORBIDDEN_OPENINGS,
@@ -21,101 +18,140 @@ from game_rules import (
     THREAT_MAX,
     loyalty_band,
 )
-from pydantic import BaseModel
 from verbalize_sampling import DIVERSITY_HINTS, verbalize_prompt
 
 
-class OnboardingQuestion(BaseModel):
-    """A single onboarding question"""
-
-    id: int
-    text: str
-    options: list[dict[str, Any]]
-    image_url: str | None
-    image_prompt: str | None
-
-
-def build_dynamic_sg_question_prompts(
+def build_character_flavour_prompts(
     language: str,
-    dimension: str,
-    sg_step: int,
-    accumulated_tags: dict[str, int],
+    role_key: str,
+    role_name: str,
+    species_display: str,
+    species_secondary: str | None,
+    species_hybrid: bool,
+    gender_display: str,
+    gender_secondary: str | None,
+    gender_hybrid: bool,
+    *,
+    use_vs: bool,
+    vs_k: int,
 ) -> tuple[str, str]:
-    """Build system + user prompts for generating ONE dynamic species/gender question.
+    """Build system + user prompts for a random character proposal.
 
-    The LLM only authors the question text and one vivid answer label per
-    canonical tag. Tags themselves are assigned by the caller, which keeps the
-    species/gender determination logic (tag counting) reliable.
-
-    Args:
-        language: LANGUAGE_RU / LANGUAGE_EN
-        dimension: "species" or "gender"
-        sg_step: 1-based index within the alternating S/G/S/G/S sequence
-        accumulated_tags: {tag: count} of this dimension picked in prior answers
+    One LLM call produces everything the proposal card and the avatar need:
+    role_description, avatar_description, personality_traits, and
+    species_description — tailored to the rolled role/species/gender.
     """
-    tags = get_dimension_tags(dimension)
-    tag_field = get_dimension_tag_field(dimension)
-
-    tag_lines = "\n".join(f"  - {tag}: {get_tag_display_name(tag, dimension, language)}" for tag in tags)
-    tag_keys_str = ", ".join(tags)
-
-    if accumulated_tags:
-        acc_parts = [f"{tag} ({get_tag_display_name(tag, dimension, language)}): {count}" for tag, count in sorted(accumulated_tags.items(), key=lambda x: x[1], reverse=True)]
-        accumulated_desc = ", ".join(acc_parts)
-    else:
-        accumulated_desc = ""
-
+    # A human/humanoid must be described as a person, not as an alien being:
+    # without this guard the LLM invents non-human physiology even for a
+    # Human species, which then corrupts the downstream avatar prompt.
+    # Match whole words only, and reject negated forms: "негуманоид" and
+    # "non-humanoid" must NOT match the "гуманоид"/"humanoid" substring.
+    _neg = re.search(r"\b(не|non|not)\b", species_display.lower()) or species_display.lower().startswith(("не", "non"))
+    _has_token = any(
+        re.search(rf"\b{tok}\b", species_display.lower())
+        for tok in ("человек", "гуманоид", "human", "humanoid")
+    )
+    is_human_like = _has_token and not _neg
     if language == LANGUAGE_RU:
-        if dimension == "species":
-            subject = "расы и биологической природы персонажа"
-            ask_focus = "Спроси о чём-то, что выявляет природу тела, происхождение, физиологию или способ существования вида — избегай банальных вопросов про 'дом' или 'смерть'. Будь образным и неожиданным: ритуалы, чувства, восприятие, связь со средой."
-        else:
-            subject = "пола и репродуктивной/идентификационной формы персонажа"
-            ask_focus = "Спроси о чём-то, что выявляет половую роль, обращение, идентичность или способ продолжения рода — избегай банальных вопросов. Будь образным и тактичным, без пошлости."
-
-        system = "Ты — креативный нарративный дизайнер sci-fi вселенной в духе Star Trek. Ты сочиняешь живые, нешаблонные вопросы для онбординга, которые помогают игроку определить сущность своего персонажа."
-        acc_clause = f"Предыдущие ответы игрока по этому измерению: {accumulated_desc}. Учти это: новый вопрос должен углублять и уточнять, а не повторяться.\n" if accumulated_desc else ""
-        user = (
-            f"Это вопрос №{sg_step} в серии, определяющей {subject}.\n"
-            f"{acc_clause}"
-            f"Доступные теги этого измерения (поле «{tag_field}») и их смысл:\n{tag_lines}\n\n"
-            f"{ask_focus}\n\n"
-            "Сгенерируй:\n"
-            "1. text — один вопрос-сценарий (1-2 предложения), творческий и atmospheric, на русском.\n"
-            "2. labels — объект, где для КАЖДОГО из перечисленных тегов дан короткий "
-            "яркий вариант ответа (2-7 слов), который выбрал бы игрок, чей персонаж "
-            "соответствует этому тегу. Варианты должны быть чётко различными по смыслу.\n"
-            f"Ключи в labels обязаны быть ровно этими и только ими: {tag_keys_str}.\n"
-            "Не добавляй других полей. Весь текст — строго на русском языке."
+        species_note = (
+            f"Вид: {species_display}" + (f" (гибрид с {species_secondary})" if species_hybrid else "")
+            + f"\nПол: {gender_display}" + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
         )
-    else:
-        if dimension == "species":
-            subject = "the character's species and biological nature"
-            ask_focus = (
-                "Ask something that reveals the nature of the body, origin, physiology, "
-                "or mode of existence of the species — avoid clichéd questions about 'home' or 'death'. "
-                "Be imaginative and surprising: rituals, feelings, perception, bond with the environment."
+        if is_human_like:
+            system = (
+                "Ты — креативный писатель-фантаст, создающий живые портреты членов звёздного экипажа. "
+                "Для заданной роли, вида и пола опиши конкретного ЧЕЛОВЕКА на этой должности. "
+                "Это человек/гуманоид: две руки, две ноги, человеческое лицо. НЕ придумывай нечеловеческую "
+                "физиологию (никаких щупалец, панцирей, плазмы, лишних конечностей, паразитизма, "
+                "симбиозов, энергетических форм). Избегай шаблонных архетипов — сделай персонажа "
+                "запоминающимся. Текст кинематографичный и атмосферный."
+            )
+            anatomy_guard = (
+                "ВАЖНО: это человек/гуманоид. avatar_description и species_description должны "
+                "описывать человека (внешность, форма, окружение, поза), а personality_traits — "
+                "человеческие черты характера. Никаких нечеловеческих элементов."
             )
         else:
-            subject = "the character's gender and reproductive/identity form"
-            ask_focus = "Ask something that reveals gender role, address, identity, or way of reproduction — avoid clichéd questions. Be imaginative and tasteful, never crude."
-
-        system = "You are a creative narrative designer for a Star Trek-style sci-fi universe. You craft vivid, non-generic onboarding questions that help a player define who their character is."
-        acc_clause = f"The player's previous answers for this dimension: {accumulated_desc}. Take it into account: the new question should deepen and refine, not repeat.\n" if accumulated_desc else ""
+            system = (
+                "Ты — креативный писатель-фантаст, создающий живые портреты членов звёздного экипажа. "
+                "Для заданной роли, вида и пола опиши конкретное инопланетное существо на этой должности. "
+                "Опиши его нечеловеческую физиологию в соответствии с видом. Избегай шаблонных архетипов — "
+                "сделай персонажа запоминающимся. Текст кинематографичный и атмосферный."
+            )
+            anatomy_guard = "Это инопланетное существо: опиши его нечеловеческую физиологию по типу расы."
         user = (
-            f"This is question #{sg_step} in a series determining {subject}.\n"
-            f"{acc_clause}"
-            f"Available tags for this dimension (the «{tag_field}» field) and their meaning:\n{tag_lines}\n\n"
-            f"{ask_focus}\n\n"
-            "Generate:\n"
-            "1. text — one scenario question (1-2 sentences), creative and atmospheric, in English.\n"
-            "2. labels — an object giving, for EACH listed tag, a short vivid answer option "
-            "(2-7 words) that a player whose character matches that tag would pick. "
-            "Options must be clearly distinct in meaning.\n"
-            f"The keys in labels must be exactly these and only these: {tag_keys_str}.\n"
-            "Do not add any other fields. All text must be strictly in English."
+            "Создай описание персонажа для космической игры в стиле Star Trek.\n\n"
+            f"Роль: {role_name} (ключ: {role_key})\n"
+            f"{species_note}\n"
+            f"{anatomy_guard}\n\n"
+            "Верни JSON с четырьмя полями:\n"
+            "- role_description: 2-4 предложения на русском — кто этот персонаж на своей должности, "
+            "как он воспринимает свою роль и почему он здесь. Второе лицо ('вы').\n"
+            "- avatar_description: 1-2 предложения на русском — визуальное описание для генерации "
+            "аватара: внешность, одежда/форма, окружение, поза, атмосфера. Без указания имени.\n"
+            "- species_description: 3-5 предложений на русском — как выглядит и ощущает себя этот "
+            "персонаж: внешность, физиология, текстура, свечение; как пол/форма проявляются в его "
+            "культуре и самовосприятии; единый образ личности.\n"
+            "- personality_traits: ровно 3 прилагательных на русском, контрастных между собой, "
+            "отражающих характер персонажа."
         )
-
+    else:
+        species_note = (
+            f"Species: {species_display}" + (f" (hybrid with {species_secondary})" if species_hybrid else "")
+            + f"\nGender: {gender_display}" + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
+        )
+        if is_human_like:
+            system = (
+                "You are a creative sci-fi writer crafting vivid portraits of starship crew members. "
+                "For a given role, species, and gender, describe a specific HUMAN holding that post. "
+                "This is a human/humanoid: two arms, two legs, a human face. Do NOT invent non-human "
+                "physiology (no tentacles, carapaces, plasma, extra limbs, parasitism, symbiosis, or "
+                "energy forms). Avoid stock archetypes — make the character memorable. The writing "
+                "should be cinematic and atmospheric."
+            )
+            anatomy_guard = (
+                "IMPORTANT: this is a human/humanoid. avatar_description and species_description must "
+                "describe a human (appearance, uniform, surroundings, pose), and personality_traits "
+                "must be human character traits. No non-human elements whatsoever."
+            )
+        else:
+            system = (
+                "You are a creative sci-fi writer crafting vivid portraits of starship crew members. "
+                "For a given role, species, and gender, describe a specific alien being holding that post. "
+                "Describe its non-human physiology per its species. Avoid stock archetypes — make the "
+                "character memorable. The writing should be cinematic and atmospheric."
+            )
+            anatomy_guard = "This is an alien being: describe its non-human physiology per its species type."
+        user = (
+            "Create a character description for a Star Trek-style space game.\n\n"
+            f"Role: {role_name} (key: {role_key})\n"
+            f"{species_note}\n"
+            f"{anatomy_guard}\n\n"
+            "Return JSON with four fields:\n"
+            "- role_description: 2-4 sentences in English — who this character is in their role, "
+            "how they relate to it, and why they are here. Second person ('you').\n"
+            "- avatar_description: 1-2 sentences in English — visual description for avatar "
+            "generation: appearance, clothing/uniform, surroundings, pose, mood. No name.\n"
+            "- species_description: 3-5 sentences in English — how this character looks and feels "
+            "(appearance, physiology, texture, glow); how their gender/form manifests in their "
+            "culture and self-perception; a unified image of the personality.\n"
+            "- personality_traits: exactly 3 adjectives in English, contrasting with each other."
+        )
+    if use_vs:
+        if is_human_like:
+            # For humans the diversity axes are human traits only — never
+            # non-humanoid body plans or alien textures (the default hint
+            # would push the LLM back into inventing alien physiology).
+            hint = (
+                "Vary across these axes:\n"
+                "- Age and build (young/lean, middle-aged/sturdy, older/weathered)\n"
+                "- Ethnicity and complexion (varied human phenotypes)\n"
+                "- Demeanor (calm, intense, weary, cheerful)\n"
+                "- All options MUST remain human: two arms, two legs, a human face.\n"
+            )
+        else:
+            hint = DIVERSITY_HINTS["species_description"]
+        system, user = verbalize_prompt(system, user, hint, k=vs_k)
     return system, user
 
 
@@ -679,168 +715,6 @@ def build_game_over_prompts(
 # ── Onboarding generation prompts ──────────────────────────────────
 
 
-def build_onboarding_prompts(
-    language: str,
-    questions_count: int,
-    options_count: int,
-    role_keys_str: str,
-    example_role_scores_json: str,
-    underrepresented_hint: str,
-    *,
-    use_vs: bool,
-    vs_k: int,
-) -> tuple[str, str]:
-    """Build system and user prompts for onboarding question generation."""
-    if language == LANGUAGE_RU:
-        system = (
-            "Ты — нарративный дизайнер sci-fi-игры в жанре space opera (в духе Mass Effect, Star Trek). "
-            "Твоя задача — писать атмосферные, кинематографичные сценарные ситуации для онбординга новых игроков. "
-            "Каждая ситуация должна ставить игрока внутри живой сцены: звуки, запахи, свет, напряжение, детали окружения — "
-            "а не сухо констатировать аварию."
-        )
-        hint = (
-            underrepresented_hint
-            if not underrepresented_hint
-            else f"🎯 ОСОБОЕ УКАЗАНИЕ: В предыдущих сессиях следующие роли получали меньше всего очков: {underrepresented_hint}. Удели им особое внимание при составлении вопросов — создай для них минимум по 2-3 интересных варианта ответов.\n\n"
-        )
-        user = (
-            f"Сгенерируй {questions_count} вопросов для онбординга в игре про космический экипаж звездного корабля. "
-            f"Каждый вопрос — это конкретная ситуация на корабле или во время миссии с выбором из {options_count} вариантов ДЕЙСТВИЙ. "
-            "ВАЖНО: Каждый вариант ответа (поле value) должен описывать КОНКРЕТНОЕ ДЕЙСТВИЕ, которое игрок совершает в этой ситуации. "
-            "ПРИМЕР правильных вариантов: 'Бежать в машинное отделение и попытаться починить варп-двигатель', "
-            "'Активировать аварийные щиты и вызвать подкрепление'. "
-            "НЕПРАВИЛЬНО: 'Инженер — технический специалист', 'Учёный – смелый, ищущий прорыв'. "
-            "НЕПРАВИЛЬНО: 'A', 'B', 'C' — варианты должны быть ПОЛНЫМИ описаниями действий! "
-            "Никогда не указывайте название роли или тип личности в вариантах ответа — только действия. "
-            "Каждый вариант (value) должен быть развёрнутым предложением минимум из 5-7 слов, описывающим конкретное действие. "
-            "КРИТИЧНО: Если ты генерируешь НЕСКОЛЬКО наборов вопросов, КАЖДЫЙ набор обязан быть одинаково проработан — "
-            "с тем же уровнем детализации, длины и атмосферности, что и первый. Категорически запрещено «уставать» и упрощать текст "
-            "в последних наборах генерации: никаких сокращённых text вроде «Двигатель перегревается. Нужно действовать быстро.» или "
-            "«Чужое существо в клетке. Оно смотрит на вас.» и никаких вариантов ответа из 1-2 слов («Бежать», «Отдохнуть», «Стрелять», "
-            "«Купить еду»). Каждый text — от 150 символов, каждый value — развёрнутое действие. Качество последнего набора должно "
-            "совпадать с качеством первого — это строгое требование, а не пожелание. "
-            "КРИТИЧНО: Соблюдай ограничения по длине текста для Telegram! Поле text вопроса — от 150 до 350 символов. "
-            "Каждый вариант ответа (поле value) — НЕ БОЛЕЕ 150 символов. "
-            "Это нужно, чтобы весь текст вопроса с вариантами поместился в подпись к картинке в Telegram (лимит 1024 символа). "
-            "ПОЛЕ text ДОЛЖНО БЫТЬ АТМОСФЕРНЫМ и КИНЕМАТОГРАФИЧНЫМ — это сцена, в которую игрок проваливается. "
-            "Опиши окружение, звуки, свет, запахи, что чувствует и видит персонаж в этот момент. "
-            "НЕ ЗАКАНЧИВАЙ text риторическим вопросом вроде «Что делаешь?», «Твои действия?», «Как поступишь?», «Твой выбор?» — "
-            "варианты ответа и так описывают действия, вопрос-хвост избыточен и делает текст однообразным. "
-            "Заканчивай description-ем напряжения или развилки без вопроса. "
-            "ПРИМЕРЫ хорошего text (атмосферно, без хвоста-вопроса): "
-            "'В машинном отделении гаснет свет. Под ногами дрожит палуба, из разорванного трубопровода шипит перегретый пар. "
-            "Сквозь рёв тревоги пробивается мигание красных аварийных ламп — и твой долгожданный отпуск превращается в кошмар.'; "
-            "'На обзорном экране мостика зависает чужой корабль. Его корпус покрыт рунами, которых нет ни в одной базе данных Звёздного Флота. "
-            "Голографический интерфейс пульсирует холодным синим, а по громкой связи раздаётся голос на языке, понятном только тебе.' "
-            "ВАЖНО: эти примеры — только ДЕМОНСТРИРУЮТ уровень атмосферности поля text, "
-            "их топики (поломка двигателя в машинном отделении, чужой корабль с рунами на мостике) "
-            "СЛИШКОМ ИЗЪЕДЕНЫ — НЕ используй эти два сценария вообще. "
-            "Также избегай и других клише онбординга: вспышка неизвестной болезни в медблоке, "
-            "потеря управления при пилотировании, тест системы безопасности. "
-            "Каждый раз выбирай СВОИ оригинальные сценарии из РАЗНЫХ локаций и с РАЗНЫМ источником угрозы. "
-            "КРИТИЧНО: Все варианты ответа в одном вопросе должны быть РАЗЛИЧНЫМИ и описывать РАЗНЫЕ действия. "
-            "Не допускай одинаковых или очень похожих вариантов — каждый должен представлять уникальный подход. "
-            "Вопросы должны покрывать разные аспекты: реакция на опасность, работа с техникой, взаимодействие с экипажем, "
-            "исследование неизвестного, принятие решений в кризисе. "
-            "Все тексты на русском языке.\n\n"
-            "КРИТИЧНО: Каждый вариант ответа (option) должен содержать поле role_scores — это объект с очками для ролей. "
-            f"Доступные роли (ключи): {role_keys_str}. "
-            "Каждому варианту назначь от 1 до 3 ролей, которым это действие больше всего подходит, с очками от 1 до 3. "
-            "Остальным ролям поставь 0. Очки отражают насколько выбранное действие характерно для данной роли. "
-            "ПРИМЕР role_scores для действия 'Починить варп-двигатель': "
-            f"{example_role_scores_json}. "
-            "ВАЖНО: В каждом вопросе варианты должны давать очки РАЗНЫМ ролям — чтобы каждый вопрос помогал отличать игроков.\n\n" + hint + "Текст вопроса (text) и все варианты ответов (value) — строго НА РУССКОМ ЯЗЫКЕ.\n"
-            "Поле image_prompt — это отдельное поле в JSON, которое должно быть НА АНГЛИЙСКОМ ЯЗЫКЕ (для генерации картинок).\n"
-            "КРИТИЧНО: image_prompt обязан ВИЗУАЛЬНО СОВПАДАТЬ с text — не «про ту же тему», а та же сцена с теми же объектами. "
-            "ПЕРЕНОСИ ВСЕ конкретные визуальные детали из text в image_prompt: форму, размер, цвет, источник света, "
-            "именованные объекты, материалы, позы/выражения персонажей. "
-            "ЗАПРЕЩЕНО заменять конкретный объект обобщённым словом: если text говорит «геометрически идеальный куб со стороной в километр, "
-            "поверхность поглощает свет, из центра бьёт узкий луч» — image_prompt обязан содержать «kilometre-wide geometrically perfect cube, "
-            "light-absorbing surface, narrow beam from its centre», а НЕ «massive alien artifact». "
-            "Если text не называет конкретный объект, описывай буквально окружение из text. "
-            "Для КАЖДОГО вопроса сгенерируй image_prompt — детальный промпт на АНГЛИЙСКОМ для генерации изображения сцены. "
-            "Промпт должен быть кинематографичным, sci-fi/space opera, 4K. "
-            "ПРИМЕР соответствия text ↔ image_prompt (только для поля image_prompt, не для текста вопроса): "
-            "если text: «На главном экране мостика зависает конструкт — геометрически идеальный куб, чёрная поверхность поглощает свет, "
-            "из центра бьёт узкий луч в сторону корабля, красные лампы аварийной тревоги», то "
-            "image_prompt: \"Starship bridge viewed through a large viewport, a geometrically perfect kilometre-wide black cube floating in space, "
-            "its surface absorbing all light, a narrow beam lancing from its centre toward the ship, red emergency lamps pulsing on the bridge, "
-            "cinematic 4K space opera.\" "
-            "Отделяй русский текст вопроса от английского image_prompt. "
-        )
-    else:
-        system = (
-            "You are a narrative designer for a sci-fi space opera game (in the spirit of Mass Effect, Star Trek). "
-            "Your task is to write atmospheric, cinematic scenario situations for onboarding new players. "
-            "Each situation must place the player inside a living scene: sounds, smells, light, tension, environmental details — "
-            "not just a dry statement that something broke."
-        )
-        hint = (
-            underrepresented_hint
-            if not underrepresented_hint
-            else f"🎯 SPECIAL NOTE: The following roles have received the fewest points in previous sessions: {underrepresented_hint}. Pay special attention to them — create at least 2-3 interesting answer options for each.\n\n"
-        )
-        user = (
-            f"Generate {questions_count} onboarding questions for a starship crew game. "
-            f"Each question is a specific situation aboard a ship or during a mission with {options_count} ACTION choices. "
-            "CRITICAL: Each option (the value field) must describe a SPECIFIC ACTION the player would take in this situation. "
-            "CORRECT example: 'Run to engineering and try to repair the warp drive', "
-            "'Activate emergency shields and call for backup'. "
-            "INCORRECT: 'Engineer - technical specialist', 'Scientist - bold, seeking breakthrough'. "
-            "INCORRECT: 'A', 'B', 'C' — options must be FULL action descriptions, NOT single letters! "
-            "NEVER include role names or personality types in options — only actions. "
-            "Each option (value) must be a detailed sentence of at least 5-7 words describing a specific action. "
-            "CRITICAL: If you are generating MULTIPLE question sets, EVERY set must be equally detailed and polished — "
-            "the same level of detail, length, and atmosphere as the first set. NEVER degrade into shorter or simpler text "
-            "in later sets: no truncated text like 'Engine overheating. Act fast.' or 'Alien creature in a cage. It watches you.' "
-            "and no 1-2 word options ('Run', 'Rest', 'Shoot', 'Buy food'). Every text — 150+ characters, every value — a full action sentence. "
-            "The quality of the last set must match the quality of the first set; this is a hard requirement, not a suggestion. "
-            "CRITICAL: Respect Telegram character limits! The text field (question text) — 150 to 350 characters. "
-            "Each option value — MAX 150 characters. "
-            "This is needed so the full question text with options fits in a Telegram photo caption (1024 char limit). "
-            "THE text FIELD MUST BE ATMOSPHERIC and CINEMATIC — it is a scene the player drops into. "
-            "Describe the surroundings, sounds, light, smells, what the character feels and sees in that moment. "
-            "DO NOT END text with a rhetorical question like 'What do you do?', 'Your actions?', 'How do you proceed?', 'Your choice?' — "
-            "the options already describe actions, a trailing question is redundant and makes the text repetitive. "
-            "End with a depiction of tension or the fork in the road, without a question. "
-            "EXAMPLES of good text (atmospheric, no trailing question): "
-            "'The lights in engineering die. The deck shudders underfoot, and superheated steam hisses from a ruptured conduit. "
-            "Through the blare of the alarm, the crimson pulse of emergency lamps breaks through — and your long-awaited shore leave turns into a nightmare.'; "
-            "'An unknown ship hangs motionless on the bridge's main viewscreen. Its hull is etched with runes found in no Starfleet database. "
-            "The holographic interface throbs cold blue, and over the comm comes a voice in a language only you seem to understand.' "
-            "IMPORTANT: these examples only DEMONSTRATE the level of atmosphere expected in the text field — "
-            "their topics (engine failure in engineering, alien ship with runes on the bridge) ARE TIRED CLICHES: "
-            "do NOT use those two scenarios at all. "
-            "Also avoid other onboarding cliches: a mystery outbreak in medbay, a piloting loss of control, a security system test. "
-            "Each time pick your OWN original scenarios from DIFFERENT locations and with DIFFERENT threat origins. "
-            "CRITICAL: All answer options for one question must be DIFFERENT and describe DIFFERENT actions. "
-            "Do not allow identical or very similar options — each should represent a unique approach. "
-            "Questions should cover different aspects: danger response, technical work, crew interaction, "
-            "exploration, crisis decision-making. "
-            "All text in English.\n\n"
-            "CRITICAL: Each option must include a role_scores field — an object mapping roles to points. "
-            f"Available roles (keys): {role_keys_str}. "
-            "Assign 1-3 roles that this action best suits, with 1-3 points each. "
-            "Set all other roles to 0. Points reflect how characteristic this action is for that role. "
-            "EXAMPLE role_scores for 'Repair the warp drive': "
-            f"{example_role_scores_json}. "
-            "IMPORTANT: Options in each question should give points to DIFFERENT roles — so each question helps distinguish players.\n\n" + hint + "Question text (text) and all option values — strictly in ENGLISH.\n"
-            "CRITICAL: image_prompt must VISUALLY MATCH the text — not merely \"the same topic\" but the same scene with the same objects. "
-            "CARRY OVER EVERY concrete visual detail from text into image_prompt: shape, size, color, light source, named objects, materials, character poses/expressions. "
-            "NEVER replace a specific object with a generic word: if text says \"a geometrically perfect kilometre-wide cube whose surface absorbs light, with a narrow beam from its centre\", "
-            "image_prompt must say exactly that — \"a geometrically perfect kilometre-wide cube, light-absorbing surface, narrow beam from its centre\" — NOT \"a massive alien artifact\". "
-            "If text names no specific object, describe the literal environment from text. "
-            "For EACH question generate an image_prompt — a detailed English prompt for the scene image. "
-            "The prompt should be cinematic, sci-fi/space opera, 4K quality. "
-            "EXAMPLE of text ↔ image_prompt correspondence (image_prompt only): "
-            "if text is \"On the bridge's main screen hangs a construct — a geometrically perfect cube, its black surface absorbs light, a narrow beam lances from its centre toward the ship, red emergency lamps pulsing\", "
-            "then image_prompt: \"Starship bridge viewed through a large viewport, a geometrically perfect kilometre-wide black cube floating in space, its surface absorbing all light, a narrow beam lancing from its centre toward the ship, red emergency lamps pulsing on the bridge, cinematic 4K space opera.\" "
-        )
-    if use_vs:
-        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["onboarding_questions"], k=vs_k)
-    return system, user
-
-
 # ── Game title generation prompts ──────────────────────────────────
 
 
@@ -1152,106 +1026,6 @@ def build_player_message_prompts(
 
 # ── Species description prompts
 # ── Species description prompts ────────────────────────────────────
-
-
-def build_species_description_prompts(
-    language: str,
-    role: str,
-    species_display: str,
-    species_secondary: str | None,
-    species_hybrid: bool,
-    gender_display: str,
-    gender_secondary: str | None,
-    gender_hybrid: bool,
-    *,
-    use_vs: bool,
-    vs_k: int,
-) -> tuple[str, str]:
-    """Build system and user prompts for species description generation."""
-    # A human/humanoid must be described as a person, not as an alien being.
-    # The unconditional "describe how alien beings look" framing used to make
-    # the LLM invent non-human physiology (extra limbs, carapaces, plasma
-    # bodies) even for a Human species — which then contradicted species in the
-    # avatar pipeline. Frame non-human/hybrid species as alien creatures, but
-    # human/humanoid as a Starfleet crew member.
-    # Match whole words only, and reject negated forms: "негуманоид" and
-    # "non-humanoid" must NOT match the "гуманоид"/"humanoid" substring.
-    _neg = re.search(r"\b(не|non|not)\b", species_display.lower()) or species_display.lower().startswith(("не", "non"))
-    _has_token = any(
-        re.search(rf"\b{tok}\b", species_display.lower())
-        for tok in ("человек", "гуманоид", "human", "humanoid")
-    )
-    is_human_like = _has_token and not _neg
-    if language == LANGUAGE_RU:
-        species_note = f"Тип расы: {species_display}" + (f" (гибрид с {species_secondary})" if species_hybrid else "") + f"\nТип пола: {gender_display}" + (f" (гибрид с {gender_secondary})" if gender_hybrid else "")
-        if is_human_like:
-            system = (
-                "Ты — креативный писатель-фантаст, создающий описания членов звёздного экипажа. "
-                "Опиши человека/гуманоида — внешность, манеру держаться, атмосферу вокруг него. "
-                "Будь атмосферным и детальным. НЕ придумывай нечеловеческую физиологию (никаких "
-                "щупалец, панцирей, плазмы, лишних конечностей) — это человекообразный персонаж."
-            )
-            anatomy_guard = "Это человек/гуманоид: две руки, две ноги, человеческое лицо. Опиши его как живого человека в форме Starfleet."
-        else:
-            system = (
-                "Ты — креативный писатель-фантаст, создающий описания инопланетных персонажей. "
-                "Опиши, как выглядят и ощущают себя существа такого типа. Будь атмосферным и детальным."
-            )
-            anatomy_guard = "Это инопланетное существо: опиши его нечеловеческую физиологию по типу расы."
-        user = (
-            f"Создай яркое нарративное описание персонажа для космической игры Star Trek.\n\n"
-            f"Роль: {role}\n"
-            f"{species_note}\n"
-            f"{anatomy_guard}\n\n"
-            f"Опиши:\n"
-            f"1. Как выглядит и ощущает себя этот персонаж (внешность, физиология, текстура, свечение и т.д.)\n"
-            f"2. Как пол/форма размножения проявляется в их культуре и самовосприятии\n"
-            f"3. Единый образ — как расовые и половые черты сливаются в одну личность\n\n"
-            f"Текст на русском языке, 3-5 предложений, атмосферный и кинематографичный."
-        )
-    else:
-        species_note = f"Species type: {species_display}" + (f" (hybrid with {species_secondary})" if species_hybrid else "") + f"\nGender type: {gender_display}" + (f" (hybrid with {gender_secondary})" if gender_hybrid else "")
-        if is_human_like:
-            system = (
-                "You are a creative sci-fi writer crafting descriptions of starship crew members. "
-                "Describe a human/humanoid — their appearance, bearing, and the atmosphere around them. "
-                "Be atmospheric and detailed. Do NOT invent non-human physiology (no tentacles, "
-                "carapaces, plasma, or extra limbs) — this is a human-shaped character."
-            )
-            anatomy_guard = "This is a human/humanoid: two arms, two legs, a human face. Describe them as a living person in a Starfleet uniform."
-        else:
-            system = (
-                "You are a creative sci-fi writer crafting descriptions of alien characters. "
-                "Describe how beings of this type look and feel. Be atmospheric and detailed."
-            )
-            anatomy_guard = "This is an alien being: describe its non-human physiology per its species type."
-        user = (
-            f"Create a vivid narrative description of a character for a Star Trek-style space game.\n\n"
-            f"Role: {role}\n"
-            f"{species_note}\n"
-            f"{anatomy_guard}\n\n"
-            f"Describe:\n"
-            f"1. How this character looks and feels (appearance, physiology, texture, glow, etc.)\n"
-            f"2. How their gender/reproductive form manifests in their culture and self-perception\n"
-            f"3. A unified image — how species and gender traits merge into one personality\n\n"
-            f"Text in English, 3-5 sentences, atmospheric and cinematic."
-        )
-    if use_vs:
-        if is_human_like:
-            # For humans the diversity axes are human traits only — never
-            # non-humanoid body plans or alien textures (the default hint
-            # would push the LLM back into inventing alien physiology).
-            hint = (
-                "Vary across these axes:\n"
-                "- Age and build (young/lean, middle-aged/sturdy, older/weathered)\n"
-                "- Ethnicity and complexion (varied human phenotypes)\n"
-                "- Demeanor (calm, intense, weary, cheerful)\n"
-                "- All options MUST remain human: two arms, two legs, a human face.\n"
-            )
-        else:
-            hint = DIVERSITY_HINTS["species_description"]
-        system, user = verbalize_prompt(system, user, hint, k=vs_k)
-    return system, user
 
 
 # ── Role flavour prompts ───────────────────────────────────────────

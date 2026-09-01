@@ -24,7 +24,6 @@ import re
 import time
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote
 
 import aiohttp
 import language as lang
@@ -42,7 +41,6 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InputMediaPhoto,
     KeyboardButton,
-    ReactionTypeEmoji,
     ReplyKeyboardMarkup,
 )
 from aiogram.utils.deep_linking import create_start_link, decode_payload
@@ -195,11 +193,9 @@ GAME_OVER_GM_LABEL_KEYS = {
 
 
 class OnboardingState(StatesGroup):
-    """State machine for onboarding flow"""
+    """State machine for onboarding flow (character proposal yes/no decision)"""
 
-    waiting_for_name = State()
-    waiting_for_answer = State()
-    completed = State()
+    waiting_for_decision = State()
 
 
 class GameSessionState(StatesGroup):
@@ -662,129 +658,77 @@ async def send_random_splash_image(message: types.Message, caption: str, reply_m
     return False
 
 
-async def send_question_with_image(
-    bot_or_message: types.Message,
-    question: dict,
-    keyboard: InlineKeyboardMarkup,
+def format_character_card(proposal: dict, language: str, final: bool = False) -> str:
+    """Build the character proposal card text (role, species, gender, flavour)."""
+    msgs = lang.get_onboarding(language)
+    profile_msgs = lang.get_profile(language)
+
+    species = proposal.get("species") or "—"
+    if proposal.get("species_secondary"):
+        species = profile_msgs["hybrid_species"].format(primary=species, secondary=proposal["species_secondary"])
+    gender = proposal.get("gender") or "—"
+
+    card_key = "character_card_forced" if final else "character_card"
+    return msgs[card_key].format(
+        role=escape_markdown(proposal.get("role", "")),
+        species=escape_markdown(species),
+        gender=escape_markdown(gender),
+        role_description=escape_markdown(proposal.get("role_description", "")),
+        traits=escape_markdown("\n- ".join(proposal.get("personality_traits", []))),
+    )
+
+
+def create_character_keyboard(session_id: str, language: str) -> InlineKeyboardMarkup:
+    """Create the yes/no keyboard under a character proposal card."""
+    msgs = lang.get_onboarding(language)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=msgs["character_accept_button"],
+                    callback_data=f"onb_dec:{session_id}:yes",
+                ),
+                InlineKeyboardButton(
+                    text=msgs["character_reroll_button"],
+                    callback_data=f"onb_dec:{session_id}:no",
+                ),
+            ],
+        ]
+    )
+
+
+async def send_character_card(
+    message: types.Message,
+    proposal: dict,
+    session_id: str,
     language: str,
-) -> str:
-    """Send a question to the player, optionally with an image.
+    final: bool = False,
+) -> None:
+    """Send a character proposal card: avatar photo + role/species/gender caption."""
+    card_text = format_character_card(proposal, language, final=final)
+    keyboard = None if final else create_character_keyboard(session_id, language)
 
-    If the question has an image_url, sends it as a photo with caption.
-    Otherwise sends plain text.
-    Returns the question text that was displayed.
-    """
-    image_url = question.get("image_url")
-    options = question.get("options", [])
-
-    # Use label for display when available (species/gender questions), fall back to value
-    def _option_display(opt: dict, idx: int) -> str:
-        return f"{idx + 1}. {escape_markdown(opt.get('label', opt['value']))}"
-
-    options_text = "\n\n".join([_option_display(opt, i) for i, opt in enumerate(options)])
-    situation_text = lang.get_onboarding(language)["question_prefix"].format(id=question["id"], text=escape_markdown(question["text"]))
-    if options_text:
-        question_text = f"{situation_text}\n\n---\n\n{options_text}"
-    else:
-        question_text = situation_text
-
-    if image_url:
+    avatar_url = proposal.get("avatar_url")
+    if avatar_url:
         try:
             async with aiohttp.ClientSession() as session:
                 resp = await session.get(
-                    image_url,
+                    avatar_url,
                     timeout=aiohttp.ClientTimeout(total=30),
                 )
                 if resp.status == 200:
                     photo_data = await resp.read()
-                    photo = BufferedInputFile(photo_data, filename=f"q_{question['id']}.png")
-                    if len(question_text) <= TELEGRAM_CAPTION_LIMIT:
-                        await bot_or_message.answer_photo(
-                            photo=photo,
-                            caption=question_text,
-                            parse_mode="Markdown",
-                            reply_markup=keyboard,
-                        )
-                    elif options_text and len(situation_text) <= TELEGRAM_CAPTION_LIMIT:
-                        # Caption too long: image keeps the situation, options
-                        # go in a follow-up message carrying the keyboard.
-                        await bot_or_message.answer_photo(
-                            photo=photo,
-                            caption=situation_text,
-                            parse_mode="Markdown",
-                        )
-                        await bot_or_message.answer(
-                            text=options_text,
-                            parse_mode="Markdown",
-                            reply_markup=keyboard,
-                        )
-                    else:
-                        await bot_or_message.answer_photo(photo=photo)
-                        await bot_or_message.answer(
-                            text=question_text,
-                            parse_mode="Markdown",
-                            reply_markup=keyboard,
-                        )
-                    return question_text
+                    photo = BufferedInputFile(photo_data, filename=f"character_{session_id}.png")
+                    if len(card_text) <= TELEGRAM_CAPTION_LIMIT:
+                        await message.answer_photo(photo=photo, caption=card_text, parse_mode="Markdown", reply_markup=keyboard)
+                        return
+                    await message.answer_photo(photo=photo, parse_mode="Markdown")
                 else:
-                    logger.warning(f"Failed to download question image (question_id={question['id']}): {resp.status}")
+                    logger.warning(f"Failed to download character avatar: HTTP {resp.status}")
         except Exception as e:
-            logger.warning(f"Failed to send question image (question_id={question['id']}): {e}", exc_info=True)
+            logger.warning(f"Failed to send character avatar: {e}", exc_info=True)
 
-    # Check for option-level images (species/gender questions)
-    has_option_images = any(opt.get("image_url") for opt in options)
-
-    if has_option_images:
-        # Download all option images and send as a media group
-        media_group = []
-        for i, opt in enumerate(options):
-            opt_url = opt.get("image_url")
-            if not opt_url:
-                continue
-            try:
-                async with aiohttp.ClientSession() as session:
-                    resp = await session.get(
-                        opt_url,
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    )
-                    if resp.status == 200:
-                        photo_data = await resp.read()
-                        photo = BufferedInputFile(photo_data, filename=f"opt_{question['id']}_{i}.png")
-                        caption = f"{i + 1}. {escape_markdown(opt.get('label', opt['value']))}"
-                        media_group.append(
-                            InputMediaPhoto(
-                                media=photo,
-                                caption=caption,
-                                parse_mode="Markdown",
-                            )
-                        )
-                    else:
-                        logger.warning(f"Failed to download option image {i}: {resp.status}")
-            except Exception as e:
-                logger.warning(f"Failed to download option image {i}: {e}")
-
-        if media_group:
-            try:
-                await bot_or_message.answer_media_group(media=media_group)
-                logger.info(f"Sent onboarding question media group (question_id={question['id']}, images={len(media_group)})")
-            except Exception as e:
-                logger.warning(f"Failed to send option media group (question_id={question['id']}): {e}")
-
-        # Send question text + inline keyboard as separate message
-        await bot_or_message.answer(
-            question_text,
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
-        return question_text
-
-    # No image or download failed: send text only
-    await bot_or_message.answer(
-        question_text,
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
-    return question_text
+    await message.answer(card_text, parse_mode="Markdown", reply_markup=keyboard)
 
 
 async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
@@ -801,8 +745,9 @@ async def check_player_game_status(player_id: int) -> dict[str, Any] | None:
         return None
 
 
-async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
-    """Generate avatar, then send onboarding complete message with avatar, then notify others."""
+async def _finalize_onboarding(player_id: int, session_id: str, bot: Bot):
+    """Accept the pending character server-side, then send the onboarding
+    complete message with avatar and notify the other players."""
     try:
         result = await api_request(
             "POST",
@@ -815,12 +760,21 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         if result is None:
             logger.error(f"Onboarding completion returned no result for player {player_id}", stack_info=True)
             return
+        await _send_onboarding_completion(bot, player_id, result)
+    except Exception as e:
+        logger.error(f"Failed to finalize onboarding for player {player_id}: {e}", exc_info=True)
+        error_msgs = lang.get_errors(get_player_language(player_id))
+        await bot.send_message(chat_id=player_id, text=error_msgs["onboarding_error"].format(error=str(e)))
+
+
+async def _send_onboarding_completion(bot: Bot, player_id: int, result: dict[str, Any]) -> None:
+    """Send the welcome-aboard message with avatar, game status and mission info."""
+    try:
         avatar_url = result.get("avatar_url")
         profile = result.get("profile", {})
         game_started = result.get("game_started", False)
         game_just_started = result.get("game_just_started", False)
         other_player_ids = result.get("other_player_ids", [])
-        game_title = result.get("game_title", "")
         game_language = result.get("language", DEFAULT_LANGUAGE)
 
         onboarding_msgs = lang.get_onboarding(game_language)
@@ -1049,6 +1003,10 @@ async def _generate_and_send_avatar(player_id: int, session_id: str, bot: Bot):
         except Exception as e:
             logger.warning(f"Failed to broadcast for player {player_id}: {e}")
 
+        # Onboarding is finished — clear the active session marker so /start
+        # no longer routes the player into the onboarding restore branch.
+        update_player_state(player_id, onboarding_session_id=None)
+
     except Exception as e:
         logger.error(f"Avatar generation/sending failed for player {player_id}: {e}", exc_info=True)
         try:
@@ -1216,105 +1174,6 @@ async def _broadcast_game_started(new_player_id: int, profile: dict, other_playe
         logger.error(f"Broadcast game started failed: {e}", exc_info=True)
 
 
-def wrap_text(text: str, width: int) -> str:
-    """Wrap text into multiple lines for Telegram button.
-
-    Telegram inline buttons have limited width. This function splits
-    long text into multiple lines at word boundaries.
-    """
-    words = text.split()
-    lines = []
-    current_line = []
-    current_length = 0
-
-    for word in words:
-        if current_length + len(word) + 1 <= width:
-            current_line.append(word)
-            current_length += len(word) + 1
-        else:
-            if current_line:
-                lines.append(" ".join(current_line))
-            current_line = [word]
-            current_length = len(word)
-
-    if current_line:
-        lines.append(" ".join(current_line))
-
-    return "\n".join(lines)
-
-
-def create_onboarding_keyboard(options: list, question_id: int, selected_index: int | None) -> InlineKeyboardMarkup:
-    """Create inline keyboard for onboarding options.
-
-    Buttons show numbers [1] [2] [3] etc. attached to the message
-    itself — unlike ReplyKeyboardMarkup, these CANNOT be dismissed
-    by the user, ensuring they always have a way to answer.
-
-    If selected_index is provided, that button gets a ✅ prefix
-    to visually indicate the player's choice.
-    """
-    builder = InlineKeyboardBuilder()
-    for idx in range(len(options)):
-        if selected_index == idx:
-            text = f"✅ {idx + 1}"
-        else:
-            text = str(idx + 1)
-        builder.add(
-            InlineKeyboardButton(
-                text=text,
-                callback_data=f"onb_ans:{question_id}:{idx}",
-            )
-        )
-    builder.adjust(len(options))
-    return builder.as_markup()
-
-
-def _options_have_sg_tags(options: list | None) -> bool:
-    """True if any option carries species_tags or gender_tags (species/gender phase)."""
-    return any(opt.get("species_tags") or opt.get("gender_tags") for opt in (options or []))
-
-
-async def _maybe_show_sg_progress_message(
-    message: types.Message,
-    *,
-    current_options: list | None,
-    current_question_id,
-    role_count,
-    sg_count,
-    language: str,
-) -> None:
-    """Show a 'please wait' heads-up before the slow species/gender question generation.
-
-    The next species/gender question is built on demand by the LLM (30-60s) inside
-    the /onboarding/answer call, so feedback must appear BEFORE that blocking call.
-
-    Callers MUST pass the reconciled question id/options (after syncing the FSM with
-    player_store). Passing the raw FSM state_data is wrong: species/gender questions
-    arrive via /push/onboarding-ready, which updates player_store but NOT the FSM, so
-    state_data can still point at the last role question — and every species/gender
-    answer would then be misclassified as the role→sg transition.
-
-    - Transitioning from role questions into the species/gender phase (just answered
-      the last role question): send a loading image explaining the 5 upcoming questions.
-    - Already answering a species/gender question (and not the final one): send a
-      short 'generating next question' message.
-    """
-    if not _options_have_sg_tags(current_options):
-        # Role question — the species/gender phase starts right after the last one.
-        if role_count and current_question_id == role_count:
-            await message.answer(lang.get_images(language)["sg_intro_caption"])
-        return
-
-    # Answering a species/gender question: skip the 'generating next question' line
-    # on the final question (onboarding completes instead of producing a next one).
-    last_sg_id = (role_count + sg_count) if (role_count and sg_count) else None
-    if last_sg_id and current_question_id == last_sg_id:
-        return
-
-    msgs = lang.get_onboarding(language)
-    await message.answer(msgs["generating_next_question"])
-
-
 def create_main_menu_keyboard(language: str) -> ReplyKeyboardMarkup:
     """Create compact main menu keyboard with horizontal button layout"""
     menu = lang.get_menu(language)
@@ -1407,69 +1266,24 @@ def _validate_schedule_format(raw: str) -> bool:
     return bool(re.match(r"^\d+[hms]$", s))
 
 
-async def show_player_language_selection(message: types.Message, state: FSMContext):
-    """Show language selection for the player before showing game list."""
-    lang_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"{lang.HELLO['ru']} {lang.get_language_flag('ru')}",
-                    callback_data="player_lang:ru",
-                ),
-                InlineKeyboardButton(
-                    text=f"{lang.HELLO['en']} {lang.get_language_flag('en')}",
-                    callback_data="player_lang:en",
-                ),
-            ],
-        ]
-    )
-    await message.answer(
-        "> " * 5 + "🌐" + " <" * 5 + "\n\n",
-        reply_markup=lang_keyboard,
-    )
-    await state.set_state(GameSelectionState.waiting_for_game_selection)
+def _detect_language(from_user: types.User | None) -> str:
+    """Derive the player's language from their Telegram client locale.
+
+    Russian-speaking clients get ru, everyone else gets en. The player can
+    always change it later with /lang.
+    """
+    code = (from_user.language_code or "").lower() if from_user else ""
+    return lang.LANGUAGE_RU if code.startswith("ru") else lang.LANGUAGE_EN
 
 
-async def player_language_selection_callback(callback: types.CallbackQuery, state: FSMContext):
-    """Handle player's language choice, then show game list."""
-    await callback.answer()
-
-    data = callback.data or ""
-    if not data.startswith("player_lang:"):
-        return
-
-    lang_code = data.split(":", 1)[1]
-    if lang_code not in ("ru", "en"):
-        return
-
-    player_id = callback.from_user.id
-    logger.info("[HANDLER] player_language_selection_callback")
-    message = callback.message
-
-    if not isinstance(message, types.Message):
-        return
-
-    # Store player's language preference
-    await state.update_data(player_language=lang_code)
-    update_player_state(player_id, language=lang_code)
-
-    # Remove language keyboard
-    try:
-        await message.edit_reply_markup(reply_markup=None)
-    except Exception as e:
-        logger.error(f"Failed to remove language keyboard: {e}", exc_info=True)
-
-    # Confirm language selection
-    onboarding_msgs = lang.get_onboarding(lang_code)
-    lang_flag = lang.get_language_flag(lang_code)
-    lang_name = lang.get_language_name(lang_code, lang_code)
-    await message.answer(
-        onboarding_msgs["language_confirmation"].format(language=lang_name, flag=lang_flag),
-        parse_mode="Markdown",
-    )
-
-    # Now show game list in chosen language
-    await show_game_selection(message, state, language=lang_code)
+def _ensure_player_language(player_id: int, from_user: types.User | None) -> str:
+    """Return the player's stored language, detecting and storing it on first contact."""
+    stored = get_player_state(player_id).get("language")
+    if stored in (lang.LANGUAGE_RU, lang.LANGUAGE_EN):
+        return stored
+    detected = _detect_language(from_user)
+    update_player_state(player_id, language=detected)
+    return detected
 
 
 async def lang_set_callback(callback: types.CallbackQuery):
@@ -1579,15 +1393,21 @@ async def start_onboarding_flow(
     player_name: str,
     language: str,
 ):
-    """Start onboarding flow with a specific game_id and optional player_name.
+    """Start onboarding for a game: create a session on the server.
 
-    Uses game language from state if set, otherwise falls back to DEFAULT_LANGUAGE.
+    The server rolls a random character in the background and delivers the
+    proposal card via /push/onboarding-ready. The player then answers with
+    the yes/no buttons on the card.
     """
     effective_language = language or DEFAULT_LANGUAGE
-    msgs = lang.get_onboarding(effective_language)
 
     try:
         logger.info(f"Starting onboarding for player_id={player_id}, game_id={game_id}, player_name={player_name}, language={effective_language}")
+
+        # The first player of a game also waits for the game concept
+        # (mission + title) — show a loading image up front.
+        await send_random_loading_image(message, caption_key="onboarding_wait", language=effective_language, game_id=game_id)
+
         result = await api_request(
             "POST",
             "/onboarding/start",
@@ -1611,57 +1431,19 @@ async def start_onboarding_flow(
         if not session_id:
             raise Exception("No session ID returned from API")
 
-        question = result.get("question")
-        if not question:
-            raise Exception("No question returned from API")
-
-        pending_images = result.get("pending_images", False)
-
-        # Always save session + question state so it survives restarts
+        # Always save session state so it survives restarts
         await state.update_data(
             session_id=session_id,
             game_id=resolved_game_id,
-            current_question_id=question["id"],
-            current_options=question["options"],
-            role_question_count=result.get("role_question_count"),
-            species_gender_question_count=result.get("species_gender_question_count"),
         )
         update_player_state(
             player_id,
             onboarding_session_id=session_id,
             game_id=resolved_game_id,
-            current_question_id=question["id"],
-            current_options=question["options"],
-            current_question_text=question["text"],
-            current_question_image_url=question.get("image_url"),
+            language=effective_language,
         )
-
-        if pending_images:
-            # Images are being generated in background.
-            # The "please wait" message was already sent in handle_onboarding_name
-            # before calling us. The actual question with images will be delivered
-            # via /push/onboarding-ready.
-            await state.set_state(OnboardingState.waiting_for_answer)
-            logger.info(f"Onboarding pending_images for player {player_id}, waiting for push")
-        else:
-            # Backward-compat / fast path: images already available
-            welcome_text = result.get("welcome_message") or msgs["welcome"]
-            game_title = result.get("game_title", "")
-            if game_title:
-                welcome_text = f"*{game_title}*\n\n{welcome_text}" if welcome_text else f"*{game_title}*"
-
-            splash_sent = await send_random_splash_image(message, welcome_text, None, game_id)
-            if not splash_sent:
-                await message.answer(welcome_text, parse_mode="Markdown")
-
-            logger.info(f"First onboarding question: id={question['id']}, text={question['text']}...")
-            logger.info(f"Question options: {[opt['value'] for opt in question['options']]}")
-            if question.get("image_url"):
-                logger.info(f"Question has image: {question['image_url']}")
-
-            keyboard = create_onboarding_keyboard(question["options"], question["id"], None)
-            await send_question_with_image(message, question, keyboard, effective_language)
-            await state.set_state(OnboardingState.waiting_for_answer)
+        await state.set_state(OnboardingState.waiting_for_decision)
+        logger.info(f"Onboarding session {session_id} started for player {player_id}, waiting for character proposal push")
 
     except Exception as e:
         error_str = str(e)
@@ -1719,39 +1501,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             if not game_id:
                 raise Exception("No game_id selected")
 
-            # Fetch game language and name from API
-            game_lang = player_lang
-            game_name = ""
-            try:
-                result = await api_request("GET", "/admin/list-games", data=None, params={"include_ended": "false"}, timeout_total=600, ignore_codes=())
-                games = result.get("games", []) if result else []
-                for g in games:
-                    if g.get("game_id") == game_id:
-                        game_lang = g.get("language", player_lang)
-                        game_name = g.get("name", "")
-                        break
-            except Exception as e:
-                logger.warning(f"Failed to fetch language for game {game_id}: {e}")
-
-            # Show which game the player is joining
-            onboarding_msgs = lang.get_onboarding(game_lang)
-            if game_name:
-                await message.answer(
-                    onboarding_msgs["selected_game"].format(game_name=game_name),
-                    parse_mode="Markdown",
-                )
-
-            # Ask for player name in game's language
-            await message.answer(
-                onboarding_msgs["name_question"],
-                parse_mode="Markdown",
-            )
-
-            await state.update_data(
-                game_id=game_id,
-                game_language=game_lang,
-            )
-            await state.set_state(OnboardingState.waiting_for_name)
+            await _start_join_flow(message, state, game_id, fallback_lang=player_lang)
 
     except Exception as e:
         logger.error(f"Failed to process game selection for player {player_id}: {e}", exc_info=True)
@@ -1780,7 +1530,7 @@ async def _finalize_new_game_creation(
     language: str,
     schedule: str,
 ) -> None:
-    """Create the new game with the chosen schedule and proceed to name input."""
+    """Create the new game with the chosen schedule and start onboarding right away."""
     onboarding_msgs = lang.get_onboarding(language)
     # create_new_game blocks on mission + title + asset generation (~1 min).
     # Tell the player up front so the wait is not silent.
@@ -1794,10 +1544,10 @@ async def _finalize_new_game_creation(
         onboarding_msgs["schedule_set_confirm"].format(label=schedule),
         parse_mode="Markdown",
     )
-    await message.answer(onboarding_msgs["name_question"], parse_mode="Markdown")
 
+    player_name = (message.from_user.first_name if message.from_user else "") or f"Player {player_id}"
     await state.update_data(game_id=game_id, game_language=language)
-    await state.set_state(OnboardingState.waiting_for_name)
+    await start_onboarding_flow(message, state, player_id, game_id, player_name, language=language)
 
 
 async def new_game_schedule_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -1869,70 +1619,23 @@ async def handle_custom_schedule_input(message: types.Message, state: FSMContext
         await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
 
 
-async def handle_onboarding_name(message: types.Message, state: FSMContext):
-    """Handle player name input during onboarding."""
-    if message.from_user is None:
-        return
-    player_id = message.from_user.id
-
-    player_name = message.text.strip() if message.text else ""
-    if not player_name or len(player_name) < 1 or len(player_name) > 50:
-        onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
-        await message.answer(onboarding_msgs["name_length_error"])
-        return
-
-    logger.info(f"Player {player_id} entered name: {player_name}")
-
-    # Guard against re-entry: if onboarding already started, don't start again
-    player_state = get_player_state(player_id)
-    existing_session_id = player_state.get("onboarding_session_id")
-    if existing_session_id:
-        logger.info(f"Player {player_id} already has active session {existing_session_id}, ignoring re-entry")
-        onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
-        await message.answer(onboarding_msgs["already_onboarding"])
-        return
-
-    # Store name in FSM data and proceed to onboarding
-    data = await state.get_data()
-    game_id = data.get("game_id")
-    if not game_id:
-        logger.error(f"Player {player_id} reached name input without game_id in FSM state")
-        onboarding_msgs = lang.get_onboarding(get_player_language(player_id))
-        await message.answer(onboarding_msgs["onboarding_error"].format(error="missing game_id"))
-        await state.clear()
-        return
-    game_language = data.get("game_language", "")
-    effective_lang = game_language or DEFAULT_LANGUAGE
-
-    # Confirm player's name in chosen language
-    onboarding_msgs = lang.get_onboarding(effective_lang)
-    await message.answer(
-        onboarding_msgs["game_name_confirmation"].format(name=player_name),
-        parse_mode="Markdown",
-    )
-
-    # Send loading image with "please wait" caption immediately — the onboarding
-    # API call below takes ~30-60s to generate questions via LLM.
-    await send_random_loading_image(message, caption_key="onboarding_wait", language=effective_lang, game_id=game_id)
-
-    await state.update_data(player_name=player_name)
-
-    # Proceed to the actual onboarding flow with game language if set
-    await start_onboarding_flow(message, state, player_id, game_id, player_name, language=game_language)
-
-
-async def _enter_name_for_game(
+async def _start_join_flow(
     message: types.Message,
     state: FSMContext,
     game_id: str,
     fallback_lang: str,
 ) -> None:
-    """Ask for the player's name to begin onboarding for a specific game.
+    """Begin onboarding for a specific game.
 
     Looks up the game's language and name, announces the selected game, then
-    sets the FSM into ``waiting_for_name``. Shared by the new-player deep-link
-    path and the deep-link conflict "Join" button.
+    starts the onboarding flow immediately — the character name is taken from
+    the Telegram profile. Shared by the game-list selection, the new-player
+    deep-link path and the deep-link conflict "Join" button.
     """
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+
     game_lang = fallback_lang
     game_name = ""
     try:
@@ -1952,15 +1655,13 @@ async def _enter_name_for_game(
             onboarding_msgs["selected_game"].format(game_name=game_name),
             parse_mode="Markdown",
         )
-    await message.answer(
-        onboarding_msgs["name_question"],
-        parse_mode="Markdown",
-    )
+
+    player_name = (message.from_user.first_name or "").strip() or f"Player {player_id}"
     await state.update_data(
         game_id=game_id,
         game_language=game_lang,
     )
-    await state.set_state(OnboardingState.waiting_for_name)
+    await start_onboarding_flow(message, state, player_id, game_id, player_name, language=game_lang)
 
 
 async def _show_deeplink_game_conflict(
@@ -2039,7 +1740,7 @@ async def deeplink_conflict_callback(callback: types.CallbackQuery, state: FSMCo
 
     if action == "join":
         logger.info(f"Player {player_id} chose to join new game {game_id} via deeplink conflict")
-        await _enter_name_for_game(message, state, game_id, fallback_lang=player_lang)
+        await _start_join_flow(message, state, game_id, fallback_lang=player_lang)
     elif action == "back":
         msgs = lang.get_onboarding(player_lang)
         await message.answer(
@@ -2056,108 +1757,83 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
     player_id = message.from_user.id
     logger.info(f"[/start] player_id={player_id} args={command.args!r}")
 
-    player_lang = get_player_language(player_id)
+    player_lang = _ensure_player_language(player_id, message.from_user)
     msgs = lang.get_onboarding(player_lang)
 
-    # Check if player already has an active onboarding session in memory
+    # Check if player already has an active onboarding session
     player_state = get_player_state(player_id)
     session_id = player_state.get("onboarding_session_id")
     if session_id:
         logger.info(f"Player {player_id} already has active onboarding session: {session_id}")
-        current_options = player_state.get("current_options", [])
-        current_question_text = player_state.get("current_question_text")
-        current_question_image_url = player_state.get("current_question_image_url")
-        current_question_id = player_state.get("current_question_id", 1)
 
-        if current_options and current_question_text:
-            # Re-send the current question with image and inline keyboard
+        # Fetch the current proposal from the API (works both for a card that
+        # was pushed and lost, and for a proposal still being generated).
+        try:
+            session_data = await api_request(
+                "GET",
+                f"/onboarding/{session_id}",
+                data=None,
+                params=None,
+                timeout_total=600,
+                ignore_codes=(404,),
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch onboarding session {session_id}: {e}", exc_info=True)
+            session_data = None
+
+        if session_data and session_data.get("completed"):
+            # Session already completed but player never got completion flow.
+            # Re-run the finalization (idempotent) to restore the flow.
+            logger.info(f"Session {session_id} already completed for player {player_id}, triggering completion")
+            await message.answer(
+                msgs["onboarding_complete_restored"],
+                parse_mode="Markdown",
+            )
+            await state.clear()
+            update_player_state(
+                player_id,
+                onboarding_session_id=None,
+            )
+            if message.bot is not None:
+                asyncio.create_task(_finalize_onboarding(player_id, session_id, message.bot))
+            return
+
+        proposal = session_data.get("proposal") if session_data else None
+        if session_data and proposal:
+            logger.info(f"Restored character proposal from API (rejections={session_data.get('rejections')})")
             await state.update_data(
                 session_id=session_id,
-                game_id=player_state["game_id"],
-                current_question_id=current_question_id,
-                current_options=current_options,
+                game_id=session_data["game_id"],
             )
-            keyboard = create_onboarding_keyboard(current_options, current_question_id, None)
-            question = {
-                "id": current_question_id,
-                "text": current_question_text,
-                "options": current_options,
-                "image_url": current_question_image_url,
-            }
-            await send_question_with_image(message, question, keyboard, player_lang)
-            await state.set_state(OnboardingState.waiting_for_answer)
+            await send_character_card(message, proposal, session_id, player_lang)
+            await state.set_state(OnboardingState.waiting_for_decision)
+        elif session_data:
+            # Session exists but the character is still being generated — the
+            # proposal card will arrive via /push/onboarding-ready.
+            await state.update_data(
+                session_id=session_id,
+                game_id=session_data["game_id"],
+            )
+            await state.set_state(OnboardingState.waiting_for_decision)
+            await send_random_loading_image(message, caption_key="onboarding_wait", language=player_lang, game_id=session_data["game_id"])
         else:
-            # No cached question data — fetch current question from API
-            try:
-                session_data = await api_request(
-                    "GET",
-                    f"/onboarding/{session_id}",
-                    data=None,
-                    params={"language": player_lang},
-                    timeout_total=600,
-                    ignore_codes=(404,),
-                )
-            except Exception as e:
-                logger.error(f"Failed to fetch onboarding session {session_id}: {e}", exc_info=True)
-                session_data = None
-
-            if session_data and session_data.get("completed"):
-                # Session already completed but player never got completion flow.
-                # Trigger avatar generation and completion.
-                logger.info(f"Session {session_id} already completed for player {player_id}, triggering completion")
-                await message.answer(
-                    msgs["onboarding_complete_restored"],
-                    parse_mode="Markdown",
-                )
-                await state.clear()
-                update_player_state(
-                    player_id,
-                    onboarding_session_id=None,
-                    current_question_id=None,
-                    current_options=None,
-                )
-                if message.bot is not None:
-                    asyncio.create_task(_generate_and_send_avatar(player_id, session_id, message.bot))
-                return
-
-            if session_data and session_data.get("next_question"):
-                next_question = session_data["next_question"]
-                logger.info(f"Restored onboarding question from API: id={next_question['id']}")
-                await state.update_data(
-                    session_id=session_id,
-                    game_id=session_data["game_id"],
-                    current_question_id=next_question["id"],
-                    current_options=next_question["options"],
-                )
-                update_player_state(
-                    player_id,
-                    onboarding_session_id=session_id,
-                    current_question_id=next_question["id"],
-                    current_options=next_question["options"],
-                    current_question_text=next_question["text"],
-                    current_question_image_url=next_question.get("image_url"),
-                )
-                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
-                await send_question_with_image(message, next_question, keyboard, player_lang)
-                await state.set_state(OnboardingState.waiting_for_answer)
-            else:
-                # Nothing useful came back — guide the player to reset
-                logger.error(f"Stale onboarding session {session_id} for player {player_id}: no question data available", exc_info=True)
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=msgs["clear_session_button"],
-                                callback_data=f"onb_clear:{session_id}",
-                            )
-                        ]
+            # Nothing useful came back — guide the player to reset
+            logger.error(f"Stale onboarding session {session_id} for player {player_id}: no data available", exc_info=True)
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=msgs["clear_session_button"],
+                            callback_data=f"onb_clear:{session_id}",
+                        )
                     ]
-                )
-                await message.answer(
-                    msgs["stale_onboarding_session"],
-                    parse_mode="Markdown",
-                    reply_markup=keyboard,
-                )
+                ]
+            )
+            await message.answer(
+                msgs["stale_onboarding_session"],
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
         return
 
     game_id, referrer_id = None, None
@@ -2213,7 +1889,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     await _show_deeplink_game_conflict(message, player_lang, game_id, existing_game_id)
                 else:
                     logger.info(f"Player {player_id} deep-linked to game {game_id}; previous game {existing_game_id} ended, joining new game")
-                    await _enter_name_for_game(message, state, game_id, fallback_lang=player_lang)
+                    await _start_join_flow(message, state, game_id, fallback_lang=player_lang)
                 return
 
             # Game already ended — show finale + game list instead of welcoming back.
@@ -2314,10 +1990,10 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
         else:
             if game_id:
                 # Deep link to a specific game — ask for player name before onboarding
-                await _enter_name_for_game(message, state, game_id, fallback_lang=DEFAULT_LANGUAGE)
+                await _start_join_flow(message, state, game_id, fallback_lang=DEFAULT_LANGUAGE)
             else:
-                # New player — ask for language preference first
-                await show_player_language_selection(message, state)
+                # New player — straight to game selection in the Telegram locale
+                await show_game_selection(message, state, player_lang)
 
     except Exception as e:
         logger.error(f"Error in /start command for player {player_id}: {e}", exc_info=True)
@@ -3137,16 +2813,12 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
             update_player_state(
                 player_id,
                 onboarding_session_id=None,
-                current_question_id=None,
-                current_options=None,
-                current_question_text=None,
-                current_question_image_url=None,
             )
         except Exception as clear_err:
             logger.error(f"Failed to clear onboarding state for player {player_id}: {clear_err}", exc_info=True)
         await state.clear()
         await message.answer(reset_msgs["error"].format(error=e))
-        await show_player_language_selection(message, state)
+        await show_game_selection(message, state, get_player_language(player_id))
         return
 
     if not result or result.get("status") != "success":
@@ -3155,16 +2827,12 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
             update_player_state(
                 player_id,
                 onboarding_session_id=None,
-                current_question_id=None,
-                current_options=None,
-                current_question_text=None,
-                current_question_image_url=None,
             )
         except Exception as clear_err:
             logger.error(f"Failed to clear onboarding state for player {player_id}: {clear_err}", exc_info=True)
         await state.clear()
         await message.answer(reset_msgs["error"].format(error=error_detail))
-        await show_player_language_selection(message, state)
+        await show_game_selection(message, state, get_player_language(player_id))
         return
 
     # Clear per-(player, game) delivery dedup so a wiped profile delivers
@@ -3180,12 +2848,12 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
     except Exception as e:
         logger.error(f"Failed to clear delivery dedup for player {player_id}: {e}", exc_info=True)
 
-    # Wipe FSM + business state, then restart from language selection.
+    # Wipe FSM + business state, then restart from game selection.
     await state.clear()
     delete_player_state(player_id)
 
     await message.answer(reset_msgs["success"], parse_mode="Markdown")
-    await show_player_language_selection(message, state)
+    await show_game_selection(message, state, get_player_language(player_id))
 
 
 async def cmd_help(message: types.Message):
@@ -4216,249 +3884,92 @@ async def handle_text_message(message: types.Message):
         await message.answer(msgs["error"].format(error=str(e)))
 
 
-# Players currently waiting for an onboarding answer to be processed by the
-# game-server (LLM + 8 ComfyUI images can take 30-60s). While a player's id is
-# in this set, further answer submissions are rejected client-side and the
-# server's CAS guard rejects any that still slip through. Without it, a player
-# tapping the inline buttons repeatedly spawned N parallel generations of the
-# next question (e.g. "Ситуация 7" delivered four times).
-_onboarding_answer_in_flight: set[int] = set()
+# Players currently waiting for a character decision to be processed by the
+# game-server (a reroll regenerates flavour + avatar, which takes a while).
+# While a player's id is in this set, further button presses are rejected
+# client-side and the server's CAS guard rejects any that still slip through.
+_onboarding_decision_in_flight: set[int] = set()
 
 
-def _claim_onboarding_answer(player_id: int) -> bool:
-    """Reserve the player's onboarding answer slot. Returns False if one is
-    already in flight (the caller should alert and bail out)."""
-    if player_id in _onboarding_answer_in_flight:
-        return False
-    _onboarding_answer_in_flight.add(player_id)
-    return True
+async def character_decision_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Handle the yes/no buttons under a character proposal card.
 
-
-def _release_onboarding_answer(player_id: int) -> None:
-    _onboarding_answer_in_flight.discard(player_id)
-
-
-async def handle_onboarding_inline_answer(callback: types.CallbackQuery, state: FSMContext):
-    """Handle onboarding answer selection from inline keyboard buttons.
-
-    Callback data format: onb_ans:<question_id>:<option_index>
-    The option_index is used to look up the answer value from current_options in state.
+    Callback data format: onb_dec:<session_id>:<yes|no>
+    "yes" accepts the character (POST /onboarding/{id}/complete);
+    "no" rerolls it (POST /onboarding/{id}/reroll). After three rejections
+    the server assigns the next character automatically and the push carries
+    the completion payload instead of new buttons.
     """
     await callback.answer()
     if callback.data is None:
-        logger.error("handle_onboarding_inline_answer: callback.data is None", stack_info=True)
+        logger.error("character_decision_callback: callback.data is None", stack_info=True)
         return
     if callback.message is None:
-        logger.error("handle_onboarding_inline_answer: callback.message is None", stack_info=True)
+        logger.error("character_decision_callback: callback.message is None", stack_info=True)
         return
     msg: types.Message = callback.message  # type: ignore[assignment]
     player_id = callback.from_user.id
-    logger.info("[HANDLER] handle_onboarding_inline_answer")
+    logger.info("[HANDLER] character_decision_callback")
     player_lang = get_player_language(player_id)
+    error_msgs = lang.get_errors(player_lang)
 
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await msg.answer(lang.get_errors(player_lang)["invalid_format"])
-        return
-
-    _, question_id_str, option_idx_str = parts
-    try:
-        option_idx = int(option_idx_str)
-        callback_question_id = int(question_id_str)
-    except (ValueError, TypeError):
-        logger.warning("Invalid callback data from player %d: %r", player_id, callback.data)
-        await msg.answer(lang.get_errors(player_lang)["invalid_format"])
-        return
-    error_msgs = lang.get_errors(player_lang)
-
-    # Get current question data from state
-    state_data = await state.get_data()
-    session_id = state_data.get("session_id")
-    current_question_id = state_data.get("current_question_id")
-    current_options = state_data.get("current_options")
-
-    # The persistent player_store is the source of truth for the active
-    # onboarding question: every delivery path writes to it (inline answer,
-    # /onboarding/start, and /push/onboarding-ready). The FSM (Redis-backed,
-    # ephemeral) can lag behind — most notably after a pending_sg answer,
-    # where the species/gender question is generated in the background and
-    # delivered via /push/onboarding-ready, which updates player_store but
-    # NOT the FSM. If we trusted the stale FSM value here, every button press
-    # on the pushed question would be rejected as a stale keyboard. So always
-    # reconcile: prefer player_store, and resync the FSM when it diverges.
-    player_state = get_player_state(player_id)
-    ps_session = player_state.get("onboarding_session_id")
-    ps_question = player_state.get("current_question_id")
-    ps_options = player_state.get("current_options")
-    if ps_session and ps_question is not None and (
-        ps_question != current_question_id or not current_options
-    ):
-        session_id = ps_session
-        current_question_id = ps_question
-        current_options = ps_options
-        await state.update_data(
-            session_id=session_id,
-            current_question_id=current_question_id,
-            current_options=current_options,
-        )
-        logger.info(
-            f"Reconciled onboarding FSM state from player_store for player {player_id}: "
-            f"session_id={session_id}, current_question_id={current_question_id}"
-        )
-
-    logger.info(f"Inline onboarding answer: player={player_id}, callback_question_id={callback_question_id}, option_idx={option_idx}, session_id={session_id}")
-
-    # Ignore stale button presses when no active onboarding session
-    if current_question_id is None:
-        logger.warning(f"Stale keyboard press: no active onboarding for player {player_id} (callback_question_id={callback_question_id})")
-        await callback.answer(error_msgs["stale_question"], show_alert=False)
-        return
-
-    # Ignore stale button presses from old messages (wrong question id)
-    if callback_question_id != current_question_id:
-        logger.warning(f"Stale keyboard press: callback_question_id={callback_question_id} != current_question_id={current_question_id}, ignoring")
-        await callback.answer(error_msgs["stale_question"], show_alert=False)
-        return
-
-    if not session_id:
-        logger.error(f"No session_id in state for player {player_id}", exc_info=True)
-        await msg.answer(error_msgs["session_not_found"])
-        return
-
-    if not current_options or option_idx < 0 or option_idx >= len(current_options):
-        logger.error(f"Invalid option_idx {option_idx} for {len(current_options) if current_options else 0} options", exc_info=True)
         await msg.answer(error_msgs["invalid_format"])
         return
 
-    answer_value = current_options[option_idx]["value"]
-    logger.info(f"Matched option: idx={option_idx}, value='{answer_value}'")
+    _, session_id, decision = parts
+    if decision not in ("yes", "no"):
+        await msg.answer(error_msgs["invalid_format"])
+        return
 
-    # Reject duplicate submissions while a previous answer for this player is
-    # still being processed (LLM + ComfyUI for the next question can take
-    # 30-60s). Without this, every repeated tap spawned a fresh generation.
-    if not _claim_onboarding_answer(player_id):
-        logger.info(f"Onboarding answer already in flight for player {player_id}, ignoring duplicate (question_id={callback_question_id})")
+    # Reject duplicate presses while a previous decision is still being
+    # processed (a reroll regenerates flavour + avatar, which takes a while).
+    if player_id in _onboarding_decision_in_flight:
+        logger.info(f"Character decision already in flight for player {player_id}, ignoring duplicate ({decision})")
         await callback.answer(error_msgs["onboarding_in_progress"], show_alert=True)
         return
 
+    _onboarding_decision_in_flight.add(player_id)
     try:
-        # Set reaction to show processing
-        if callback.bot is not None:
-            try:
-                await callback.bot.set_message_reaction(
-                    chat_id=player_id,
-                    message_id=msg.message_id,
-                    reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
-                    is_big=False,
-                )
-            except Exception as reaction_err:
-                logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
-
-        # Immediately update the inline keyboard to show ✅ on the selected option
+        # Remove the buttons so the same card cannot be answered twice.
         try:
-            updated_keyboard = create_onboarding_keyboard(current_options, callback_question_id, selected_index=option_idx)
-            await msg.edit_reply_markup(reply_markup=updated_keyboard)
+            await msg.edit_reply_markup(reply_markup=None)
         except Exception as kb_err:
-            logger.warning(f"Failed to update onboarding keyboard for player {player_id}: {kb_err}")
+            logger.warning(f"Failed to remove decision keyboard for player {player_id}: {kb_err}")
 
-        # Show a 'please wait' message before the (slow) species/gender question generation.
-        # Pass the reconciled current_* values (not state_data): the FSM lags behind
-        # player_store after a pending_sg answer, so state_data can still point at
-        # the last role question and misclassify this as the role→sg transition.
-        await _maybe_show_sg_progress_message(
-            msg,
-            current_options=current_options,
-            current_question_id=current_question_id,
-            role_count=state_data.get("role_question_count"),
-            sg_count=state_data.get("species_gender_question_count"),
-            language=player_lang,
-        )
-
-        logger.info(f"Submitting onboarding answer (inline): session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
-        result = await api_request(
-            "POST",
-            f"/onboarding/{session_id}/answer",
-            data={"question_id": current_question_id, "answer": answer_value},
-            params={"language": DEFAULT_LANGUAGE},
-            timeout_total=600,
-            # 409 = server CAS guard rejected a duplicate/stale answer; the
-            # first accepted submission still drives the flow, so ignore it.
-            ignore_codes=(409,),
-        )
-
-        if result is None:
-            # Ignored 409 — a concurrent/earlier answer for this question already
-            # advanced the session. Nothing to do; that answer delivers the next
-            # question, and the slot is released by this handler's finally.
-            logger.info(f"Onboarding answer for player {player_id} rejected as duplicate by server (409)")
-            return
-
-        logger.info(f"Onboarding answer response: {result}")
-
-        # Answer processed successfully — update reaction to checkmark
-        if callback.bot is None:
-            logger.warning(f"callback.bot is None for player {player_id}, cannot set reaction")
-        else:
-            try:
-                await callback.bot.set_message_reaction(
-                    chat_id=player_id,
-                    message_id=msg.message_id,
-                    reaction=[ReactionTypeEmoji(emoji="👍")],  # 👍 thumbs up
-                    is_big=False,
-                )
-            except Exception as reaction_err:
-                logger.warning(f"Failed to update reaction for player {player_id}: {reaction_err}")
-
-        if result.get("completed"):
-            profile = result.get("profile") or {}
-            logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
-
+        if decision == "yes":
+            # Accept the character: finalize server-side, then deliver the
+            # welcome-aboard message (idempotent profile creation there).
             await state.clear()
-            update_player_state(
-                player_id,
-                onboarding_session_id=None,
-                current_question_id=None,
-                current_options=None,
-            )
-
-            # Show loading image while profile/avatar is being generated
-            await send_random_loading_image(msg, caption_key="processing_caption", language=player_lang, game_id=state_data["game_id"])
-
-            # Avatar generation + onboarding message
             if msg.bot is None:
-                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar", exc_info=True)
-            else:
-                asyncio.create_task(_generate_and_send_avatar(player_id, session_id, msg.bot))
+                logger.error(f"message.bot is None for player {player_id}, cannot finalize onboarding", exc_info=True)
+                return
+            await _finalize_onboarding(player_id, session_id, msg.bot)
         else:
-            next_question = result.get("next_question")
-            if next_question:
-                logger.info(f"Next onboarding question (inline): id={next_question['id']}, text={next_question['text']}...")
-                await state.update_data(
-                    current_question_id=next_question["id"],
-                    current_options=next_question["options"],
-                )
-                update_player_state(
-                    player_id,
-                    current_question_id=next_question["id"],
-                    current_options=next_question["options"],
-                    current_question_text=next_question["text"],
-                    current_question_image_url=next_question.get("image_url"),
-                )
-                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
-                await send_question_with_image(msg, next_question, keyboard, player_lang)
-            elif result.get("pending_sg"):
-                # Species/gender question is being generated in the background;
-                # it will be delivered via /push/onboarding-ready. The
-                # "generating next question" heads-up was already shown before
-                # this POST, so just wait for the push.
-                logger.info(f"S/G question generating in background for player {player_id}, waiting for push")
-                await state.set_state(OnboardingState.waiting_for_answer)
+            # Reroll: the server generates a new character and pushes the card.
+            result = await api_request(
+                "POST",
+                f"/onboarding/{session_id}/reroll",
+                data=None,
+                params=None,
+                timeout_total=60,
+                # 409 = a duplicate/late press lost the server-side race; the
+                # winning request still drives the flow, so ignore it.
+                ignore_codes=(409,),
+            )
+            if result is None:
+                logger.info(f"Reroll for player {player_id} rejected as duplicate by server (409)")
+                return
+            msgs = lang.get_onboarding(player_lang)
+            await msg.answer(msgs["character_rerolling"], parse_mode="Markdown")
+            await state.set_state(OnboardingState.waiting_for_decision)
 
     except Exception as e:
-        logger.error(f"Failed to submit onboarding answer (inline): {e}", exc_info=True)
-        await callback.message.answer(error_msgs["onboarding_error"].format(error=str(e)))
+        logger.error(f"Failed to process character decision for player {player_id}: {e}", exc_info=True)
+        await msg.answer(error_msgs["onboarding_error"].format(error=str(e)))
     finally:
-        _release_onboarding_answer(player_id)
+        _onboarding_decision_in_flight.discard(player_id)
 
 
 async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -4492,10 +4003,6 @@ async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMCon
     update_player_state(
         player_id,
         onboarding_session_id=None,
-        current_question_id=None,
-        current_options=None,
-        current_question_text=None,
-        current_question_image_url=None,
     )
 
     # Remove the inline keyboard from the stale message
@@ -4504,213 +4011,9 @@ async def clear_onboarding_callback(callback: types.CallbackQuery, state: FSMCon
     except Exception as e:
         logger.warning(f"Failed to remove keyboard: {e}")
 
-    # Restart from language selection
+    # Restart from game selection
     await state.clear()
-    await show_player_language_selection(msg, state)
-
-
-async def onboarding_answer(message: types.Message, state: FSMContext):
-    """Handle onboarding answer selection from reply keyboard.
-
-    Buttons show [1], [2], [3] etc. The number is extracted and used
-    as an index into current_options to find the matching option value.
-    """
-    if message.from_user is None:
-        logger.error("onboarding_answer: message.from_user is None", stack_info=True)
-        return
-    if message.text is None:
-        logger.error("onboarding_answer: message.text is None", stack_info=True)
-        return
-    answer_text = message.text
-    player_id = message.from_user.id
-    logger.info("[HANDLER] onboarding_answer")
-    error_msgs = lang.get_errors(get_player_language(player_id))
-
-    logger.info(f"Onboarding answer handler called: player={player_id}, text='{answer_text}'")
-
-    # Get current question data from state
-    state_data = await state.get_data()
-    session_id = state_data.get("session_id")
-    current_question_id = state_data.get("current_question_id")
-    current_options = state_data.get("current_options")
-
-    # Reconcile FSM with the persistent player_store (source of truth).
-    # The species/gender question is delivered via /push/onboarding-ready,
-    # which updates player_store but NOT the FSM — so the FSM can hold a
-    # stale question id / options after a pending_sg answer. See the inline
-    # handler for the full rationale.
-    player_state = get_player_state(player_id)
-    ps_session = player_state.get("onboarding_session_id")
-    ps_question = player_state.get("current_question_id")
-    ps_options = player_state.get("current_options")
-    if ps_session and ps_question is not None and (
-        ps_question != current_question_id or not current_options
-    ):
-        session_id = ps_session
-        current_question_id = ps_question
-        current_options = ps_options
-        await state.update_data(
-            session_id=session_id,
-            current_question_id=current_question_id,
-            current_options=current_options,
-        )
-        logger.info(
-            f"Reconciled onboarding FSM state from player_store for player {player_id}: "
-            f"session_id={session_id}, current_question_id={current_question_id}"
-        )
-
-    logger.info(f"State data: session_id={session_id}, question_id={current_question_id}, options_count={len(current_options) if current_options else 0}")
-
-    if not session_id:
-        logger.error(f"No session_id in state for player {player_id}", stack_info=True)
-        await message.answer(error_msgs["session_not_found"])
-        return
-
-    if not current_options:
-        logger.error(f"No current_options in state for player {player_id}, state_data={state_data}", stack_info=True)
-        await message.answer(error_msgs["invalid_format"])
-        return
-
-    # Match by numeric index from button text (e.g., "[1]" or "1")
-    answer_value = None
-    match = re.match(r"^(\[?)(\d+)(\]?)$", answer_text.strip())
-    if match:
-        try:
-            idx = int(match.group(2)) - 1
-        except (ValueError, TypeError):
-            logger.debug("Failed to parse onboarding answer index from %r", answer_text)
-            idx = -1
-        if 0 <= idx < len(current_options):
-            answer_value = current_options[idx]["value"]
-            logger.info(f"Numeric match: idx={idx}, value='{answer_value}'")
-
-    if not answer_value:
-        logger.warning(f"No matching option found! Player text: '{answer_text}', Available options: {[opt['value'] for opt in current_options]}")
-        await message.answer(error_msgs["invalid_format"])
-        return
-
-    # Reject duplicate submissions while a previous answer for this player is
-    # still being processed (LLM + ComfyUI for the next question can take
-    # 30-60s). Mirrors the inline-keyboard handler.
-    if not _claim_onboarding_answer(player_id):
-        logger.info(f"Onboarding answer already in flight for player {player_id}, ignoring duplicate (question_id={current_question_id})")
-        await message.answer(error_msgs["onboarding_in_progress"])
-        return
-
-    try:
-        # Set reaction to show processing
-        if message.bot is not None:
-            try:
-                await message.bot.set_message_reaction(
-                    chat_id=player_id,
-                    message_id=message.message_id,
-                    reaction=[ReactionTypeEmoji(emoji="👀")],  # 👀 eyes
-                    is_big=False,
-                )
-            except Exception as reaction_err:
-                logger.warning(f"Failed to set reaction for player {player_id}: {reaction_err}")
-
-        # Show a 'please wait' message before the (slow) species/gender question generation.
-        # Pass the reconciled current_* values (not state_data): the FSM lags behind
-        # player_store after a pending_sg answer, so state_data can still point at
-        # the last role question and misclassify this as the role→sg transition.
-        await _maybe_show_sg_progress_message(
-            message,
-            current_options=current_options,
-            current_question_id=current_question_id,
-            role_count=state_data.get("role_question_count"),
-            sg_count=state_data.get("species_gender_question_count"),
-            language=get_player_language(player_id),
-        )
-
-        logger.info(f"Submitting onboarding answer: session_id={session_id}, question_id={current_question_id}, answer_value='{answer_value}'")
-        result = await api_request(
-            "POST",
-            f"/onboarding/{session_id}/answer",
-            data={"question_id": current_question_id, "answer": answer_value},
-            params={"language": DEFAULT_LANGUAGE},
-            timeout_total=600,
-            # 409 = server CAS guard rejected a duplicate/stale answer; the
-            # first accepted submission still drives the flow, so ignore it.
-            ignore_codes=(409,),
-        )
-
-        if result is None:
-            # Ignored 409 — a concurrent/earlier answer already advanced the
-            # session. Nothing more to do here; release the slot below.
-            logger.info(f"Onboarding answer for player {player_id} rejected as duplicate by server (409)")
-            return
-
-        logger.info(f"Onboarding answer response: {result}")
-
-        # Answer processed successfully — update reaction to checkmark
-        if message.bot is not None:
-            try:
-                await message.bot.set_message_reaction(
-                    chat_id=player_id,
-                    message_id=message.message_id,
-                    reaction=[ReactionTypeEmoji(emoji="👍")],  # 👍 thumbs up
-                    is_big=False,
-                )
-            except Exception as reaction_err:
-                logger.warning(f"Failed to update reaction for player {player_id}: {reaction_err}")
-
-        if result.get("completed"):
-            profile = result.get("profile") or {}
-            logger.info(f"Onboarding completed for player {player_id}: role={profile.get('role', 'Unknown')}")
-
-            await state.clear()
-            update_player_state(
-                player_id,
-                onboarding_session_id=None,
-                current_question_id=None,
-                current_options=None,
-            )
-
-            # Show loading image while profile/avatar is being generated
-            await send_random_loading_image(message, caption_key="processing_caption", language=get_player_language(player_id), game_id=state_data["game_id"])
-
-            # Avatar generation + onboarding message is handled in _generate_and_send_avatar
-            if message.bot is None:
-                logger.error(f"message.bot is None for player {player_id}, cannot generate avatar", exc_info=True)
-            else:
-                asyncio.create_task(_generate_and_send_avatar(player_id, session_id, message.bot))
-
-        else:
-            next_question = result.get("next_question")
-            if next_question:
-                logger.info(f"Next onboarding question: id={next_question['id']}, text={next_question['text']}...")
-                logger.info(f"Next question options: {[opt['value'] for opt in next_question['options']]}")
-                if next_question.get("image_url"):
-                    logger.info(f"Next question has image: {next_question['image_url']}")
-                # Store next question data in state for matching
-                logger.info(f"Storing next question in state: question_id={next_question['id']}, options={[opt['value'] for opt in next_question['options']]}")
-                await state.update_data(
-                    current_question_id=next_question["id"],
-                    current_options=next_question["options"],
-                )
-                update_player_state(
-                    player_id,
-                    current_question_id=next_question["id"],
-                    current_options=next_question["options"],
-                    current_question_text=next_question["text"],
-                    current_question_image_url=next_question.get("image_url"),
-                )
-                keyboard = create_onboarding_keyboard(next_question["options"], next_question["id"], None)
-                await send_question_with_image(message, next_question, keyboard, get_player_language(player_id))
-            elif result.get("pending_sg"):
-                # Species/gender question is being generated in the background;
-                # it will be delivered via /push/onboarding-ready. The
-                # "generating next question" heads-up was already shown before
-                # this POST, so just wait for the push.
-                logger.info(f"S/G question generating in background for player {player_id}, waiting for push")
-                await state.set_state(OnboardingState.waiting_for_answer)
-
-    except Exception as e:
-        logger.error(f"Failed to submit onboarding answer: {e}", exc_info=True)
-        await message.answer(error_msgs["onboarding_error"].format(error=str(e)))
-    finally:
-        _release_onboarding_answer(player_id)
+    await show_game_selection(msg, state, get_player_language(player_id))
 
 
 async def action_selection(callback: types.CallbackQuery):
@@ -4945,15 +4248,11 @@ async def main():
     dp.message.register(cmd_gm_lang, Command("gm_lang"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
-    # Onboarding name input handler — before general text handlers
-    dp.message.register(handle_onboarding_name, OnboardingState.waiting_for_name)
     # Custom schedule input (new-game creator) — before general text handlers
     dp.message.register(handle_custom_schedule_input, GameSelectionState.waiting_for_schedule)
 
-    # Onboarding answer handler - inline keyboard callback
-    dp.callback_query.register(handle_onboarding_inline_answer, F.data.startswith("onb_ans:"))
-    # Fallback for manually typed text answers (if user types instead of pressing button)
-    dp.message.register(onboarding_answer, OnboardingState.waiting_for_answer)
+    # Character proposal decision handler - inline keyboard callback
+    dp.callback_query.register(character_decision_callback, F.data.startswith("onb_dec:"))
 
     # General text message handler (catch-all for non-command messages)
     dp.message.register(handle_text_message, F.text & ~F.command)
@@ -4962,7 +4261,6 @@ async def main():
     dp.callback_query.register(game_selection_callback, F.data.startswith("select_game:"))
     dp.callback_query.register(deeplink_conflict_callback, F.data.startswith("dlconf:"))
     dp.callback_query.register(new_game_schedule_callback, F.data.startswith("new_game_sched:"))
-    dp.callback_query.register(player_language_selection_callback, F.data.startswith("player_lang:"))
     dp.callback_query.register(lang_set_callback, F.data.startswith("lang_set:"))
     dp.callback_query.register(action_selection, F.data.startswith("action:"))
     dp.callback_query.register(refresh_game, F.data.startswith("refresh_game:"))
@@ -5000,7 +4298,9 @@ async def main():
     )
 
     # Start push HTTP server (replaces old polling loop)
-    from push_server import start_push_server
+    from push_server import set_onboarding_completion_fn, start_push_server
+
+    set_onboarding_completion_fn(_send_onboarding_completion)
 
     watchdog_task = asyncio.create_task(stuck_update_watchdog())
 

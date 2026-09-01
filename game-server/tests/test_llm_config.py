@@ -66,10 +66,9 @@ class LLMConfigTests(unittest.TestCase):
         server = FakeServer(False, llm_max_avatar_tokens=777)
         self.assertEqual(resolve_max_tokens(MAX_TOKENS_AVATAR, server), 777)
 
-    def test_onboarding_uses_default_sentinel(self):
-        params = resolve_llm_params("any-model", "onboarding_questions", vs_enabled=False)
+    def test_game_title_uses_default_sentinel(self):
+        params = resolve_llm_params("any-model", "game_title", vs_enabled=False)
         self.assertEqual(params.max_tokens, MAX_TOKENS_DEFAULT)
-        self.assertAlmostEqual(params.temperature, 0.7)
 
     def test_npc_name_has_highest_temperature(self):
         params = resolve_llm_params("any-model", "npc_name", vs_enabled=False)

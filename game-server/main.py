@@ -84,7 +84,6 @@ from database import (
     get_random_game_image,
     get_role_by_key,
     get_role_key_for_player,
-    get_underrepresented_roles,
     deactivate_npc,
     init_db,
     is_game_started,
@@ -115,7 +114,6 @@ from database import (
     update_game_state,
     update_game_title,
     update_mission_stage_progress,
-    update_onboarding_role_scores,
     update_onboarding_session,
     update_player_profile_last_poll,
 )
@@ -133,18 +131,15 @@ from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
     format_game_summary,
-    get_dimension_tag_field,
-    get_dimension_tags,
     get_game_strings,
+    GENDER_TAGS,
     get_gender_type_name,
     get_hybrid_species_name,
     get_species_type_name,
-)
-from prompts import (
-    OnboardingQuestion,
+    SPECIES_TAGS,
 )
 from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_game_summary, push_gm_notification, push_player_chosen_action, push_player_death, push_turn_reminder
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 # Configure logging.
 # A daily file handler mirrors logs to /app/logs/ so they survive
@@ -207,13 +202,6 @@ def generate_game_id(length: int) -> str:
 
 
 # ============== Pydantic Models ==============
-
-
-class OnboardingAnswer(BaseModel):
-    """Player's answer to an onboarding question"""
-
-    question_id: int
-    answer: str
 
 
 class GameInfo(BaseModel):
@@ -311,476 +299,328 @@ class SetLanguageRequest(BaseModel):
     language: str
 
 
-# Dynamic species/gender onboarding: up to SPECIES_GENDER_QUESTIONS_TOTAL questions
-# generated one-at-a-time by the LLM as the player answers, in a fixed alternating
-# species/gender sequence (S/G/S/G/S = 3 species + 2 gender). The question text and
-# option labels are LLM-authored; the canonical tags are assigned by us, so the
-# existing tag-counting determination logic stays reliable.
-SPECIES_GENDER_QUESTIONS_TOTAL = 5
-SPECIES_GENDER_DIMENSIONS = ("species", "gender", "species", "gender", "species")
+# ============== Random character proposals ==============
+
+# Number of rejected proposals ("no" presses) after which the next character
+# is generated and assigned to the player automatically.
+ONBOARDING_MAX_REROLLS = 3
+
+# Chance that a rolled character is a hybrid of two species.
+SPECIES_HYBRID_CHANCE = 0.2
+
+# Template avatar prompts per species key, used when the LLM avatar-prompt
+# call fails. The species key is known exactly (no keyword sniffing needed).
+_FALLBACK_AVATAR_TEMPLATES = {
+    "human": (
+        "Sci-fi character portrait of a {role} in Star Trek style. Personality traits: {traits}. "
+        "{desc} Futuristic uniform, cinematic lighting, detailed face, 4K quality. "
+        "Portrait, upper body, space opera aesthetic."
+    ),
+    "humanoid": (
+        "Sci-fi character portrait of a humanoid {role} in Star Trek style. Personality traits: {traits}. "
+        "{desc} Humanoid with subtle alien features, futuristic uniform, cinematic lighting, "
+        "detailed face, 4K quality. Portrait, upper body, space opera aesthetic."
+    ),
+    "non_humanoid": (
+        "Alien creature concept art of a non-humanoid {role}. Personality traits: {traits}. {desc} "
+        "The creature is NOT a human or humanoid: no two arms ending in hands, no two legs, "
+        "no human face or hair, not a bipedal silhouette, no uniform. "
+        "Cinematic lighting, 4K quality, detailed alien biology. "
+        "Full body or 3/4 view showing the alien physiology."
+    ),
+    "energy": (
+        "Abstract energy-being concept art of an energy being {role}. Personality traits: {traits}. {desc} "
+        "Glowing plasma energy form, luminous, ethereal, no solid body, no face, no limbs, "
+        "not a human or humanoid. Cinematic lighting, 4K quality. Full body showing the energy form."
+    ),
+    "cybernetic": (
+        "Sci-fi concept art of a cybernetic {role}. Personality traits: {traits}. {desc} "
+        "Mechanical body, circuits, synthetic components, cinematic lighting, 4K quality. "
+        "Full body or 3/4 view showing cybernetic anatomy."
+    ),
+    "symbiotic": (
+        "Alien creature concept art of a symbiotic being {role}. Personality traits: {traits}. {desc} "
+        "Composite organism, multiple life forms in one body, not a single humanoid body, no human face. "
+        "Cinematic lighting, 4K quality. Full body view showing the composite nature."
+    ),
+}
 
 
-def _question_has_sg_tags(question: OnboardingQuestion) -> bool:
-    """True if a question's options carry species_tags or gender_tags."""
-    return any(opt.get("species_tags") or opt.get("gender_tags") for opt in question.options)
+def _fallback_avatar_prompt(role: str, traits: list[str], avatar_desc: str, species_desc: str, species_key: str) -> str:
+    template = _FALLBACK_AVATAR_TEMPLATES.get(species_key, _FALLBACK_AVATAR_TEMPLATES["human"])
+    desc = " ".join(x for x in (avatar_desc, species_desc) if x)
+    return template.format(role=role, traits=", ".join(traits), desc=desc)
 
 
-async def generate_dynamic_onboarding_questions(
-    language: str,
-    *,
-    game_id: str,
+def _roll_species_and_gender(past_species: list[str]) -> dict[str, Any]:
+    """Roll a random species/gender combination for a character proposal.
+
+    Avoids repeating species already shown to this player while there is
+    something else left to pick.
+    """
+    species_pool = [s for s in SPECIES_TAGS if s not in past_species] or list(SPECIES_TAGS)
+    species_primary = random.choice(species_pool)
+
+    species_secondary = ""
+    species_hybrid = False
+    if random.random() < SPECIES_HYBRID_CHANCE:
+        species_secondary = random.choice([s for s in SPECIES_TAGS if s != species_primary])
+        species_hybrid = True
+
+    return {
+        "species_primary": species_primary,
+        "species_secondary": species_secondary,
+        "species_hybrid": species_hybrid,
+        "gender_primary": random.choice(GENDER_TAGS),
+    }
+
+
+async def _generate_character_proposal(
     player_id: int,
-    skip_images: bool,
-) -> list[OnboardingQuestion]:
-    """Generate dynamic onboarding questions using LLM with json_schema.
-
-    When skip_images is True, only generates questions (text + image_prompt) without
-    calling ComfyUI. Image generation can be done later via
-    generate_onboarding_question_images().
-    """
-    logger.info(f"=== Generating dynamic onboarding questions for language: {language} ===")
-    start_time = datetime.now()
-
-    questions: list[OnboardingQuestion] = []
-    try:
-        game_server = create_game_server(language=language)
-        logger.info("Game Master agent created successfully")
-
-        # Query underrepresented roles from recent onboarding history
-        try:
-            from language import get_ship_role_name
-
-            underrepresented = get_underrepresented_roles(game_id, n_last=10)
-            if underrepresented:
-                # Take bottom 3-4 roles
-                target_roles = underrepresented[:4]
-                role_names = []
-                for rk in target_roles:
-                    name = get_ship_role_name(rk, language)
-                    role_names.append(f"{name} ({rk})")
-                hint = ", ".join(role_names)
-                logger.info(f"Underrepresented roles: {hint}")
-            else:
-                hint = ""
-                logger.info("No underrepresented role history available")
-        except Exception as e:
-            logger.warning(f"Failed to query underrepresented roles: {e}", exc_info=True)
-            hint = ""
-
-        raw_questions = await game_server.generate_onboarding_questions(
-            underrepresented_hint=hint,
-            game_id=game_id,
-            player_id=player_id,
-            turn=None,
-            kind="onboarding_questions",
-        )
-        logger.info(f"LLM returned {len(raw_questions)} questions")
-
-        if raw_questions:
-            result = []
-            for i, q in enumerate(raw_questions):
-                result.append(
-                    OnboardingQuestion(
-                        id=q.get("id", i + 1),
-                        text=q.get("text", f"Question {i + 1}"),
-                        options=q.get("options", []),
-                        image_url=None,
-                        image_prompt=q.get("image_prompt"),
-                    )
-                )
-            if result:
-                questions = result
-        else:
-            logger.warning("No questions returned, using static fallback")
-
-        gen_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Question generation took {gen_time:.2f} seconds")
-
-        if not skip_images:
-            await generate_onboarding_question_images(questions, game_id, player_id)
-
-        return questions
-
-    except Exception as e:
-        logger.error(f"Failed to generate dynamic onboarding questions: {e}", exc_info=True)
-        raise
-
-
-async def generate_onboarding_question_images(
-    questions: list[OnboardingQuestion],
-    game_id: str,
-    player_id: int,
-) -> list[OnboardingQuestion]:
-    """Generate ComfyUI images for each onboarding question (in parallel).
-
-    Mutates question.image_url in-place and returns the list for convenience.
-    Safe to call in background — logs failures but never raises.
-    """
-    if not questions:
-        return questions
-    logger.info("=== Generating images for onboarding questions (background) ===")
-    image_start = datetime.now()
-    try:
-        image_generator = create_image_generator()
-
-        async def _generate_one(q: OnboardingQuestion) -> tuple[OnboardingQuestion, str | None]:
-            prompt = q.image_prompt
-            if not prompt:
-                logger.warning(f"No image_prompt for question {q.id}, skipping image generation")
-                return q, None
-            url = await image_generator.generate_image(
-                prompt=prompt,
-                filename_prefix=f"{game_id}/onboarding_q_{player_id}_{q.id}",
-                width=768,
-                height=768,
-                max_retries=3,
-                game_id=game_id,
-                player_id=str(player_id),
-                turn=None,
-                kind="onboarding_question",
-            )
-            return q, url
-
-        tasks = [_generate_one(q) for q in questions]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for result in results:
-            if isinstance(result, BaseException):
-                logger.warning(f"Image generation task failed: {result}")
-                continue
-            q, url = result
-            if url:
-                q.image_url = url
-
-        img_time = (datetime.now() - image_start).total_seconds()
-        success_count = sum(1 for q in questions if q.image_url)
-        logger.info(f"Question images: {success_count}/{len(questions)} generated in {img_time:.2f}s")
-    except Exception as img_err:
-        logger.warning(f"Question image generation failed entirely: {img_err}")
-
-    return questions
-
-
-async def _generate_option_images_for_question(
-    question: OnboardingQuestion,
-    session: dict[str, Any],
-    language: str,
-    game_id: str,
-) -> OnboardingQuestion:
-    """Generate one image per answer option for a species/gender question.
-
-    Uses LLM to create short creative prompts, then generates images
-    in parallel via ComfyUI (bounded by COMFYUI_IMAGE_CONCURRENCY semaphore).
-
-    Each option image shows cumulative visual effect of all previous
-    species/gender choices + this option's specific trait.
-
-    Args:
-        question: The next question to generate option images for
-        session: The onboarding session (contains all answers so far)
-        language: Language code (ru/en)
-        game_id: Game identifier
-
-    Returns:
-        Question with image_url attached to each option (or None if generation failed)
-    """
-    logger.info(f"[OPTION_IMAGES] Generating option images for question {question.id}: {question.text[:50]}...")
-
-    # Determine if this is a species or gender question
-    has_species_tags = any(opt.get("species_tags") for opt in question.options if opt.get("species_tags"))
-
-    tag_type = "species_tags" if has_species_tags else "gender_tags"
-
-    # Build accumulated tags from all previous answers
-    accumulated_tags: dict[str, int] = {}
-    session_answers = session.get("answers", {})
-    session_questions = session.get("questions", [])
-
-    game_server = create_game_server(language=language)
-
-    # Count all tags from already-answered questions
-    for qid_str, selected_value in session_answers.items():
-        try:
-            qid = int(qid_str) if not isinstance(qid_str, int) else qid_str
-        except (ValueError, TypeError):
-            logger.warning("Invalid question id in answers: %r", qid_str)
-            continue
-        if qid < 0:
-            continue  # Skip metadata entries (game_id stored as -1)
-        # Find the question in session questions
-        for sq in session_questions:
-            if sq.get("id") == qid:
-                for opt in sq.get("options", []):
-                    if opt.get("value") == selected_value:
-                        for tag in opt.get(tag_type, []):
-                            accumulated_tags[tag] = accumulated_tags.get(tag, 0) + 1
-                        break
-                break
-
-    # Generate LLM prompts for each option
-    prompts_dict = await game_server.generate_species_option_prompts(question=question.model_dump(), accumulated_tags=accumulated_tags, tag_type=tag_type, game_id=game_id, player_id=None, turn=None, kind="species_option_prompts")
-
-    if not prompts_dict:
-        logger.warning("[OPTION_IMAGES] No prompts generated, skipping images")
-        return question
-
-    # Generate images in parallel
-    image_generator = create_image_generator()
-    tasks = []
-    option_values = []
-
-    for opt in question.options:
-        opt_value = opt.get("value", "")
-        prompt = prompts_dict.get(opt_value, "")
-        if not prompt:
-            continue
-        filename_prefix = f"{game_id}/species_{session.get('player_id', 'x')}_{question.id}_{opt_value}"
-        tasks.append(
-            image_generator.generate_image(
-                prompt=prompt,
-                filename_prefix=filename_prefix,
-                width=512,
-                height=512,
-                max_retries=3,
-                game_id=game_id,
-                player_id=None,
-                turn=None,
-                kind="species_option",
-            )
-        )
-        option_values.append(opt_value)
-
-    if not tasks:
-        return question
-
-    logger.info(f"[OPTION_IMAGES] Generating {len(tasks)} images in parallel via ComfyUI...")
-    urls = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Attach URLs back to options
-    success_count = 0
-    for opt_value, url_or_err in zip(option_values, urls, strict=False):
-        if isinstance(url_or_err, str) and url_or_err:
-            for opt in question.options:
-                if opt.get("value") == opt_value:
-                    opt["image_url"] = url_or_err
-                    success_count += 1
-                    break
-        elif isinstance(url_or_err, Exception):
-            logger.warning(f"[OPTION_IMAGES] Image failed for option {opt_value}: {url_or_err}")
-
-    logger.info(f"[OPTION_IMAGES] {success_count}/{len(tasks)} option images generated")
-    return question
-
-
-async def generate_dynamic_species_gender_question(
-    dimension: str,
-    sg_step: int,
-    session: dict[str, Any],
-    language: str,
-    game_id: str,
-    existing_questions: list[OnboardingQuestion],
-) -> OnboardingQuestion:
-    """Generate ONE dynamic species/gender question and render its option images.
-
-    The LLM authors only the question text + one label per canonical tag; we attach
-    the tags ourselves (one option per canonical tag), then shuffle options
-    deterministically by the session seed and generate a per-option ComfyUI image
-    reflecting the cumulative traits chosen so far.
-    """
-    tag_field = get_dimension_tag_field(dimension)
-    tags = get_dimension_tags(dimension)
-
-    session_answers = {k: v for k, v in session.get("answers", {}).items() if str(k) not in ("-1", "-2", "-3")}
-    session_questions = session.get("questions", [])
-
-    game_server = create_game_server(language=language)
-    accumulated = game_server._count_tags_from_answers(session_answers, tag_field, session_questions)
-    generated = await game_server.generate_dynamic_species_gender_question(
-        dimension,
-        sg_step,
-        accumulated,
-        game_id=game_id,
-        kind="sg_question",
-        player_id=str(session.get("player_id", "")),
-        turn=None,
-    )
-
-    prefix = "s" if dimension == "species" else "g"
-    options = [
-        {
-            "value": f"{prefix}{sg_step}_{tag}",
-            "label": generated["labels"].get(tag, tag),
-            "role_scores": {},
-            tag_field: [tag],
-        }
-        for tag in tags
-    ]
-
-    rng = random.Random(session.get("shuffle_seed", 0) + sg_step)
-    rng.shuffle(options)
-
-    question = OnboardingQuestion(id=len(existing_questions) + 1, text=generated["text"], options=options, image_url=None, image_prompt=None)
-
-    try:
-        question = await _generate_option_images_for_question(
-            question=question,
-            session=session,
-            language=language,
-            game_id=game_id,
-        )
-    except Exception as img_err:
-        logger.warning(f"[SG_Q] Option image generation failed for {dimension} step {sg_step}: {img_err}")
-
-    return question
-
-
-async def generate_player_profile_from_answers(
-    player_id: int,
-    answers: dict[int, str],
     game_id: str,
     language: str,
-    questions: list[dict[str, Any]] | None,
-    player_name: str,
-    session_id: str | None,
+    past_roles: list[str],
+    past_species: list[str],
 ) -> dict[str, Any]:
-    """Assign a role from the available ship roles based on accumulated role scores from onboarding answers."""
-    available = get_available_roles(game_id, language=language)
+    """Generate one random character proposal.
 
+    Rolls a free role + species + gender, produces all flavour text in a
+    single LLM call, then renders the avatar via ComfyUI. Never repeats a
+    role/species the player has already rejected while alternatives exist.
+    """
+    available = get_available_roles(game_id, language=language)
     if not available:
         raise ValueError("All crew positions are filled. No roles available.")
 
-    game_server = create_game_server(language=language)
+    role_pool = [r for r in available if r["role_key"] not in past_roles] or available
+    role_data = random.choice(role_pool)
+    assigned_key = role_data["role_key"]
 
-    role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
-
-    assigned_key = role_result.get("role_key", "")
-
-    role_data = get_role_by_key(assigned_key, language=language, game_id=game_id)
-    if not role_data or role_data.get("taken_by") is not None:
-        logger.warning(f"[ROLE] Suggested taken/invalid role '{assigned_key}', re-assigning from available")
-        available = get_available_roles(game_id, language=language)
-        if not available:
-            raise ValueError("All crew positions are filled while re-assigning.")
-        role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
-        assigned_key = role_result.get("role_key", "")
-        role_data = get_role_by_key(assigned_key, language=language, game_id=game_id)
-
-    if not role_data:
-        role_data = available[0]
-        assigned_key = role_data["role_key"]
-
-    taken = take_role(assigned_key, player_id, game_id)
-    if not taken:
-        logger.warning(f"[ROLE] Role {assigned_key} was taken between check and assignment, re-assigning from available")
-        available = get_available_roles(game_id, language=language)
-        if not available:
-            raise ValueError("All crew positions are filled.")
-        # Use point-based assignment to pick the best remaining role, not just first
-        role_result = game_server.assign_role_from_answers(answers, available, questions=questions)
-        fallback_key = role_result.get("role_key", available[0]["role_key"])
-        fallback_taken = take_role(fallback_key, player_id, game_id)
-        if not fallback_taken:
-            # Ultimate fallback: first available
-            role_data = available[0]
-            take_role(role_data["role_key"], player_id, game_id)
-        else:
-            role_data = get_role_by_key(fallback_key, language=language, game_id=game_id)
-
-    if not role_data:
-        raise ValueError("Could not resolve an available role for player.")
-
-    traits: list[str] = []
-    for ans in answers.values():
-        if ans in ("cautious", "caution"):
-            traits.append("осторожный")
-        elif ans in ("bold", "aggressive"):
-            traits.append("смелый")
-        elif ans == "empathetic":
-            traits.append("эмпатичный")
-        elif ans == "logical":
-            traits.append("логичный")
-    traits = list(dict.fromkeys(traits))
-
-    logger.info(f"[ROLE] Player {player_id} assigned role: {role_data['role_name']} ({assigned_key}), scores: {role_result.get('reasoning', '')}")
-
-    # Calculate species and gender from answers
-    species_result = game_server.calculate_species_from_answers(answers, questions=questions)
-    gender_result = game_server.calculate_gender_from_answers(answers, questions=questions)
-
-    species_primary = species_result.get("primary", "")
-    species_hybrid = species_result.get("hybrid", False)
-    species_secondary = species_result.get("secondary", "")
-    gender_primary = gender_result.get("primary", "")
+    dice = _roll_species_and_gender(past_species)
+    species_primary = dice["species_primary"]
+    species_secondary = dice["species_secondary"]
+    species_hybrid = dice["species_hybrid"]
 
     species_display = species_primary
-    if species_hybrid and species_secondary:
+    if species_hybrid:
         hybrid_key = f"{species_primary}+{species_secondary}"
         alt_hybrid = f"{species_secondary}+{species_primary}"
         species_display = get_hybrid_species_name(hybrid_key, language)
         if species_display == hybrid_key:
             species_display = get_hybrid_species_name(alt_hybrid, language)
 
-    # Get secondary display names for hybrid display
-    gender_secondary = gender_result.get("secondary", "")
-
     species_type_display = get_species_type_name(species_primary, language)
-    gender_type_display = get_gender_type_name(gender_primary, language)
-
+    gender_type_display = get_gender_type_name(dice["gender_primary"], language)
     species_secondary_display = get_species_type_name(species_secondary, language) if species_secondary else None
-    gender_secondary_display = get_gender_type_name(gender_secondary, language) if gender_secondary else None
 
-    # Generate per-character role flavour via LLM (replaces static SHIP_ROLES_I18N).
-    # Tailored to role + species + gender + onboarding-derived traits.
-    role_flavour = await game_server.generate_role_flavour(
+    gm = create_game_server(language=language)
+    flavour = await gm.generate_character_flavour(
         role_key=assigned_key,
         role_name=role_data["role_name"],
         species_display=species_display,
+        species_secondary=species_secondary_display,
+        species_hybrid=species_hybrid,
         gender_display=gender_type_display,
-        traits=traits,
+        gender_secondary=None,
+        gender_hybrid=False,
         game_id=game_id,
         player_id=str(player_id),
         turn=None,
-        kind="role_flavour",
     )
-    traits = role_flavour["personality_traits"]
+    traits = flavour["personality_traits"]
 
-    # Generate species+gender narrative description via LLM
-    species_description = ""
+    # Avatar prompt via LLM; the combined description mirrors the pre-proposal
+    # avatar pipeline (species type + gender + narrative appearance).
+    avatar_prompt = ""
     try:
-        species_description = await game_server.generate_species_gender_description(species_result=species_result, gender_result=gender_result, role=role_data["role_name"], game_id=game_id, player_id=str(player_id), turn=None, kind="species_description")
-        logger.info(f"[SPECIES] Description generated for player {player_id}: {species_description}...")
+        parts = [flavour["avatar_description"]]
+        if species_type_display:
+            parts.append(f"Species type: {species_type_display}")
+        # A human gender label is a strong humanoid prior that collapses alien
+        # anatomy back into a person, so it is omitted for exotic body plans.
+        if gender_type_display and species_primary not in ("non_humanoid", "energy", "symbiotic"):
+            parts.append(f"Gender type: {gender_type_display}")
+        if flavour["species_description"]:
+            parts.append(f"Appearance: {flavour['species_description']}")
+        avatar_prompt = await gm.generate_avatar_prompt(
+            role=role_data["role_name"],
+            traits=traits,
+            avatar_description="\n".join(x for x in parts if x),
+            species_category=species_primary,
+            game_id=game_id,
+            player_id=str(player_id),
+            turn=None,
+            kind="avatar_prompt",
+        )
     except Exception as e:
-        logger.warning(f"[SPECIES] Failed to generate description for player {player_id}: {e}", exc_info=True)
-        species_description = ""
+        logger.warning(f"[PROPOSAL] Avatar prompt generation failed for player {player_id}: {e}")
 
-    logger.info(f"[SPECIES] Player {player_id} species={species_primary}, gender={gender_primary}, hybrid={species_hybrid}, display={species_display}")
+    if not avatar_prompt:
+        avatar_prompt = _fallback_avatar_prompt(
+            role_data["role_name"], traits, flavour["avatar_description"], flavour["species_description"], species_primary
+        )
 
+    avatar_url = None
+    try:
+        image_generator = create_image_generator()
+        avatar_url = await image_generator.generate_avatar_image(
+            prompt=avatar_prompt,
+            filename_prefix=f"{game_id}/avatar_{player_id}",
+            width=768,
+            height=1024,
+            game_id=game_id,
+            player_id=str(player_id),
+            turn=None,
+            kind="avatar",
+        )
+    except Exception as e:
+        logger.error(f"[PROPOSAL] Avatar ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}", exc_info=True)
+
+    return {
+        "role_key": assigned_key,
+        "role": role_data["role_name"],
+        "role_name_en": role_data.get("role_name_en", ""),
+        "role_description": flavour["role_description"],
+        "avatar_description": flavour["avatar_description"],
+        "personality_traits": traits,
+        "species": species_type_display,
+        "gender": gender_type_display,
+        "species_description": flavour["species_description"],
+        "species_secondary": species_secondary_display,
+        "gender_secondary": None,
+        "species_primary_key": species_primary,
+        "avatar_url": avatar_url,
+        "past_roles": past_roles + [assigned_key],
+        "past_species": past_species + [species_primary],
+    }
+
+
+def _take_proposed_role(proposal: dict[str, Any], player_id: int, game_id: str, language: str) -> dict[str, Any]:
+    """Reserve the proposed role for the player, falling back to any free role
+    if it was taken by a concurrently-completing player."""
+    assigned_key = proposal.get("role_key", "")
+    role_data = get_role_by_key(assigned_key, language=language, game_id=game_id)
+    if not role_data or role_data.get("taken_by") is not None:
+        available = get_available_roles(game_id, language=language)
+        if not available:
+            raise ValueError("All crew positions are filled.")
+        role_data = available[0]
+        assigned_key = role_data["role_key"]
+
+    if not take_role(assigned_key, player_id, game_id):
+        available = get_available_roles(game_id, language=language)
+        if not available:
+            raise ValueError("All crew positions are filled.")
+        role_data = available[0]
+        take_role(role_data["role_key"], player_id, game_id)
+
+    return role_data
+
+
+def _profile_from_proposal(
+    proposal: dict[str, Any],
+    player_id: int,
+    player_name: str,
+    game_id: str,
+    language: str,
+) -> dict[str, Any]:
+    """Build a player_profiles row from an accepted character proposal."""
+    role_data = _take_proposed_role(proposal, player_id, game_id, language)
+    logger.info(f"[ROLE] Player {player_id} accepted role: {role_data['role_name']} ({role_data['role_key']})")
     return {
         "player_id": player_id,
         "player_name": player_name,
-        "avatar_description": role_flavour["avatar_description"],
+        "avatar_description": proposal.get("avatar_description", ""),
+        "avatar_url": proposal.get("avatar_url"),
         "role": role_data["role_name"],
-        "role_name_en": role_data["role_name_en"],
-        "role_description": role_flavour["role_description"],
-        "personality_traits": traits,
+        "role_name_en": role_data.get("role_name_en", ""),
+        "role_description": proposal.get("role_description", ""),
+        "personality_traits": proposal.get("personality_traits", []),
         "game_id": game_id,
-        "species": species_type_display,
-        "gender": gender_type_display,
-        "species_description": species_description,
-        "species_secondary": species_secondary_display,
-        "gender_secondary": gender_secondary_display,
-        "species_primary_key": species_primary,
+        "species": proposal.get("species", ""),
+        "gender": proposal.get("gender", ""),
+        "species_description": proposal.get("species_description", ""),
+        "species_secondary": proposal.get("species_secondary"),
+        "gender_secondary": proposal.get("gender_secondary"),
+        "species_primary_key": proposal.get("species_primary_key", ""),
     }
 
-    # Save role_score_history for underrepresented role tracking
-    if session_id:
-        role_points = role_result.get("role_points", {})
-        if role_points:
-            try:
-                update_onboarding_role_scores(session_id, role_points)
-                logger.info(f"[ROLE] Saved role_score_history for session {session_id}: {dict(sorted(role_points.items(), key=lambda x: x[1], reverse=True)[:5])}")
-            except Exception as e:
-                logger.warning(f"[ROLE] Failed to save role_score_history for session {session_id}: {e}")
+
+async def _finalize_onboarding_session(session: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
+    """Create the player profile from an accepted proposal and run post-join logic.
+
+    Marks the session completed. Returns the /onboarding/{id}/complete payload.
+    Safe to call again for an already-created profile (idempotent restore path).
+    """
+    session_id = session["session_id"]
+    player_id = session["player_id"]
+    answers_data = session.get("answers", {})
+    game_id = session.get("game_id") or answers_data.get(-1) or answers_data.get("-1")
+    language = session.get("language", "en")
+    player_name = answers_data.get(-2) or answers_data.get("-2", "")
+
+    profile = get_player_profile(player_id)
+    if not profile:
+        profile_data = _profile_from_proposal(proposal, player_id, player_name, game_id, language)
+        create_player_profile(profile_data)
+        profile = get_player_profile(player_id)
+        if not profile:
+            raise HTTPException(status_code=500, detail="Failed to create player profile")
+        # If the player is returning (e.g. after /reset), deactivate any active
+        # NPC that was created to replace them on a previous role — otherwise it
+        # would duplicate them in the team roster and turn generation.
+        ghosts = deactivate_replacement_npcs_for_player(player_id, game_id)
+        if ghosts:
+            logger.info(f"[ONBOARDING] Deactivated {ghosts} ghost NPC(s) for returning player {player_id} in game {game_id}")
+        cleared_kicks = clear_kicks_for_returning_player(player_id, game_id)
+        if cleared_kicks:
+            logger.info(f"[ONBOARDING] Cleared {cleared_kicks} stale kick record(s) for returning player {player_id} in game {game_id}")
+        update_onboarding_session(
+            session_id,
+            session.get("current_question", 0),
+            answers_data,
+            True,
+            language,
+            proposal,
+        )
+
+    # Check player count and start game if >= GAME_START_MIN_PLAYERS
+    player_count = get_player_count_in_game(game_id)
+    game_was_started = False
+    if player_count >= GAME_START_MIN_PLAYERS:
+        game_was_started = start_game(game_id)
+        if game_was_started:
+            # Register this game with the scheduler
+            asyncio.create_task(_register_game_in_scheduler(game_id, None))
+            # Auto-start skips _original_start_game, so generate the mission
+            # (archetype + objectives) and the bridge image explicitly —
+            # otherwise the game runs without them.
+            game_lang = get_game_language(game_id)
+            asyncio.create_task(_generate_started_game_assets(game_id, game_lang))
+
+    game_started = is_game_started(game_id)
+
+    # If joining an already-running game (this onboarding did not start it),
+    # let the player inherit the current turn's NPC briefing so they can
+    # participate immediately instead of waiting for the next generated turn.
+    if game_started and not game_was_started:
+        game_lang = get_game_language(game_id)
+        asyncio.create_task(_inherit_npc_briefing_for_player(player_id, game_id, game_lang))
+
+    all_players = get_players_in_game(game_id)
+    other_players = [p for p in all_players if p != player_id]
+
+    return {
+        "status": "completed",
+        "profile": profile,
+        "avatar_url": profile.get("avatar_url"),
+        "game_started": game_started,
+        "game_just_started": game_was_started,
+        "player_count": player_count,
+        "other_player_ids": other_players,
+        "game_title": get_game_title(game_id) or "",
+        "language": get_game_language(game_id),
+    }
 
 
 # ============== FastAPI App ==============
@@ -930,53 +770,44 @@ def _get_onboarding_image_lock(session_id: str) -> asyncio.Lock:
     return _onboarding_image_locks[session_id]
 
 
-async def _background_onboarding_images(
+async def _background_character_proposal(
     player_id: int,
     game_id: str,
     session_id: str,
-    questions: list[OnboardingQuestion],
-    game_title_data: dict,
     language: str,
+    game_title_data: dict,
     needs_splash: bool,
+    forced: bool,
 ) -> None:
-    """Background task: generate onboarding question images + splash, then push to bot.
+    """Background task: generate splash (first proposal only) + a random
+    character proposal, persist it, then push the card to the telegram-bot
+    via /push/onboarding-ready.
 
-    Runs after fast onboarding return. Acquires a per-session lock to prevent
-    duplicate concurrent generations. On completion, pushes full onboarding data
-    (with image URLs) to the telegram-bot via /push/onboarding-ready.
+    Acquires a per-session lock so a spam of "no" presses cannot produce
+    concurrent generations for one player. When ``forced`` is set (the player
+    rejected three proposals), the generated character is assigned
+    immediately: the session completes here and the push carries the
+    completion payload instead of yes/no buttons.
     """
     lock = _get_onboarding_image_lock(session_id)
     async with lock:
-        logger.info(f"[ONBOARDING_BG] Starting background image generation for player {player_id} (session {session_id})")
+        logger.info(f"[ONBOARDING_BG] Starting background proposal for player {player_id} (session {session_id}, forced={forced})")
         bg_start = datetime.now()
 
         try:
-            # 1. Generate question images
-            if questions:
-                await generate_onboarding_question_images(questions, game_id, player_id)
+            session = get_onboarding_session(session_id)
+            if not session:
+                logger.warning(f"[ONBOARDING_BG] Session {session_id} not found, aborting proposal generation")
+                return
+            if session.get("completed"):
+                logger.info(f"[ONBOARDING_BG] Session {session_id} already completed, skipping stale generation")
+                return
 
-            # 2. Update session questions in DB with image URLs
-            try:
-                from database import get_onboarding_session as _get_session
-                from database import update_onboarding_session as _update_session_db
+            current = session.get("proposal") or {}
+            past_roles = list(current.get("past_roles", []))
+            past_species = list(current.get("past_species", []))
 
-                sess = _get_session(session_id)
-                if sess:
-                    _update_session_db(
-                        session_id,
-                        current_question=sess.get("current_question", 0),
-                        answers=sess.get("answers", {}),
-                        completed=sess.get("completed", False),
-                        language=language,
-                        questions=[q.model_dump() for q in questions],
-                    )
-                    logger.info(f"[ONBOARDING_BG] Updated session {session_id} questions with image URLs")
-                else:
-                    logger.warning(f"[ONBOARDING_BG] Session {session_id} not found for question update")
-            except Exception as e:
-                logger.warning(f"[ONBOARDING_BG] Failed to update session questions: {e}")
-
-            # 3. Generate splash images if needed
+            # Splash images accompany the FIRST proposal only.
             if needs_splash:
                 title_for_prompt = game_title_data.get("title", "")
                 welcome_for_prompt = game_title_data.get("welcome_text", "")
@@ -1001,111 +832,63 @@ async def _background_onboarding_images(
                 except Exception as e:
                     logger.error(f"[ONBOARDING_BG] Splash generation failed: {e}", exc_info=True)
 
-            # 4. Push onboarding-ready to telegram-bot
+            proposal = await _generate_character_proposal(
+                player_id=player_id,
+                game_id=game_id,
+                language=language,
+                past_roles=past_roles,
+                past_species=past_species,
+            )
+
+            completion_payload = None
+            if forced:
+                completion_payload = await _finalize_onboarding_session(
+                    get_onboarding_session(session_id) or session,
+                    proposal,
+                )
+            else:
+                update_onboarding_session(
+                    session_id,
+                    session.get("current_question", 0),
+                    session.get("answers", {}),
+                    False,
+                    language,
+                    proposal,
+                )
+
             try:
-                first_question = questions[0].model_dump() if questions else None
                 from push_client import push_onboarding_ready as _push_ready
 
                 success = await _push_ready(
                     player_id=player_id,
                     game_id=game_id,
                     session_id=session_id,
-                    question=first_question,
-                    game_title=game_title_data.get("title", ""),
-                    welcome_message=game_title_data.get("welcome_text", ""),
+                    proposal=proposal,
+                    game_title=game_title_data.get("title", "") if needs_splash else "",
+                    welcome_message=game_title_data.get("welcome_text", "") if needs_splash else "",
                     language=language,
+                    final=forced,
+                    completion=completion_payload,
                 )
-                logger.info(f"[ONBOARDING_BG] Push onboarding-ready {'succeeded' if success else 'FAILED'} for player {player_id}")
+                logger.info(f"[ONBOARDING_BG] Push proposal {'succeeded' if success else 'FAILED'} for player {player_id}")
             except Exception as e:
-                logger.error(f"[ONBOARDING_BG] Push onboarding-ready failed: {e}", exc_info=True)
+                logger.error(f"[ONBOARDING_BG] Push proposal failed for player {player_id}: {e}", exc_info=True)
 
         except Exception as e:
-            logger.error(f"[ONBOARDING_BG] Background image generation failed for player {player_id}: {e}", exc_info=True)
+            logger.error(f"[ONBOARDING_BG] Background proposal generation failed for player {player_id}: {e}", exc_info=True)
 
         bg_time = (datetime.now() - bg_start).total_seconds()
-        logger.info(f"[ONBOARDING_BG] Background images for player {player_id} took {bg_time:.2f} seconds")
-
-
-async def _background_sg_question(
-    player_id: int,
-    game_id: str,
-    session_id: str,
-    dimension: str,
-    sg_step: int,
-    language: str,
-) -> None:
-    """Background task: generate one species/gender question (LLM + option
-    images), persist it, then push to the bot via /push/onboarding-ready.
-
-    Mirrors _background_onboarding_images but for a single dynamic S/G question
-    produced on demand during the /onboarding/{session_id}/answer flow. The
-    S/G generation (1 LLM call + 6 ComfyUI images) can exceed the bot's HTTP
-    timeout, so it runs here and the result is delivered via push rather than
-    inline in the HTTP response.
-    """
-    lock = _get_onboarding_image_lock(session_id)
-    async with lock:
-        logger.info(f"[SG_BG] Starting background S/G question for player {player_id} (session {session_id}, {dimension} step {sg_step})")
-        sg_start = datetime.now()
-
-        try:
-            sess = get_onboarding_session(session_id)
-            if not sess:
-                logger.warning(f"[SG_BG] Session {session_id} not found, aborting S/G question generation")
-                return
-            if sess.get("completed"):
-                logger.info(f"[SG_BG] Session {session_id} already completed, skipping stale S/G generation")
-                return
-
-            question_adapter = TypeAdapter(list[OnboardingQuestion])
-            existing_questions = question_adapter.validate_python(sess.get("questions", [])) if sess.get("questions") else []
-
-            question = await generate_dynamic_species_gender_question(
-                dimension=dimension,
-                sg_step=sg_step,
-                session=sess,
-                language=language,
-                game_id=game_id,
-                existing_questions=existing_questions,
-            )
-
-            # Persist the newly generated question into the session.
-            existing_questions.append(question)
-            update_onboarding_session(
-                session_id,
-                sess.get("current_question", 0),
-                sess.get("answers", {}),
-                sess.get("completed", False),
-                language,
-                questions=[q.model_dump() for q in existing_questions],
-            )
-            logger.info(f"[SG_BG] Saved S/G question {question.id} ({dimension} step {sg_step}) to session {session_id}")
-
-            # Push to the bot — no game_title/welcome here, S/G questions
-            # arrive mid-onboarding where a splash is not needed.
-            from push_client import push_onboarding_ready as _push_ready
-
-            success = await _push_ready(
-                player_id=player_id,
-                game_id=game_id,
-                session_id=session_id,
-                question=question.model_dump(),
-                game_title="",
-                welcome_message="",
-                language=language,
-            )
-            logger.info(f"[SG_BG] Push S/G question {'succeeded' if success else 'FAILED'} for player {player_id}")
-
-        except Exception as e:
-            logger.error(f"[SG_BG] Background S/G question generation failed for player {player_id}: {e}", exc_info=True)
-
-        sg_time = (datetime.now() - sg_start).total_seconds()
-        logger.info(f"[SG_BG] Background S/G question for player {player_id} took {sg_time:.2f} seconds")
+        logger.info(f"[ONBOARDING_BG] Proposal for player {player_id} took {bg_time:.2f} seconds")
 
 
 @app.post("/onboarding/start")
 async def start_onboarding(request: StartOnboardingRequest):
-    """Start a new onboarding session for a player"""
+    """Start a new onboarding session for a player.
+
+    Creates the session and kicks off a background task that rolls a random
+    character (role + species + gender + flavour + avatar) and pushes the
+    proposal card to the bot. Returns immediately.
+    """
     start_time = datetime.now()
     logger.info("=== START ONBOARDING ===")
     logger.info(f"player_id: {request.player_id}, game_id: {request.game_id}, language: {request.language}")
@@ -1138,199 +921,99 @@ async def start_onboarding(request: StartOnboardingRequest):
             detail=(f"Game is full ({current_count}/{GAME_START_MAX_PLAYERS} players). No more players can join at this time."),
         )
 
-    # Generate role questions (text-only, skip ComfyUI images for fast return).
-    # Images are generated asynchronously in background after the response.
-    logger.info("Generating dynamic onboarding questions (text-only)...")
-    role_questions = await generate_dynamic_onboarding_questions(
-        language=request.language,
-        game_id=request.game_id,
-        player_id=request.player_id,
-        skip_images=True,
-    )
-    logger.info(f"Generated {len(role_questions)} role questions")
-
-    # Generate shuffle seed for deterministic question/option shuffling
-    shuffle_seed = secrets.randbelow(2**31)
-
-    # Species/gender questions are NOT pre-generated here. They are produced
-    # one-at-a-time by the LLM during /onboarding/{session_id}/answer (fixed
-    # alternating S/G/S/G/S sequence, capped at SPECIES_GENDER_QUESTIONS_TOTAL).
-    dynamic_questions = role_questions
-
-    for i, q in enumerate(dynamic_questions, start=1):
-        q.id = i
-    logger.info(f"Total onboarding questions: {len(dynamic_questions)} role (+ up to {SPECIES_GENDER_QUESTIONS_TOTAL} dynamic species/gender)")
-
     # Generate the linked game concept (mission + title + welcome) once per
-    # game. The title tagline and welcome are derived from the mission so the
-    # game name, its welcome and the mission stay consistent. Idempotent and
-    # concurrency-safe (per-game lock + uq_game_mission index).
+    # game. Idempotent and concurrency-safe (per-game lock + uq_game_mission
+    # index), so this only blocks for the very first player of a game.
     concept = await _generate_game_concept(request.game_id, request.language)
     game_title_data = {
         "title": concept["title"],
         "welcome_text": concept["welcome_text"],
     }
 
-    # Create session with pre-generated questions (no images yet) and shuffle_seed
-    session = create_onboarding_session(
-        request.player_id,
-        request.language,
-        questions=[q.model_dump() for q in dynamic_questions],
-        shuffle_seed=shuffle_seed,
-    )
-    # onboarding_sessions table does not persist game_id yet; keep them in answers payload
-    metadata = {
-        -1: request.game_id,  # store game_id as metadata
-        -2: request.player_name,  # store player_name as metadata
-    }
-    update_onboarding_session(
-        session["session_id"],
-        0,
-        metadata,
-        False,
-        request.language,
-        None,
-    )
+    session = create_onboarding_session(request.player_id, request.language)
     session_id = session["session_id"]
+
+    # The onboarding_sessions table has no game_id column; keep it in the
+    # answers payload alongside the player name (same convention as before).
+    metadata = {
+        -1: request.game_id,
+        -2: request.player_name,
+    }
+    update_onboarding_session(session_id, 0, metadata, False, request.language, None)
     logger.info(f"Onboarding session created: {session_id}")
 
-    # Log generation time
     gen_time = (datetime.now() - start_time).total_seconds()
     logger.info(f"Fast onboarding start took {gen_time:.2f} seconds")
 
-    next_question = dynamic_questions[0] if dynamic_questions else None
-    if next_question:
-        logger.info(f"First question: id={next_question.id}, text={next_question.text}...")
-
-    # Kick off background task: generate question images + splash images,
-    # update session in DB, push to telegram-bot via /push/onboarding-ready
     needs_splash = get_game_image_count("splash", request.game_id, None) < 3
-    needs_question_images = any(q.image_prompt for q in dynamic_questions)
-    if needs_splash or needs_question_images:
-        asyncio.create_task(
-            _background_onboarding_images(
-                player_id=request.player_id,
-                game_id=request.game_id,
-                session_id=session_id,
-                questions=dynamic_questions,
-                game_title_data=game_title_data,
-                language=request.language,
-                needs_splash=needs_splash,
-            )
+    asyncio.create_task(
+        _background_character_proposal(
+            player_id=request.player_id,
+            game_id=request.game_id,
+            session_id=session_id,
+            language=request.language,
+            game_title_data=game_title_data,
+            needs_splash=needs_splash,
+            forced=False,
         )
+    )
 
-    result = {
+    logger.info("=== START ONBOARDING COMPLETED (fast return) ===")
+    return {
         "session_id": session_id,
         "game_id": request.game_id,
-        "question": next_question.model_dump() if next_question else None,
         "game_title": game_title_data.get("title", ""),
         "welcome_message": game_title_data.get("welcome_text", ""),
         "pending_images": True,
-        "role_question_count": len(dynamic_questions),
-        "species_gender_question_count": SPECIES_GENDER_QUESTIONS_TOTAL,
     }
-    logger.info("=== START ONBOARDING COMPLETED (fast return) ===")
-    return result
 
 
-@app.post("/onboarding/{session_id}/answer")
-async def submit_onboarding_answer(session_id: str, answer: OnboardingAnswer, language: str):
-    """Submit an answer to an onboarding question"""
+@app.post("/onboarding/{session_id}/reroll")
+async def reroll_onboarding_character(session_id: str):
+    """Reject the current character proposal and generate another one.
+
+    The compare-and-set on current_question (the rejection counter) rejects
+    duplicate button presses racing while a proposal is still generating.
+    After ONBOARDING_MAX_REROLLS rejections the next character is generated
+    and assigned automatically (forced).
+    """
     session = get_onboarding_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session["completed"]:
+        raise HTTPException(status_code=400, detail="Onboarding already completed")
 
-    # Use the language from request or from session if already set
-    effective_language = language if language != "en" else session.get("language", "en")
+    if not session.get("proposal"):
+        raise HTTPException(status_code=409, detail="No character proposal to reject yet")
+
+    if not reserve_onboarding_slot(session_id, session["current_question"]):
+        logger.info(f"[ONBOARDING] Duplicate reroll race rejected for session={session_id}")
+        raise HTTPException(status_code=409, detail="Duplicate reroll request")
+
+    rejections = session["current_question"] + 1
+    forced = rejections >= ONBOARDING_MAX_REROLLS
+
     answers_data = session.get("answers", {})
     game_id = session.get("game_id") or answers_data.get(-1) or answers_data.get("-1")
     if not game_id:
         raise HTTPException(status_code=400, detail="Session has no game_id")
+    language = session.get("language", "en")
 
-    # Guard against duplicate / stale answers. Question ids are assigned as
-    # current_question+1 (role questions: q.id = index+1; dynamic S/G questions:
-    # id = len(existing_questions)+1), so the only valid answer here is for the
-    # question immediately following the one the session currently points at.
-    expected_question_id = session["current_question"] + 1
-    if answer.question_id != expected_question_id:
-        logger.info(f"[ONBOARDING] Stale answer rejected: session={session_id} got question_id={answer.question_id}, expected {expected_question_id}")
-        raise HTTPException(status_code=409, detail="Answer for a stale or already-answered question")
+    logger.info(f"[ONBOARDING] Player {session['player_id']} rejected proposal {rejections}/{ONBOARDING_MAX_REROLLS} (forced={forced})")
 
-    # Atomically reserve the next slot BEFORE the (slow, 30-60s) species/gender
-    # generation. Two concurrent answers to the same question both pass the id
-    # check above with the same in-memory snapshot, but only one CAS wins — the
-    # loser is rejected here. Without this, a player spamming the inline buttons
-    # got N parallel generations of the next question ("Ситуация 7" sent 4 times).
-    if not reserve_onboarding_slot(session_id, session["current_question"]):
-        logger.info(f"[ONBOARDING] Duplicate answer race rejected for session={session_id}")
-        raise HTTPException(status_code=409, detail="Answer for a stale or already-answered question")
-
-    answers = session["answers"].copy()
-    answers[answer.question_id] = answer.answer
-    current_question = session["current_question"] + 1
-
-    session_questions = session.get("questions", [])
-
-    question_adapter = TypeAdapter(list[OnboardingQuestion])
-    dynamic_questions = question_adapter.validate_python(session_questions) if session_questions else []
-
-    # Role questions are the tag-less ones; species/gender questions carry tags.
-    role_count = sum(1 for q in dynamic_questions if not _question_has_sg_tags(q))
-    total_questions = role_count + SPECIES_GENDER_QUESTIONS_TOTAL
-    completed = current_question >= total_questions
-
-    next_question = None
-    questions_changed = False
-    pending_sg = False
-    dimension = None
-    sg_step = None
-    if not completed:
-        if current_question < len(dynamic_questions):
-            # Question already exists (a role question, or a species/gender question
-            # built in a previous step with its option images already attached).
-            next_question = dynamic_questions[current_question]
-        else:
-            # Dynamic species/gender phase. The next question (LLM text + 6
-            # option images) can take several minutes when ComfyUI is busy,
-            # which exceeds the bot's HTTP timeout. Generate it in the
-            # background and deliver via push, mirroring the role-question-1
-            # flow at onboarding start.
-            sg_step = current_question - role_count + 1  # 1-based within the S/G sequence
-            dimension = SPECIES_GENDER_DIMENSIONS[sg_step - 1]
-            pending_sg = True
-
-    # Persist progress (and the newly generated question, if any).
-    update_onboarding_session(
-        session_id,
-        current_question,
-        answers,
-        completed,
-        effective_language,
-        questions=[q.model_dump() for q in dynamic_questions] if questions_changed else None,
+    asyncio.create_task(
+        _background_character_proposal(
+            player_id=session["player_id"],
+            game_id=game_id,
+            session_id=session_id,
+            language=language,
+            game_title_data={},
+            needs_splash=False,
+            forced=forced,
+        )
     )
 
-    if pending_sg:
-        player_id = session.get("player_id")
-        if player_id:
-            asyncio.create_task(
-                _background_sg_question(
-                    player_id=int(player_id),
-                    game_id=game_id,
-                    session_id=session_id,
-                    dimension=dimension,
-                    sg_step=sg_step,
-                    language=effective_language,
-                )
-            )
-
-    # Profile generation (role-flavour + species-description LLM calls) is
-    # deferred to /complete, so /answer returns immediately when onboarding
-    # finishes and the bot can show the "processing" message without delay.
-    return {
-        "completed": completed,
-        "next_question": next_question.model_dump() if next_question else None,
-        "pending_sg": pending_sg,
-    }
+    return {"rejections": rejections, "forced": forced}
 
 
 async def _generate_game_concept(game_id: str, language: str) -> dict:
@@ -1508,267 +1191,27 @@ async def _ensure_missions_for_started_games() -> None:
 
 @app.post("/onboarding/{session_id}/complete")
 async def complete_onboarding(session_id: str):
-    """Complete onboarding and trigger avatar generation"""
+    """Accept the proposed character and finish onboarding.
+
+    Builds the player profile from the stored proposal (the avatar was already
+    generated with it), runs post-join logic (game start, briefing inherit)
+    and returns the completion payload. Idempotent: calling it for an already
+    completed session just re-derives the payload.
+    """
     session = get_onboarding_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if not session["completed"]:
-        raise HTTPException(status_code=400, detail="Onboarding not completed yet")
+    proposal = session.get("proposal")
+    if not proposal:
+        raise HTTPException(status_code=400, detail="No character proposal yet")
 
-    player_id = session["player_id"]
     answers_data = session.get("answers", {})
     game_id = session.get("game_id") or answers_data.get(-1) or answers_data.get("-1")
     if not game_id:
         raise HTTPException(status_code=400, detail="Session has no game_id")
 
-    # Build the player profile on demand (role-flavour + species-description
-    # LLM calls). Moved here from /answer so that /answer returns immediately
-    # and the bot can show the "processing" message before flavour generation.
-    profile = get_player_profile(player_id)
-    if not profile:
-        profile_answers = {k: v for k, v in answers_data.items() if str(k) not in ("-1", "-2")}
-        player_name = answers_data.get(-2) or answers_data.get("-2", "")
-        profile_data = await generate_player_profile_from_answers(
-            player_id,
-            profile_answers,
-            game_id=game_id,
-            language=session.get("language", "en"),
-            questions=session.get("questions", []),
-            player_name=player_name,
-            session_id=session_id,
-        )
-        create_player_profile(profile_data)
-        profile = get_player_profile(player_id)
-        if not profile:
-            raise HTTPException(status_code=500, detail="Failed to create player profile")
-        # If the player is returning (e.g. after /reset), deactivate any active
-        # NPC that was created to replace them on a previous role — otherwise it
-        # would duplicate them in the team roster and turn generation.
-        ghosts = deactivate_replacement_npcs_for_player(player_id, game_id)
-        if ghosts:
-            logger.info(f"[ONBOARDING] Deactivated {ghosts} ghost NPC(s) for returning player {player_id} in game {game_id}")
-        cleared_kicks = clear_kicks_for_returning_player(player_id, game_id)
-        if cleared_kicks:
-            logger.info(f"[ONBOARDING] Cleared {cleared_kicks} stale kick record(s) for returning player {player_id} in game {game_id}")
-
-    # Generate avatar using ComfyUI directly
-    # Step 1: Generate avatar prompt (LLM) with fallback to template
-    avatar_prompt = ""
-    try:
-        game_server = create_game_server(language=session.get("language", "en"))
-
-        species_desc = profile.get("species_description") or ""
-        species_type = profile.get("species", "") or ""
-        gender_type = profile.get("gender", "") or ""
-        species_primary = profile.get("species_primary_key") or ""
-        if species_desc or species_type or gender_type:
-            parts = [profile.get("avatar_description", "")]
-            if species_type:
-                parts.append(f"Species type: {species_type}")
-            # A human gender label (Male/Female) is a strong humanoid prior that
-            # collapses alien anatomy back into a person, so for non-humanoid,
-            # energy, and symbiotic beings we let the LLM invent a fitting
-            # non-human biological identity instead of passing the gender through.
-            if gender_type and species_primary not in ("non_humanoid", "energy", "symbiotic"):
-                parts.append(f"Gender type: {gender_type}")
-            if species_desc:
-                parts.append(f"Appearance: {species_desc}")
-            avatar_description_combined = "\n".join(parts)
-        else:
-            avatar_description_combined = profile.get("avatar_description", "")
-
-        avatar_prompt = await game_server.generate_avatar_prompt(
-            role=profile["role"], traits=profile["personality_traits"], avatar_description=avatar_description_combined, species_category=profile.get("species_primary_key") or "", game_id=game_id, player_id=str(player_id), turn=None, kind="avatar_prompt"
-        )
-        logger.info(f"[AVATAR] LLM prompt for player {player_id}: {avatar_prompt}...")
-    except Exception as e:
-        logger.warning(f"[AVATAR] LLM prompt generation failed for player {player_id}: {e}")
-
-    # Step 2: Use LLM prompt or build fallback
-    if not avatar_prompt:
-        traits_str = ", ".join(profile.get("personality_traits", []))
-        species_desc = profile.get("species_description", "")
-        species_type = profile.get("species", "") or ""
-        gender_type = profile.get("gender", "") or ""
-        avatar_desc = profile.get("avatar_description", "")
-        combined_desc = f"{avatar_desc} {species_type} {gender_type} {species_desc}".lower()
-
-        # Detect species category from available text
-        species_cat = "human"
-        cat_keywords = {
-            "energy": [
-                "energy being",
-                "энергетическ",
-                "plasma",
-                "energy field",
-                "gaseous",
-                "frequency",
-                "resonance",
-                "light being",
-            ],
-            "cybernetic": [
-                "cybernetic",
-                "кибернетическ",
-                "robotic",
-                "mechanical",
-                "synthetic",
-                "machine",
-                "android",
-                "cyborg",
-                "digital",
-            ],
-            "symbiotic": [
-                "symbiotic",
-                "симбиотическ",
-                "symbiont",
-                "composite",
-                "multiple beings",
-                "host",
-                "union",
-                "collective",
-            ],
-            "non_humanoid": [
-                "non_humanoid",
-                "негуманоид",
-                "tentacle",
-                "carapace",
-                "exoskeleton",
-                "crystalline",
-                "кристаллическ",
-                "щупальц",
-                "панцирь",
-                "экзоскелет",
-                "бесформенн",
-                "amorphous",
-                "alien anatomy",
-                "multiple limb",
-            ],
-            "humanoid": ["humanoid", "гуманоид"],
-        }
-        for cat, keywords in cat_keywords.items():
-            if any(kw in combined_desc for kw in keywords):
-                species_cat = cat
-                break
-
-        fallback_templates = {
-            "human": (f"Sci-fi character portrait of a {profile['role']} in Star Trek style. Personality traits: {traits_str}. {avatar_desc} Futuristic uniform, cinematic lighting, detailed face, 4K quality. Portrait, upper body, space opera aesthetic."),
-            "humanoid": (
-                f"Sci-fi character portrait of a humanoid {profile['role']} in Star Trek style. "
-                f"Personality traits: {traits_str}. "
-                f"{avatar_desc} "
-                f"{species_desc} "
-                f"Humanoid with subtle alien features, futuristic uniform, "
-                f"cinematic lighting, detailed face, 4K quality. "
-                f"Portrait, upper body, space opera aesthetic."
-            ),
-            "non_humanoid": (
-                f"Alien creature concept art of a non-humanoid {profile['role']}. "
-                f"Personality traits: {traits_str}. "
-                f"Creature form: {avatar_desc} "
-                f"{species_desc} "
-                f"The creature is NOT a human or humanoid: no two arms ending in hands, "
-                f"no two legs, no human face or hair, not a bipedal silhouette, no uniform. "
-                f"Cinematic lighting, 4K quality, detailed alien biology. "
-                f"Full body or 3/4 view showing the alien physiology."
-            ),
-            "energy": (
-                f"Abstract energy-being concept art of an energy being {profile['role']}. "
-                f"Personality traits: {traits_str}. "
-                f"Form: {avatar_desc} "
-                f"{species_desc} "
-                f"Glowing plasma energy form, luminous, ethereal, no solid body, "
-                f"no face, no limbs, not a human or humanoid. "
-                f"Cinematic lighting, 4K quality. "
-                f"Full body showing the energy form."
-            ),
-            "cybernetic": (
-                f"Sci-fi concept art of a cybernetic {profile['role']}. "
-                f"Personality traits: {traits_str}. "
-                f"Form: {avatar_desc} "
-                f"{species_desc} "
-                f"Mechanical body, circuits, synthetic components, "
-                f"cinematic lighting, 4K quality. "
-                f"Full body or 3/4 view showing cybernetic anatomy."
-            ),
-            "symbiotic": (
-                f"Alien creature concept art of a symbiotic being {profile['role']}. "
-                f"Personality traits: {traits_str}. "
-                f"Form: {avatar_desc} "
-                f"{species_desc} "
-                f"Composite organism, multiple life forms in one body, "
-                f"not a single humanoid body, no human face. "
-                f"Cinematic lighting, 4K quality. "
-                f"Full body view showing the composite nature."
-            ),
-        }
-        avatar_prompt = fallback_templates.get(species_cat, fallback_templates["human"])
-        logger.info(f"[AVATAR] Using fallback prompt ({species_cat}) for player {player_id}: {avatar_prompt}...")
-
-    # Step 3: Call ComfyUI to generate the avatar
-    try:
-        image_generator = create_image_generator()
-        logger.info(f"[AVATAR] Calling ComfyUI at {image_generator.comfyui_url} for avatar generation")
-        avatar_url = await image_generator.generate_avatar_image(
-            prompt=avatar_prompt,
-            filename_prefix=f"{game_id}/avatar_{player_id}",
-            width=768,
-            height=1024,
-            game_id=game_id,
-            player_id=str(player_id),
-            turn=None,
-            kind="avatar",
-        )
-
-        if avatar_url:
-            logger.info(f"[AVATAR] URL received for player {player_id}: {avatar_url}")
-            update_player_profile_avatar(player_id, avatar_url)
-            profile["avatar_url"] = avatar_url
-        else:
-            logger.warning(f"[AVATAR] ComfyUI returned None for player {player_id}")
-
-    except Exception as e:
-        logger.error(f"[AVATAR] ComfyUI generation failed for player {player_id}: {type(e).__name__}: {e}", exc_info=True)
-        # Continue without avatar URL
-
-    # Check player count and start game if >= GAME_START_MIN_PLAYERS
-    player_count = get_player_count_in_game(game_id)
-    game_was_started = False
-    if player_count >= GAME_START_MIN_PLAYERS:
-        game_was_started = start_game(game_id)
-        if game_was_started:
-            # Register this game with the scheduler
-            asyncio.create_task(_register_game_in_scheduler(game_id, None))
-            # Auto-start skips _original_start_game, so generate the mission
-            # (archetype + objectives) and the bridge image explicitly —
-            # otherwise the game runs without them.
-            game_lang = get_game_language(game_id)
-            asyncio.create_task(_generate_started_game_assets(game_id, game_lang))
-
-    game_started = is_game_started(game_id)
-
-    # If joining an already-running game (this onboarding did not start it),
-    # let the player inherit the current turn's NPC briefing so they can
-    # participate immediately instead of waiting for the next generated turn.
-    if game_started and not game_was_started:
-        game_lang = get_game_language(game_id)
-        asyncio.create_task(_inherit_npc_briefing_for_player(player_id, game_id, game_lang))
-
-    # Get all other players in the game (for notification)
-    all_players = get_players_in_game(game_id)
-    other_players = [p for p in all_players if p != player_id]
-
-    return {
-        "status": "completed",
-        "profile": profile,
-        "avatar_url": profile.get("avatar_url"),
-        "game_started": game_started,
-        "game_just_started": game_was_started,
-        "player_count": player_count,
-        "other_player_ids": other_players,
-        "game_title": get_game_title(game_id) or "",
-        "language": get_game_language(game_id),
-    }
+    return await _finalize_onboarding_session(session, proposal)
 
 
 def update_player_profile_avatar(player_id: int, avatar_url: str) -> bool:
@@ -2002,21 +1445,11 @@ async def generate_player_avatar_endpoint(player_id: int):
 
 
 @app.get("/onboarding/{session_id}")
-async def get_onboarding_status(session_id: str, language: str):
-    """Get onboarding session status"""
+async def get_onboarding_status(session_id: str):
+    """Get onboarding session status: the pending character proposal (if any)."""
     session = get_onboarding_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    next_question = None
-    if not session["completed"]:
-        # Get questions from session (pre-generated, no need to regenerate)
-        session_questions = session.get("questions", [])
-        if session_questions:
-            question_adapter = TypeAdapter(list[OnboardingQuestion])
-            dynamic_questions = question_adapter.validate_python(session_questions)
-            remaining_questions = dynamic_questions[session["current_question"] :]
-            next_question = remaining_questions[0] if remaining_questions else None
 
     answers_data = session.get("answers", {})
     session_game_id = session.get("game_id") or answers_data.get(-1) or answers_data.get("-1")
@@ -2026,9 +1459,9 @@ async def get_onboarding_status(session_id: str, language: str):
     return {
         "session_id": session["session_id"],
         "game_id": session_game_id,
-        "current_question": session["current_question"],
+        "rejections": session["current_question"],
         "completed": session["completed"],
-        "next_question": next_question.model_dump() if next_question else None,
+        "proposal": session.get("proposal"),
     }
 
 

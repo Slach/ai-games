@@ -182,23 +182,6 @@ DIVERSITY_HINTS: dict[str, str] = {
         "- Overall mood (ready for action, tense standoff, routine calm, crisis)\n"
     ),
     "scene_prompt": ("Vary across these axes:\n- Color palette (cold blues, warm ambers, sickly greens, stark monochrome)\n- Atmosphere (fog, sparks, zero-g float, alien bioluminescence)\n- Scene scale (intimate close-up, expansive epic wide shot)\n"),
-    "onboarding_questions": (
-        "Vary across these axes to AVOID every session opening with the same scenes "
-        "(engine failure, unknown alien, medbay outbreak, piloting crisis, security test):\n"
-        "- Scenario archetype (diplomatic incident, scientific anomaly, social/crew conflict, "
-        "moral dilemma, exploration of the unknown, discovery, routine duty gone wrong) — "
-        "do NOT default to 'something broke' or 'an alien appeared'\n"
-        "- Location (bridge, engineering, medbay, cargo hold, shuttle bay, planet surface, "
-        "ruins, derelict, nebula, marketplace, diplomatic reception, mess hall, quarters)\n"
-        "- Threat origin (mechanical, biological, social, political, psychological, environmental, "
-        "unknown — rotate, never reuse the same origin twice in one set)\n"
-        "- Emotional register (wonder, dread, humor, grief, temptation, loyalty tested, boredom "
-        "shattered) — no two questions in a set share the same register\n"
-        "- What the player must DO (persuade, investigate, repair, command, deceive, comfort, "
-        "sacrifice, improvise, abstain)\n"
-        "The k candidate SETS must differ as wholes — different scenario mix, different "
-        "locations, different opening hook — not just rephrasings of the same five situations."
-    ),
     "role_flavour": (
         "Vary across these axes so no two holders of the same role read alike:\n"
         "- Flavour / command style (by-the-book, maverick, weary veteran, idealistic rookie, "
