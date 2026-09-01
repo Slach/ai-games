@@ -244,11 +244,11 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                         "properties": {
                             "character_name": {
                                 "type": "string",
-                                "description": "Character name (player name or NPC name)",
+                                "description": "Bare character name (player name or NPC name) WITHOUT the role in parentheses and WITHOUT the [entity_id]: 'KhaGar', not 'KhaGar (Security Chief) [p123]'",
                             },
                             "role": {
                                 "type": "string",
-                                "description": "Role on the ship",
+                                "description": "Role on the ship, goes ONLY here — never inside character_name",
                             },
                             "outcome_text": {
                                 "type": "string",
@@ -366,7 +366,9 @@ _COMBINED_OUTCOME_USER_RU = (
     "('critical'→'moderate', 'moderate'→'minor', 'minor'→'healthy'=полное излечение). "
     "Редкое событие; оставляй пустым, если лечения не было.\n"
     "13. personal_outcomes — МАССИВ объектов {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
-    "для КАЖДОГО персонажа, принимавшего решение.\n\n"
+    "для КАЖДОГО персонажа, принимавшего решение. "
+    "В character_name — ТОЛЬКО чистое имя персонажа, без роли в скобках и без [entity_id] "
+    "(роль указывай отдельно в поле role), иначе роль задублируется в сообщении игроку.\n\n"
     "Всё на русском языке."
 )
 
@@ -457,7 +459,9 @@ _COMBINED_OUTCOME_USER_EN = (
     "('critical'→'moderate', 'moderate'→'minor', 'minor'→'healthy'=fully healed). "
     "Rare event; leave empty if no treatment happened.\n"
     "13. personal_outcomes — ARRAY of {{'character_name': ..., 'role': ..., 'outcome_text': ...}} "
-    "for EVERY character who made a decision.\n"
+    "for EVERY character who made a decision. "
+    "In character_name put the BARE name only — no role in parentheses, no [entity_id] "
+    "(the role goes in the separate 'role' field), otherwise the role is duplicated in the player message."
 )
 
 
