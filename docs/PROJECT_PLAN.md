@@ -163,7 +163,7 @@ Database: SQLite (game_server.db per service)
 - Push server (`push_server.py`) for receiving briefings from API
 - Language support (per-player preference)
 
-### 4. Game Master Scheduler — `game-scheduler/game_server.py`
+### 4. Game Master Scheduler — `game-scheduler/main.py`
 
 - Standalone async service that calls game-server
 - Configurable schedule: interval (Nh/Nm/Ns), daily (HH:MM or HH:MM,...), multi-daily (DAY-HH:MM)
@@ -198,6 +198,10 @@ Database: SQLite (game_server.db per service)
 - Ship role definitions and constraints
 - Mission normalization and seed selection
 - Species and gender definitions for onboarding
+- Deterministic rules layer over LLM outcomes: mission regression caps and
+  stage freeze, persistent ship state from per-turn deltas, wound escalation
+  ladder (critical + new wound = death), doom-clock tick, NPC loyalty changes
+  and mutiny conditions, five-token outcome matrix, VS risk reweighting
 
 ### 8. Prompts — `game-server/prompts.py`
 
@@ -259,12 +263,18 @@ cd game-server && ../.venv/bin/python -m unittest discover -s tests
 - [x] Turn scheduler with configurable interval
 - [x] Player profiles (species, gender, role, traits)
 - [x] Onboarding flow with dynamic questions
-- [x] Player action system with auto-selection
-- [x] NPC system (decisions, dialogues, role-filling)
+- [x] Player action system with auto-selection (LLM pick, honest "delay" fallback)
+- [x] NPC system (decisions, dialogues, bounded pool of 4 key roles)
 - [x] Mission system
 - [x] Push server for Telegram notifications
 - [x] Language support (English/Russian)
-- [x] Game-over detection and ending generation
+- [x] Game-over detection and ending generation (5 end reasons, 5 outcome tokens)
+- [x] Doom clock: threat level 0-100 ticked by code every turn, ends the game at 100
+- [x] Persistent ship state (hull/shields/offline systems) from LLM per-turn deltas
+- [x] Wound escalation ladder with mechanical deaths (critical + new wound)
+- [x] NPC loyalty and mutiny ending (2+ NPCs at loyalty <= 15)
+- [x] Turn deadline with T-2h/T-30m reminders
+- [x] Post-game summary push and /admin/win-rate telemetry
 - [x] Comic generation via ComfyUI + Pixelle MCP
 - [x] Avatar generation
 - [x] SQLite persistence with migration system

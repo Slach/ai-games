@@ -81,7 +81,10 @@ ONBOARDING = {
         "name_question": "🗣 *Как вас зовут?*\n\nНапишите имя вашего персонажа (или своё настоящее имя):",
         "name_length_error": "Пожалуйста, напишите имя длиной от 1 до 50 символов:",
         "game_name_confirmation": "✅ Ваше игровое имя: {name}",
+        "game_over_triumph_title": "✨ *ИГРА ЗАВЕРШЕНА — ТРИУМФ!*",
         "game_over_victory_title": "🏆 *ИГРА ЗАВЕРШЕНА — ПОБЕДА!*",
+        "game_over_pyrrhic_title": "🔥 *ИГРА ЗАВЕРШЕНА — ПОБЕДА ЛЮБОЙ ЦЕНОЙ*",
+        "game_over_stalemate_title": "⚖️ *ИГРА ЗАВЕРШЕНА — НИЧЬЯ*",
         "game_over_defeat_title": "💀 *ИГРА ЗАВЕРШЕНА — ПОРАЖЕНИЕ*",
         "game_over_continue": "🎮 *Что дальше?*\n\nВыберите игру, чтобы присоединиться, или начните новую:",
         "schedule_question": "⏰ *Расписание ходов*\n\nИгра будет автоматически генерировать новые ходы по расписанию. Выберите готовый вариант кнопкой ниже или нажмите «✏️ Свой формат», чтобы задать своё.",
@@ -135,7 +138,10 @@ ONBOARDING = {
         "name_question": "🗣 *What is your name?*\n\nEnter your character name (or your real name):",
         "name_length_error": "Please enter a name between 1 and 50 characters:",
         "game_name_confirmation": "✅ Your game name: {name}",
+        "game_over_triumph_title": "✨ *GAME OVER — TRIUMPH!*",
         "game_over_victory_title": "🏆 *GAME OVER — VICTORY!*",
+        "game_over_pyrrhic_title": "🔥 *GAME OVER — PYRRHIC VICTORY*",
+        "game_over_stalemate_title": "⚖️ *GAME OVER — STALEMATE*",
         "game_over_defeat_title": "💀 *GAME OVER — DEFEAT*",
         "game_over_continue": "🎮 *What next?*\n\nSelect a game to join or start a new one:",
         "schedule_question": "⏰ *Turn schedule*\n\nThe game will automatically generate new turns on a schedule. Choose a preset below or tap «✏️ Custom format» to define your own.",
@@ -207,14 +213,20 @@ CURRENT_TURN = {
         "actions": "*Ваши варианты действий:*\n{actions}",
         "select_action": "Выберите действие ниже:",
         "briefing_header": "{briefing}",
+        "deadline": "⏳ Ход закроется: {deadline}",
         "error": "Не удалось получить информацию о текущем ходе: {error}",
         "outcome_title": "🎬 *Итоги хода {turn}*",
         "global_intro_title": "🌌 *Ход {turn} — Общая вводная*",
+        "game_over_triumph_title": "✨ *Игра завершена — Триумф!*",
         "game_over_victory_title": "🏆 *Игра завершена — Победа!*",
+        "game_over_pyrrhic_title": "🔥 *Игра завершена — Победа любой ценой*",
+        "game_over_stalemate_title": "⚖️ *Игра завершена — Ничья*",
         "game_over_defeat_title": "💀 *Игра завершена — Поражение*",
         "game_over_reason_mission_complete": "Миссия выполнена успешно.",
         "game_over_reason_ship_destroyed": "Корабль уничтожен.",
         "game_over_reason_crew_wiped": "Весь экипаж погиб.",
+        "game_over_reason_overwhelmed": "Угроза достигла предела.",
+        "game_over_reason_mutiny": "Мятеж экипажа.",
         "game_over_reason_game_over": "Игра окончена.",
         "game_over_no_finale": "Игра завершена, но финальная история недоступна.",
     },
@@ -225,14 +237,20 @@ CURRENT_TURN = {
         "actions": "*Your action choices:*\n{actions}",
         "select_action": "Select an action below:",
         "briefing_header": "{briefing}",
+        "deadline": "⏳ Turn closes at: {deadline}",
         "error": "Could not get information about the current turn: {error}",
         "outcome_title": "🎬 *Turn {turn} Outcome*",
         "global_intro_title": "🌌 *Turn {turn} — Common Briefing*",
+        "game_over_triumph_title": "✨ *Game Over — Triumph!*",
         "game_over_victory_title": "🏆 *Game Over — Victory!*",
+        "game_over_pyrrhic_title": "🔥 *Game Over — Pyrrhic Victory*",
+        "game_over_stalemate_title": "⚖️ *Game Over — Stalemate*",
         "game_over_defeat_title": "💀 *Game Over — Defeat*",
         "game_over_reason_mission_complete": "Mission completed successfully.",
         "game_over_reason_ship_destroyed": "Ship destroyed.",
         "game_over_reason_crew_wiped": "All crew lost.",
+        "game_over_reason_overwhelmed": "The threat reached its limit.",
+        "game_over_reason_mutiny": "Crew mutiny.",
         "game_over_reason_game_over": "Game over.",
         "game_over_no_finale": "Game ended, but the finale is unavailable.",
     },
@@ -249,6 +267,19 @@ ACTIONS = {
         "recorded": "Your choice has been recorded!\n\nThe Game Master will process your decision and update the plot.\n\nYou can continue communicating with the Game Master or wait for the next turn.",
         "error": "An error occurred while recording the choice: {error}",
         "action_caption": "🎬 Your action in the current episode",
+    },
+}
+
+# Turn-deadline reminders (sent by game-scheduler via game-server
+# at T-2h (level 1) and T-30m (level 2) before the turn closes).
+TURN_REMINDER = {
+    LANGUAGE_RU: {
+        1: "⏳ До конца хода {turn} осталось ~2 часа — ты ещё не выбрал действие. Промедление будет зафиксировано автоматически и усилит угрозу.",
+        2: "⏳ До конца хода {turn} осталось ~30 минут — ты ещё не выбрал действие. Промедление будет зафиксировано автоматически и усилит угрозу.",
+    },
+    LANGUAGE_EN: {
+        1: "⏳ About 2 hours left until turn {turn} closes — you haven't chosen an action yet. Hesitation will be recorded automatically and raise the threat.",
+        2: "⏳ About 30 minutes left until turn {turn} closes — you haven't chosen an action yet. Hesitation will be recorded automatically and raise the threat.",
     },
 }
 
@@ -343,6 +374,10 @@ TEAM = {
         "roster": "*Состав команды:*\n{details}",
         "entry": "{name} — {role} | {species} | {gender}",
         "entry_dead": "💀 {name} — {role} | {species} | {gender}",
+        "loyalty_steadfast": "предан",
+        "loyalty_uneasy": "нервничает",
+        "loyalty_on_edge": "на грани",
+        "loyalty_mutinous": "готов взбунтоваться",
         "no_team": "🚫 Команда не найдена. Сначала присоединитесь к игре.",
         "api_error": "❌ Ошибка получения данных команды.",
     },
@@ -351,6 +386,10 @@ TEAM = {
         "roster": "*Crew Roster:*\n{details}",
         "entry": "{name} — {role} | {species} | {gender}",
         "entry_dead": "💀 {name} — {role} | {species} | {gender}",
+        "loyalty_steadfast": "steadfast",
+        "loyalty_uneasy": "uneasy",
+        "loyalty_on_edge": "on edge",
+        "loyalty_mutinous": "ready to mutiny",
         "no_team": "🚫 No crew found. Join a game first.",
         "api_error": "❌ Error fetching crew data.",
     },
@@ -409,27 +448,27 @@ RESET = {
     LANGUAGE_RU: {
         "confirm": (
             "⚠️ *Сброс участия в игре*\n\n"
-            "Это действие необратимо. Вы покинете текущую игру — ваш персонаж будет "
-            "заменён на NPC, а все ответы онбординга будут удалены. Затем вы сможете "
-            "начать заново с выбора языка и вступления в новую игру.\n\n"
+            "Это действие необратимо. Вы покинете текущую игру — ваше место "
+            "в экипаже останется пустым, а все ответы онбординга будут "
+            "удалены. Затем вы сможете начать заново с выбора языка и "
+            "вступления в новую игру.\n\n"
             "Продолжить?"
         ),
         "confirm_yes": "✅ Начать заново",
         "confirm_no": "❌ Отмена",
         "cancelled": "Сброс отменён, вы продолжаете в текущей игре.",
         "nothing_to_reset": "У вас нет активного профиля или онбординга — нечего сбрасывать. Используйте /start, чтобы начать.",
-        "resetting": "⏳ Сбросываю ваше участие в игре...",
-        "success": ("✅ *Сброс выполнен!*\n\nВаш персонаж заменён на NPC{npc_part}, профиль и онбординг удалены.\n\nДавайте начнём сначала 🌐"),
-        "success_npc_part": ": {npc_name}",
+        "resetting": "⏳ Сбрасываю ваше участие в игре...",
+        "success": ("✅ *Сброс выполнен!*\n\nВы покинули игру, профиль и онбординг удалены.\n\nДавайте начнём сначала 🌐"),
         "error": "Не удалось выполнить сброс: {error}",
     },
     LANGUAGE_EN: {
         "confirm": (
             "⚠️ *Reset game participation*\n\n"
-            "This is irreversible. You will leave your current game — your character "
-            "will be replaced by an NPC, and all your onboarding answers will be "
-            "deleted. You can then start over from language selection and join a new "
-            "game.\n\n"
+            "This is irreversible. You will leave your current game — your crew "
+            "seat will stay empty, and all your onboarding answers will be "
+            "deleted. You can then start over from language selection and join a "
+            "new game.\n\n"
             "Continue?"
         ),
         "confirm_yes": "✅ Start over",
@@ -437,8 +476,7 @@ RESET = {
         "cancelled": "Reset cancelled — you remain in your current game.",
         "nothing_to_reset": "You have no active profile or onboarding to reset. Use /start to begin.",
         "resetting": "⏳ Resetting your game participation...",
-        "success": ("✅ *Reset complete!*\n\nYour character was replaced by an NPC{npc_part}, your profile and onboarding have been deleted.\n\nLet's start over 🌐"),
-        "success_npc_part": ": {npc_name}",
+        "success": ("✅ *Reset complete!*\n\nYou have left the game; your profile and onboarding have been deleted.\n\nLet's start over 🌐"),
         "error": "Reset failed: {error}",
     },
 }
@@ -474,7 +512,7 @@ GM_COMMANDS = {
         "kick_usage": "❌ Использование: /gm_kick <game_id> <role_key> [причина]\n\nПример: /gm_kick abc123 chief_engineer Неактивен более 3 дней",
         "default_kick_reason": "Не указана",
         "kicking_player": "⏳ Изгнание игрока с ролью `{role_key}` из игры `{game_id}`...",
-        "player_kicked": "✅ *Игрок изгнан!*\n\n🎮 Игра: `{game_id}`\n👤 Игрок: `{kicked_id}`\n🤖 Заменён NPC: {npc_name}\n📝 Причина: {reason}\n\nУведомление отправлено игроку.",
+        "player_kicked": "✅ *Игрок изгнан!*\n\n🎮 Игра: `{game_id}`\n👤 Игрок: `{kicked_id}`\n🪑 Место в экипаже оставлено пустым\n📝 Причина: {reason}\n\nУведомление отправлено игроку.",
         "unknown_error": "Неизвестная ошибка",
         "no_api_response": "Нет ответа от API",
         "kick_error": "❌ Ошибка изгнания игрока: {error}",
@@ -498,11 +536,16 @@ GM_COMMANDS = {
         "status_error": "❌ Ошибка получения статуса: {error}",
         "list_games_error": "❌ Ошибка получения списка игр: {error}",
         "game_ended_label": "🏁 Игра завершена",
+        "ended_triumph_label": "✨ Триумф",
         "ended_victory_label": "🏆 Победа",
+        "ended_pyrrhic_label": "🔥 Победа любой ценой",
+        "ended_stalemate_label": "⚖️ Ничья",
         "ended_defeat_label": "💀 Поражение",
         "ended_reason_mission_complete": "🏆 Миссия выполнена — победа!",
         "ended_reason_ship_destroyed": "💀 Корабль уничтожен",
         "ended_reason_crew_wiped": "☠ Весь экипаж погиб",
+        "ended_reason_overwhelmed": "🌊 Угроза достигла предела",
+        "ended_reason_mutiny": "⚔️ Мятеж экипажа",
         "ended_reason_game_over": "Игра окончена",
         "status_ended_header": "🏁 *Игра `{game_id}` завершена*\n\n📛 Миссия: {mission_name}\n🎭 Архетип: {archetype}\n🎯 Финальный ход: {turn}\n⚰️ Причина: {reason}\n🛸 Корабль: {ship}\n👤 Игроков: {player_count} (в живых: {alive_count})\n🤖 NPC: {npc_count} (активных: {npc_alive_count})",
         "set_language_usage": "❌ Использование: /gm_lang <game_id> <ru|en>\n\nПример: /gm_lang abc123 en",
@@ -553,7 +596,7 @@ GM_COMMANDS = {
         "kick_usage": "❌ Usage: /gm_kick <game_id> <role_key> [reason]\n\nExample: /gm_kick abc123 chief_engineer Inactive for more than 3 days",
         "default_kick_reason": "Not specified",
         "kicking_player": "⏳ Kicking player with role `{role_key}` from game `{game_id}`...",
-        "player_kicked": "✅ *Player kicked!*\n\n🎮 Game: `{game_id}`\n👤 Player: `{kicked_id}`\n🤖 Replaced by NPC: {npc_name}\n📝 Reason: {reason}\n\nNotification sent to player.",
+        "player_kicked": "✅ *Player kicked!*\n\n🎮 Game: `{game_id}`\n👤 Player: `{kicked_id}`\n🪑 Crew seat left empty\n📝 Reason: {reason}\n\nNotification sent to player.",
         "unknown_error": "Unknown error",
         "no_api_response": "No API response",
         "kick_error": "❌ Error kicking player: {error}",
@@ -577,11 +620,16 @@ GM_COMMANDS = {
         "status_error": "❌ Error fetching game status: {error}",
         "list_games_error": "❌ Error fetching game list: {error}",
         "game_ended_label": "🏁 Game ended",
+        "ended_triumph_label": "✨ Triumph",
         "ended_victory_label": "🏆 Victory",
+        "ended_pyrrhic_label": "🔥 Pyrrhic victory",
+        "ended_stalemate_label": "⚖️ Stalemate",
         "ended_defeat_label": "💀 Defeat",
         "ended_reason_mission_complete": "🏆 Mission completed — victory!",
         "ended_reason_ship_destroyed": "💀 Ship destroyed",
         "ended_reason_crew_wiped": "☠ All crew lost",
+        "ended_reason_overwhelmed": "🌊 Overwhelmed by the threat",
+        "ended_reason_mutiny": "⚔️ Crew mutiny",
         "ended_reason_game_over": "Game over",
         "status_ended_header": "🏁 *Game `{game_id}` ended*\n\n📛 Mission: {mission_name}\n🎭 Archetype: {archetype}\n🎯 Final turn: {turn}\n⚰️ Reason: {reason}\n🛸 Ship: {ship}\n👤 Players: {player_count} (alive: {alive_count})\n🤖 NPCs: {npc_count} (active: {npc_alive_count})",
         "set_language_usage": "❌ Usage: /gm_lang <game_id> <ru|en>\n\nExample: /gm_lang abc123 en",
@@ -645,6 +693,12 @@ def get_actions(language: str):
     return ACTIONS.get(language, ACTIONS[LANGUAGE_RU])
 
 
+def get_turn_reminder(language: str, level: int):
+    """Get the turn-deadline reminder text for a level (1 = T-2h, 2 = T-30m)."""
+    reminders = TURN_REMINDER.get(language, TURN_REMINDER[LANGUAGE_RU])
+    return reminders.get(level, reminders[2])
+
+
 def get_messages(language: str):
     """Get message handling strings for a specific language"""
     return MESSAGES.get(language, MESSAGES[LANGUAGE_RU])
@@ -689,6 +743,7 @@ PUSH_OUTCOME = {
         "ship_destroyed": "💥 Корабль уничтожен!",
         "hull": "🛡 Корпус: {value}%",
         "shields": "🟡 Щиты: {value}%",
+        "threat": "⚠ Угроза: {bar} {value}/100",
         "crew_alive": "👥 {alive} из {total} членов экипажа живы",
         "crew_alive_one": "👥 {alive} из {total} член экипажа жив",
         "death_notices_header": "☠ Потери экипажа:",
@@ -711,6 +766,7 @@ PUSH_OUTCOME = {
         "ship_destroyed": "💥 Ship destroyed!",
         "hull": "🛡 Hull: {value}%",
         "shields": "🟡 Shields: {value}%",
+        "threat": "⚠ Threat: {bar} {value}/100",
         "crew_alive": "👥 {alive} / {total} crew alive",
         "crew_alive_one": "👥 {alive} / {total} crew alive",
         "death_notices_header": "☠ Crew losses:",

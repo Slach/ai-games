@@ -13,7 +13,15 @@ import re
 from typing import Any, cast
 
 from database import SHIP_ROLE_KEYS
-from game_rules import normalize_mission, select_mission_seeds
+from game_rules import (
+    HULL_MAX,
+    SHIELDS_MAX,
+    compute_risk_factor,
+    normalize_mission,
+    option_badness,
+    reweight_probabilities,
+    select_mission_seeds,
+)
 from llm_config import LLMParams, resolve_llm_params, resolve_max_tokens
 from language import (
     LANGUAGE_EN,
@@ -28,6 +36,10 @@ from prompts import (
     COMBINED_OUTCOME_SCHEMA,
     GAME_OVER_SCHEMA,
     BACKGROUND_LOCATION_TYPES,
+    DELAY_ACTION_TEXT_EN,
+    DELAY_ACTION_TEXT_RU,
+    DELAY_KIND_RULE_EN,
+    DELAY_KIND_RULE_RU,
     build_auto_choice_prompts,
     build_background_prompts_system,
     build_background_prompts_user,
@@ -35,11 +47,11 @@ from prompts import (
     build_content_prompt_note,
     build_crew_dialogue_prompts,
     build_death_notice_prompts,
-    build_turn_story_prompts,
     build_dynamic_sg_question_prompts,
     build_game_over_prompts,
     build_game_title_prompts,
     build_global_circumstances_prompts,
+    format_threat_status,
     build_mission_prompts,
     build_npc_decision_prompts,
     build_npc_dialogue_lang_note,
@@ -173,54 +185,6 @@ NPC_TEMPLATES = {
     },
 }
 
-
-# ============== JSON Schema Definitions ==============
-
-STORY_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "daily_story",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "setting": {
-                    "type": "string",
-                    "description": "Description of the space location, station or planet",
-                },
-                "conflict": {
-                    "type": "string",
-                    "description": "The central problem or mystery",
-                },
-                "narrative": {
-                    "type": "string",
-                    "description": "The story description for the turn",
-                },
-                "decision_points": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "text": {
-                                "type": "string",
-                                "description": "Action description visible to player",
-                            },
-                            "consequence": {
-                                "type": "string",
-                                "description": "Hidden consequence result",
-                            },
-                        },
-                        "required": ["id", "text", "consequence"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "required": ["setting", "conflict", "narrative", "decision_points"],
-            "additionalProperties": False,
-        },
-    },
-}
 
 # Onboarding configuration from environment
 try:
@@ -949,47 +913,6 @@ NPC_NAME_SCHEMA = {
 
 # ============== Game Server ==============
 
-# Each wound severity step removes one action choice from the healthy total.
-# healthy = full set (progress+injury+fatal), then minor→-1, moderate→-2, critical→-3.
-# Trimming order: fatal first (a wounded crew member shouldn't be forced toward a
-# deadly option), then injury, preserving progress actions last.
-_WOUND_ACTION_PENALTY = {"minor": 1, "moderate": 2, "critical": 3}
-
-
-def _actions_for_wound(
-    wound_severity: str | None,
-    n_progress: int,
-    n_injury: int,
-    n_fatal: int,
-) -> tuple[int, int, int, int]:
-    """Return (total, progress, injury, fatal) action counts for a wound severity.
-
-    Reduces the action set by trimming fatal choices first, then injury,
-    preserving progress (mission-advancing) actions last. Never goes below
-    1 total action.
-    """
-    total = n_progress + n_injury + n_fatal
-    penalty = _WOUND_ACTION_PENALTY.get(wound_severity or "", 0)
-    if penalty <= 0:
-        return total, n_progress, n_injury, n_fatal
-
-    # Trim from fatal first.
-    removed_from_fatal = min(n_fatal, penalty)
-    out_fatal = n_fatal - removed_from_fatal
-    remaining_penalty = penalty - removed_from_fatal
-    # Then trim from injury.
-    removed_from_injury = min(n_injury, remaining_penalty)
-    out_injury = n_injury - removed_from_injury
-    remaining_penalty -= removed_from_injury
-    # Progress is preserved last.
-    out_progress = max(0, n_progress - remaining_penalty)
-    final_total = out_progress + out_injury + out_fatal
-    # Never go below 1 total action — keep one progress option if possible,
-    # otherwise the single remaining action of whatever type.
-    if final_total < 1:
-        return 1, max(1, n_progress), 0, 0
-    return final_total, out_progress, out_injury, out_fatal
-
 
 class GameServer:
     """
@@ -1023,14 +946,9 @@ class GameServer:
         self._init_default_npcs()
         logger.info(f"GameServer initialized: model={self.llm_model}, language={language}, max_tokens={self.llm_max_tokens}")
 
-    def _get_player_briefing_schema(self, total_actions: int | None = None) -> dict[str, object]:
-        """Build the player briefing JSON schema with dynamic maxItems.
-
-        total_actions overrides the default healthy count when a crew member is
-        wounded (fewer choices).
-        """
-        if total_actions is None:
-            total_actions = self.turn_progress_actions + self.turn_injury_actions + self.turn_fatal_actions
+    def _get_player_briefing_schema(self) -> dict[str, object]:
+        """Build the player briefing JSON schema with dynamic maxItems."""
+        total_actions = self.turn_progress_actions + self.turn_injury_actions + self.turn_fatal_actions
         return {
             "type": "json_schema",
             "json_schema": {
@@ -1070,8 +988,8 @@ class GameServer:
                                     },
                                     "consequence_kind": {
                                         "type": "string",
-                                        "enum": ["progress", "injury", "fatal"],
-                                        "description": "Classification of this action: progress (success advances the mission, opens opportunities), injury (leads to a wound, no death), fatal (death of a crew member). Must match the requested count for each type.",
+                                        "enum": ["progress", "injury", "fatal", "delay"],
+                                        "description": "Classification of this action: progress (success advances the mission, opens opportunities), injury (leads to a wound, no death), fatal (death of a crew member). Must match the requested count for each type. 'delay' is a system-generated hesitation fallback — NEVER emit it yourself.",
                                     },
                                 },
                                 "required": ["id", "text", "consequence", "consequence_kind"],
@@ -1611,59 +1529,6 @@ class GameServer:
 
         logger.info(f"[TITLE] Generated: {result.get('title', '')}")
         return result
-
-    # ============== Daily Story ==============
-
-    async def generate_turn_story(
-        self,
-        turn: int,
-        previous_summary: str,
-        player_role: str,
-        *,
-        game_id: str | None,
-        player_id: str | None,
-        kind: str | None,
-    ) -> GameStory:
-        """Generate daily story using LLM with json_schema."""
-        logger.info(f"[STORY] Starting story generation for Turn {turn}, language: {self.language}")
-
-        system, user = build_turn_story_prompts(self.language, turn, previous_summary, player_role, use_vs=self.vs_enabled, vs_k=resolve_vs_k("turn_story", self.vs_k))
-
-        if self.vs_enabled:
-            vs_result = await self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=vs_response_schema(STORY_SCHEMA),
-                use_case='turn_story',
-                game_id=game_id,
-                player_id=player_id,
-                turn=turn,
-                kind=kind,
-            )
-            chosen = select_response(vs_result["responses"], self.vs_mode)
-            logger.info("[VS-STORY] Selected p=%.3f", chosen["probability"])
-            parsed = chosen["text"]
-        else:
-            parsed = await self._call_llm(
-                system_prompt=system,
-                user_prompt=user,
-                response_schema=STORY_SCHEMA,
-                use_case='turn_story',
-                game_id=game_id,
-                player_id=player_id,
-                turn=turn,
-                kind=kind,
-            )
-
-        story = GameStory(
-            turn=turn,
-            setting=parsed.get("setting", ""),
-            conflict=parsed.get("conflict", ""),
-            narrative=parsed.get("narrative", ""),
-            decision_points=parsed.get("decision_points", []),
-        )
-        logger.info(f"[STORY] Story generated: setting='{story.setting}...', {len(story.decision_points)} actions")
-        return story
 
     # ============== NPC Dialogues ==============
 
@@ -2797,6 +2662,24 @@ class GameServer:
 
     # ============== NPC Decision Making (LLM-based, no consequences visible) ==============
 
+    def _delay_decision(self, name: str) -> dict[str, Any]:
+        """Synthetic hesitation decision for when an LLM auto-choice fails.
+
+        Formerly the fallback picked choices[0], which the briefing schema
+        orders progress→injury→fatal — a hidden progress subsidy. The delay
+        action is lost time instead: it does not advance the mission.
+        Callers must append decision["choice"] to the briefing's choices so
+        downstream consumers (turn outcome, action images, notifications)
+        resolve it by the usual selected_action_id lookup.
+        """
+        template = DELAY_ACTION_TEXT_RU if self.language == LANGUAGE_RU else DELAY_ACTION_TEXT_EN
+        text = template.format(name=name)
+        return {
+            "action_id": "delay",
+            "rationale": text,
+            "choice": {"id": "delay", "text": text, "consequence_kind": "delay"},
+        }
+
     async def generate_npc_choice(
         self,
         choices: list[dict[str, Any]],
@@ -2807,13 +2690,16 @@ class GameServer:
         turn: int | str | None,
         kind: str | None,
         crew_dialogue_context: str | None = None,
+        loyalty: int = 70,
     ) -> dict[str, Any]:
         """NPC makes a choice using LLM without seeing the consequences.
 
         The NPC only sees the action text IDs and descriptions — no consequences.
-        This ensures NPC decisions are role-played in-character.
+        This ensures NPC decisions are role-played in-character. Loyalty
+        (code-owned state, 0-100) steers how the NPC treats orders: from
+        acting in the mission's interest down to sabotage and mutiny.
         """
-        logger.info(f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')}")
+        logger.info(f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')} (loyalty={loyalty})")
 
         npc_name = npc_profile.get("npc_name", "Unknown")
         npc_role = npc_profile.get("role", "Crew Member")
@@ -2832,7 +2718,7 @@ class GameServer:
         # Build the choice text for the NPC
         choices_text = "\n".join([f"  [{c['id']}] {c['text']}" for c in clean_choices])
 
-        system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text, use_vs=self.vs_enabled, vs_k=resolve_vs_k("npc_decision", self.vs_k))
+        system, user = build_npc_decision_prompts(self.language, npc_name, npc_role, traits, choices_text, loyalty=loyalty, use_vs=self.vs_enabled, vs_k=resolve_vs_k("npc_decision", self.vs_k))
         if crew_dialogue_context:
             user = user + "\n" + crew_dialogue_context
 
@@ -2867,18 +2753,16 @@ class GameServer:
             # Validate the choice is among available options
             valid_ids = [c.get("id") for c in choices]
             if action_id not in valid_ids:
-                logger.warning(f"[NPC] LLM returned invalid choice '{action_id}' for {npc_name}, falling back to first available")
-                action_id = valid_ids[0] if valid_ids else ""
-                rationale = "Fallback: first available action"
+                logger.warning(f"[NPC] LLM returned invalid choice '{action_id}' for {npc_name}, falling back to delay action")
+                return self._delay_decision(npc_name)
 
             logger.info(f"[NPC] {npc_name} chose '{action_id}': {rationale}...")
             return {"action_id": action_id, "rationale": rationale}
 
         except Exception as e:
             logger.error(f"[NPC] LLM choice failed for {npc_name}: {e}", exc_info=True)
-            # Fallback: pick first action
-            action_id = choices[0].get("id", "") if choices else ""
-            return {"action_id": action_id, "rationale": "Fallback: system default"}
+            # Fallback: synthetic hesitation — never subsidize progress via choices[0]
+            return self._delay_decision(npc_name)
 
     async def generate_player_auto_choice(
         self,
@@ -2979,17 +2863,16 @@ class GameServer:
 
             valid_ids = [c.get("id") for c in choices]
             if action_id not in valid_ids:
-                logger.warning(f"[AUTO_CHOICE] LLM returned invalid choice '{action_id}' for {display_name}, falling back to first available")
-                action_id = valid_ids[0] if valid_ids else ""
-                rationale = "Fallback: first available action"
+                logger.warning(f"[AUTO_CHOICE] LLM returned invalid choice '{action_id}' for {display_name}, falling back to delay action")
+                return self._delay_decision(display_name)
 
             logger.info(f"[AUTO_CHOICE] Player {display_name} auto-chose '{action_id}': {rationale[:80]}...")
             return {"action_id": action_id, "rationale": rationale}
 
         except Exception as e:
             logger.error(f"[AUTO_CHOICE] LLM failed for {display_name}: {e}", exc_info=True)
-            action_id = choices[0].get("id", "") if choices else ""
-            return {"action_id": action_id, "rationale": "Fallback: LLM error"}
+            # Fallback: synthetic hesitation — never subsidize progress via choices[0]
+            return self._delay_decision(display_name)
 
     # ============== Restructured Game Turn Generation ==============
 
@@ -3003,6 +2886,7 @@ class GameServer:
         game_id: str | None,
         player_id: str | None,
         kind: str | None,
+        threat_level: int | None = None,
     ) -> dict[str, Any]:
         """Generate the shared global circumstances for a game turn.
 
@@ -3014,6 +2898,8 @@ class GameServer:
             previous_summary: Summary of previous events
             player_profiles: List of player/npc profiles
             mission_context: Optional mission data to ensure story consistency
+            threat_level: Current doom-clock level (0-100); shown to the LLM
+                so rising threat is reflected in the narrative.
         """
         logger.info(f"[TURN] Generating global circumstances for Turn {turn}")
 
@@ -3066,6 +2952,7 @@ class GameServer:
             mission_str,
             use_vs=self.vs_enabled,
             vs_k=resolve_vs_k("global_circumstances", self.vs_k),
+            threat_status=format_threat_status(self.language, threat_level) if threat_level is not None else "",
         )
 
         try:
@@ -3116,6 +3003,8 @@ class GameServer:
         kind: str | None,
         player_id: str,
         crew_dialogue_context: str | None = None,
+        threat_level: int | None = None,
+        ship_status: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate a personal briefing and unique choices for a specific player
         based on the shared global circumstances.
@@ -3124,6 +3013,11 @@ class GameServer:
         - A personal_title with name + role + greeting
         - A personal briefing (their unique perspective on the situation)
         - Action choices with visible descriptions and hidden consequences
+
+        threat_level is the current doom-clock level (0-100); it is shown in
+        the prompt so the briefing reflects how little time is left.
+        ship_status carries the persistent hull/shields so the briefing can
+        telegraph the ship's condition (see build_personal_briefing_system).
         """
         player_role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
@@ -3141,18 +3035,27 @@ class GameServer:
 
         key_events_text = "\n".join([f"  - {e}" for e in key_events])
 
-        # Wound severity reduces the number of action choices available:
-        # healthy = full set, then one fewer per step (5/4/3/2 by default).
-        # Fatal is trimmed first, then injury; progress is preserved last.
+        # All crew members — healthy and wounded alike — get the same action
+        # quota. Wounds no longer trim the choice set; they are telegraphed in
+        # the briefing text (see build_personal_briefing_system).
         wound_severity = player_profile.get("wound_severity") or None
-        total_actions, n_progress, n_injury, n_fatal = _actions_for_wound(
-            wound_severity,
-            self.turn_progress_actions,
-            self.turn_injury_actions,
-            self.turn_fatal_actions,
-        )
+        total_actions = self.turn_progress_actions + self.turn_injury_actions + self.turn_fatal_actions
+        n_progress = self.turn_progress_actions
+        n_injury = self.turn_injury_actions
+        n_fatal = self.turn_fatal_actions
 
         system = build_personal_briefing_system(self.language)
+        threat_line = format_threat_status(self.language, threat_level) + "\n" if threat_level is not None else ""
+        if ship_status:
+            hull = ship_status.get("hull_integrity", HULL_MAX)
+            shields = ship_status.get("shields", SHIELDS_MAX)
+            ship_line = (
+                f"Статус корабля: Корпус: {hull}/{HULL_MAX}, Щиты: {shields}/{SHIELDS_MAX}\n"
+                if self.language == LANGUAGE_RU
+                else f"Ship status: Hull: {hull}/{HULL_MAX}, Shields: {shields}/{SHIELDS_MAX}\n"
+            )
+        else:
+            ship_line = ""
         user = "Global circumstances:\n" if self.language == LANGUAGE_EN else "Общие обстоятельства дня:\n"
         # Build user prompt based on language inline (complex formatting with instance state)
         if self.language == LANGUAGE_RU:
@@ -3171,6 +3074,8 @@ class GameServer:
                 f"Конфликт: {conflict}\n"
                 f"Общий нарратив: {narrative}\n\n"
                 f"Ключевые события:\n{key_events_text}\n\n"
+                f"{threat_line}"
+                f"{ship_line}"
                 f"Персонаж:\n"
                 f"  Имя: {display_name}\n"
                 f"  Роль: {player_role}\n"
@@ -3203,7 +3108,8 @@ class GameServer:
                 "травма, ущерб здоровью, временная нетрудоспособность.\n"
                 "- 'fatal' — СМЕРТЕЛЬНОЕ действие: его провал (или иной исход) ведёт к гибели "
                 "члена экипажа (самого персонажа или другого).\n"
-                "- Последствия НЕ ДОЛЖНЫ быть очевидны из текста действия! Игрок ВЫБИРАЕТ вслепую — "
+                + DELAY_KIND_RULE_RU
+                + "- Последствия НЕ ДОЛЖНЫ быть очевидны из текста действия! Игрок ВЫБИРАЕТ вслепую — "
                 "текст действия не должен выдавать его consequence_kind.\n"
                 "- Разные варианты должны давать РАЗНЫЕ уровни риска и награды.\n"
                 "- Варианты должны соответствовать РОЛИ персонажа.\n"
@@ -3232,6 +3138,8 @@ class GameServer:
                 f"Conflict: {conflict}\n"
                 f"Narrative: {narrative}\n\n"
                 f"Key events:\n{key_events_text}\n\n"
+                f"{threat_line}"
+                f"{ship_line}"
                 f"Character:\n"
                 f"  Name: {display_name}\n"
                 f"  Role: {player_role}\n"
@@ -3259,7 +3167,8 @@ class GameServer:
                 "temporary incapacitation.\n"
                 "- 'fatal' — a DEADLY action: its failure (or other outcome) leads to the death of "
                 "a crew member (the character themselves or another).\n"
-                "- The consequence MUST NOT be obvious from the action text! The player chooses BLIND — "
+                + DELAY_KIND_RULE_EN
+                + "- The consequence MUST NOT be obvious from the action text! The player chooses BLIND — "
                 "the text must not reveal its consequence_kind.\n"
                 + ("- The character is WOUNDED — fewer aggressive/physical actions, more cautious phrasing.\n" if wound_severity in ("critical", "moderate", "minor") else "")
                 + (crew_dialogue_context if crew_dialogue_context else "")
@@ -3269,7 +3178,7 @@ class GameServer:
             parsed = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=self._get_player_briefing_schema(total_actions),
+                response_schema=self._get_player_briefing_schema(),
                 use_case='player_briefing',
                 game_id=game_id,
                 player_id=player_id,
@@ -3324,6 +3233,8 @@ class GameServer:
         mission_context: dict[str, Any] | None,
         crew_roster: list[dict[str, Any]] | None,
         *,
+        ship_status: dict[str, Any],
+        threat_level: int | None = None,
         game_id: str | None,
         player_id: str | None,
         turn: int | str | None,
@@ -3338,11 +3249,18 @@ class GameServer:
 
         Args:
             global_circumstances: Shared circumstances for the turn
-            all_decisions: All player and NPC decisions with consequences
+            all_decisions: All player and NPC decisions with consequences;
+                each carries a stable "entity_id" ("p<player_id>" / "n<npc_key>")
             previous_summary: Summary of previous turn for continuity
             mission_context: Current mission state for progress tracking
-            crew_roster: Full roster of all crew members (name, role) to prevent
-                the LLM from inventing non-existent crew members.
+            crew_roster: Full roster of all crew members (name, role, entity_id)
+                to prevent the LLM from inventing non-existent crew members and
+                to address casualties by stable id instead of name/role.
+            ship_status: Persistent ship status (hull_integrity, shields,
+                systems_offline) from game_state. Shown to the LLM as the
+                current values it must emit deltas against.
+            threat_level: Current doom-clock level (0-100) from game_state;
+                feeds the VS risk factor (a cornered ship lives dangerously).
 
         Returns:
             Dict with outcome_narrative, ship_status_change, crew_morale_change,
@@ -3355,6 +3273,7 @@ class GameServer:
         for i, d in enumerate(all_decisions, 1):
             name = d.get("name", d.get("player_id", d.get("npc_key", f"Character {i}")))
             role = d.get("role", "")
+            entity_id = d.get("entity_id", "")
             action = d.get("action_id", "")
             action_text = d.get("action_text", "")
             consequence = d.get("consequence", "")
@@ -3362,22 +3281,32 @@ class GameServer:
             rationale = d.get("rationale", "")
             is_player = bool(d.get("player_id"))
             weight = "HIGH (PLAYER)" if is_player else "NORMAL (NPC)"
-            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role})\nChose: {action_text} ({action})\nRationale: {rationale}\nHIDDEN CONSEQUENCE: [{consequence_kind}] {consequence}\n"
+            id_suffix = f" [{entity_id}]" if entity_id else ""
+            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role}){id_suffix}\nChose: {action_text} ({action})\nRationale: {rationale}\nHIDDEN CONSEQUENCE: [{consequence_kind}] {consequence}\n"
 
-        # Full crew roster — prevents the LLM from inventing non-existent crew members
+        # Full crew roster — prevents the LLM from inventing non-existent crew members.
+        # Each line carries the stable entity_id ([p<player_id>] / [n<npc_key>]) the
+        # LLM must use to address victims in dead_crew_members / crew_injured /
+        # crew_healed — names get declined and roles repeat, entity_ids do not.
         roster_text = ""
         if crew_roster:
             roster_lines = []
             for r in crew_roster:
                 cname = r.get("name", "?")
                 crole = r.get("role", "?")
+                entity_id = r.get("entity_id", "")
                 is_dead = r.get("is_dead", False)
                 wound = r.get("wound_severity")
                 status = "DEAD" if is_dead else "ALIVE"
                 if not is_dead and wound:
                     status += f" (WOUNDED: {wound})"
-                roster_lines.append(f"  - {cname} ({crole}) — {status}")
-            roster_text = "\nFull crew roster (ONLY these characters exist on the ship):\n" + "\n".join(roster_lines) + "\n"
+                id_suffix = f" [{entity_id}]" if entity_id else ""
+                roster_lines.append(f"  - {cname} ({crole}){id_suffix} — {status}")
+            roster_text = (
+                "\nFull crew roster (ONLY these characters exist on the ship; "
+                "the [entity_id] is the stable id you MUST use to address characters "
+                "in dead_crew_members / crew_injured / crew_healed):\n" + "\n".join(roster_lines) + "\n"
+            )
 
         # Mission context for progress tracking
         mission_text = ""
@@ -3401,6 +3330,15 @@ class GameServer:
         conflict = global_circumstances.get("conflict", "")
         narrative = global_circumstances.get("narrative", "")
 
+        # Persistent ship status — the LLM only proposes per-turn deltas
+        # against these current values; the code owns the absolutes.
+        offline = ship_status.get("systems_offline", [])
+        ship_status_text = (
+            f"Hull integrity: {ship_status.get('hull_integrity', 100)}/100\n"
+            f"Shields: {ship_status.get('shields', 100)}/100\n"
+            f"Systems offline: {', '.join(offline) if offline else 'none'}"
+        )
+
         system, user = build_combined_outcome_prompts(
             language=self.language,
             setting=setting,
@@ -3408,10 +3346,26 @@ class GameServer:
             narrative=narrative,
             previous_summary=previous_summary,
             mission_text=mission_text,
+            ship_status_text=ship_status_text,
             decisions_text=decisions_text,
             roster_text=roster_text,
             use_vs=self.vs_enabled,
             vs_k=resolve_vs_k("combined_outcome", self.vs_k),
+        )
+
+        # VS risk factor: outcome risk must depend on STATE (damaged hull,
+        # doom clock, reckless decisions), not on the LLM's own probability
+        # taste — otherwise catastrophic options stay buried at p=0.05 forever.
+        reckless_count = sum(1 for d in all_decisions if d.get("consequence_kind") in ("injury", "fatal"))
+        reckless_ratio = reckless_count / len(all_decisions) if all_decisions else 0.0
+        try:
+            hull_ratio = max(0.0, min(1.0, float(ship_status.get("hull_integrity", HULL_MAX)) / HULL_MAX))
+        except (TypeError, ValueError):
+            hull_ratio = 1.0
+        risk_factor = compute_risk_factor(
+            hull_ratio=hull_ratio,
+            threat_level=threat_level,
+            reckless_ratio=reckless_ratio,
         )
 
         try:
@@ -3426,7 +3380,21 @@ class GameServer:
                     turn=turn,
                     kind=kind,
                 )
-                chosen = select_response(vs_result["responses"], self.vs_mode)
+                # Reweight the LLM-assigned probabilities by structural
+                # badness * state risk before sampling.
+                responses = vs_result["responses"]
+                probs_before = [r.get("probability", 0.0) for r in responses]
+                badness = [option_badness(r.get("text") if isinstance(r.get("text"), dict) else {}) for r in responses]
+                probs_after = reweight_probabilities(probs_before, badness, risk_factor)
+                for resp, prob in zip(responses, probs_after):
+                    resp["probability"] = prob
+                logger.info(
+                    "[VS] risk=%.2f probs %s -> %s",
+                    risk_factor,
+                    ",".join(f"{p:.2f}" for p in probs_before),
+                    ",".join(f"{p:.2f}" for p in probs_after),
+                )
+                chosen = select_response(responses, self.vs_mode)
                 logger.info("[VS-OUTCOME] Selected %d/%d p=%.3f", vs_result["responses"].index(chosen) + 1, len(vs_result["responses"]), chosen["probability"])
                 parsed = chosen["text"]
             else:
@@ -3451,10 +3419,10 @@ class GameServer:
                 "next_turn_hook": "Tomorrow brings new challenges.",
                 "mission_progress": [],
                 "dead_crew_members": [],
-                "ship_destroyed": False,
-                "ship_hull_integrity": 100,
-                "ship_shields": 100,
-                "ship_systems_offline": [],
+                "ship_hull_change": 0,
+                "ship_shields_change": 0,
+                "systems_taken_offline": [],
+                "systems_restored": [],
                 "crew_injured": [],
                 "crew_healed": [],
                 "personal_outcomes": [],
@@ -3473,14 +3441,29 @@ class GameServer:
         turn: int | str | None,
         kind: str | None,
         outcome_label: str,
+        end_reason: str,
+        hull: int,
+        shields: int,
+        threat: int,
+        dead_crew_count: int,
+        alive_crew_count: int,
+        turns_played: int,
     ) -> dict[str, str]:
         """Generate a dramatic finale narrative and image prompt for game end.
 
         Args:
-            outcome_type: "victory" or "defeat" — machine token, selects the fallback
-            outcome_label: human-readable header shown to the LLM
+            outcome_type: machine verdict token ("triumph"/"victory"/"pyrrhic"/
+                "stalemate"/"defeat") computed by game_rules.compute_outcome_type —
+                selects the fallback and the required tone
+            outcome_label: human-readable header for the rules-verdict line
             outcome_narrative: The last turn's outcome narrative for context
-            mission_summary: Summary of mission stages and their completion status
+            mission_summary: Dry facts — mission stages with completion status
+            end_reason: localized line naming WHY the game ended (status →
+                mission accomplished / ship destroyed / crew lost / threat
+                peak / crew mutiny)
+            hull/shields/threat: final ship status for the facts block
+            dead_crew_count/alive_crew_count: final crew toll for the facts block
+            turns_played: number of turns played for the facts block
 
         Returns:
             Dict with finale_narrative and finale_image_prompt
@@ -3489,9 +3472,17 @@ class GameServer:
 
         system, user = build_game_over_prompts(
             language=self.language,
-            outcome_type=outcome_label,
+            outcome_type=outcome_type,
+            outcome_label=outcome_label,
             outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
+            end_reason=end_reason,
+            hull=hull,
+            shields=shields,
+            threat=threat,
+            dead_crew_count=dead_crew_count,
+            alive_crew_count=alive_crew_count,
+            turns_played=turns_played,
             use_vs=self.vs_enabled,
             vs_k=resolve_vs_k("combined_outcome", self.vs_k),
         )

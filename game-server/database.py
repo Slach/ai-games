@@ -162,6 +162,52 @@ MIGRATIONS: list[tuple[int, str]] = [
         # to have no game_id duplicates before this migration.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_game_mission ON game_missions(game_id);",
     ),
+    (
+        18,
+        # Legacy table of the old daily format, superseded by game_turns.
+        # Empty (0 rows) everywhere; drop it.
+        "DROP TABLE IF EXISTS game_days;",
+    ),
+    (
+        19,
+        # Persistent ship status: hull/shields/systems_offline become
+        # code-owned state (the LLM reports only per-turn deltas).
+        # crew_health is superseded by hull_integrity — the game now ends
+        # via code when hull reaches 0, so the column is dropped.
+        """
+        ALTER TABLE game_state ADD COLUMN hull_integrity INTEGER DEFAULT 100;
+        ALTER TABLE game_state ADD COLUMN shields INTEGER DEFAULT 100;
+        ALTER TABLE game_state ADD COLUMN systems_offline TEXT DEFAULT '[]';
+        ALTER TABLE game_state DROP COLUMN crew_health;
+        """.strip(),
+    ),
+    (
+        20,
+        # The analytics snapshot column stored ship health; it now snapshots
+        # hull integrity (crew_health no longer exists in game_state).
+        "ALTER TABLE player_action_stats RENAME COLUMN crew_health TO hull_integrity;",
+    ),
+    (
+        21,
+        # Doom clock: code-owned threat level 0-100, grown every turn by
+        # compute_threat_tick (game_rules.py). Reaching 100 ends the game
+        # with end_game("overwhelmed").
+        "ALTER TABLE game_state ADD COLUMN threat_level INTEGER DEFAULT 0;",
+    ),
+    (
+        22,
+        # NPC loyalty 0-100, code-owned state adjusted every turn by
+        # game_rules.compute_loyalty_change. Two active NPCs at loyalty
+        # <= MUTINY_LOYALTY_THRESHOLD end the game with end_game("mutiny").
+        "ALTER TABLE npc_profiles ADD COLUMN loyalty INTEGER DEFAULT 70;",
+    ),
+    (
+        23,
+        # Turn deadline (ISO datetime, UTC): the moment the scheduler fires
+        # the next generation, i.e. when auto-action fixes a "delay" for
+        # players who never chose. NULL = unknown (e.g. first turn).
+        "ALTER TABLE game_turns ADD COLUMN deadline TEXT DEFAULT NULL;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -411,8 +457,8 @@ def _ensure_game_state(game_id: str):
     row = cursor.fetchone()
     if row is None:
         cursor.execute(
-            """INSERT INTO game_state (game_id, turn, status, ship_alive, crew_health, last_updated)
-               VALUES (?, 1, 'active', 1, 100, ?)""",
+            """INSERT INTO game_state (game_id, turn, status, ship_alive, hull_integrity, shields, systems_offline, threat_level, last_updated)
+               VALUES (?, 1, 'active', 1, 100, 100, '[]', 0, ?)""",
             (game_id, datetime.now().isoformat()),
         )
         conn.commit()
@@ -533,12 +579,13 @@ def reset_roles(game_id: str):
 def deactivate_replacement_npcs_for_player(player_id: int, game_id: str) -> int:
     """Deactivate active NPCs that were created to replace ``player_id`` in a game.
 
-    /admin/reset-player replaces a player with an active NPC (replaces_player_id)
-    and deletes the player's profile. If the player later re-onboards into a
-    DIFFERENT role, take_role() only deactivates NPCs for the new role_key, so
-    the old NPC stays active as a ghost duplicating the player in the team
-    roster and turn generation. This clears any such ghost. Returns the number
-    of NPCs deactivated.
+    Legacy-data guard: kicks/resets used to create an active replacement NPC
+    (replaces_player_id) — new games never do, and take_role() deactivates the
+    NPC in the same statement that writes replaces_player_id. If a player with
+    such a legacy NPC re-onboards into a DIFFERENT role, take_role() only
+    deactivates NPCs for the new role_key, so the old NPC stays active as a
+    ghost duplicating the player in the team roster and turn generation. This
+    clears any such ghost. Returns the number of NPCs deactivated.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -909,11 +956,12 @@ def delete_player_profile(player_id: int) -> bool:
 def player_has_played_in_game(player_id: int, game_id: str) -> bool:
     """Return True if ``player_id`` already participated in ``game_id``.
 
-    A player who died or was replaced leaves behind an NPC row in
-    ``npc_profiles`` with ``replaces_player_id = player_id`` (active or not —
-    deactivation only flips ``is_active``). Such a row is a permanent marker
-    that the player already played in this game, and is used to block
-    re-onboarding into the same still-active game after death.
+    An NPC row in ``npc_profiles`` with ``replaces_player_id = player_id``
+    (active or not — deactivation only flips ``is_active``) is a permanent
+    marker of a seat the player held: the NPC the player displaced by taking
+    its role (take_role writes the marker), or a legacy replacement NPC from
+    when kicks used to create them. It is used to block re-onboarding into
+    the same still-active game after death.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -979,8 +1027,8 @@ def create_game_turn(turn_data: dict[str, Any], game_id: str) -> dict[str, Any] 
 
     cursor.execute(
         """INSERT OR REPLACE INTO game_turns
-           (turn, story, crew_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_turn_summary, global_circumstances, combined_outcome, created_at, game_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (turn, story, crew_dialogues, player_actions, generated_content, teaser, ship_alive, crew_status, previous_turn_summary, global_circumstances, combined_outcome, created_at, game_id, deadline)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             turn_data["turn"],
             turn_data["story"],
@@ -995,6 +1043,7 @@ def create_game_turn(turn_data: dict[str, Any], game_id: str) -> dict[str, Any] 
             turn_data.get("combined_outcome", ""),
             datetime.now().isoformat(),
             game_id,
+            turn_data.get("deadline"),
         ),
     )
 
@@ -1030,6 +1079,7 @@ def get_game_turn(turn: int, game_id: str) -> dict[str, Any] | None:
         "global_circumstances": row["global_circumstances"] or "",
         "combined_outcome": row["combined_outcome"] or "",
         "game_id": row["game_id"],
+        "deadline": row["deadline"],
     }
 
 
@@ -1102,6 +1152,33 @@ def get_player_actions(player_id: int, turn: int | None) -> list[dict[str, Any]]
     return result
 
 
+def count_turn_action_autos(turn: int, *, game_id: str) -> tuple[int, int]:
+    """Count a turn's player decisions and how many were auto-selected.
+
+    Auto-selection is marked by choice='auto_selected' in player_actions
+    (the /game/auto-action path); manual choices record the bot's
+    choice='selected'. player_actions has no game_id column, so rows are
+    scoped via the players currently registered in the game. Returns
+    (total, auto_count) — (0, 0) when nobody acted.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT COUNT(*) AS total,
+                  SUM(CASE WHEN choice = 'auto_selected' THEN 1 ELSE 0 END) AS auto
+           FROM player_actions
+           WHERE turn = ? AND player_id IN (
+               SELECT player_id FROM player_profiles WHERE game_id = ?
+           )""",
+        (turn, game_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    total = row["total"] or 0
+    auto = row["auto"] or 0
+    return (total, auto)
+
+
 # ============== Game Messages ==============
 
 
@@ -1165,8 +1242,10 @@ def get_game_state(game_id: str) -> dict[str, Any]:
         "turn": row["turn"],
         "status": row["status"],
         "ship_alive": bool(row["ship_alive"]),
-        "crew_health": row["crew_health"],
-        "last_death_turn": row["last_death_turn"] if "last_death_turn" in row.keys() else 0,
+        "hull_integrity": row["hull_integrity"],
+        "shields": row["shields"],
+        "systems_offline": _safe_json_loads(row["systems_offline"], []),
+        "threat_level": row["threat_level"],
         "last_updated": row["last_updated"],
         "finale_narrative": row["finale_narrative"] if "finale_narrative" in row.keys() else "",
         "finale_outcome_type": row["finale_outcome_type"] if "finale_outcome_type" in row.keys() else "",
@@ -1179,28 +1258,41 @@ def update_game_state(
     turn: int,
     status: str,
     ship_alive: bool,
-    crew_health: int,
     *,
     game_id: str,
+    hull_integrity: int | None = None,
+    shields: int | None = None,
+    systems_offline: list[str] | None = None,
+    threat_level: int | None = None,
 ) -> dict[str, Any]:
-    """Update game state"""
+    """Update game state.
+
+    hull_integrity / shields / systems_offline / threat_level are updated
+    only when passed: the ship status and doom clock are persistent and must
+    survive turn advancement calls that don't touch them.
+    """
     _ensure_game_state(game_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        """UPDATE game_state
-           SET turn = ?, status = ?, ship_alive = ?, crew_health = ?, last_updated = ?
-           WHERE game_id = ?""",
-        (
-            turn,
-            status,
-            1 if ship_alive else 0,
-            crew_health,
-            datetime.now().isoformat(),
-            game_id,
-        ),
-    )
+    set_sql = "SET turn = ?, status = ?, ship_alive = ?"
+    params: list[Any] = [turn, status, 1 if ship_alive else 0]
+    if hull_integrity is not None:
+        set_sql += ", hull_integrity = ?"
+        params.append(hull_integrity)
+    if shields is not None:
+        set_sql += ", shields = ?"
+        params.append(shields)
+    if systems_offline is not None:
+        set_sql += ", systems_offline = ?"
+        params.append(json.dumps(list(systems_offline), ensure_ascii=False))
+    if threat_level is not None:
+        set_sql += ", threat_level = ?"
+        params.append(threat_level)
+    set_sql += ", last_updated = ?"
+    params.append(datetime.now().isoformat())
+    params.append(game_id)
+    cursor.execute(f"UPDATE game_state {set_sql} WHERE game_id = ?", params)
 
     conn.commit()
     conn.close()
@@ -1209,20 +1301,20 @@ def update_game_state(
 
 
 def is_game_active(game_id: str) -> bool:
-    """Check if game is still active (ship and crew alive)"""
+    """Check if game is still active"""
     state = get_game_state(game_id)
-    return state["status"] == "active" and state["ship_alive"] and state["crew_health"] > 0
+    return state["status"] == "active" and state["ship_alive"]
 
 
 def end_game(reason: str, *, game_id: str) -> dict[str, Any]:
-    """End the game by setting ship destroyed and crew health to 0"""
+    """End the game: terminal status, ship not alive, games.status='ended'"""
     _ensure_game_state(game_id)
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """UPDATE game_state
-           SET status = ?, ship_alive = 0, crew_health = 0, last_updated = ?
+           SET status = ?, ship_alive = 0, last_updated = ?
            WHERE game_id = ?""",
         (reason, datetime.now().isoformat(), game_id),
     )
@@ -1695,6 +1787,7 @@ def get_npc_profile(npc_key: str) -> dict[str, Any] | None:
         "replaces_player_id": row["replaces_player_id"],
         "created_at": row["created_at"],
         "wound_severity": row["wound_severity"],
+        "loyalty": row["loyalty"],
     }
 
 
@@ -1803,14 +1896,19 @@ def deactivate_npc(npc_key: str) -> bool:
 # ============== Player Kicks ==============
 
 
-def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str, *, game_id: str) -> dict[str, Any]:
-    """Record a player kick scoped to a specific game."""
+def record_kick(kicked_player_id: int, reason: str, *, game_id: str) -> dict[str, Any]:
+    """Record a player kick scoped to a specific game.
+
+    The vacated seat stays empty — no NPC is created for the kicked player.
+    Legacy rows may still carry a replaced_by_npc_key from when kicks created
+    an NPC replacement; nothing writes that column anymore.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """INSERT INTO player_kicks (kicked_player_id, replaced_by_npc_key, reason, game_id, kicked_at)
-           VALUES (?, ?, ?, ?, ?)""",
-        (kicked_player_id, replaced_by_npc_key, reason, game_id, datetime.now().isoformat()),
+        """INSERT INTO player_kicks (kicked_player_id, reason, game_id, kicked_at)
+           VALUES (?, ?, ?, ?)""",
+        (kicked_player_id, reason, game_id, datetime.now().isoformat()),
     )
     kick_id = cursor.lastrowid
     conn.commit()
@@ -1818,7 +1916,6 @@ def record_kick(kicked_player_id: int, replaced_by_npc_key: str, reason: str, *,
     return {
         "id": kick_id,
         "kicked_player_id": kicked_player_id,
-        "replaced_by_npc_key": replaced_by_npc_key,
         "reason": reason,
         "game_id": game_id,
     }
@@ -1832,12 +1929,12 @@ def save_player_action_stats(
     action_id: str,
     action_text: str,
     consequence_kind: str,
-    crew_health: int,
+    hull_integrity: int,
 ) -> dict[str, Any]:
     """Record one player action choice for analytics.
 
     Append-only log of every submitted action with its pre-authored kind and the
-    crew health snapshot at the moment of choice. Lets us reconstruct a player's
+    hull integrity snapshot at the moment of choice. Lets us reconstruct a player's
     choice history across ended games (which player_profiles.game_id loses).
     """
     conn = get_db_connection()
@@ -1845,11 +1942,11 @@ def save_player_action_stats(
     cursor.execute(
         """INSERT INTO player_action_stats
              (game_id, player_id, turn, action_id, action_text,
-              consequence_kind, crew_health, created_at)
+              consequence_kind, hull_integrity, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             game_id, player_id, turn, action_id, action_text,
-            consequence_kind, crew_health, datetime.now().isoformat(),
+            consequence_kind, hull_integrity, datetime.now().isoformat(),
         ),
     )
     stat_id = cursor.lastrowid
@@ -1863,7 +1960,46 @@ def save_player_action_stats(
         "action_id": action_id,
         "action_text": action_text,
         "consequence_kind": consequence_kind,
-        "crew_health": crew_health,
+        "hull_integrity": hull_integrity,
+    }
+
+
+def get_game_action_stats(*, game_id: str) -> dict[str, Any]:
+    """Aggregate per-player action counts for a game from player_action_stats.
+
+    Auto actions are rows with consequence_kind='delay': 'delay' is the
+    code-assigned hesitation fallback (the LLM is forbidden to author it),
+    so it is the only reliable game-scoped auto marker in this table.
+    player_actions.choice='auto_selected' cannot be used — that table has no
+    game_id, so its rows can only be scoped via the players' CURRENT game,
+    which breaks for ended games whose players have moved on.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT player_id,
+                  COUNT(*) AS actions,
+                  SUM(CASE WHEN consequence_kind = 'delay' THEN 1 ELSE 0 END) AS auto_actions
+           FROM player_action_stats
+           WHERE game_id = ?
+           GROUP BY player_id
+           ORDER BY player_id""",
+        (game_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    players = [
+        {
+            "player_id": row["player_id"],
+            "actions": row["actions"] or 0,
+            "auto_actions": row["auto_actions"] or 0,
+        }
+        for row in rows
+    ]
+    return {
+        "players": players,
+        "total_actions": sum(p["actions"] for p in players),
+        "auto_actions": sum(p["auto_actions"] for p in players),
     }
 
 
@@ -2039,10 +2175,21 @@ def update_briefing_choice(
     selected_action_id: str,
     choice_rationale: str,
     consequence_result: dict[str, Any] | None,
+    choices: list[dict[str, Any]] | None = None,
 ) -> bool:
-    """Update a briefing with the player/NPC's choice."""
+    """Update a briefing with the player/NPC's choice.
+
+    ``choices`` optionally rewrites the stored choices — used by the
+    auto-select fallback to append the synthetic delay action so the
+    selected id resolves for every consumer.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
+    if choices is not None:
+        cursor.execute(
+            "UPDATE player_briefings SET choices = ? WHERE id = ?",
+            (json.dumps(choices, ensure_ascii=False), briefing_id),
+        )
     cursor.execute(
         """UPDATE player_briefings
            SET selected_action_id = ?, choice_rationale = ?, consequence_result = ?
@@ -2079,6 +2226,9 @@ def get_players_who_need_to_choose(turn: int, game_id: str) -> list[dict[str, An
 
     Dead/spectator players are excluded so their (possibly stale, leftover
     from the death race) briefing doesn't block the turn outcome forever.
+    Kicked players are excluded too: leave_game clears their profile's
+    game_id, so the LEFT JOIN yields no profile row — requiring one keeps
+    reminders and auto-selection away from people no longer in the game.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2086,6 +2236,7 @@ def get_players_who_need_to_choose(turn: int, game_id: str) -> list[dict[str, An
         """SELECT pb.* FROM player_briefings pb
            LEFT JOIN player_profiles pp ON pp.player_id = pb.player_id AND pp.game_id = pb.game_id
            WHERE pb.turn = ? AND pb.game_id = ? AND pb.is_npc = 0 AND pb.selected_action_id IS NULL
+             AND pp.player_id IS NOT NULL
              AND (pp.is_dead IS NULL OR pp.is_dead = 0)
              AND (pp.is_spectator IS NULL OR pp.is_spectator = 0)
            ORDER BY pb.created_at""",
@@ -2285,6 +2436,30 @@ def set_npc_wound_severity(npc_key: str, severity: str | None) -> bool:
     return updated
 
 
+def adjust_npc_loyalty(npc_key: str, delta: int) -> int:
+    """Shift an NPC's loyalty by delta, clamped to [0, 100].
+
+    Returns the new loyalty value. Loyalty is code-owned state adjusted
+    every turn by game_rules.compute_loyalty_change; the LLM never writes it.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT loyalty FROM npc_profiles WHERE npc_key = ?", (npc_key,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return 0
+    current = row["loyalty"] if row["loyalty"] is not None else 70
+    new_value = max(0, min(100, int(current) + delta))
+    cursor.execute(
+        "UPDATE npc_profiles SET loyalty = ? WHERE npc_key = ?",
+        (new_value, npc_key),
+    )
+    conn.commit()
+    conn.close()
+    return new_value
+
+
 def get_dead_players(game_id: str) -> list[int]:
     """Get IDs of dead players in a game (spectators)."""
     conn = get_db_connection()
@@ -2340,9 +2515,18 @@ def delete_game_state_for_game(game_id: str) -> bool:
 
 
 def reset_game_state_to_turn1(game_id: str) -> dict[str, Any]:
-    """Reset game state back to turn 1."""
+    """Reset game state back to turn 1 with a pristine ship and doom clock."""
     _ensure_game_state(game_id)
-    return update_game_state(1, "active", True, 100, game_id=game_id)
+    return update_game_state(
+        1,
+        "active",
+        True,
+        hull_integrity=100,
+        shields=100,
+        systems_offline=[],
+        threat_level=0,
+        game_id=game_id,
+    )
 
 
 def delete_game_turn(turn: int, game_id: str) -> bool:

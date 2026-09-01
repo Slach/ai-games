@@ -66,10 +66,6 @@ DEFAULT_USE_CASES: dict[str, dict[str, LLMParams]] = {
         LLMParams(temperature=0.9, max_tokens=MAX_TOKENS_DEFAULT),
         LLMParams(temperature=0.9, max_tokens=MAX_TOKENS_DEFAULT),
     ),
-    "turn_story": _use_case(
-        LLMParams(temperature=0.7, max_tokens=8192),
-        LLMParams(temperature=0.7, max_tokens=4096),
-    ),
     "crew_dialogue": _use_case(
         LLMParams(temperature=0.8, max_tokens=256),
         LLMParams(temperature=0.8, max_tokens=256),

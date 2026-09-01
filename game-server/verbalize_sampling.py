@@ -147,7 +147,6 @@ def vs_response_schema(inner_schema: dict) -> dict:
 DIVERSITY_HINTS: dict[str, str] = {
     "mission": ("Vary across these axes:\n- Genre (diplomacy, combat, mystery, exploration, sabotage)\n- Tone (dark, heroic, absurd, tense, melancholic)\n- Scale (personal drama, ship crisis, galactic threat)\n"),
     "game_title": ("Vary across these axes:\n- Style (metaphorical, technical, ironic, epic)\n- Length (short punchy, multi-word epic)\n"),
-    "turn_story": ("Vary across these axes:\n- Direction (escalation, de-escalation, revelation, character moment)\n- Pacing (fast action, slow burn, sudden twist)\n"),
     "global_circumstances": (
         "Vary across these axes:\n- Threat type (external, internal, natural phenomenon, technogenic)\n- Scene mood (hopeful, tense, mysterious, catastrophic)\n- Location variety (ship interior, planet surface, space anomaly, station)\n"
     ),

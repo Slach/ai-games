@@ -59,11 +59,6 @@ try:
 except (ValueError, TypeError):
     logger.warning("Invalid GAME_SCHEDULER_PORT, using default 8001")
     GAME_SCHEDULER_PORT = 8001
-try:
-    AUTO_ACTION_TIMEOUT_HOURS = int(os.getenv("AUTO_ACTION_TIMEOUT_HOURS", "24"))
-except (ValueError, TypeError):
-    logger.warning("Invalid AUTO_ACTION_TIMEOUT_HOURS, using default 24")
-    AUTO_ACTION_TIMEOUT_HOURS = 24
 GAME_ID = os.getenv("GAME_ID", "all")
 
 
@@ -165,6 +160,35 @@ def _schedule_label(schedule_type: str, schedule_value: str | int) -> str:
 
 DEFAULT_SCHEDULE = parse_schedule(DEFAULT_SCHEDULE_RAW)
 
+# Turn-window reminders: level 1 fires at T-2h before the turn deadline,
+# level 2 at T-30m. Recipients (players who haven't chosen yet) are resolved
+# by game-server's /game/remind-turn endpoint.
+REMINDER_LEADS: tuple[tuple[int, timedelta], ...] = (
+    (1, timedelta(hours=2)),
+    (2, timedelta(minutes=30)),
+)
+
+
+def due_reminder_levels(
+    now: datetime,
+    deadline: datetime,
+    sent: set[tuple[str, int, int]],
+    game_id: str,
+    turn: int,
+) -> list[int]:
+    """Pure decision: which reminder levels are due for this (game, turn).
+
+    A level is due when `now` has passed (deadline - lead time) and it has
+    not been sent yet for this (game_id, turn, level).
+    """
+    due = []
+    for level, lead in REMINDER_LEADS:
+        if (game_id, turn, level) in sent:
+            continue
+        if now >= deadline - lead:
+            due.append(level)
+    return due
+
 
 class GameScheduleState:
     """Mutable in-memory state for one game's schedule."""
@@ -240,6 +264,10 @@ class GameScheduler:
         self._global_paused = False
         self._pause_event = asyncio.Event()
         self._pause_event.set()
+        # (game_id, turn, level) reminders already sent this run. In-memory
+        # only: a scheduler restart may re-send a reminder at most once per
+        # (game, turn, level) — acceptable, better than persisting forever.
+        self._sent_reminders: set[tuple[str, int, int]] = set()
 
         self._load_all_states()
 
@@ -382,6 +410,14 @@ class GameScheduler:
             await self.check_and_auto_select_actions(game_id, prev_turn)
 
         # Step 4: Trigger the next turn
+        #
+        # Deadline of the NEW turn = the scheduler's next fire time. Computed
+        # here (before the POST) so game-server stores and shows players
+        # exactly the instant this state's timer points at below. The actual
+        # next fire happens after generation completes (game-server notifies
+        # /scheduler/reset on success), so it can only be LATER than this
+        # deadline — never earlier. Players are never cut off before it.
+        deadline = _compute_next_run(state.schedule_type, state.schedule_value, None)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -390,6 +426,7 @@ class GameScheduler:
                         "game_id": game_id,
                         "language": game_language,
                         "force_resend": "false",
+                        "deadline": deadline.isoformat(),
                     },
                 ) as resp:
                     if resp.status != 200:
@@ -399,7 +436,8 @@ class GameScheduler:
 
                     result = await resp.json()
                     state.last_generation = datetime.now(timezone.utc)
-                    state.reset_timer()
+                    # Same value game-server stored as the new turn's deadline.
+                    state.next_run_at = deadline
                     state.persist()
 
                     logger.info(f"=== SCHEDULED TURN COMPLETED for game '{game_id}' ===")
@@ -431,6 +469,80 @@ class GameScheduler:
                 logger.info(f"Game '{gid}' ended on server (status={srv_state.get('status')!r}) — stopping scheduling")
                 self.unregister_game(gid)
 
+    # ── Turn-deadline reminders (T-2h / T-30m) ──
+
+    async def get_turn_deadline(self, game_id: str) -> dict[str, Any] | None:
+        """Fetch {turn, deadline} of a game's current playable turn from game-server."""
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(f"{self.api_url}/game/turn-deadline/{game_id}") as resp,
+            ):
+                if resp.status == 200:
+                    return await resp.json()
+                logger.warning(f"turn-deadline for '{game_id}' returned {resp.status}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to fetch turn deadline for '{game_id}': {e}", exc_info=True)
+            return None
+
+    async def _send_turn_reminder(self, game_id: str, turn: int, level: int) -> None:
+        """Ask game-server to remind players who haven't chosen on this turn."""
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.api_url}/game/remind-turn/{game_id}/{turn}",
+                    json={"level": level},
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    result = await resp.json()
+                    self._sent_reminders.add((game_id, turn, level))
+                    logger.info(
+                        f"[REMINDER] Level {level} for game '{game_id}' turn {turn}: "
+                        f"{result.get('reminded', 0)} player(s) reminded"
+                    )
+                else:
+                    error_text = await resp.text()
+                    logger.error(
+                        f"[REMINDER] game-server returned {resp.status} for game '{game_id}' "
+                        f"turn {turn} level {level}: {error_text}",
+                        stack_info=True,
+                    )
+        except Exception as e:
+            logger.error(f"[REMINDER] Failed to send level {level} reminder for game '{game_id}' turn {turn}: {e}", exc_info=True)
+
+    async def _check_turn_reminders(self) -> datetime | None:
+        """Send every due reminder; return the earliest future reminder time.
+
+        The return value lets run_scheduling_loop wake up exactly when the
+        next reminder boundary (deadline - lead) is reached, instead of the
+        usual at-most-hourly wake.
+        """
+        now = datetime.now(timezone.utc)
+        next_at: datetime | None = None
+        for gid, state in list(self._games.items()):
+            if gid in self._paused_games or state.mode == "ended":
+                continue
+            info = await self.get_turn_deadline(gid)
+            if not info or not info.get("deadline"):
+                continue  # first turn / unknown deadline — nothing to remind about
+            try:
+                parsed = datetime.fromisoformat(info["deadline"])
+                deadline = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+                turn = int(info.get("turn", 0))
+            except (ValueError, TypeError):
+                logger.warning(f"[REMINDER] Invalid deadline {info['deadline']!r} for game '{gid}', skipping")
+                continue
+            for level in due_reminder_levels(now, deadline, self._sent_reminders, gid, turn):
+                await self._send_turn_reminder(gid, turn, level)
+            for lead_time in (lead for lvl, lead in REMINDER_LEADS if (gid, turn, lvl) not in self._sent_reminders):
+                fire_at = deadline - lead_time
+                if fire_at > now and (next_at is None or fire_at < next_at):
+                    next_at = fire_at
+        return next_at
+
     async def run_scheduling_loop(self):
         """Run the scheduling loop for all registered games."""
         if self._loop_running:
@@ -445,6 +557,11 @@ class GameScheduler:
 
                 # Drop games that have ended on the server before scheduling them
                 await self._prune_ended_games()
+
+                # Turn-deadline reminders (T-2h / T-30m). Also returns the
+                # next upcoming reminder boundary so the sleep below can
+                # wake up for it.
+                next_reminder_at = await self._check_turn_reminders()
 
                 now = datetime.now(timezone.utc)
                 # Find the game whose next_run_at is nearest
@@ -466,9 +583,16 @@ class GameScheduler:
                 gid, next_time = nearest
                 delay = (next_time - now).total_seconds()
                 if delay > 0:
+                    # Wake at most every hour, and no later than the next
+                    # reminder boundary so T-30m reminders fire on time.
+                    sleep_for = min(delay, 3600.0)
+                    if next_reminder_at is not None:
+                        reminder_delay = (next_reminder_at - now).total_seconds()
+                        if 0 < reminder_delay < sleep_for:
+                            sleep_for = max(reminder_delay, 5.0)
                     total_next = f"next: game='{gid}' in {delay / 3600:.1f}h ({delay:.0f}s)"
                     logger.info(total_next)
-                    await asyncio.sleep(min(delay, 3600))  # wake at most every hour
+                    await asyncio.sleep(sleep_for)
 
                 # Fine-grained loop: check which games are due now
                 due_games = []
@@ -520,7 +644,7 @@ class GameScheduler:
     async def validate_game_active(self, game_id: str) -> bool:
         try:
             state = await self.check_game_state(game_id)
-            return state.get("status") == "active" and state.get("ship_alive", True) and state.get("crew_health", 0) > 0
+            return state.get("status") == "active" and state.get("ship_alive", True)
         except Exception as e:
             logger.error(f"Failed to validate game '{game_id}' active: {e}", exc_info=True)
             return False

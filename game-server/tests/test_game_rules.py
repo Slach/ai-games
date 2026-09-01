@@ -107,13 +107,19 @@ class TestApplyMissionProgress(unittest.TestCase):
         # completed stage must not drop below threshold
         self.assertEqual(m["stage_progress"]["1"], 5)
 
-    def test_tempo_floor_advances_current_stage_by_one(self):
-        """A turn with no positive progress on the current stage still nudges +1."""
+    def test_empty_turn_leaves_stage_progress_unchanged(self):
+        """A turn with no mission progress deltas moves nothing (no tempo floor)."""
         m = _mission([("A", 5)])
         m = apply_mission_progress(m, [{"stage": 1, "points": 2}])
         self.assertEqual(m["stage_progress"]["1"], 2)
-        m = apply_mission_progress(m, [{"stage": 1, "points": 0}])  # no advance proposed
-        self.assertEqual(m["stage_progress"]["1"], 3)
+        m = apply_mission_progress(m, [{"stage": 1, "points": 0}])  # zero-points entry
+        self.assertEqual(m["stage_progress"]["1"], 2)
+        m = apply_mission_progress(m, [])  # empty mission_progress list
+        self.assertEqual(m["stage_progress"]["1"], 2)
+        m = apply_mission_progress(m, None)  # missing mission_progress
+        self.assertEqual(m["stage_progress"]["1"], 2)
+        self.assertFalse(m["completed"])
+        self.assertEqual(m["current_stage"], 1)
 
     def test_ignores_unknown_stage_and_bad_points(self):
         m = _mission([("A", 3)])
@@ -121,8 +127,8 @@ class TestApplyMissionProgress(unittest.TestCase):
             m,
             [{"stage": 99, "points": 5}, {"stage": 1, "points": "bad"}, {}],
         )
-        # tempo floor still applies to stage 1 -> 1
-        self.assertEqual(m["stage_progress"]["1"], 1)
+        # nothing applicable -> stage 1 stays at 0
+        self.assertEqual(m["stage_progress"]["1"], 0)
 
 
 from unittest.mock import AsyncMock, patch  # noqa: E402
@@ -163,7 +169,7 @@ class TestGameOverFallback(unittest.IsolatedAsyncioTestCase):
     defeat fallback narrative ("Корабль погиб...") because the caller passed
     the localized header as `outcome_type`, so `fallback_{header}` never
     matched and `.get(key, fallback_defeat)` silently returned the defeat
-    text. Victory must map to fallback_victory, defeat to fallback_defeat."""
+    text. Every verdict token must map to its own fallback."""
 
     async def _run_failing_finale(self, language, outcome_type, outcome_label):
         agent = GameServer(language=language)
@@ -178,10 +184,22 @@ class TestGameOverFallback(unittest.IsolatedAsyncioTestCase):
                 turn=None,
                 kind=None,
                 outcome_label=outcome_label,
+                end_reason="Причина конца: миссия выполнена",
+                hull=50,
+                shields=40,
+                threat=30,
+                dead_crew_count=1,
+                alive_crew_count=4,
+                turns_played=7,
             )
 
     async def test_victory_fallback_not_defeat_when_llm_fails(self):
         result = await self._run_failing_finale("ru", "victory", "🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!")
+        self.assertIn("Миссия выполнена", result["finale_narrative"])
+        self.assertNotIn("Корабль погиб", result["finale_narrative"])
+
+    async def test_pyrrhic_fallback_not_defeat_when_llm_fails(self):
+        result = await self._run_failing_finale("ru", "pyrrhic", "🔥 МИССИЯ ВЫПОЛНЕНА ЛЮБОЙ ЦЕНОЙ — ПИРРОВА ПОБЕДА")
         self.assertIn("Миссия выполнена", result["finale_narrative"])
         self.assertNotIn("Корабль погиб", result["finale_narrative"])
 
@@ -213,9 +231,50 @@ class TestGameOverFallback(unittest.IsolatedAsyncioTestCase):
                 turn=None,
                 kind=None,
                 outcome_label="🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!",
+                end_reason="Причина конца: миссия выполнена",
+                hull=80,
+                shields=60,
+                threat=20,
+                dead_crew_count=0,
+                alive_crew_count=5,
+                turns_played=9,
             )
         self.assertIn("🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!", captured["user"])
         self.assertNotIn("Исход игры: victory", captured["user"])
+
+    async def test_prompt_carries_verdict_token_and_facts_not_decided_by_llm(self):
+        agent = GameServer(language="ru")
+        agent.vs_enabled = False
+        captured = {}
+
+        async def _capture(system_prompt, user_prompt, **kwargs):
+            captured["user"] = user_prompt
+            return {"finale_narrative": "ok", "finale_image_prompt": "ok"}
+
+        with patch.object(GameServer, "_call_llm", side_effect=_capture):
+            await agent.generate_game_over_outcome(
+                outcome_type="pyrrhic",
+                outcome_narrative="narrative",
+                mission_summary="✓ Этап 1: Прорыв (3/3)",
+                game_id=None,
+                player_id=None,
+                turn=None,
+                kind=None,
+                outcome_label="🔥 МИССИЯ ВЫПОЛНЕНА ЛЮБОЙ ЦЕНОЙ — ПИРРОВА ПОБЕДА",
+                end_reason="Причина конца: миссия выполнена",
+                hull=0,
+                shields=0,
+                threat=95,
+                dead_crew_count=5,
+                alive_crew_count=0,
+                turns_played=12,
+            )
+        self.assertIn("Вердикт правил: pyrrhic", captured["user"])
+        self.assertIn("НЕ решаешь исход", captured["user"])
+        self.assertIn("Корпус: 0/100", captured["user"])
+        self.assertIn("угроза: 95/100", captured["user"])
+        self.assertIn("выживших 0, погибших 5", captured["user"])
+        self.assertIn("Ходов сыграно: 12", captured["user"])
 
 
 
@@ -271,6 +330,52 @@ class TestMissionPromptInjection(unittest.TestCase):
         _, user = build_mission_prompts("ru", archetype=None, seeds=None, use_vs=True, vs_k=5)
         self.assertIn("3-5", user)
         self.assertIn("сигнал", user)  # forbidden list mentions the banned trope
+
+
+from game_rules import NPC_COUNT, select_npc_role_keys  # noqa: E402
+
+
+class TestSelectNpcRoleKeys(unittest.TestCase):
+    """The NPC pool at game start is capped at NPC_COUNT seats, preferring the
+    key roles — a bounded pool is what makes crew_wiped reachable."""
+
+    ALL_ROLES = [
+        "captain",
+        "chief_engineer",
+        "science_officer",
+        "communications_officer",
+        "security_chief",
+        "navigator",
+        "medical_officer",
+        "tactical_officer",
+        "xenobiologist",
+        "pilot",
+    ]
+
+    def test_exactly_npc_count_roles_for_few_players(self):
+        # 2 players → 8 unfilled roles, but only NPC_COUNT seats become NPCs.
+        picked = select_npc_role_keys(self.ALL_ROLES[2:])
+        self.assertEqual(len(picked), NPC_COUNT)
+
+    def test_prefers_key_roles_in_priority_order(self):
+        picked = select_npc_role_keys(self.ALL_ROLES)
+        self.assertEqual(picked, ["chief_engineer", "medical_officer", "pilot", "science_officer"])
+
+    def test_fills_from_canonical_order_when_key_roles_taken(self):
+        # Players hold medical_officer and pilot → the remaining key roles are
+        # still preferred, then the first unfilled non-key roles in canonical
+        # order fill the rest.
+        available = [r for r in self.ALL_ROLES if r not in ("medical_officer", "pilot")]
+        picked = select_npc_role_keys(available)
+        self.assertEqual(picked, ["chief_engineer", "science_officer", "captain", "communications_officer"])
+
+    def test_fewer_npcs_when_roles_nearly_full(self):
+        # 7+ players: fewer than NPC_COUNT seats left → only those get NPCs.
+        picked = select_npc_role_keys(["tactical_officer", "xenobiologist"])
+        self.assertEqual(picked, ["tactical_officer", "xenobiologist"])
+
+    def test_empty_available_roles(self):
+        self.assertEqual(select_npc_role_keys([]), [])
 
 
 if __name__ == "__main__":

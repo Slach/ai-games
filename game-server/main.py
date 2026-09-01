@@ -19,8 +19,10 @@ from database import (
     GAME_START_MIN_PLAYERS,
     GAME_START_MAX_PLAYERS,
     add_game_message,
+    adjust_npc_loyalty,
     clear_game_started,
     complete_generation_job,
+    count_turn_action_autos,
     create_game,
     create_game_turn,
     create_mission,
@@ -54,6 +56,7 @@ from database import (
     get_db_connection,
     get_dead_players,
     get_game,
+    get_game_action_stats,
     get_game_turn,
     get_game_image_count,
     get_game_language,
@@ -86,6 +89,7 @@ from database import (
     init_db,
     is_game_started,
     is_player_kicked,
+    leave_game,
     mark_player_dead,
     set_player_wound_severity,
     set_npc_wound_severity,
@@ -115,7 +119,7 @@ from database import (
     update_onboarding_session,
     update_player_profile_last_poll,
 )
-from game_rules import apply_mission_progress
+from game_rules import HULL_MAX, THREAT_MAX, WOUND_DEAD, _to_int, apply_mission_progress, apply_ship_status, apply_systems_offline, compute_loyalty_change, compute_outcome_type, compute_threat_tick, loyalty_band, mutiny_conditions, resolve_injury, select_npc_role_keys
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_server import create_game_server
@@ -128,6 +132,7 @@ from image_generator import (
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
+    format_game_summary,
     get_dimension_tag_field,
     get_dimension_tags,
     get_game_strings,
@@ -138,7 +143,7 @@ from language import (
 from prompts import (
     OnboardingQuestion,
 )
-from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_gm_notification, push_player_chosen_action, push_player_death
+from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_game_summary, push_gm_notification, push_player_chosen_action, push_player_death, push_turn_reminder
 from pydantic import BaseModel, TypeAdapter
 
 # Configure logging.
@@ -254,6 +259,15 @@ class PlayerActionRequest(BaseModel):
     choice: str
 
 
+class RemindTurnRequest(BaseModel):
+    """Request to send a turn-deadline reminder to players who haven't chosen.
+
+    level 1 = ~2 hours before the deadline, level 2 = ~30 minutes before.
+    """
+
+    level: int
+
+
 class PollResponse(BaseModel):
     """Response from game polling endpoint"""
 
@@ -279,7 +293,6 @@ class KickPlayerRequest(BaseModel):
     role_key: str
     reason: str
     game_id: str
-    language: str
 
 
 class CreateGameRequest(BaseModel):
@@ -2157,7 +2170,8 @@ async def get_game_status_endpoint(game_id: str):
         "current_turn": current_turn_num,
         "status": state["status"],
         "ship_alive": state["ship_alive"],
-        "crew_health": state["crew_health"],
+        "hull_integrity": state["hull_integrity"],
+        "shields": state["shields"],
         "game_started": is_game_started(game_id),
         "mission_name": mission.get("name", "") if mission else "",
         "archetype": mission.get("archetype", "") if mission else "",
@@ -2347,9 +2361,9 @@ async def submit_player_action(request: PlayerActionRequest):
             consequence_result={"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
         )
 
-        # Append to per-action analytics log with crew-health snapshot
+        # Append to per-action analytics log with hull snapshot
         try:
-            stats_crew_health = get_game_state(game_id)["crew_health"]
+            stats_hull = get_game_state(game_id)["hull_integrity"]
             save_player_action_stats(
                 game_id=game_id,
                 player_id=request.player_id,
@@ -2357,7 +2371,7 @@ async def submit_player_action(request: PlayerActionRequest):
                 action_id=request.action_id,
                 action_text=chosen_action_text,
                 consequence_kind=chosen_consequence_kind,
-                crew_health=stats_crew_health,
+                hull_integrity=stats_hull,
             )
         except Exception:
             logger.warning("player_action_stats save failed", exc_info=True)
@@ -2481,6 +2495,13 @@ async def auto_select_action(
     if not action_id:
         raise HTTPException(status_code=500, detail="LLM returned no valid action")
 
+    # Fallback delay decision carries a synthetic choice — append it to the
+    # briefing's choices so every consumer (turn outcome, action image,
+    # notification) resolves the selected id as usual.
+    fallback_choice = decision.get("choice")
+    if fallback_choice and not any(c.get("id") == fallback_choice.get("id") for c in choices):
+        choices = [*choices, fallback_choice]
+
     # 5. Submit the action (same flow as submit_player_action)
     chosen_consequence = ""
     chosen_consequence_kind = ""
@@ -2497,11 +2518,12 @@ async def auto_select_action(
         selected_action_id=action_id,
         choice_rationale=rationale,
         consequence_result={"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
+        choices=choices,
     )
 
-    # Append to per-action analytics log with crew-health snapshot
+    # Append to per-action analytics log with hull snapshot
     try:
-        stats_crew_health = get_game_state(game_id)["crew_health"]
+        stats_hull = get_game_state(game_id)["hull_integrity"]
         save_player_action_stats(
             game_id=game_id,
             player_id=player_id,
@@ -2509,7 +2531,7 @@ async def auto_select_action(
             action_id=action_id,
             action_text=chosen_action_text,
             consequence_kind=chosen_consequence_kind,
-            crew_health=stats_crew_health,
+            hull_integrity=stats_hull,
         )
     except Exception:
         logger.warning("player_action_stats save failed (auto)", exc_info=True)
@@ -2574,6 +2596,53 @@ async def auto_select_action(
         "action_text": action_text,
         "rationale": rationale,
     }
+
+
+@app.get("/game/turn-deadline/{game_id}")
+async def get_turn_deadline(game_id: str):
+    """Get the deadline of the current (playable) turn.
+
+    The playable turn is game_state.turn - 1: generation advances the state
+    to turn N+1 while players still act on turn N. deadline is an ISO
+    datetime string (UTC) or null when unknown (e.g. first turn).
+    Used by game-scheduler to fire T-2h/T-30m reminders.
+    """
+    state = get_game_state(game_id)
+    turn = max(1, state["turn"] - 1)
+    turn_data = get_game_turn(turn, game_id)
+    deadline = turn_data.get("deadline") if turn_data else None
+    return {"game_id": game_id, "turn": turn, "deadline": deadline}
+
+
+@app.post("/game/remind-turn/{game_id}/{turn}")
+async def remind_turn(game_id: str, turn: int, request: RemindTurnRequest):
+    """Send a turn-deadline reminder to players who haven't chosen an action.
+
+    Called by game-scheduler at T-2h (level 1) and T-30m (level 2) before the
+    deadline stored on the turn. "Haven't chosen" is the same definition the
+    auto-action flow uses: a player briefing with no selected_action_id.
+    """
+    if request.level not in (1, 2):
+        raise HTTPException(status_code=400, detail="level must be 1 (T-2h) or 2 (T-30m)")
+
+    language = get_game_language(game_id)
+    pending = get_players_who_need_to_choose(turn, game_id)
+    player_ids = [b["player_id"] for b in pending if b.get("player_id") is not None]
+
+    logger.info(f"[REMIND] Turn {turn} reminder level {request.level} for game {game_id}: {len(player_ids)} player(s) pending")
+
+    if player_ids:
+        asyncio.create_task(
+            push_turn_reminder(
+                game_id=game_id,
+                turn=turn,
+                level=request.level,
+                player_ids=player_ids,
+                language=language,
+            )
+        )
+
+    return {"status": "ok", "turn": turn, "level": request.level, "reminded": len(player_ids), "player_ids": player_ids}
 
 
 # ============== Message endpoints ==============
@@ -3262,21 +3331,31 @@ def _build_turn_summary(combined_outcome_str: str, language: str) -> str:
     if morale:
         parts.append(ds["crew_morale"].format(morale=morale))
 
-    # Deaths
+    # Deaths — new outcomes address victims as {"entity_id": ...}; older
+    # stored outcomes use legacy [name, role] lists.
     dead = oc.get("dead_crew_members", [])
     if dead:
-        dead_names = [f"{d[0]} ({d[1]})" if isinstance(d, list) and len(d) >= 2 else str(d) for d in dead]
+        dead_names = []
+        for d in dead:
+            if isinstance(d, dict):
+                dead_names.append(str(d.get("entity_id", d)))
+            elif isinstance(d, list) and len(d) >= 2:
+                dead_names.append(f"{d[0]} ({d[1]})")
+            else:
+                dead_names.append(str(d))
         parts.append(ds["deceased"].format(names=", ".join(dead_names)))
 
-    # Injured
+    # Injured — entity_id objects (new) or [name, role, severity] lists (legacy)
     injured = oc.get("crew_injured", [])
     if injured:
         injured_names = []
         for i_entry in injured:
-            if isinstance(i_entry, list) and len(i_entry) >= 2:
-                i_name = i_entry[0]
+            if isinstance(i_entry, dict):
+                severity = i_entry.get("severity") or "unknown"
+                injured_names.append(f"{i_entry.get('entity_id', i_entry)} ({severity})")
+            elif isinstance(i_entry, list) and len(i_entry) >= 2:
                 i_severity = i_entry[2] if len(i_entry) >= 3 else "unknown"
-                injured_names.append(f"{i_name} ({i_severity})")
+                injured_names.append(f"{i_entry[0]} ({i_severity})")
             else:
                 injured_names.append(str(i_entry))
         parts.append(ds["injured"].format(names=", ".join(injured_names)))
@@ -3346,6 +3425,112 @@ def _build_cumulative_story_summary(
         result = result[:3000] + "..."
 
     return result
+
+
+def _parse_entity_id(entity_id: Any) -> tuple[int | None, str | None]:
+    """Split a stable entity_id ("p<player_id>" / "n<npc_key>") into its parts.
+
+    Returns (player_id, npc_key) — exactly one of them is set.
+    """
+    if not isinstance(entity_id, str):
+        return None, None
+    if entity_id.startswith("p") and entity_id[1:].isdigit():
+        return int(entity_id[1:]), None
+    if entity_id.startswith("n") and len(entity_id) > 1:
+        return None, entity_id[1:]
+    return None, None
+
+
+def _resolve_outcome_entity(
+    entry: Any,
+    crew_roster: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve one dead_crew_members / crew_injured / crew_healed entry to a
+    roster record.
+
+    Expected format (per COMBINED_OUTCOME_SCHEMA): an object addressed by the
+    stable entity_id from the crew roster — "p<player_id>" for players,
+    "n<npc_key>" for NPCs. A legacy [name, role, ...] list is a schema
+    violation from the LLM: it is logged and then matched by an EXACT roster
+    name only (the role is never compared — role matching once deactivated
+    the wrong NPC). Graceful degradation at the external-API boundary.
+    """
+    if isinstance(entry, dict):
+        entity_id = entry.get("entity_id")
+        if entity_id is not None:
+            for r in crew_roster:
+                if r.get("entity_id") == entity_id:
+                    return r
+        logger.warning(f"[OUTCOME] Unknown entity_id {entity_id!r} in outcome entry, skipping: {entry}", stack_info=True)
+        return None
+    if isinstance(entry, list) and entry:
+        logger.warning(f"[OUTCOME] Legacy [name, role] outcome entry (schema requires entity_id objects), falling back to exact name match: {entry}", stack_info=True)
+        for r in crew_roster:
+            if r.get("name") == entry[0]:
+                return r
+        logger.warning(f"[OUTCOME] Legacy outcome entry name {str(entry[0])!r} not found in roster, skipping", stack_info=True)
+        return None
+    logger.warning(f"[OUTCOME] Malformed outcome entry, skipping: {entry}", stack_info=True)
+    return None
+
+
+def _apply_crew_injuries(
+    outcome: dict[str, Any],
+    crew_roster: list[dict[str, Any]],
+    *,
+    game_id: str,
+) -> tuple[list[dict[str, str]], set[int]]:
+    """Apply the turn's crew_injured entries through the wound-escalation rules.
+
+    The incoming severity from the LLM is resolved against the STORED
+    severity via game_rules.resolve_injury (result = max on the ladder,
+    never below the incoming wound). A critically wounded character who
+    takes ANY new wound dies mechanically: players are marked dead and
+    collected in newly_dead (for the one-time death notice push), NPCs
+    are deactivated. Returns (injury_notices, newly_dead); notices are
+    built only for wounds that were actually persisted, never for deaths
+    (those surface via the death-notice roster).
+    """
+    injury_notices: list[dict[str, str]] = []
+    newly_dead: set[int] = set()
+    for injury_entry in outcome.get("crew_injured", []):
+        resolved = _resolve_outcome_entity(injury_entry, crew_roster)
+        if not resolved:
+            continue
+        if isinstance(injury_entry, dict):
+            severity = injury_entry.get("severity") or "minor"
+        else:
+            severity = injury_entry[2] if len(injury_entry) >= 3 else "minor"
+        pid, npc_key = _parse_entity_id(resolved.get("entity_id"))
+        if pid:
+            profile = get_player_profile(pid) or {}
+            new_severity = resolve_injury(profile.get("wound_severity"), severity)
+            if new_severity == WOUND_DEAD:
+                mark_player_dead(pid, game_id)
+                newly_dead.add(pid)
+                logger.info(f"[WOUND] Player {pid} died of accumulated wounds (critical + new injury)")
+                continue
+            set_player_wound_severity(pid, game_id, new_severity)
+            logger.info(f"[INJURY] Player {pid} now {new_severity}")
+        elif npc_key:
+            npc_profile = get_npc_profile(npc_key) or {}
+            new_severity = resolve_injury(npc_profile.get("wound_severity"), severity)
+            if new_severity == WOUND_DEAD:
+                deactivate_npc(npc_key)
+                logger.info(f"[WOUND] NPC {npc_key} died of accumulated wounds (critical + new injury)")
+                continue
+            set_npc_wound_severity(npc_key, new_severity)
+            logger.info(f"[INJURY] NPC {npc_key} now {new_severity}")
+        else:
+            continue
+        injury_notices.append(
+            {
+                "name": str(resolved.get("name", "")),
+                "role": str(resolved.get("role", "")),
+                "severity": str(severity),
+            }
+        )
+    return injury_notices, newly_dead
 
 
 async def _analyze_turn_outcome(
@@ -3436,6 +3621,7 @@ async def _analyze_turn_outcome(
                     {
                         "player_id": player_id,
                         "npc_key": npc_key,
+                        "entity_id": f"p{player_id}" if player_id else (f"n{npc_key}" if npc_key else None),
                         "name": entity_name,
                         "role": role_name,
                         "action_id": selected_id,
@@ -3463,11 +3649,14 @@ async def _analyze_turn_outcome(
             # Get mission context for progress tracking
             mission = get_mission(None, game_id=game_id)
 
-            # Build full crew roster from all briefings — prevents LLM from inventing members
+            # Build full crew roster from all briefings — prevents LLM from inventing members.
+            # entity_id ("p<player_id>" / "n<npc_key>") is the stable address the LLM
+            # MUST use in dead_crew_members / crew_injured / crew_healed.
             crew_roster = []
             for b in all_briefings:
                 player_id = b.get("player_id")
                 npc_key = b.get("npc_key")
+                entity_id = f"p{player_id}" if player_id else (f"n{npc_key}" if npc_key else None)
                 role_name = "?"
                 entity_name = "?"
                 is_dead = False
@@ -3486,11 +3675,19 @@ async def _analyze_turn_outcome(
                         entity_name = n.get("npc_name", npc_key)
                         is_dead = not n.get("is_active", True)
                         wound_severity = n.get("wound_severity")
-                crew_roster.append({"name": entity_name, "role": role_name, "is_dead": is_dead, "wound_severity": wound_severity})
+                crew_roster.append({"entity_id": entity_id, "name": entity_name, "role": role_name, "is_dead": is_dead, "wound_severity": wound_severity})
 
-            # Analyze with LLM
+            # Analyze with LLM. Ship status is persistent code-owned state:
+            # the LLM receives the current hull/shields/systems_offline and
+            # returns only per-turn deltas against them.
             gm = create_game_server(language=language)
-            outcome = await gm.analyze_combined_outcome(global_circ, all_decisions, previous_summary, mission_context=mission, crew_roster=crew_roster, game_id=game_id, player_id=None, turn=turn, kind="combined_outcome")
+            ship_state = get_game_state(game_id)
+            ship_status = {
+                "hull_integrity": ship_state["hull_integrity"],
+                "shields": ship_state["shields"],
+                "systems_offline": ship_state["systems_offline"],
+            }
+            outcome = await gm.analyze_combined_outcome(global_circ, all_decisions, previous_summary, mission_context=mission, crew_roster=crew_roster, ship_status=ship_status, threat_level=ship_state["threat_level"], game_id=game_id, player_id=None, turn=turn, kind="combined_outcome")
 
             # Detect and retry fallback outcomes (bland narrative, empty progress).
             # This happens when the LLM JSON can't be parsed and we got the generic
@@ -3517,6 +3714,8 @@ async def _analyze_turn_outcome(
                         previous_summary,
                         mission_context=mission,
                         crew_roster=crew_roster,
+                        ship_status=ship_status,
+                        threat_level=ship_state["threat_level"],
                         game_id=game_id,
                         player_id=None,
                         turn=turn,
@@ -3538,14 +3737,15 @@ async def _analyze_turn_outcome(
             # combined_outcome in the DB is the "turn fully closed" signal that
             # continue-game waits on before generating the next turn — so it must
             # not be written until mark_player_dead / end_game have run.
-            outcome_json = json.dumps(outcome, ensure_ascii=False)
 
             # Apply mission progress through the rules layer (P0+P1):
-            # normalizes objectives, accumulates with regression caps + tempo floor,
+            # normalizes objectives, accumulates with regression caps,
             # and computes completion from real thresholds (fixes defect B/C).
             mission_progress = outcome.get("mission_progress", [])
             mission_completed = False
+            mission_stagnant = False
             if mission:
+                progress_before = sum(mission.get("stage_progress", {}).values())
                 updated_mission = apply_mission_progress(mission, mission_progress)
                 update_mission_stage_progress(
                     updated_mission["stage_progress"],
@@ -3559,95 +3759,95 @@ async def _analyze_turn_outcome(
                     mission_completed = True
                     end_game("mission_complete", game_id=game_id)
                     logger.info("[MISSION] MISSION COMPLETE! Game ended.")
+                # Doom clock input: the turn is stagnant when total stage
+                # progress did not grow (regression counts as stagnant too).
+                mission_stagnant = sum(updated_mission["stage_progress"].values()) <= progress_before
                 mission = updated_mission
 
-            # ========== Process ship damage from new structured fields ==========
-            ship_hull = outcome.get("ship_hull_integrity", 100)
-            ship_shields = outcome.get("ship_shields", 100)
-            ship_systems_offline = outcome.get("ship_systems_offline", [])
-            ship_destroyed = outcome.get("ship_destroyed", False)
+            # ========== Ship status: persistent state + LLM deltas ==========
+            # hull/shields/systems_offline live in game_state; the LLM outcome
+            # carries only per-turn changes. Apply them through the rules layer
+            # (clamped to [0,100]). Destruction is decided by code: hull <= 0.
+            state = get_game_state(game_id)
+            ship_hull, ship_shields = apply_ship_status(
+                state["hull_integrity"],
+                state["shields"],
+                outcome.get("ship_hull_change", 0),
+                outcome.get("ship_shields_change", 0),
+            )
+            ship_systems_offline = apply_systems_offline(
+                state["systems_offline"],
+                outcome.get("systems_taken_offline", []),
+                outcome.get("systems_restored", []),
+            )
+            ship_destroyed = ship_hull <= 0
 
-            # Compute crew_health from hull (hull=0 → crew_health=0, hull=100 → crew_health=100)
-            # Shields also contribute to survival chances
-            crew_health = max(0, min(100, int(ship_hull * 0.7 + ship_shields * 0.3)))
+            # Record the resulting absolute ship status in the outcome JSON so
+            # stored turn summaries (and the push below) read real end-of-turn
+            # values instead of LLM deltas.
+            outcome["ship_hull_integrity"] = ship_hull
+            outcome["ship_shields"] = ship_shields
+            outcome["ship_systems_offline"] = ship_systems_offline
+            outcome["ship_destroyed"] = ship_destroyed
+            outcome_json = json.dumps(outcome, ensure_ascii=False)
 
             logger.info(f"[SHIP] Turn {turn}: hull={ship_hull}%, shields={ship_shields}%, systems_offline={ship_systems_offline}, destroyed={ship_destroyed}")
 
-            # Handle crew injuries — persist wound severity so it affects the
-            # number of action choices on the next turn.
-            crew_injured = outcome.get("crew_injured", [])
-            for injury_entry in crew_injured:
-                if isinstance(injury_entry, list) and len(injury_entry) >= 2:
-                    injured_name = injury_entry[0]
-                    injured_role = injury_entry[1]
-                    severity = injury_entry[2] if len(injury_entry) >= 3 else "minor"
-                    for d in all_decisions:
-                        if d.get("name") == injured_name or d.get("role") == injured_role:
-                            pid = d.get("player_id")
-                            npc_key = d.get("npc_key")
-                            if pid:
-                                set_player_wound_severity(pid, game_id, severity)
-                                logger.info(f"[INJURY] Player {pid} ({injured_role}) now {severity}")
-                            elif npc_key:
-                                set_npc_wound_severity(npc_key, severity)
-                                logger.info(f"[INJURY] NPC {npc_key} ({injured_role}) now {severity}")
-                            break
+            # Handle crew injuries — escalate the stored severity through
+            # game_rules.resolve_injury: the result is max(current, incoming)
+            # on the ladder, and a critically wounded character who takes any
+            # new wound DIES (mark_player_dead / deactivate_npc — the death
+            # notice push reads newly_dead below). Entries are addressed
+            # by entity_id from the crew roster; legacy [name, role, severity]
+            # lists fall back to an exact roster-name match (see
+            # _resolve_outcome_entity). Notices are built inside the helper
+            # so a push notice exists exactly when the wound was persisted.
+            injury_notices, newly_dead = _apply_crew_injuries(outcome, crew_roster, game_id=game_id)
 
             # Handle crew healing — only when the Medical Officer treated wounds.
-            # crew_healed entries are [name, role, new_severity] where new_severity
-            # is the improved step ('healthy' = fully healed → stored as NULL).
-            crew_healed = outcome.get("crew_healed", [])
-            for heal_entry in crew_healed:
-                if isinstance(heal_entry, list) and len(heal_entry) >= 2:
-                    healed_name = heal_entry[0]
-                    healed_role = heal_entry[1]
+            # crew_healed entries are {"entity_id", "new_severity"} where
+            # new_severity is the improved step ('healthy' = fully healed →
+            # stored as NULL). Healed NPCs feed the loyalty rules below.
+            healed_npc_count = 0
+            for heal_entry in outcome.get("crew_healed", []):
+                resolved = _resolve_outcome_entity(heal_entry, crew_roster)
+                if not resolved:
+                    continue
+                if isinstance(heal_entry, dict):
+                    new_severity = heal_entry.get("new_severity") or "healthy"
+                else:
                     new_severity = heal_entry[2] if len(heal_entry) >= 3 else "healthy"
-                    stored = None if new_severity in (None, "", "healthy") else new_severity
-                    for d in all_decisions:
-                        if d.get("name") == healed_name or d.get("role") == healed_role:
-                            pid = d.get("player_id")
-                            npc_key = d.get("npc_key")
-                            if pid:
-                                set_player_wound_severity(pid, game_id, stored)
-                                logger.info(f"[HEAL] Player {pid} ({healed_role}) wound now {stored or 'healthy'}")
-                            elif npc_key:
-                                set_npc_wound_severity(npc_key, stored)
-                                logger.info(f"[HEAL] NPC {npc_key} ({healed_role}) wound now {stored or 'healthy'}")
-                            break
+                stored = None if new_severity in (None, "", "healthy") else new_severity
+                pid, npc_key = _parse_entity_id(resolved.get("entity_id"))
+                if pid:
+                    set_player_wound_severity(pid, game_id, stored)
+                    logger.info(f"[HEAL] Player {pid} wound now {stored or 'healthy'}")
+                elif npc_key:
+                    set_npc_wound_severity(npc_key, stored)
+                    healed_npc_count += 1
+                    logger.info(f"[HEAL] NPC {npc_key} wound now {stored or 'healthy'}")
 
-            # Handle crew deaths
+            # Handle crew deaths — entries are {"entity_id", "cause"} addressed
+            # by the stable roster id (legacy [name, role] falls back to an
+            # exact roster-name match). Player ids who died on THIS turn —
+            # here or via wound escalation above — are collected in newly_dead
+            # for a one-time death notice. NPCs are deactivated and never
+            # receive a push.
             dead_crew = outcome.get("dead_crew_members", [])
-            # Player ids who died on THIS turn — used to deliver a one-time
-            # death notice. NPCs land in a separate roster (deactivated) and
-            # never receive a push, so only players are collected here.
-            newly_dead: set[int] = set()
             for death_entry in dead_crew:
-                # death_entry could be [name, role]
-                if isinstance(death_entry, list) and len(death_entry) >= 2:
-                    entity_name = death_entry[0]
-                    entity_role = death_entry[1]
-                    found = False
-                    # Try to find the player by looking up their entity name
-                    for d in all_decisions:
-                        if d.get("name") == entity_name or d.get("role") == entity_role:
-                            pid = d.get("player_id")
-                            if pid:
-                                mark_player_dead(pid, game_id)
-                                newly_dead.add(pid)
-                                logger.info(f"[DEATH] Player {pid} ({entity_role}) marked as dead")
-                                found = True
-                            break
-                    # If not a player, try to deactivate the NPC
-                    if not found:
-                        for d in all_decisions:
-                            if d.get("name") == entity_name or d.get("role") == entity_role:
-                                npc_key = d.get("npc_key")
-                                if npc_key:
-                                    deactivate_npc(npc_key)
-                                    logger.info(f"[DEATH] NPC {npc_key} ({entity_role}) deactivated")
-                                    break
+                resolved = _resolve_outcome_entity(death_entry, crew_roster)
+                if not resolved:
+                    continue
+                pid, npc_key = _parse_entity_id(resolved.get("entity_id"))
+                if pid:
+                    mark_player_dead(pid, game_id)
+                    newly_dead.add(pid)
+                    logger.info(f"[DEATH] Player {pid} marked as dead")
+                elif npc_key:
+                    deactivate_npc(npc_key)
+                    logger.info(f"[DEATH] NPC {npc_key} deactivated")
 
-            # Handle ship destruction
+            # Handle ship destruction — decided by code (hull <= 0), not the LLM
             if ship_destroyed:
                 end_game("ship_destroyed", game_id=game_id)
                 logger.warning(f"[SHIP] Ship destroyed! Game over for {game_id}")
@@ -3660,18 +3860,91 @@ async def _analyze_turn_outcome(
                 end_game("crew_wiped", game_id=game_id)
                 logger.warning(f"[CREW] All crew dead! Game over for {game_id}")
 
-            # Also update game state with computed crew_health.
-            # Skip if the game has already ended — end_game() already set
-            # the correct status (mission_complete, ship_destroyed, etc.).
-            state = get_game_state(game_id)
-            ship_alive = not ship_destroyed and state.get("ship_alive", True)
+            # Persist the ship status and advance the doom clock, unless the
+            # game has already ended — end_game() already set the correct
+            # status (mission_complete, ship_destroyed, etc.).
             game_already_ended = mission_completed or ship_destroyed or crew_wiped
+
+            # ── NPC loyalty: code-owned morale, applied to every active NPC ──
+            # Loyalty drops from this turn's losses (deaths, hull damage,
+            # mission regression) and recovers slightly from heals and
+            # mission progress (game_rules.compute_loyalty_change). Two
+            # active NPCs at loyalty <= MUTINY_LOYALTY_THRESHOLD means open
+            # mutiny — a defeat path of its own.
+            mutiny_happened = False
             if not game_already_ended:
+                # Deaths this turn: players are collected in newly_dead (both
+                # dead_crew_members and wound escalation), NPCs are deactivated
+                # in the same handlers — count them as the roster drop.
+                npcs_alive_before = sum(
+                    1 for r in crew_roster if str(r["entity_id"] or "").startswith("n") and not r["is_dead"]
+                )
+                deaths_count = len(newly_dead) + max(0, npcs_alive_before - len(active_npcs))
+                hull_damage = max(0, -_to_int(outcome.get("ship_hull_change", 0), 0))
+                mission_delta = sum(_to_int(e.get("points", 0), 0) for e in mission_progress if isinstance(e, dict))
+                change = compute_loyalty_change(
+                    deaths_count=deaths_count,
+                    hull_damage=hull_damage,
+                    mission_delta=mission_delta,
+                    healed_count=healed_npc_count,
+                )
+                new_loyalties = [adjust_npc_loyalty(n["npc_key"], change) for n in active_npcs]
+                logger.info(
+                    f"[LOYALTY] Turn {turn}: change={change} (deaths={deaths_count}, "
+                    f"hull_dmg={hull_damage}, mission={mission_delta}, healed={healed_npc_count})"
+                )
+                if mutiny_conditions(new_loyalties):
+                    mutiny_happened = True
+                    game_already_ended = True
+                    end_game("mutiny", game_id=game_id)
+                    logger.warning(f"[LOYALTY] Crew mutiny on {game_id}! Game over")
+
+            threat_overwhelmed = False
+            new_threat = state["threat_level"]
+            if not game_already_ended:
+                # Doom clock: threat grows by CODE every turn (never by the
+                # LLM), accelerated by auto-selected actions (hesitation),
+                # a critically damaged hull and mission stagnation.
+                auto_total, auto_count = count_turn_action_autos(turn, game_id=game_id)
+                auto_ratio = (auto_count / auto_total) if auto_total > 0 else 0.0
+                new_threat = compute_threat_tick(
+                    state["threat_level"],
+                    auto_ratio=auto_ratio,
+                    hull_ratio=ship_hull / HULL_MAX,
+                    mission_stagnant=mission_stagnant,
+                )
                 update_game_state(
                     state["turn"],
-                    "active" if ship_alive else "ship_destroyed",
-                    ship_alive=ship_alive,
-                    crew_health=crew_health,
+                    "active",
+                    ship_alive=True,
+                    hull_integrity=ship_hull,
+                    shields=ship_shields,
+                    systems_offline=ship_systems_offline,
+                    threat_level=new_threat,
+                    game_id=game_id,
+                )
+                logger.info(
+                    f"[THREAT] Turn {turn}: threat={new_threat} (+{new_threat - state['threat_level']}, "
+                    f"auto={auto_ratio:.0%}, stagnant={mission_stagnant})"
+                )
+                if new_threat >= THREAT_MAX:
+                    threat_overwhelmed = True
+                    end_game("overwhelmed", game_id=game_id)
+                    logger.warning(f"[THREAT] Threat reached {new_threat}/{THREAT_MAX}! Game over for {game_id}")
+            else:
+                # Terminal turn: still persist the final ship state so
+                # /game/status reflects the ship the crew actually ended
+                # with — end_game() only flips status/ship_alive. Status and
+                # ship_alive are re-read AFTER end_game so we never overwrite
+                # the terminal values it just wrote.
+                ended_state = get_game_state(game_id)
+                update_game_state(
+                    state["turn"],
+                    ended_state.get("status", "active"),
+                    ship_alive=ended_state.get("ship_alive", True),
+                    hull_integrity=ship_hull,
+                    shields=ship_shields,
+                    systems_offline=ship_systems_offline,
                     game_id=game_id,
                 )
 
@@ -3680,7 +3953,7 @@ async def _analyze_turn_outcome(
                 logger.info(f"[SHIP] Systems offline: {', '.join(ship_systems_offline)}")
 
             # Persist combined_outcome now that ALL turn effects (deaths,
-            # end_game, ship state, crew_health) are applied. This is the
+            # end_game, ship status) are applied. This is the
             # "turn fully closed" signal: continue-game blocks until the
             # previous turn's combined_outcome exists, so a death resolved on
             # turn N is visible in player_profiles before turn N+1 starts.
@@ -3901,17 +4174,10 @@ async def _analyze_turn_outcome(
                 )
 
             # ── Build injury notices for push ───────────────────────────
-            injury_notices = []
-            crew_injured_list = outcome.get("crew_injured", [])
-            for injury_entry in crew_injured_list:
-                if isinstance(injury_entry, list) and len(injury_entry) >= 2:
-                    injury_notices.append(
-                        {
-                            "name": str(injury_entry[0]),
-                            "role": str(injury_entry[1]),
-                            "severity": str(injury_entry[2]) if len(injury_entry) >= 3 else "unknown",
-                        }
-                    )
+            # injury_notices were built where the wounds were persisted
+            # (see the crew_injured handling above), so every notice maps to
+            # an actually-applied wound with roster name/role resolved from
+            # the entity_id.
 
             # ── Build personal outcomes for push ────────────────────────
             personal_outcomes = outcome.get("personal_outcomes", [])
@@ -4024,6 +4290,7 @@ async def _analyze_turn_outcome(
                     ship_hull_integrity=ship_hull,
                     ship_shields=ship_shields,
                     ship_systems_offline=ship_systems_offline,
+                    threat_level=new_threat,
                     total_crew_count=total_crew,
                     alive_crew_count=alive_crew,
                 )
@@ -4032,13 +4299,30 @@ async def _analyze_turn_outcome(
                 logger.error(f"[OUTCOME] Failed to deliver outcome for turn {turn}: {push_err}", exc_info=True)
 
             # ── Game Over: generate and deliver finale ──────────────────
-            game_ended = mission_completed or ship_destroyed or crew_wiped
+            game_ended = mission_completed or ship_destroyed or crew_wiped or threat_overwhelmed or mutiny_happened
             if game_ended:
                 try:
-                    outcome_type = "victory" if mission_completed else "defeat"
+                    # Outcome matrix: the verdict is computed by CODE from the
+                    # end-state; the LLM only writes it up in the matching tone.
+                    mission_progress_ratio = 0.0
+                    if mission:
+                        threshold_total = sum(o.get("success_threshold", 0) for o in mission.get("objectives", []))
+                        if threshold_total > 0:
+                            mission_progress_ratio = sum(mission.get("stage_progress", {}).values()) / threshold_total
+                    alive_crew_ratio = (alive_crew / total_crew) if total_crew > 0 else 1.0
+                    outcome_type = compute_outcome_type(
+                        mission_completed=mission_completed,
+                        mission_progress_ratio=mission_progress_ratio,
+                        hull_ratio=ship_hull / HULL_MAX,
+                        alive_crew_ratio=alive_crew_ratio,
+                        threat_level=new_threat,
+                        ship_destroyed=ship_destroyed,
+                        crew_wiped=crew_wiped,
+                    )
                     logger.info(f"[GAME_OVER] Game ended: {outcome_type}, generating finale...")
 
-                    # Build mission summary for the LLM prompt
+                    # Build mission summary (dry facts) for the LLM prompt
+                    stage_word = "Этап" if language == LANGUAGE_RU else "Stage"
                     mission_summary_parts = []
                     if mission:
                         for obj in mission.get("objectives", []):
@@ -4047,19 +4331,42 @@ async def _analyze_turn_outcome(
                             progress = mission.get("stage_progress", {}).get(str(stage), 0)
                             threshold = obj.get("success_threshold", "?")
                             done = "✓" if progress >= threshold else "✗"
-                            mission_summary_parts.append(f"{done} Этап {stage}: {name} ({progress}/{threshold})")
+                            mission_summary_parts.append(f"{done} {stage_word} {stage}: {name} ({progress}/{threshold})")
                     mission_summary = "\n".join(mission_summary_parts) if mission_summary_parts else "No mission data"
 
-                    # outcome_type is the machine token ("victory"/"defeat") used for
-                    # fallback lookup; outcome_label is the human-readable header shown
-                    # to the LLM. Mixing them once routed a victory to the defeat fallback.
+                    # outcome_type is the machine token ("triumph"/"victory"/"pyrrhic"/
+                    # "stalemate"/"defeat") used for fallback lookup and the rules-verdict
+                    # line; outcome_label is the human-readable header shown to the LLM
+                    # alongside that token. Mixing them once routed a victory to the
+                    # defeat fallback.
                     gs = get_game_strings(language)
                     go_msgs = gs.get("game_over", {})
-                    outcome_label = go_msgs.get("victory_header", outcome_type) if mission_completed else go_msgs.get("defeat_header", outcome_type)
+                    outcome_label = go_msgs.get(f"{outcome_type}_header", outcome_type)
+
+                    # Why the game ended (terminal status → localized facts line).
+                    # Priority mirrors the DB write order: ship_destroyed wins
+                    # over crew_wiped when both hit in one turn (end_game skips
+                    # the crew_wiped write if the ship already went down), and
+                    # a mutiny matters more than the clock.
+                    if mutiny_happened:
+                        end_status = "mutiny"
+                    elif ship_destroyed:
+                        end_status = "ship_destroyed"
+                    elif crew_wiped:
+                        end_status = "crew_wiped"
+                    elif threat_overwhelmed:
+                        end_status = "overwhelmed"
+                    else:
+                        end_status = "mission_complete"
+                    end_reason = go_msgs[f"reason_{end_status}"]
 
                     gm = create_game_server(language=language)
                     game_over = await gm.generate_game_over_outcome(
-                        outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary, game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome"
+                        outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary,
+                        end_reason=end_reason,
+                        hull=ship_hull, shields=ship_shields, threat=new_threat,
+                        dead_crew_count=total_crew - alive_crew, alive_crew_count=alive_crew, turns_played=turn,
+                        game_id=game_id, player_id=None, turn=turn, kind="game_over_outcome"
                     )
 
                     finale_narrative = game_over.get("finale_narrative", "")
@@ -4126,6 +4433,38 @@ async def _analyze_turn_outcome(
                         finale_outcome_type=outcome_type,
                         finale_image_url=finale_image_url or "",
                     )
+
+                    # ── Mission summary: compact stats right after the finale ──
+                    action_stats = get_game_action_stats(game_id=game_id)
+                    stats_players = []
+                    for p in action_stats["players"]:
+                        stats_profile = get_player_profile(p["player_id"])
+                        stats_players.append(
+                            {
+                                "name": (stats_profile or {}).get("player_name") or str(p["player_id"]),
+                                "actions": p["actions"],
+                                "auto_actions": p["auto_actions"],
+                            }
+                        )
+                    summary_text = format_game_summary(
+                        language,
+                        outcome_label=outcome_label,
+                        end_status=end_status,
+                        turns=turn,
+                        hull=ship_hull,
+                        shields=ship_shields,
+                        threat=new_threat,
+                        dead_names=[n.get("name", "") for n in death_notices],
+                        alive_crew=alive_crew,
+                        total_crew=total_crew,
+                        player_stats=stats_players,
+                    )
+                    await push_game_summary(
+                        game_id=game_id,
+                        text=summary_text,
+                        player_ids=outcome_recipients,
+                    )
+                    logger.info(f"[GAME_OVER] Summary delivered to {len(outcome_recipients)} players")
                 except Exception as go_err:
                     logger.error(f"[GAME_OVER] Finale generation/delivery failed: {go_err}", exc_info=True)
 
@@ -4405,7 +4744,7 @@ def _build_player_briefings_for_push(
         player_id = b.get("player_id")
         if not player_id:
             continue
-        # Skip kicked players — they were replaced by NPCs
+        # Skip kicked players — they are out of the game
         if is_player_kicked(player_id, game_id):
             continue
         # Get player_name from profile
@@ -4427,68 +4766,6 @@ def _build_player_briefings_for_push(
             }
         )
     return players_data
-
-
-@app.post("/admin/generate-turn")
-async def generate_turn_episode(
-    language: str,
-    *,
-    game_id: str,
-    previous_actions: list[dict[str, Any]] | None,
-    previous_summary: str | None,
-    team_assembly_status: dict[str, Any] | None,
-):
-    """Generate a new turn episode (called by game scheduler)"""
-    state = get_game_state(game_id)
-    turn_num = state["turn"]
-
-    # Use game's stored language — the caller may not know it
-    language = get_game_language(game_id) or language
-
-    logger.info("=== GENERATE TURN STARTED ===")
-    logger.info(f"Turn number: {turn_num}")
-    logger.info(f"Language: {language}")
-    logger.info(f"Previous actions count: {len(previous_actions) if previous_actions else 0}")
-
-    game_server = create_game_server(language=language)
-
-    player_role = "Crew Member" if language != "ru" else "Член экипажа"
-    logger.info(f"Player role: {player_role}")
-
-    # Generate previous turn summary from actions for story consistency
-    summary = previous_summary or ""
-    if not summary and previous_actions:
-        action_summaries = []
-        for action in previous_actions:
-            action_summaries.append(f"Turn {action.get('turn', 0)}: Player chose '{action.get('choice')}'")
-        summary = " | ".join(action_summaries)
-
-    story = await game_server.generate_turn_story(turn=turn_num, previous_summary=summary or state["last_updated"], player_role=player_role, game_id=game_id, player_id=None, kind="turn_story")
-
-    logger.info("Generating NPC dialogues...")
-    dialogues = await game_server.generate_crew_dialogues(story=story, player_role=player_role, crew_members=_get_crew_members(game_id), game_id=game_id, player_id=None, turn=turn_num, kind="crew_dialogue")
-
-    new_turn = {
-        "turn": turn_num,
-        "story": story.narrative,
-        "crew_dialogues": [{"npc": d.npc_name, "dialogue": d.dialogue} for d in dialogues],
-        "player_actions": story.decision_points,
-        "generated_content": {
-            "image": f"/content/turn_{turn_num}/scene.jpg",
-            "comic": f"/content/turn_{turn_num}/comic.webp",
-        },
-        "previous_turn_summary": summary,
-    }
-
-    create_game_turn(new_turn, game_id)
-    update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
-
-    logger.info("=== GENERATE TURN COMPLETED ===")
-    logger.info(f"Story: {story.narrative}...")
-    logger.info(f"NPC dialogues: {len(dialogues)}")
-    logger.info(f"Player actions: {len(story.decision_points)}")
-
-    return new_turn
 
 
 @app.post("/admin/generate-comic/{player_id}")
@@ -4915,7 +5192,12 @@ async def _original_start_game(request: StartGameRequest):
     available_roles = get_available_roles(game_id, language=language)
     logger.info(f"Available roles after re-assignment: {[r['role_key'] for r in available_roles]}")
 
-    # 3. Create NPCs for all unfilled roles
+    # 3. Create NPCs for unfilled roles — capped at NPC_COUNT seats by the
+    # rules layer (keeps crew_wiped reachable and turn generation lean).
+    # A seat vacated later (kick/reset/death) stays empty: departing players
+    # are no longer replaced by NPCs.
+    npc_role_keys = set(select_npc_role_keys([r["role_key"] for r in available_roles]))
+    available_roles = [r for r in available_roles if r["role_key"] in npc_role_keys]
     npcs_created = []
     gm = create_game_server(language=language)
     _npc_turn = get_game_state(game_id)["turn"]
@@ -4995,7 +5277,6 @@ async def _original_start_game(request: StartGameRequest):
             "avatar_description": npc_flavour["avatar_description"],
             "game_id": game_id,
             "is_active": True,
-            "replaces_player_id": None,
         }
         npc = create_npc_profile(npc_data)
         if npc:
@@ -5127,6 +5408,8 @@ async def _original_start_game(request: StartGameRequest):
     # 7. Generate the game turn with the new restructured flow
     state = get_game_state(game_id)
     turn_num = state["turn"]
+    turn_threat = state["threat_level"]
+    turn_ship_status = {"hull_integrity": state["hull_integrity"], "shields": state["shields"]}
 
     # Build cumulative summary from ALL previous turns, not just the last one
     previous_summary = _build_cumulative_story_summary(
@@ -5145,7 +5428,7 @@ async def _original_start_game(request: StartGameRequest):
         except (json.JSONDecodeError, TypeError):
             global_circ = None
     if global_circ is None:
-        global_circ = await gm.generate_global_circumstances(turn=turn_num, previous_summary=previous_summary, player_profiles=all_participants, mission_context=mission_data, game_id=game_id, player_id=None, kind="global_circumstances")
+        global_circ = await gm.generate_global_circumstances(turn=turn_num, previous_summary=previous_summary, player_profiles=all_participants, mission_context=mission_data, game_id=game_id, player_id=None, kind="global_circumstances", threat_level=turn_threat)
     global_narrative = global_circ.get("narrative", "")
 
     # Save global circumstances
@@ -5285,6 +5568,8 @@ async def _original_start_game(request: StartGameRequest):
                     game_id=game_id,
                     player_id=str(player_id) if player_id else participant.get("npc_key", ""),
                     kind="player_briefing",
+                    threat_level=turn_threat,
+                    ship_status=turn_ship_status,
                 )
             except Exception as e:
                 logger.error(f"[BRIEFING] Failed to generate briefing for {participant.get('role', '?')}: {e}", exc_info=True)
@@ -5308,6 +5593,7 @@ async def _original_start_game(request: StartGameRequest):
                         player_id=participant.get("npc_key", ""),
                         turn=turn_num,
                         kind="npc_choice",
+                        loyalty=npc_profile.get("loyalty", 70),
                     )
                 except Exception as e:
                     logger.error(f"[NPC] Failed to generate choice for {participant.get('npc_key', '?')}: {e}", exc_info=True)
@@ -5315,6 +5601,12 @@ async def _original_start_game(request: StartGameRequest):
 
                 selected_id = npc_decision.get("action_id", "")
                 rationale = npc_decision.get("rationale", "")
+
+                # Fallback delay decision carries a synthetic choice — append
+                # it so the selected id resolves for every consumer.
+                fallback_choice = npc_decision.get("choice")
+                if fallback_choice and not any(c.get("id") == fallback_choice.get("id") for c in choices):
+                    choices = [*choices, fallback_choice]
 
                 # Find the consequence for the chosen action
                 chosen_consequence = ""
@@ -5538,8 +5830,9 @@ async def _original_start_game(request: StartGameRequest):
     }
     create_game_turn(new_turn, game_id)
 
-    # Advance game state to next turn
-    update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
+    # Advance game state to next turn. Ship status (hull/shields/systems)
+    # is persistent and deliberately not reset here.
+    update_game_state(turn_num + 1, "active", ship_alive=True, game_id=game_id)
 
     # Build per-player briefing response
     briefings_for_response = []
@@ -5672,10 +5965,10 @@ async def get_team_endpoint(game_id: str):
     # Add NPCs — include both active and dead (killed in story).
     # Exclude inactive NPCs whose role is now taken by a real player
     # (checks ship_roles.taken_by to also handle legacy data), and also exclude
-    # ghost NPCs that were created to replace a player who has since returned to
-    # this game (replaces_player_id is in player_profiles for this game) —
-    # otherwise a reset-then-reonboard player would see their old NPC duplicate
-    # them in the roster.
+    # NPCs whose replaces_player_id is a player registered in this game — the
+    # NPC holds the same seat as that player (a player who displaced the NPC by
+    # taking its role, or legacy replacement NPCs of a returned player), so
+    # listing both would duplicate the seat in the roster.
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -5684,6 +5977,7 @@ async def get_team_endpoint(game_id: str):
     )
     npc_rows = cursor.fetchall()
     conn.close()
+    loyalty_words = get_game_strings(get_game_language(game_id)).get("npc_loyalty", {})
     for row in npc_rows:
         avatar_desc = row["avatar_description"] or ""
         avatar_url = _extract_avatar_url(avatar_desc)
@@ -5699,16 +5993,21 @@ async def get_team_endpoint(game_id: str):
             is_active = bool(row["is_active"])
         except KeyError:
             is_active = True
-        team.append(
-            {
-                "name": npc_name or npc_role,
-                "role": npc_role,
-                "species": npc_species,
-                "gender": npc_gender,
-                "avatar_url": avatar_url,
-                "is_dead": not is_active,
-            }
-        )
+        entry = {
+            "name": npc_name or npc_role,
+            "role": npc_role,
+            "species": npc_species,
+            "gender": npc_gender,
+            "avatar_url": avatar_url,
+            "is_dead": not is_active,
+        }
+        # Telegraph NPC morale to the players: active crew members show
+        # their loyalty band so an approaching mutiny is visible in advance.
+        if is_active and row["loyalty"] is not None:
+            band = loyalty_band(row["loyalty"])
+            entry["loyalty_band"] = band
+            entry["loyalty_status"] = loyalty_words.get(band, band)
+        team.append(entry)
 
     return {"game_id": game_id, "members": team, "count": len(team)}
 
@@ -5741,150 +6040,12 @@ async def get_live_player_ids_endpoint(game_id: str):
     return {"live_player_ids": live, "count": len(live)}
 
 
-def _replace_player_with_npc(
-    player_id: int,
-    role_key: str,
-    game_id: str,
-    reason: str,
-    language: str,
-) -> dict[str, Any]:
-    """Replace a player with an NPC that takes over their role.
-
-    Core of the kick/reset flow: builds an NPC preserving the player's name,
-    species, gender and appearance, releases ONLY that role (not every role in
-    the game), creates the NPC profile and records the kick. Does NOT touch the
-    player profile itself — the caller decides whether to NULL its game_id (kick)
-    or delete it outright (reset).
-
-    Returns {"role_name", "npc_key", "npc_name"}. Raises HTTPException on failure.
-    """
-    role_data = get_role_by_key(role_key, language="ru", game_id=game_id)
-    if not role_data:
-        raise HTTPException(status_code=404, detail=f"Role '{role_key}' not found")
-
-    kicked_profile = get_player_profile(player_id)
-    npc_name = ((kicked_profile.get("player_name", "") or "") if kicked_profile else role_data["role_name"]) or role_data["role_name"]
-    npc_traits = kicked_profile.get("personality_traits", []) if kicked_profile else []
-    npc_species = (kicked_profile.get("species", "") or "") if kicked_profile else ""
-    npc_gender = (kicked_profile.get("gender", "") or "") if kicked_profile else ""
-    if not npc_species:
-        npc_species = _random_npc_species()
-    if not npc_gender:
-        npc_gender = _random_npc_gender(language)
-    npc_avatar_desc = kicked_profile.get("avatar_description", "") if kicked_profile else ""
-    npc_role_description = kicked_profile.get("role_description", "") if kicked_profile else ""
-
-    # Preserve the replaced player's existing avatar image so the NPC shows up
-    # in the team roster without regeneration. NPCs store the URL inside
-    # avatar_description as "avatar_url=<url>;<prompt>" (see _extract_avatar_url).
-    player_avatar_url = (kicked_profile.get("avatar_url") if kicked_profile else None) or None
-    if player_avatar_url:
-        npc_avatar_desc = f"avatar_url={player_avatar_url};{npc_avatar_desc}"
-
-    # Release ONLY the target role (reset_roles() here nuked every assignment).
-    release_role(role_key, game_id)
-
-    npc = create_npc_profile(
-        {
-            "npc_key": f"npc_{role_key}_{game_id}",
-            "role_key": role_key,
-            "npc_name": npc_name,
-            "role": role_data["role_name"],
-            "role_description": npc_role_description,
-            "personality_traits": npc_traits,
-            "species": npc_species,
-            "gender": npc_gender,
-            "avatar_description": npc_avatar_desc,
-            "game_id": game_id,
-            "is_active": True,
-            "replaces_player_id": player_id,
-        }
-    )
-    if not npc:
-        raise HTTPException(status_code=500, detail="Failed to create NPC replacement")
-
-    record_kick(player_id, npc["npc_key"], reason, game_id=game_id)
-    logger.info(f"[REPLACE] Player {player_id} replaced by NPC {npc_name} for role {role_key} in game {game_id}")
-    return {
-        "role_name": role_data["role_name"],
-        "npc_key": npc["npc_key"],
-        "npc_name": npc_name,
-        "player_avatar_url": kicked_profile.get("avatar_url") if kicked_profile else None,
-        "player_avatar_desc": kicked_profile.get("avatar_description", "") if kicked_profile else "",
-    }
-
-
-async def _generate_replacement_npc_avatar(
-    npc_key: str,
-    role_key: str,
-    role_name: str,
-    player_avatar_url: str | None,
-    player_avatar_desc: str,
-    game_id: str,
-) -> None:
-    """Generate an NPC avatar using the replaced player's avatar as reference.
-
-    Uses img2img (denoise=0.4) to adapt the player's avatar into an NPC portrait
-    that preserves the character's appearance. Falls back to text-to-image if
-    the player had no avatar or img2img fails.
-    """
-    prompt = _extract_avatar_prompt(player_avatar_desc)
-    if not prompt:
-        prompt = f"Sci-fi character portrait of {role_name}. Cinematic lighting, detailed uniform, 4K quality, space opera aesthetic."
-
-    try:
-        image_gen = create_image_generator()
-
-        if player_avatar_url:
-            # Try img2img with player's avatar as reference (low denoise to preserve appearance)
-            url = await image_gen.generate_action_image_with_reference(
-                prompt=prompt,
-                reference_image_url=player_avatar_url,
-                character_description=role_name,
-                filename_prefix=f"{game_id}/avatar_{role_key}",
-                width=768,
-                height=1024,
-                denoise=0.4,
-                game_id=game_id,
-                player_id=None,
-                turn=None,
-                kind=f"npc_avatar_{role_key}",
-            )
-        else:
-            # Fallback: text-to-image
-            url = await image_gen.generate_avatar_image(
-                prompt=prompt,
-                filename_prefix=f"{game_id}/avatar_{role_key}",
-                width=768,
-                height=1024,
-                game_id=game_id,
-                player_id=None,
-                turn=None,
-                kind=f"npc_avatar_{role_key}",
-            )
-
-        if url:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE npc_profiles SET avatar_description = ? WHERE npc_key = ?",
-                (f"avatar_url={url};{prompt}", npc_key),
-            )
-            conn.commit()
-            conn.close()
-            logger.info(f"[NPC_AVATAR] Generated replacement avatar for {npc_key}: {url}")
-        else:
-            logger.warning(f"[NPC_AVATAR] Failed to generate avatar for {npc_key}")
-    except Exception as e:
-        logger.warning(f"[NPC_AVATAR] Avatar generation failed for {npc_key}: {e}")
-
-
 @app.post("/admin/kick-player")
 async def admin_kick_player(request: KickPlayerRequest):
-    """Kick a player by role, replace with NPC, and notify the kicked player.
+    """Kick a player by role and notify the kicked player.
 
     The kicked player receives a message about being removed from the game.
-    The NPC takes over the role with LLM-based decisions.
+    Their seat stays empty — no NPC replacement is created.
     """
     logger.info("=== ADMIN KICK PLAYER ===")
     logger.info(f"role_key={request.role_key}, reason={request.reason}")
@@ -5901,48 +6062,25 @@ async def admin_kick_player(request: KickPlayerRequest):
         raise HTTPException(status_code=400, detail=f"Role '{role_key}' is not taken by any player")
     kicked_player_id = taken_by
 
-    replaced = _replace_player_with_npc(
-        player_id=kicked_player_id,
-        role_key=role_key,
-        game_id=game_id,
-        reason=request.reason,
-        language=request.language,
-    )
-
-    # Generate NPC avatar using kicked player's avatar as reference
-    await _generate_replacement_npc_avatar(
-        npc_key=replaced["npc_key"],
-        role_key=role_key,
-        role_name=replaced["role_name"],
-        player_avatar_url=replaced.get("player_avatar_url"),
-        player_avatar_desc=replaced.get("player_avatar_desc", ""),
-        game_id=game_id,
-    )
+    # Vacate the seat — it stays empty until a new player takes the role.
+    release_role(role_key, game_id)
+    record_kick(kicked_player_id, request.reason, game_id=game_id)
 
     # Notify the kicked player (via game_messages)
-    kick_notification = f"⛔ *Вы были изгнаны с корабля!*\n\nGame Master принял решение заменить вас NPC.\n*Причина:* {request.reason}\n\nВаш персонаж заменён на {replaced['npc_name']}.\nСпасибо за игру!"
+    kick_notification = f"⛔ *Вы были изгнаны с корабля!*\n\nGame Master принял решение удалить вас из игры.\n*Причина:* {request.reason}\n\nВаше место в экипаже осталось пустым.\nСпасибо за игру!"
     add_game_message(kicked_player_id, kick_notification, "kick_notification")
 
     # Remove from game but keep the profile data
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE player_profiles SET game_id = NULL WHERE player_id = ?",
-        (kicked_player_id,),
-    )
-    conn.commit()
-    conn.close()
+    leave_game(kicked_player_id)
 
     logger.info("=== ADMIN KICK PLAYER COMPLETED ===")
-    logger.info(f"Kicked player {kicked_player_id}, replaced with NPC {replaced['npc_name']}")
+    logger.info(f"Kicked player {kicked_player_id} from role {role_key} in game {game_id}; seat left empty")
 
     return {
         "status": "success",
         "kicked_player_id": kicked_player_id,
         "role_key": role_key,
-        "role_name": replaced["role_name"],
-        "npc_key": replaced["npc_key"],
-        "npc_name": replaced["npc_name"],
+        "role_name": role_data["role_name"],
         "reason": request.reason,
     }
 
@@ -5958,8 +6096,9 @@ class AutoKickBlockedRequest(BaseModel):
 async def admin_auto_kick_blocked(request: AutoKickBlockedRequest):
     """Auto-kick a player who blocked the bot. Called by telegram-bot push server.
 
-    Looks up the player's game and role, replaces them with an NPC.
-    Idempotent: returns success if the player is already kicked/not in a game.
+    Looks up the player's game and role and removes them from the game; their
+    seat stays empty. Idempotent: returns success if the player is already
+    kicked/not in a game.
     """
     logger.info("=== AUTO KICK BLOCKED ===")
     logger.info(f"player_id={request.player_id}, reason={request.reason}")
@@ -5985,48 +6124,24 @@ async def admin_auto_kick_blocked(request: AutoKickBlockedRequest):
     if not role_key:
         logger.info(f"Player {request.player_id} holds no role in game {game_id}")
         # Still clear game_id so they don't keep failing pushes
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE player_profiles SET game_id = NULL WHERE player_id = ?",
-            (request.player_id,),
-        )
-        conn.commit()
-        conn.close()
+        leave_game(request.player_id)
         return {"status": "no_role", "player_id": request.player_id, "game_id": game_id}
 
-    replaced = _replace_player_with_npc(
-        player_id=request.player_id,
-        role_key=role_key,
-        game_id=game_id,
-        reason=request.reason,
-        language="en",
-    )
+    # Vacate the seat — it stays empty, no NPC replacement.
+    release_role(role_key, game_id)
+    record_kick(request.player_id, request.reason, game_id=game_id)
+    leave_game(request.player_id)
 
-    # Remove from game but keep the profile data
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE player_profiles SET game_id = NULL WHERE player_id = ?",
-        (request.player_id,),
-    )
-    conn.commit()
-    conn.close()
-
-    # Skip notification — user blocked the bot, they won't see it anyway.
-    # NPC avatar is reused from the player in _replace_player_with_npc;
-    # no regeneration needed for an automatic kick.
+    # No notification — user blocked the bot, they won't see it anyway.
 
     logger.info("=== AUTO KICK BLOCKED COMPLETED ===")
-    logger.info(f"Kicked blocked player {request.player_id} from game {game_id}, replaced with NPC {replaced['npc_name']} ({role_key})")
+    logger.info(f"Kicked blocked player {request.player_id} from game {game_id} (role {role_key}); seat left empty")
 
     return {
         "status": "kicked",
         "kicked_player_id": request.player_id,
         "game_id": game_id,
         "role_key": role_key,
-        "npc_key": replaced["npc_key"],
-        "npc_name": replaced["npc_name"],
         "reason": request.reason,
     }
 
@@ -6035,12 +6150,11 @@ class ResetPlayerRequest(BaseModel):
     """Request to reset a player's game participation (self-service /reset)."""
 
     player_id: int
-    language: str
 
 
 @app.post("/admin/reset-player")
 async def admin_reset_player(request: ResetPlayerRequest):
-    """Reset a player's participation: replace them with an NPC, then wipe their
+    """Reset a player's participation: vacate their seat, then wipe their
     profile and onboarding answers so they can start over from scratch.
     """
     logger.info("=== ADMIN RESET PLAYER ===")
@@ -6051,7 +6165,7 @@ async def admin_reset_player(request: ResetPlayerRequest):
     game_id = profile.get("game_id") if profile else None
 
     # If the player is mid-onboarding, they have no profile yet — only an
-    # onboarding session. There is nothing to replace with an NPC and no
+    # onboarding session. There is no seat to vacate and no
     # game_id to report, but we must still wipe the session so /reset can
     # get them out of the onboarding flow.
     if not profile:
@@ -6061,38 +6175,33 @@ async def admin_reset_player(request: ResetPlayerRequest):
             "status": "success",
             "player_id": player_id,
             "game_id": None,
-            "role_replaced": None,
-            "npc_name": None,
+            "role_released": None,
             "profile_deleted": False,
             "sessions_deleted": sessions_deleted,
         }
 
-    # Replace the player with an NPC if they currently hold a role.
-    npc_replaced = None
     if game_id is None:
         raise HTTPException(status_code=400, detail="Player has no associated game")
+
+    # Vacate the player's seat if they currently hold a role — it stays
+    # empty, no NPC replacement. The kick record keeps them out of briefing
+    # pushes for this game until they re-onboard.
     role_key = get_role_key_for_player(player_id, game_id)
     if role_key:
-        npc_replaced = _replace_player_with_npc(
-            player_id=player_id,
-            role_key=role_key,
-            game_id=game_id,
-            reason="Player reset",
-            language=request.language,
-        )
+        release_role(role_key, game_id)
+        record_kick(player_id, "Player reset", game_id=game_id)
 
     # Wipe the player's data so they can start a fresh onboarding.
     profile_deleted = delete_player_profile(player_id)
     sessions_deleted = delete_onboarding_sessions_for_player(player_id)
 
-    logger.info(f"=== ADMIN RESET PLAYER COMPLETED === player_id={player_id}, game_id={game_id}, role_replaced={role_key}, profile_deleted={profile_deleted}, sessions_deleted={sessions_deleted}")
+    logger.info(f"=== ADMIN RESET PLAYER COMPLETED === player_id={player_id}, game_id={game_id}, role_released={role_key}, profile_deleted={profile_deleted}, sessions_deleted={sessions_deleted}")
 
     return {
         "status": "success",
         "player_id": player_id,
         "game_id": game_id,
-        "role_replaced": role_key,
-        "npc_name": npc_replaced["npc_name"] if npc_replaced else None,
+        "role_released": role_key,
         "profile_deleted": profile_deleted,
         "sessions_deleted": sessions_deleted,
     }
@@ -6129,6 +6238,41 @@ async def admin_list_games(include_ended: bool):
             }
         )
     return {"games": result}
+
+
+@app.get("/admin/win-rate")
+async def admin_win_rate():
+    """Telemetry over all ended games: outcome-token counts, win share, averages.
+
+    win_share = (triumph + victory + pyrrhic) / ended games. avg_auto_ratio is
+    the mean of per-game auto/total action ratios from player_action_stats
+    (auto = the code-assigned 'delay' hesitation kind).
+    """
+    counts = {"triumph": 0, "victory": 0, "pyrrhic": 0, "stalemate": 0, "defeat": 0}
+    turns_list: list[int] = []
+    auto_ratios: list[float] = []
+    for game in get_all_games():
+        if game.get("status") != "ended":
+            continue
+        game_id = game["game_id"]
+        state = get_game_state(game_id)
+        outcome_type = state.get("finale_outcome_type") or "unknown"
+        counts[outcome_type] = counts.get(outcome_type, 0) + 1
+        turns_list.append(int(state.get("turn") or 0))
+        stats = get_game_action_stats(game_id=game_id)
+        if stats["total_actions"] > 0:
+            auto_ratios.append(stats["auto_actions"] / stats["total_actions"])
+        else:
+            auto_ratios.append(0.0)
+    total_ended = len(turns_list)
+    wins = counts["triumph"] + counts["victory"] + counts["pyrrhic"]
+    return {
+        "total_ended": total_ended,
+        "counts": counts,
+        "win_share": round(wins / total_ended, 3) if total_ended else 0.0,
+        "avg_turns": round(sum(turns_list) / total_ended, 1) if total_ended else 0.0,
+        "avg_auto_ratio": round(sum(auto_ratios) / total_ended, 3) if total_ended else 0.0,
+    }
 
 
 @app.post("/admin/analyze-turn")
@@ -6170,6 +6314,7 @@ async def _background_continue_wrapper(
     language: str,
     force_resend: bool,
     turn_num: int,
+    deadline: str | None,
 ):
     """Run continue-game in background, notify GM on completion."""
     try:
@@ -6181,6 +6326,7 @@ async def _background_continue_wrapper(
                 game_id=game_id,
                 language=language,
                 force_resend=force_resend,
+                deadline=deadline,
             ),
             resume_job_id=None,
         )
@@ -6224,16 +6370,21 @@ async def admin_continue_game(
     game_id: str,
     language: str,
     force_resend: bool,
+    deadline: str | None = None,
 ):
     """Generate the next turn in the game.
 
     Starts background generation and returns immediately.
     GM will receive a push notification via Telegram when done.
+
+    deadline: ISO datetime (UTC) when the scheduler fires the NEXT
+    generation — i.e. when this new turn closes. Stored on the turn
+    and shown to players so the auto-action "delay" is fair.
     """
     # Use game's stored language if available
     language = get_game_language(game_id) or language
     logger.info("=== ADMIN CONTINUE GAME ===")
-    logger.info(f"game_id={game_id}, language={language}")
+    logger.info(f"game_id={game_id}, language={language}, deadline={deadline}")
 
     state = get_game_state(game_id)
     turn_num = state["turn"]
@@ -6252,6 +6403,7 @@ async def admin_continue_game(
             language=language,
             force_resend=force_resend,
             turn_num=turn_num,
+            deadline=deadline,
         )
     )
 
@@ -6268,6 +6420,7 @@ async def _original_continue_game(
     game_id: str,
     language: str,
     force_resend: bool,
+    deadline: str | None = None,
 ):
     """Original continue-game logic (runs in background)."""
     logger.info("=== ADMIN CONTINUE GAME ===")
@@ -6387,6 +6540,12 @@ async def _original_continue_game(
     # Fetch mission data for story consistency
     mission_data = get_mission(None, game_id=game_id) or {}
 
+    # Doom clock for this turn's prompts — read AFTER the previous turn was
+    # closed above (its outcome analysis may have advanced the threat).
+    turn_state = get_game_state(game_id)
+    turn_threat = turn_state["threat_level"]
+    turn_ship_status = {"hull_integrity": turn_state["hull_integrity"], "shields": turn_state["shields"]}
+
     # Step A: Generate global circumstances (resume: reuse if already stored)
     global_circ = None
     _existing_turn = get_game_turn(turn_num, game_id)
@@ -6396,6 +6555,10 @@ async def _original_continue_game(
             logger.info(f"[TURN] Resume: reusing global circumstances for turn {turn_num}")
         except (json.JSONDecodeError, TypeError):
             global_circ = None
+    # Resume: the caller (e.g. interrupted-job recovery) may not know the
+    # deadline this turn was generated with — keep the stored one.
+    if deadline is None and _existing_turn and _existing_turn.get("deadline"):
+        deadline = _existing_turn["deadline"]
     if global_circ is None:
         global_circ = await gm.generate_global_circumstances(
             turn=turn_num,
@@ -6405,6 +6568,7 @@ async def _original_continue_game(
             game_id=game_id,
             player_id=None,
             kind="global_circumstances",
+            threat_level=turn_threat,
         )
 
     # Save global circumstances
@@ -6492,6 +6656,7 @@ async def _original_continue_game(
             "image": f"/content/turn_{turn_num}/scene.jpg",
         },
         "previous_turn_summary": previous_summary,
+        "deadline": deadline,
     }
     create_game_turn(early_turn, game_id)
     logger.info(f"[TURN] Early game turn record created for turn {turn_num}")
@@ -6605,6 +6770,8 @@ async def _original_continue_game(
             player_id=str(participant["player_id"]) if participant.get("player_id") else participant.get("npc_key", ""),
             kind="player_briefing",
             crew_dialogue_context=crew_dialogue_context or None,
+            threat_level=turn_threat,
+            ship_status=turn_ship_status,
         )
         briefing = briefing_data.get("briefing", "")
         choices = briefing_data.get("choices", [])
@@ -6623,9 +6790,16 @@ async def _original_continue_game(
                 turn=turn_num,
                 kind="npc_choice",
                 crew_dialogue_context=crew_dialogue_context or None,
+                loyalty=npc_profile.get("loyalty", 70),
             )
             selected_id = npc_decision.get("action_id", "")
             rationale = npc_decision.get("rationale", "")
+
+            # Fallback delay decision carries a synthetic choice — append
+            # it so the selected id resolves for every consumer.
+            fallback_choice = npc_decision.get("choice")
+            if fallback_choice and not any(c.get("id") == fallback_choice.get("id") for c in choices):
+                choices = [*choices, fallback_choice]
 
             chosen_consequence = ""
             chosen_consequence_kind = ""
@@ -6814,6 +6988,7 @@ async def _original_continue_game(
             "image": f"/content/turn_{turn_num}/scene.jpg",
         },
         "previous_turn_summary": previous_summary,
+        "deadline": deadline,
     }
     create_game_turn(new_turn, game_id)
 
@@ -6824,7 +6999,7 @@ async def _original_continue_game(
     # to 'active', resurrecting a dead game and letting turn N+1 be pushed.
     pre_state = get_game_state(game_id)
     if pre_state["status"] == "active" and pre_state["ship_alive"]:
-        update_game_state(turn_num + 1, "active", ship_alive=True, crew_health=100, game_id=game_id)
+        update_game_state(turn_num + 1, "active", ship_alive=True, game_id=game_id)
     else:
         logger.info(f"[CONTINUE] Game already ended (status={pre_state['status']}) before advancing to turn {turn_num + 1}; skipping state update")
 
@@ -6848,6 +7023,7 @@ async def _original_continue_game(
                     global_narrative=global_narrative,
                     was_restarted=False,
                     language=language,
+                    deadline=deadline,
                 )
             )
     except Exception as push_err:
@@ -6885,6 +7061,11 @@ async def admin_regenerate_turn(
 
     logger.info(f"Regenerating Turn {regenerate_turn} (current state turn={current_turn})")
 
+    # Preserve the turn's deadline across regeneration — the deletion below
+    # wipes the game_turns row that stores it.
+    existing_turn = get_game_turn(regenerate_turn, game_id)
+    preserved_deadline = existing_turn.get("deadline") if existing_turn else None
+
     # Delete current turn's data
     deleted_briefings = delete_player_briefings_for_turn(regenerate_turn, game_id)
     deleted_actions = delete_player_actions_for_turn(regenerate_turn, game_id)
@@ -6895,11 +7076,11 @@ async def admin_regenerate_turn(
     # Roll back game state to before the deleted turn
     reset_game_state_to_turn1(game_id)
     # Restore to the correct turn (the turn being regenerated)
-    update_game_state(regenerate_turn, "active", ship_alive=True, crew_health=100, game_id=game_id)
+    update_game_state(regenerate_turn, "active", ship_alive=True, game_id=game_id)
 
     # Now regenerate the turn using the continue-game logic
     # admin_continue_game now starts background processing and returns immediately
-    await admin_continue_game(game_id=game_id, language=language, force_resend=True)
+    await admin_continue_game(game_id=game_id, language=language, force_resend=True, deadline=preserved_deadline)
 
     logger.info(f"Background regeneration started for Turn {regenerate_turn}")
 

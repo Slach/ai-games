@@ -1,4 +1,4 @@
-"""Tests for wound severity persistence and wound-driven action counts."""
+"""Tests for wound severity persistence and briefing wound telegraphing."""
 
 import os
 import sys
@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database as db  # noqa: E402
-from game_server import _actions_for_wound  # noqa: E402
+from language import LANGUAGE_EN, LANGUAGE_RU  # noqa: E402
+from prompts import build_personal_briefing_system  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -90,40 +91,20 @@ class TestWoundPersistence(unittest.TestCase):
         self.assertEqual(len(db.get_dead_players("g1")), 0)
 
 
-class TestActionsForWound(unittest.TestCase):
-    def test_healthy_full_set(self):
-        # default env: 2 progress, 2 injury, 1 fatal = 5
-        total, p, i, f = _actions_for_wound(None, 2, 2, 1)
-        self.assertEqual((total, p, i, f), (5, 2, 2, 1))
+class TestBriefingWoundTelegraph(unittest.TestCase):
+    """The briefing system prompt must telegraph wounds with escalating alarm."""
 
-    def test_minor_removes_one(self):
-        total, p, i, f = _actions_for_wound("minor", 2, 2, 1)
-        self.assertEqual(total, 4)
-        # fatal trimmed first.
-        self.assertEqual(f, 0)
-        self.assertEqual(p, 2)
-        self.assertEqual(i, 2)
+    def test_ru_system_prompt_telegraphs_each_severity(self):
+        system = build_personal_briefing_system(LANGUAGE_RU)
+        self.assertIn("раны ноют, вы держитесь", system)
+        self.assertIn("раны серьёзные, концентрация падает", system)
+        self.assertIn("вы при смерти: следующая рана, скорее всего, станет последней", system)
 
-    def test_moderate_removes_two(self):
-        total, p, i, f = _actions_for_wound("moderate", 2, 2, 1)
-        self.assertEqual(total, 3)
-        # fatal (1) then one injury trimmed; progress preserved.
-        self.assertEqual(f, 0)
-        self.assertEqual(i, 1)
-        self.assertEqual(p, 2)
-
-    def test_critical_never_below_one(self):
-        total, p, i, f = _actions_for_wound("critical", 2, 2, 1)
-        # fatal (1) + both injury (2) = 3 trimmed; progress preserved at 2.
-        self.assertEqual(total, 2)
-        self.assertEqual(p, 2)
-        self.assertEqual(i, 0)
-        self.assertEqual(f, 0)
-        self.assertEqual(total, p + i + f)
-
-    def test_unknown_severity_treated_as_healthy(self):
-        total, p, i, f = _actions_for_wound("garbage", 2, 2, 1)
-        self.assertEqual((total, p, i, f), (5, 2, 2, 1))
+    def test_en_system_prompt_telegraphs_each_severity(self):
+        system = build_personal_briefing_system(LANGUAGE_EN)
+        self.assertIn("your wounds ache, but you are holding on", system)
+        self.assertIn("your wounds are serious, your concentration is slipping", system)
+        self.assertIn("the next wound will most likely be your last", system)
 
 
 if __name__ == "__main__":

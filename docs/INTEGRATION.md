@@ -76,7 +76,6 @@ All LLM calls use `response_format` with JSON schema (Structured Outputs). Each 
 
 | Schema | Usage | Description |
 |--------|-------|-------------|
-| `STORY_SCHEMA` | `generate_turn_story()` | Turn narrative + decision points |
 | `NPC_DIALOGUE_SCHEMA` | `generate_npc_dialogues()` | NPC reactions |
 | `CONTENT_PROMPTS_SCHEMA` | `generate_content_prompts()` | Image/video/comic prompts |
 | `ONBOARDING_QUESTIONS_SCHEMA` | `generate_onboarding_questions()` | Dynamic onboarding quiz |
@@ -88,7 +87,7 @@ All LLM calls use `response_format` with JSON schema (Structured Outputs). Each 
 | `NPC_CHOICE_SCHEMA` | NPC choice selection | NPC action selection logic |
 | `GLOBAL_CIRCUMSTANCES_SCHEMA` | Global game state | Shared turn circumstances |
 | `PLAYER_BRIEFING_CHOICES_SCHEMA` | Personal briefings | Per-player narrative + choices |
-| `COMBINED_OUTCOME_SCHEMA` | Turn outcome | Result of all player choices |
+| `COMBINED_OUTCOME_SCHEMA` | Turn outcome | Result of all player choices (ship deltas, entity_id deaths/injuries) |
 
 ### Fallback Mechanism
 
@@ -272,35 +271,51 @@ The bot makes HTTP requests to the Game Master API:
 - `POST /game/actions` — Submit player choices
 - `POST /game/messages` — Send messages to GM
 
+### Push Endpoints (game-server → bot, port 9090)
+
+The push server queues and delivers typed payloads to Telegram:
+
+`/push/briefings` (new turn + choices + deadline), `/push/outcome`,
+`/push/player-action`, `/push/player-death`, `/push/game-over`,
+`/push/game-summary` (post-finale stats summary), `/push/turn-reminder`
+(T-2h / T-30m deadline reminders), `/push/gm-notification`,
+`/push/language-changed`, `/push/onboarding-ready`.
+
 ---
 
 ## 5. Game Master Scheduler
 
-**Files:** `game-scheduler/game_server.py`
+**Files:** `game-scheduler/main.py`
 
-A scheduled task runner that triggers turn episode generation.
+A scheduled task runner that triggers turn episode generation and fires
+turn-deadline reminders (T-2h / T-30m).
 
 ### Configuration
 
 ```python
-GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
+GAME_SERVER_API_URL = os.getenv("GAME_SERVER_API_URL", "http://game-server:8000")
 GAME_SCHEDULE  = os.getenv("GAME_SCHEDULE", os.getenv("GAME_SCHEDULE_TIME", "8h"))  # Nh/Nm/Ns, HH:MM, HH:MM,..., DAY-HH:MM
-GAME_SCHEDULER_MODE    = os.getenv("GAME_SCHEDULER_MODE", "scheduled")  # single | simulation | scheduled
+GAME_SCHEDULER_MODE    = os.getenv("GAME_SCHEDULER_MODE", "scheduled")  # single | scheduled
 ```
 
 ### Modes
 
 | Mode | Description |
 |------|-------------|
-| `scheduled` | Run at configured time daily |
+| `scheduled` | Multi-game scheduling loop (interval / daily / multi-daily) |
 | `single` | Run one generation cycle then exit |
-| `simulation` | Generate with simulated player choices |
 
 ### API Calls
 
-- `POST /admin/generate-turn` — Trigger new turn generation
-- `GET /game/state` — Check current game state
-- `GET /game/current-turn` — Verify generated content
+- `GET /game/started` — Check the game has >= 3 players
+- `GET /game/state` — Check current game state / terminal status
+- `POST /game/auto-action/{player_id}/{turn}` — Auto-pick actions for players
+  who never chose on the previous turn
+- `POST /admin/continue-game` — Trigger next-turn generation (passes the next
+  fire time as `deadline`)
+- `GET /game/turn-deadline/{game_id}` — Fetch the playable turn's deadline
+- `POST /game/remind-turn/{game_id}/{turn}` — Send T-2h / T-30m reminders to
+  players who haven't chosen
 
 ---
 
@@ -314,15 +329,17 @@ SQLite database for all persistent state.
 
 | Table | Purpose |
 |-------|---------|
-| `game_state` | Current game turn, status, timestamps |
-| `player_profiles` | Player role, traits, avatar |
-| `game_turns` | Turn episodes (story, NPC dialogues) |
+| `game_state` | Current turn, status, persistent ship state (hull_integrity, shields, systems_offline), threat_level, finale |
+| `player_profiles` | Player role, traits, avatar, wound_severity |
+| `game_turns` | Turn episodes (story, NPC dialogues, combined_outcome, deadline) |
 | `player_actions` | Player choices per turn |
+| `player_action_stats` | Per-action analytics log (action, consequence_kind, hull snapshot; feeds win-rate/summary) |
 | `onboarding_sessions` | In-progress onboarding state |
 | `game_messages` | Player message history |
 | `onboarding_questions` | Generated question cache |
 | `games` | Multi-game support |
-| `npc_profiles` | NPC state and role assignments |
+| `npc_profiles` | NPC state, role assignments, wound_severity, loyalty (0-100) |
+| `game_missions` | Mission objectives, stage progress, archetype + seeds |
 | `game_images` | Generated image URLs per game |
 
 ### Database Location

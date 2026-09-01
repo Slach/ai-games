@@ -3,6 +3,14 @@
 AI-powered cooperative game delivered through Telegram bot. Each turn, an AI generates a
 unique story, personalized comics, and NPC interactions based on player choices.
 
+The game is finite and can be lost. A doom clock (threat level 0-100) ticks every turn
+(+8 base, accelerated by hesitations, a critically damaged hull and mission stagnation) —
+at 100 the game ends. Hull damage accumulates turn over turn (hull 0 = ship destroyed),
+wounds escalate minor → moderate → critical (critical + any new wound kills), NPC loyalty
+drops with losses and can end in mutiny, and the crew is never replenished. The final
+verdict is computed by code from the end-state into five outcomes: triumph / victory /
+pyrrhic / stalemate / defeat.
+
 ## Architecture
 
 ```mermaid
@@ -48,9 +56,12 @@ FastAPI service that orchestrates the game:
 - `POST /onboarding/{session_id}/answer` - Submit onboarding answer
 - `GET /players/{player_id}/profile` - Get player profile
 - `GET /game/current-turn` - Get current turn's episode
+- `GET /game/turn-deadline/{game_id}` - Get the playable turn's deadline
+- `POST /game/remind-turn/{game_id}/{turn}` - Send a T-2h/T-30m reminder
 - `POST /game/actions` - Submit player action
 - `POST /game/messages` - Send message to game master
-- `POST /admin/generate-turn` - Generate new turn episode
+- `POST /admin/continue-game` - Generate the next turn
+- `GET /admin/win-rate` - Outcome telemetry over ended games
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic
 
 ### Telegram Bot (`telegram-bot/`)
@@ -154,7 +165,9 @@ A turn is driven by `game-scheduler` (the timer), produced by `game-server`
 push server on port 9090). There is no fixed daily clock — turns are generated
 on a configurable interval (`GAME_SCHEDULE`, default `8h`), and the previous
 turn's outcome is published the moment all live players have chosen their
-actions.
+actions. Each turn has a deadline shown to players («Ход закроется: ...» UTC);
+the scheduler sends T-2h/T-30m reminders and auto-picks actions for absentees
+when the deadline passes.
 
 ```mermaid
 sequenceDiagram
@@ -166,9 +179,11 @@ sequenceDiagram
     Note over S: interval elapses (GAME_SCHEDULE)
     S->>GS: GET /game/started   (need >= 3 players)
     S->>GS: GET /game/state     (active? current turn N)
-    Note over S: if N>1: auto-pick actions for<br/>absentee players on turn N-1
-    S->>GS: POST /admin/continue-game?game_id=...&language=en
+    Note over S: if N>1: auto-pick actions for<br/>absentee players on turn N-1<br/>(LLM pick, or a recorded "delay")
+    S->>GS: POST /admin/continue-game?game_id=...&language=en&deadline=...
     GS-->>S: 202 accepted (generation runs in background)
+
+    Note over S: T-2h / T-30m before the deadline:<br/>GET /game/turn-deadline, POST /game/remind-turn
 
     Note over GS: background: LLM global circumstances -><br/>ComfyUI scene image -><br/>per-player briefings + 5 choices -><br/>NPC choices auto-selected -><br/>character/NPC images -> crew dialogues
 
@@ -176,12 +191,13 @@ sequenceDiagram
         Note over GS: resolve & push turn N-1 outcome
         GS->>GS: _analyze_turn_outcome(N-1)
         GS->>TB: POST /push/outcome   (results of last turn)
-        opt mission done / ship destroyed / crew wiped
+        opt mission done / ship destroyed / crew wiped /<br/>threat 100 / NPC mutiny
             GS->>TB: POST /push/game-over  (finale)
+            GS->>TB: POST /push/game-summary  (post-game stats)
         end
     end
 
-    GS->>TB: POST /push/briefings  (new turn intro + choices)
+    GS->>TB: POST /push/briefings  (new turn intro + choices + deadline)
     TB->>P: deliver outcome (N-1), then briefing (N)
 
     P->>TB: select an action
@@ -201,22 +217,30 @@ sequenceDiagram
    conflict and a scene prompt.
 3. **Scene image** — ComfyUI renders the turn's scene from that prompt.
 4. **Briefings & choices** — every live player and NPC gets a personalized
-   briefing with **5 action choices** (3 good / 1 neutral / 1 bad, configurable
-   via `GAME_TURN_GOOD/BAD/NEUTRAL_ACTIONS`). NPC choices are auto-selected by
-   the LLM; players' choices stay open.
+   briefing with **5 action choices** with hidden consequence kinds in a fixed
+   quota — **2 progress / 2 injury / 1 fatal** (configurable via
+   `GAME_TURN_PROGRESS_ACTIONS` / `GAME_TURN_INJURY_ACTIONS` /
+   `GAME_TURN_FATAL_ACTIONS`). NPC choices are auto-selected by the LLM;
+   players' choices stay open until the turn deadline.
 5. **Character & NPC images** — ComfyUI renders per-player character images
    (each player's avatar as reference) and NPC action images.
 6. **Crew dialogues** — LLM generates NPC banter for the turn.
-7. **Game state advances** — the turn record is created, state moves to turn
-   `N+1`.
+7. **Game state advances** — the turn record is created (with its deadline),
+   state moves to turn `N+1`.
 8. **Previous turn outcome** (turn `N > 1`) — `_analyze_turn_outcome(N-1)`
-   combines every player + NPC decision into one outcome narrative, updates ship
-   hull / shields / systems and crew health, generates an outcome scene image,
-   then pushes `/push/outcome`. If the mission is complete or the ship/crew is
-   lost, a finale is generated and pushed via `/push/game-over`.
-9. **New turn delivery** — `/push/briefings` sends the new turn's intro and
-   choices to each player. (Outcomes of `N-1` are always delivered *before* the
-   briefing for `N`.)
+   combines every player + NPC decision into one outcome narrative, applies the
+   LLM's **ship deltas** (hull/shields/systems) to the persistent ship state,
+   resolves wounds and deaths by `entity_id` through the rules ladder,
+   ticks the doom clock and NPC loyalty, generates an outcome scene image,
+   then pushes `/push/outcome`. The outcome risk is reweighted by code
+   (damaged hull / high threat / reckless choices make catastrophes likelier).
+   If the game ends (mission complete, hull 0, crew wiped, threat 100, or NPC
+   mutiny), the code-computed verdict (triumph / victory / pyrrhic / stalemate /
+   defeat) drives a finale pushed via `/push/game-over`, followed by a
+   post-game stats summary via `/push/game-summary`.
+9. **New turn delivery** — `/push/briefings` sends the new turn's intro,
+   choices and deadline to each player. (Outcomes of `N-1` are always delivered
+   *before* the briefing for `N`.)
 
 ### Action selection & outcome resolution
 
@@ -230,7 +254,8 @@ sequenceDiagram
 - Absentee players are handled by `game-scheduler`: at the start of turn `N` it
   auto-selects an action for anyone who did not choose on turn `N-1`
   (`POST /game/auto-action/{player}/{turn}`, LLM-picked) before triggering the
-  next turn.
+  next turn. If the LLM pick fails, a **delay** (hesitation) is recorded
+  honestly: it does not advance the mission and accelerates the doom clock.
 
 ### Manual control (Game Master)
 
@@ -243,16 +268,23 @@ sequenceDiagram
 
 ## NPC System
 
-The system generates NPC teams based on player role:
+At game start, free seats are filled with a bounded pool of **exactly up to 4
+NPCs** (`NPC_COUNT`), preferring the key roles `chief_engineer`,
+`medical_officer`, `pilot` and `science_officer`. A bounded pool keeps the
+crew-wipe ending reachable — and since a kicked or dead player's seat is never
+refilled, every loss is permanent.
 
-- **Captain** - Always present, leads the crew
+- **Chief Engineer** - Technical systems maintenance
+- **Medical Officer** - Crew health and wound treatment
 - **Pilot** - Navigation and flight operations
-- **Engineer** - Technical systems maintenance
-- **Communications** - External contact and diplomacy
 - **Science Officer** - Research and analysis
-- **Security Chief** - Safety and threat assessment
 
-NPCs have distinct personalities and speech styles.
+NPCs have distinct personalities and speech styles. Each NPC also has a
+**loyalty** score (0-100, starting at 70) maintained by code: deaths, heavy
+hull damage and mission regressions lower it; progress and healing raise it.
+Loyalty is visible to players in `/game/team` (loyalty band) and shapes NPC
+decisions. When **two or more active NPCs drop to loyalty <= 15, the crew
+mutinies** — one of the five ways the game can end.
 
 ## Content Generation
 
@@ -288,7 +320,7 @@ python bot.py
 # Game Scheduler (for debugging)
 cd game-scheduler
 pip install -r requirements.txt
-GAME_SCHEDULER_MODE=single python game_server.py
+GAME_SCHEDULER_MODE=single python main.py
 ```
 
 After running this, you must generate a new turn via Telegram:

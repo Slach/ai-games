@@ -85,13 +85,13 @@ This service triggers generation on schedule. It calls the game-server endpoints
 
 ```bash
 # Test single generation
-docker compose run --rm game-scheduler GAME_SCHEDULER_MODE=single python game_server.py
+docker compose run --rm game-scheduler GAME_SCHEDULER_MODE=single python main.py
 
 ```
 
 **Admin Endpoints (called by scheduler):**
 
-- `POST /admin/generate-turn` - Generate new turn episode
+- `POST /admin/continue-game` - Generate next turn episode
 - `POST /admin/generate-comic/{player_id}` - Generate personalized comic for a player
 
 ## 6. API Testing
@@ -114,11 +114,11 @@ curl http://localhost:8000/game/state
 curl -X POST "http://localhost:8000/onboarding/start?player_id=123"
 ```
 
-### Generate Daily Episode
+### Generate Next Turn
 
 ```bash
-# With language parameter (en or ru)
-curl -X POST "http://localhost:8000/admin/generate-turn?language=en"
+# game_id and language are required
+curl -X POST "http://localhost:8000/admin/continue-game?game_id=default_game&language=en&force_resend=false"
 ```
 
 ### Generate Comic for Player

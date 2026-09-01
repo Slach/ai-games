@@ -21,6 +21,7 @@ import io
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -168,8 +169,27 @@ except (ValueError, TypeError):
 
 # Socks5 proxy configuration
 # Set to empty string to disable proxy (direct connection)
-# For Docker, use host.docker.internal:PORT or proxy IP address
+# For Docker, use host.docker.internal:PORT or proxy IP
 TELEGRAM_SOCKS_PROXY = os.getenv("TELEGRAM_SOCKS_PROXY", "")
+
+# Rules-verdict tokens from the game-server outcome matrix → localized
+# title keys (CURRENT_TURN and ONBOARDING both carry these titles).
+GAME_OVER_TITLE_KEYS = {
+    "triumph": "game_over_triumph_title",
+    "victory": "game_over_victory_title",
+    "pyrrhic": "game_over_pyrrhic_title",
+    "stalemate": "game_over_stalemate_title",
+    "defeat": "game_over_defeat_title",
+}
+
+# Same tokens → GM list labels (GM_MESSAGES ended_*_label keys).
+GAME_OVER_GM_LABEL_KEYS = {
+    "triumph": "ended_triumph_label",
+    "victory": "ended_victory_label",
+    "pyrrhic": "ended_pyrrhic_label",
+    "stalemate": "ended_stalemate_label",
+    "defeat": "ended_defeat_label",
+}
 
 # ============== FSM States ==============
 
@@ -322,13 +342,16 @@ async def _send_game_over_finale(
     """Show the game-over finale (title, reason, narrative + image) for an ended game.
 
     ``game_status`` is the value from ``GET /game/state`` (caller already fetched it)
-    — one of mission_complete / ship_destroyed / crew_wiped / game_over.
+    — one of mission_complete / ship_destroyed / crew_wiped / overwhelmed /
+    mutiny / game_over.
     """
     msgs = lang.get_current_turn(language)
     reason_map = {
         "mission_complete": msgs["game_over_reason_mission_complete"],
         "ship_destroyed": msgs["game_over_reason_ship_destroyed"],
         "crew_wiped": msgs["game_over_reason_crew_wiped"],
+        "overwhelmed": msgs["game_over_reason_overwhelmed"],
+        "mutiny": msgs["game_over_reason_mutiny"],
         "game_over": msgs["game_over_reason_game_over"],
     }
     reason = reason_map.get(game_status, game_status)
@@ -342,6 +365,12 @@ async def _send_game_over_finale(
         finale = None
 
     if finale:
+        # finale_outcome_type is the rules-verdict token (triumph/victory/
+        # pyrrhic/stalemate/defeat) computed by the game-server
+        title_text = msgs.get(
+            GAME_OVER_TITLE_KEYS.get(finale.get("finale_outcome_type", ""), "game_over_defeat_title"),
+            msgs["game_over_defeat_title"],
+        )
         # Show finale image if available
         finale_image_url = finale.get("finale_image_url")
         if finale_image_url:
@@ -349,21 +378,11 @@ async def _send_game_over_finale(
                 img_data = await _download_image(finale_image_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="finale.png")
-                    title_text = (
-                        msgs["game_over_victory_title"]
-                        if finale.get("finale_outcome_type") == "victory"
-                        else msgs["game_over_defeat_title"]
-                    )
                     await message.answer_photo(photo=photo, caption=f"*{title_text}*", parse_mode="Markdown")
                     logger.info(f"[FINALE] Sent finale image to player {player_id}")
             except Exception as e:
                 logger.warning(f"[FINALE] Failed to send finale image: {e}")
 
-        title_text = (
-            msgs["game_over_victory_title"]
-            if finale.get("finale_outcome_type") == "victory"
-            else msgs["game_over_defeat_title"]
-        )
         full_text = f"*{title_text}*\n\n*{reason}*\n\n{finale['finale_narrative']}"
         await _send_split_message(message, full_text, parse_mode="Markdown", max_len=4096)
     else:
@@ -2692,13 +2711,20 @@ async def cmd_team(message: types.Message):
 
         members = team_data["members"]
 
-        # Build roster text — list all members without distinguishing NPC/player
+        # Build roster text — list all members without distinguishing NPC/player.
+        # Active NPCs carry a loyalty band from the game server; showing it next
+        # to the role telegraphs an approaching mutiny before it strikes.
         roster_lines = []
         for m in members:
             name = m.get("name", "?")
             role = m.get("role", "?")
             species = m.get("species", "?") or "?"
             gender = m.get("gender", "?") or "?"
+            band = m.get("loyalty_band") if not m.get("is_dead") else None
+            if band:
+                status = msgs.get(f"loyalty_{band}", m.get("loyalty_status", ""))
+                if status:
+                    role = f"{role} ({status})"
             if m.get("is_dead"):
                 roster_lines.append(msgs["entry_dead"].format(name=name, role=role, species=species, gender=gender))
             else:
@@ -3096,7 +3122,7 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
         result = await api_request(
             "POST",
             "/admin/reset-player",
-            data={"player_id": player_id, "language": player_lang},
+            data={"player_id": player_id},
             params=None,
             timeout_total=120,
             ignore_codes=(),
@@ -3158,12 +3184,7 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
     await state.clear()
     delete_player_state(player_id)
 
-    npc_name = result.get("npc_name")
-    npc_part = reset_msgs["success_npc_part"].format(npc_name=npc_name) if npc_name else ""
-    await message.answer(
-        reset_msgs["success"].format(npc_part=npc_part),
-        parse_mode="Markdown",
-    )
+    await message.answer(reset_msgs["success"], parse_mode="Markdown")
     await show_player_language_selection(message, state)
 
 
@@ -3385,11 +3406,9 @@ async def cmd_gm_kick(message: types.Message):
         )
         if result and result.get("status") == "success":
             kicked_id = result.get("kicked_player_id")
-            npc_name = result.get("npc_name", "NPC")
             msg = gm_msgs["player_kicked"].format(
                 game_id=game_id,
                 kicked_id=kicked_id,
-                npc_name=npc_name,
                 reason=reason,
             )
             await message.answer(msg, parse_mode="Markdown")
@@ -3461,14 +3480,11 @@ async def cmd_gm_list(message: types.Message):
             arch_tag = f" 🎭 {archetype}" if archetype else ""
 
             if game_status != "active":
-                # Ended game — collect separately, show win/loss if available
+                # Ended game — collect separately, show the rules verdict if available
                 outcome_type = game.get("finale_outcome_type", "")
-                if outcome_type == "victory":
-                    outcome_label = gm_msgs["ended_victory_label"]
-                elif outcome_type == "defeat":
-                    outcome_label = gm_msgs["ended_defeat_label"]
-                else:
-                    outcome_label = gm_msgs["game_ended_label"]
+                outcome_label = gm_msgs.get(
+                    GAME_OVER_GM_LABEL_KEYS.get(outcome_type, ""), gm_msgs["game_ended_label"]
+                )
                 ended_lines.append(f"{idx}. `{game_id}` — {title} ({outcome_label}, 🎯 Turn: {turn}){arch_tag} {lang_flag}")
             else:
                 active_count += 1
@@ -3942,6 +3958,8 @@ async def cmd_gm_status(message: types.Message):
                 "mission_complete": gm_msgs["ended_reason_mission_complete"],
                 "ship_destroyed": gm_msgs["ended_reason_ship_destroyed"],
                 "crew_wiped": gm_msgs["ended_reason_crew_wiped"],
+                "overwhelmed": gm_msgs["ended_reason_overwhelmed"],
+                "mutiny": gm_msgs["ended_reason_mutiny"],
                 "game_over": gm_msgs["ended_reason_game_over"],
             }
             reason = reason_map.get(game_status, game_status)
@@ -4863,6 +4881,46 @@ async def main():
     except Exception as e:
         logger.warning(f"Failed to fetch bot username after retries: {e}")
 
+    # ── Update tracing: never lose an update silently ──────────────
+    # aiogram fires each update as a fire-and-forget task. A handler
+    # crash is logged by aiogram, but an update stuck anywhere BEFORE
+    # its handler (middleware, awaiting a Telegram call) leaves no log
+    # line at all — observed live: a button click consumed from
+    # Telegram, offset confirmed, zero diagnostics. This middleware
+    # logs dispatch start/finish/failure for every update and a
+    # watchdog flags anything in flight for over 120 seconds.
+    _updates_in_flight: dict[int, float] = {}
+
+    @dp.update.outer_middleware()
+    async def update_tracing_middleware(handler, event, data):
+        update_id = event.update_id
+        started = time.monotonic()
+        _updates_in_flight[update_id] = started
+        logger.info("[UPDATE] id=%s — dispatch start", update_id)
+        try:
+            result = await handler(event, data)
+        except Exception:
+            logger.error("[UPDATE] id=%s — FAILED", update_id, exc_info=True)
+            raise
+        finally:
+            _updates_in_flight.pop(update_id, None)
+        logger.info("[UPDATE] id=%s — done in %.0f ms", update_id, (time.monotonic() - started) * 1000)
+        return result
+
+    async def stuck_update_watchdog():
+        while True:
+            await asyncio.sleep(60)
+            now = time.monotonic()
+            for update_id, started in list(_updates_in_flight.items()):
+                age = now - started
+                if age > 120:
+                    logger.error(
+                        "[UPDATE] id=%s — STUCK in dispatch for %.0f s",
+                        update_id,
+                        age,
+                        stack_info=True,
+                    )
+
     # Register handlers
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_start, CommandStart(deep_link=True))
@@ -4944,6 +5002,8 @@ async def main():
     # Start push HTTP server (replaces old polling loop)
     from push_server import start_push_server
 
+    watchdog_task = asyncio.create_task(stuck_update_watchdog())
+
     push_runner = await start_push_server(
         bot=bot,
         language=DEFAULT_LANGUAGE,
@@ -4963,7 +5023,8 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
 
-    # Clean up push server
+    # Clean up push server and the update watchdog
+    watchdog_task.cancel()
     await push_runner.cleanup()
 
 

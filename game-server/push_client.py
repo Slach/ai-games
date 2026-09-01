@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import random
+from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
@@ -35,6 +36,10 @@ TELEGRAM_BOT_GAME_OVER_URL = os.getenv(
     "TELEGRAM_BOT_GAME_OVER_URL",
     "http://telegram-bot:9090/push/game-over",
 )
+TELEGRAM_BOT_GAME_SUMMARY_URL = os.getenv(
+    "TELEGRAM_BOT_GAME_SUMMARY_URL",
+    "http://telegram-bot:9090/push/game-summary",
+)
 TELEGRAM_BOT_ONBOARDING_READY_URL = os.getenv(
     "TELEGRAM_BOT_ONBOARDING_READY_URL",
     "http://telegram-bot:9090/push/onboarding-ready",
@@ -42,6 +47,10 @@ TELEGRAM_BOT_ONBOARDING_READY_URL = os.getenv(
 TELEGRAM_BOT_LANGUAGE_CHANGED_URL = os.getenv(
     "TELEGRAM_BOT_LANGUAGE_CHANGED_URL",
     "http://telegram-bot:9090/push/language-changed",
+)
+TELEGRAM_BOT_TURN_REMINDER_URL = os.getenv(
+    "TELEGRAM_BOT_TURN_REMINDER_URL",
+    "http://telegram-bot:9090/push/turn-reminder",
 )
 try:
     PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
@@ -62,6 +71,17 @@ except (ValueError, TypeError):
     PUSH_REQUEST_TIMEOUT = 120
 
 
+def format_deadline(iso_string: str) -> str:
+    """Format an ISO deadline for display: UTC, strftime with %Z only.
+
+    Naive strings are treated as UTC (the scheduler always sends aware UTC).
+    """
+    dt = datetime.fromisoformat(iso_string)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M %Z")
+
+
 async def push_briefings(
     game_id: str,
     turn: int,
@@ -75,6 +95,7 @@ async def push_briefings(
     was_restarted: bool,
     *,
     language: str,
+    deadline: str | None = None,
 ) -> bool:
     """Push briefings to telegram-bot with exponential backoff retry.
 
@@ -94,6 +115,8 @@ async def push_briefings(
         was_restarted: If True, telegram-bot will send a "game restarted"
             notification to all alive players before their briefings.
         language: Game language code used for UI messages (bridge, titles, etc.).
+        deadline: ISO datetime (UTC) when the turn closes — rendered in the
+            briefing as the "turn closes at" line. None = not shown.
 
     Returns:
         True if delivered successfully, False after all retries exhausted.
@@ -116,6 +139,8 @@ async def push_briefings(
         payload["mission"] = mission
     if crew_dialogues:
         payload["crew_dialogues"] = crew_dialogues
+    if deadline:
+        payload["deadline"] = format_deadline(deadline)
 
     last_exception: Exception | None = None
 
@@ -339,6 +364,37 @@ async def push_language_changed(
     return await _post_with_retry(TELEGRAM_BOT_LANGUAGE_CHANGED_URL, payload, label)
 
 
+async def push_turn_reminder(
+    game_id: str,
+    turn: int,
+    level: int,
+    player_ids: list[int],
+    *,
+    language: str,
+) -> bool:
+    """Push a turn-deadline reminder to players who haven't chosen an action.
+
+    Args:
+        game_id: Game identifier
+        turn: Turn number the reminder is about
+        level: 1 = ~2 hours before the deadline, 2 = ~30 minutes before
+        player_ids: Telegram chat ids (= player ids) to remind
+        language: Game language code for the message text
+
+    Returns:
+        True if delivered to the bot's push queue, False after all retries.
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "turn": turn,
+        "level": level,
+        "player_ids": player_ids,
+        "language": language,
+    }
+    label = f"turn-reminder game={game_id} turn={turn} level={level} players={len(player_ids)}"
+    return await _post_with_retry(TELEGRAM_BOT_TURN_REMINDER_URL, payload, label)
+
+
 async def push_turn_outcome(
     game_id: str,
     turn: int,
@@ -355,6 +411,7 @@ async def push_turn_outcome(
     ship_hull_integrity: int | None,
     ship_shields: int | None,
     ship_systems_offline: list[str] | None,
+    threat_level: int | None,
     total_crew_count: int | None,
     alive_crew_count: int | None,
     *,
@@ -381,9 +438,10 @@ async def push_turn_outcome(
         ship_hull_integrity: Hull integrity percentage (0-100)
         ship_shields: Shield strength percentage (0-100)
         ship_systems_offline: List of offline/damaged systems
+        threat_level: Doom-clock level after this turn (0-100)
         total_crew_count: Total crew members (NPCs + players) at start of turn
         alive_crew_count: Crew members still alive after this turn
-        language: Game language code for UI messages (titles, status labels, etc.).
+        language: Game language code for UI messages (titles, status labels, etc.)
     """
     payload: dict = {
         "game_id": game_id,
@@ -414,6 +472,8 @@ async def push_turn_outcome(
         payload["ship_shields"] = ship_shields
     if ship_systems_offline is not None:
         payload["ship_systems_offline"] = ship_systems_offline
+    if threat_level is not None:
+        payload["threat_level"] = threat_level
     if total_crew_count is not None:
         payload["total_crew_count"] = total_crew_count
     if alive_crew_count is not None:
@@ -456,6 +516,29 @@ async def push_game_over(
 
     label = f"game-over game={game_id} type={outcome_type}"
     return await _post_with_retry(TELEGRAM_BOT_GAME_OVER_URL, payload, label)
+
+
+async def push_game_summary(
+    game_id: str,
+    text: str,
+    player_ids: list[int],
+) -> bool:
+    """Push the post-finale mission summary to the given players.
+
+    Delivered as a separate message right after the finale narrative.
+
+    Args:
+        game_id: Game identifier that just ended
+        text: Pre-formatted localized summary text (Telegram Markdown)
+        player_ids: Telegram chat ids (= player ids) to deliver to
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "players": player_ids,
+        "text": text,
+    }
+    label = f"game-summary game={game_id} players={len(player_ids)}"
+    return await _post_with_retry(TELEGRAM_BOT_GAME_SUMMARY_URL, payload, label)
 
 
 async def push_onboarding_ready(

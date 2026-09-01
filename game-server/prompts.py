@@ -13,7 +13,14 @@ from language import (
     get_dimension_tags,
     get_tag_display_name,
 )
-from game_rules import FORBIDDEN_OPENINGS, MISSION_ARCHETYPES
+from game_rules import (
+    FORBIDDEN_OPENINGS,
+    HULL_MAX,
+    MISSION_ARCHETYPES,
+    SHIELDS_MAX,
+    THREAT_MAX,
+    loyalty_band,
+)
 from pydantic import BaseModel
 from verbalize_sampling import DIVERSITY_HINTS, verbalize_prompt
 
@@ -156,55 +163,77 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                 },
                 "dead_crew_members": {
                     "type": "array",
-                    "description": "List of [name, role] who died this turn",
+                    "description": "Crew members who died this turn, addressed by their stable entity_id from the crew roster ('p<player_id>' for players, 'n<npc_key>' for NPCs)",
                     "items": {
-                        "type": "array",
-                        "items": [{"type": "string"}, {"type": "string"}],
+                        "type": "object",
+                        "properties": {
+                            "entity_id": {
+                                "type": "string",
+                                "description": "Stable id copied EXACTLY from the crew roster: 'p<player_id>' for a player, 'n<npc_key>' for an NPC",
+                            },
+                            "cause": {
+                                "type": "string",
+                                "description": "Short cause of death (1 sentence)",
+                            },
+                        },
+                        "required": ["entity_id", "cause"],
+                        "additionalProperties": False,
                     },
                 },
-                "ship_destroyed": {
-                    "type": "boolean",
-                    "description": "Whether the ship was destroyed",
-                },
-                "ship_hull_integrity": {
+                "ship_hull_change": {
                     "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Ship hull structural integrity percentage (0 = destroyed, 100 = pristine)",
+                    "description": "Hull integrity DELTA for this turn in percent (e.g. -25 after a hit, +10 after repairs). NOT an absolute value. Positive (repair) ONLY when a decision explicitly included a repair action.",
                 },
-                "ship_shields": {
+                "ship_shields_change": {
                     "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Shield strength percentage (0 = depleted, 100 = full)",
+                    "description": "Shield strength DELTA for this turn in percent (e.g. -30 after a hit, +15 after regenerating). NOT an absolute value.",
                 },
-                "ship_systems_offline": {
+                "systems_taken_offline": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of ship systems that are damaged/offline (e.g. 'warp drive', 'life support', 'weapons', 'communications', 'navigation')",
+                    "description": "Ship systems that went offline THIS turn only (e.g. 'warp drive', 'life support', 'weapons', 'communications')",
+                },
+                "systems_restored": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ship systems restored to operation THIS turn (only via an explicit repair action in the decisions)",
                 },
                 "crew_injured": {
                     "type": "array",
-                    "description": "List of [name, role, severity] who were injured this turn. Severity: 'critical', 'moderate', 'minor'",
+                    "description": "Crew members injured this turn, addressed by entity_id from the crew roster. Severity: 'critical', 'moderate', 'minor'",
                     "items": {
-                        "type": "array",
-                        "items": [
-                            {"type": "string"},
-                            {"type": "string"},
-                            {"type": "string"},
-                        ],
+                        "type": "object",
+                        "properties": {
+                            "entity_id": {
+                                "type": "string",
+                                "description": "Stable id copied EXACTLY from the crew roster: 'p<player_id>' for a player, 'n<npc_key>' for an NPC",
+                            },
+                            "severity": {
+                                "type": "string",
+                                "description": "Wound severity: 'critical', 'moderate' or 'minor'",
+                            },
+                        },
+                        "required": ["entity_id", "severity"],
+                        "additionalProperties": False,
                     },
                 },
                 "crew_healed": {
                     "type": "array",
-                    "description": "List of [name, role, new_severity] whose wounds improved this turn due to medical treatment. new_severity: 'minor', 'moderate', or 'healthy' (fully healed). Rare — only when the Medical Officer explicitly treats them.",
+                    "description": "Crew members whose wounds improved this turn due to medical treatment, addressed by entity_id from the crew roster. Rare — only when the Medical Officer explicitly treats them.",
                     "items": {
-                        "type": "array",
-                        "items": [
-                            {"type": "string"},
-                            {"type": "string"},
-                            {"type": "string"},
-                        ],
+                        "type": "object",
+                        "properties": {
+                            "entity_id": {
+                                "type": "string",
+                                "description": "Stable id copied EXACTLY from the crew roster: 'p<player_id>' for a player, 'n<npc_key>' for an NPC",
+                            },
+                            "new_severity": {
+                                "type": "string",
+                                "description": "Improved step: 'minor', 'moderate', or 'healthy' (fully healed)",
+                            },
+                        },
+                        "required": ["entity_id", "new_severity"],
+                        "additionalProperties": False,
                     },
                 },
                 "personal_outcomes": {
@@ -238,10 +267,10 @@ COMBINED_OUTCOME_SCHEMA: dict[str, Any] = {
                 "next_turn_hook",
                 "mission_progress",
                 "dead_crew_members",
-                "ship_destroyed",
-                "ship_hull_integrity",
-                "ship_shields",
-                "ship_systems_offline",
+                "ship_hull_change",
+                "ship_shields_change",
+                "systems_taken_offline",
+                "systems_restored",
                 "crew_injured",
                 "crew_healed",
                 "personal_outcomes",
@@ -257,17 +286,27 @@ _COMBINED_OUTCOME_SYSTEM_RU = (
     "связный результат хода.\n\n"
     "ГЛАВНЫЕ ПРИНЦИПЫ:\n"
     "1. Решения ИГРОКОВ (Weight: HIGH) имеют БОЛЬШИЙ вес, чем решения NPC.\n"
-    "2. Прогресс миссии накапливается от смелых и грамотных решений. Регресс возможен, "
-    "но только от явно рискованных или ошибочных действий.\n"
-    "3. Движущая сила истории — ОТКРЫТИЯ, повороты сюжета, новые союзники и враги, находки. "
-    "Драма рождается из событий и открытий, а не из количества трупов и повреждений.\n"
+    "2. Прогресс и регресс — равновозможные последствия решений. Грамотные смелые действия "
+    "двигают миссию; бездействие, ошибки и игнорирование угрозы — откатывают или останавливают. "
+    "Ход без движения вперёд — нормальная часть истории.\n"
+    "3. Космос враждебен и безразличен. Раны и гибель — законная цена риска (оформляй их через "
+    "crew_injured / dead_crew_members с entity_id, по метке решения). Не щади экипаж, но и не "
+    "убивай без причины в нарративе.\n"
     "4. Гибель и ранения наступают СТРОГО по метке в HIDDEN CONSEQUENCE у каждого решения: "
     "видишь [fatal] — хотя бы один участник этого решения гибнет; [injury] — участник получает "
-    "ранение (без смерти); [progress] — миссия продвигается, без жертв и ран. Метка — это "
+    "ранение (без смерти); [progress] — миссия продвигается, без жертв и ран; [delay] — "
+    "действие-промедление НЕ двигает миссию и не улучшает состояние — это потерянное время, "
+    "угроза растёт. Метка — это "
     "ОБЯЗАТЕЛЬСТВО, а не подсказка: не смягчай её и не игнорируй.\n"
-    "5. NPC действуют КОМПЕТЕНТНО в рамках своей роли и редко вредят миссии.\n"
+    "5. NPC — живые существа под давлением: они ошибаются, паникуют, действуют в собственных "
+    "интересах, иногда вопреки миссии.\n"
     "6. У каждого персонажа, принявшего решение, должен быть ПЕРСОНАЛЬНЫЙ ИСХОД в personal_outcomes.\n"
-    "7. Прошлые повреждения корабля сохраняются — их нельзя просто 'забыть'."
+    "7. Прошлые повреждения корабля сохраняются — их нельзя просто 'забыть'. "
+    "Корпус, щиты и офлайн-системы — накопленное состояние (текущие значения передаются "
+    "отдельно); ты возвращаешь ТОЛЬКО ИЗМЕНЕНИЯ за ход. При корпусе ниже 20/100 "
+    "катастрофические события ВЕРОЯТНЕЕ — не смягчай урон искусственно.\n"
+    "8. Угроза нарастает каждый ход — отражай это в событиях хода: преследователь ближе, "
+    "время тает, окружение враждебнее."
 )
 
 _COMBINED_OUTCOME_USER_RU = (
@@ -277,6 +316,7 @@ _COMBINED_OUTCOME_USER_RU = (
     "Описание: {narrative}\n\n"
     "ПРЕДЫДУЩИЕ СОБЫТИЯ:\n{previous_summary}\n\n"
     "Статус миссии:\n{mission_text}\n\n"
+    "Статус корабля (ТЕКУЩИЕ значения, их отслеживает код игры):\n{ship_status_text}\n\n"
     "Принятые решения (игроки имеют HIGH вес, NPC — NORMAL):\n{decisions_text}\n\n"
     "{roster_text}\n"
     "Проанализируй все решения и создай единый связанный результат. "
@@ -288,6 +328,10 @@ _COMBINED_OUTCOME_USER_RU = (
     "- [fatal] → участник гибнет: опиши гибель в narrative И добавь в dead_crew_members.\n"
     "Метка — обязательство. Несколько решений с одинаковой меткой складываются (двойной [fatal] — "
     "может быть две жертвы; [injury]+[fatal] — и раненый, и погибший).\n\n"
+    "АДРЕСАЦИЯ ЖЕРТВ: в dead_crew_members / crew_injured / crew_healed адресуй персонажей "
+    "ТОЛЬКО по entity_id из ростера экипажа (в квадратных скобках рядом с именем: [p123] — игрок, "
+    "[nengineer] — NPC). Копируй entity_id ТОЧНО. Не адресуй по имени и не по роли — имена "
+    "склоняются, а роли повторяются, из-за этого гибнут не те персонажи.\n\n"
     "Верни JSON с полями:\n"
     "1. outcome_narrative — что произошло в результате всех решений (2-3 абзаца). Живой и осмысленный текст.\n"
     "2. ship_status_change — как изменилось состояние корабля (текст)\n"
@@ -295,19 +339,29 @@ _COMBINED_OUTCOME_USER_RU = (
     "4. next_turn_hook — зацепка для следующего хода, которая создаёт ожидание\n"
     "5. mission_progress — МАССИВ объектов [{{'stage': N, 'points': +/-M}}]. "
     "Положительные = прогресс, отрицательные = регресс/откат (используй умеренные значения).\n"
-    "6. dead_crew_members — список [[name, role]] погибших ИЗ СПИСКА ЭКИПАЖА. "
+    "6. dead_crew_members — МАССИВ ОБЪЕКТОВ [{{'entity_id': ..., 'cause': ...}}] погибших "
+    "ИЗ СПИСКА ЭКИПАЖА. entity_id — строго из ростера, cause — короткое описание причины гибели. "
     "Убивать можно ТОЛЬКО персонажей из списка экипажа. Не выдумывай новых членов. "
     "Добавляй сюда КАЖДОГО участника решения с меткой [fatal]. "
     "Если персонаж погибает — опиши это в outcome_narrative И добавь в dead_crew_members. "
     "Не убивай случайных безымянных членов экипажа и тех, чьи решения не помечены [fatal].\n"
     "Если персонаж ранен (метка [injury]) — опиши ранение в narrative и добавь в crew_injured.\n"
-    "7. ship_destroyed — true/false\n"
-    "8. ship_hull_integrity — целостность корпуса в % (0-100). УМЕНЬШАЕТСЯ от повреждений.\n"
-    "9. ship_shields — состояние щитов в % (0-100)\n"
-    "10. ship_systems_offline — массив строк: какие системы корабля вышли из строя "
-    "(например ['warp drive', 'life support', 'weapons', 'communications'])\n"
-    "11. crew_injured — список [[name, role, severity]] раненых. severity: 'critical', 'moderate', 'minor'.\n"
-    "12. crew_healed — список [[name, role, new_severity]] вылеченных медицинским офицером. "
+    "7. ship_hull_change — ИЗМЕНЕНИЕ корпуса за ход в % (дельта: обычно -25..+10; "
+    "-25 после попадания, +10 после ремонта). НЕ абсолютное значение! "
+    "Положительная дельта (ремонт) — ТОЛЬКО если среди решений было явное ремонтное действие.\n"
+    "8. ship_shields_change — ИЗМЕНЕНИЕ щитов за ход в % (дельта, обычно -30..+15). "
+    "НЕ абсолютное значение!\n"
+    "9. systems_taken_offline — массив строк: системы, вышедшие из строя ИМЕННО В ЭТОМ ХОДУ "
+    "(например ['warp drive', 'life support', 'weapons', 'communications']). "
+    "Уже офлайн-системы из 'Статус корабля' сюда НЕ дублируй.\n"
+    "10. systems_restored — массив строк: системы, восстановленные В ЭТОМ ХОДУ "
+    "(только при явном ремонтном действии)\n"
+    "Корпус и щиты — накопительное состояние: код прибавляет твои дельты к текущим значениям "
+    "из 'Статус корабля'. Гибель корабля определяет КОД (корпус <= 0) — не помечай уничтожение сам.\n"
+    "11. crew_injured — МАССИВ ОБЪЕКТОВ [{{'entity_id': ..., 'severity': ...}}] раненых. "
+    "entity_id — строго из ростера. severity: 'critical', 'moderate', 'minor'.\n"
+    "12. crew_healed — МАССИВ ОБЪЕКТОВ [{{'entity_id': ..., 'new_severity': ...}}] вылеченных "
+    "медицинским офицером. entity_id — строго из ростера. "
     "ТОЛЬКО если Medical Officer явно выбрал лечебное действие. new_severity — улучшенная ступень "
     "('critical'→'moderate', 'moderate'→'minor', 'minor'→'healthy'=полное излечение). "
     "Редкое событие; оставляй пустым, если лечения не было.\n"
@@ -322,17 +376,27 @@ _COMBINED_OUTCOME_SYSTEM_EN = (
     "and produce a single coherent turn outcome.\n\n"
     "CORE PRINCIPLES:\n"
     "1. PLAYER decisions (Weight: HIGH) matter MORE than NPC decisions.\n"
-    "2. Mission progress accumulates from bold, smart decisions. Regression is possible, "
-    "but only from explicitly risky or wrong actions.\n"
-    "3. The engine of the story is DISCOVERIES, plot twists, new allies and enemies, findings. "
-    "Drama comes from events and revelations, not from a body count and damage totals.\n"
+    "2. Progress and regression are equally possible consequences of decisions. Smart, bold "
+    "actions advance the mission; inaction, mistakes and ignoring the threat set it back or "
+    "stall it. A turn with no forward movement is a normal part of the story.\n"
+    "3. Space is hostile and indifferent. Wounds and deaths are a legitimate price of risk "
+    "(file them through crew_injured / dead_crew_members with entity_id, following the decision "
+    "tag). Do not spare the crew, but do not kill without a reason in the narrative either.\n"
     "4. Deaths and injuries follow STRICTLY from the HIDDEN CONSEQUENCE tag on each decision: "
     "see [fatal] — at least one participant of that decision dies; [injury] — a participant is "
-    "wounded (no death); [progress] — the mission advances, with no casualties or wounds. The tag "
+    "wounded (no death); [progress] — the mission advances, with no casualties or wounds; "
+    "[delay] — a hesitation action does NOT advance the mission and does not improve anything — "
+    "it is lost time, and the threat grows. The tag "
     "is a BINDING COMMITMENT, not a hint: do not soften or ignore it.\n"
-    "5. NPCs act COMPETENTLY within their role and rarely harm the mission.\n"
+    "5. NPCs are living beings under pressure: they make mistakes, panic, act in their own "
+    "interests, sometimes against the mission.\n"
     "6. Every character who made a decision must have a PERSONAL OUTCOME in personal_outcomes.\n"
-    "7. Past ship damage PERSISTS — it cannot be simply 'forgotten'."
+    "7. Past ship damage PERSISTS — it cannot be simply 'forgotten'. Hull, shields "
+    "and offline systems are accumulated state (current values are provided "
+    "separately); you return ONLY the per-turn CHANGES. With hull below 20/100, "
+    "catastrophic events are MORE LIKELY — do not artificially soften the damage.\n"
+    "8. The threat grows every turn — reflect it in the turn's events: the pursuer closes in, "
+    "time runs out, the environment grows more hostile."
 )
 
 _COMBINED_OUTCOME_USER_EN = (
@@ -342,6 +406,7 @@ _COMBINED_OUTCOME_USER_EN = (
     "Narrative: {narrative}\n\n"
     "PREVIOUS EVENTS:\n{previous_summary}\n\n"
     "Mission status:\n{mission_text}\n\n"
+    "Ship status (CURRENT values, tracked by the game code):\n{ship_status_text}\n\n"
     "All decisions (players = HIGH weight, NPCs = NORMAL):\n{decisions_text}\n\n"
     "{roster_text}\n"
     "Analyze all decisions together and create a coherent combined result. "
@@ -353,6 +418,10 @@ _COMBINED_OUTCOME_USER_EN = (
     "- [fatal] → a participant dies: describe the death in narrative AND add them to dead_crew_members.\n"
     "The tag is a binding commitment. Multiple decisions with the same tag stack (a double [fatal] may mean "
     "two deaths; [injury]+[fatal] means both a wound and a death).\n\n"
+    "CASUALTY ADDRESSING: in dead_crew_members / crew_injured / crew_healed address characters ONLY by "
+    "their entity_id from the crew roster (in square brackets next to the name: [p123] — a player, "
+    "[nengineer] — an NPC). Copy the entity_id EXACTLY. Never address by name or role — names get "
+    "declined and roles repeat, which kills the wrong character.\n\n"
     "Return JSON with fields:\n"
     "1. outcome_narrative — what happened (2-3 paragraphs). Vivid and meaningful.\n"
     "2. ship_status_change — narrative of ship condition change\n"
@@ -360,19 +429,30 @@ _COMBINED_OUTCOME_USER_EN = (
     "4. next_turn_hook — teaser for the next turn that creates anticipation\n"
     "5. mission_progress — ARRAY of [{{'stage': N, 'points': +/-M}}]. "
     "Positive = progress, Negative = regression/setback (use moderate values).\n"
-    "6. dead_crew_members — list of [name, role] from the CREW ROSTER. "
+    "6. dead_crew_members — ARRAY of OBJECTS [{{'entity_id': ..., 'cause': ...}}] of characters from "
+    "the CREW ROSTER who died. entity_id is strictly from the roster; cause is a short cause of death. "
     "Can ONLY kill characters listed in the full crew roster. Do NOT invent non-existent crew members. "
     "Add EVERY participant of a decision tagged [fatal] here. "
     "If a character dies — describe it IN outcome_narrative AND add them to dead_crew_members. "
     "Do NOT kill random unnamed crew members, nor characters whose decisions are not tagged [fatal].\n"
     "If a character is wounded (tag [injury]) — describe the injury in narrative and add to crew_injured.\n"
-    "7. ship_destroyed — true/false\n"
-    "8. ship_hull_integrity — hull integrity % (0-100). DECREASES with damage.\n"
-    "9. ship_shields — shield strength % (0-100)\n"
-    "10. ship_systems_offline — array of offline/damaged systems "
-    "(e.g. ['warp drive', 'life support', 'weapons', 'communications'])\n"
-    "11. crew_injured — list of [name, role, severity] injured. severity: 'critical', 'moderate', 'minor'.\n"
-    "12. crew_healed — list of [name, role, new_severity] healed by the Medical Officer. "
+    "7. ship_hull_change — hull integrity CHANGE for this turn in % (delta: usually "
+    "-25..+10; -25 after a hit, +10 after repairs). NOT an absolute value! "
+    "A positive delta (repair) ONLY when a decision explicitly included a repair action.\n"
+    "8. ship_shields_change — shield strength CHANGE for this turn in % (delta, usually "
+    "-30..+15). NOT an absolute value!\n"
+    "9. systems_taken_offline — array of systems that went offline THIS turn only "
+    "(e.g. ['warp drive', 'life support', 'weapons', 'communications']). "
+    "Do NOT repeat systems already offline in 'Ship status'.\n"
+    "10. systems_restored — array of systems restored THIS turn "
+    "(only via an explicit repair action)\n"
+    "Hull and shields are accumulated state: the code adds your deltas to the current "
+    "values from 'Ship status'. Ship destruction is decided by the CODE (hull <= 0) — "
+    "do not mark destruction yourself.\n"
+    "11. crew_injured — ARRAY of OBJECTS [{{'entity_id': ..., 'severity': ...}}] of the injured. "
+    "entity_id is strictly from the roster. severity: 'critical', 'moderate', 'minor'.\n"
+    "12. crew_healed — ARRAY of OBJECTS [{{'entity_id': ..., 'new_severity': ...}}] healed by the "
+    "Medical Officer. entity_id is strictly from the roster. "
     "ONLY when the Medical Officer explicitly chose a treatment action. new_severity is the improved step "
     "('critical'→'moderate', 'moderate'→'minor', 'minor'→'healthy'=fully healed). "
     "Rare event; leave empty if no treatment happened.\n"
@@ -389,6 +469,7 @@ def build_combined_outcome_prompts(
     narrative: str,
     previous_summary: str,
     mission_text: str,
+    ship_status_text: str,
     decisions_text: str,
     roster_text: str,
     use_vs: bool,
@@ -407,6 +488,7 @@ def build_combined_outcome_prompts(
             narrative=narrative,
             previous_summary=previous_summary or "Это первый ход",
             mission_text=mission_text,
+            ship_status_text=ship_status_text,
             decisions_text=decisions_text,
             roster_text=roster_text,
         )
@@ -418,6 +500,7 @@ def build_combined_outcome_prompts(
             narrative=narrative,
             previous_summary=previous_summary or "This is the first turn",
             mission_text=mission_text,
+            ship_status_text=ship_status_text,
             decisions_text=decisions_text,
             roster_text=roster_text,
         )
@@ -459,11 +542,29 @@ _GAME_OVER_SYSTEM_RU = (
     "эмоциональным и достойным завершением их приключения."
 )
 
+# Tone each rules verdict demands from the finale narrative. The verdict
+# itself is computed by game_rules.compute_outcome_type (code, not the LLM);
+# these strings only tell the LLM HOW to write, never WHAT happened.
+_GAME_OVER_TONES_RU = {
+    "triumph": "гимн достижению — безупречная победа, корабль цел, экипаж почти не пострадал",
+    "victory": "заслуженный успех с нотами заплаченной цены",
+    "pyrrhic": "успех, купленный невосполнимой ценой, — горечь победы",
+    "stalemate": "выжили, но цель не достигнута, — незавершённость и недосказанность",
+    "defeat": "провал и его причины",
+}
+
 _GAME_OVER_USER_RU = (
-    "Исход игры: {outcome_type}\n\n"
+    "СУХИЕ ФАКТЫ (исход определён правилами по этим фактам):\n"
+    "{mission_summary}\n"
+    "Корпус: {hull}/{hull_max}, щиты: {shields}/{shields_max}, угроза: {threat}/{threat_max}\n"
+    "Экипаж: выживших {alive_crew}, погибших {dead_crew}\n"
+    "Ходов сыграно: {turns}\n"
+    "{end_reason}\n\n"
     "Последние события:\n{outcome_narrative}\n\n"
-    "Статус миссии:\n{mission_summary}\n\n"
-    "Напиши финальный нарратив (2-3 абзаца) и промпт для финальной картинки. "
+    "Вердикт правил: {outcome_token} — {outcome_label}\n"
+    "Требуемый тон: {tone}\n\n"
+    "Исход игры решён правилами и не подлежит пересмотру — ты НЕ решаешь исход и не должен его смягчать или менять. "
+    "Напиши финальный нарратив (2-3 абзаца) строго в требуемом тоне и промпт для финальной картинки. "
     "Нарратив должен подвести итог и дать чувство завершения. "
     "Картинка — эпическая сцена, отражающая финал.\n\n"
     "Всё на русском языке."
@@ -476,11 +577,26 @@ _GAME_OVER_SYSTEM_EN = (
     "emotional, and a worthy conclusion to their adventure."
 )
 
+_GAME_OVER_TONES_EN = {
+    "triumph": "a hymn to the achievement — a flawless victory, the ship intact, the crew barely scratched",
+    "victory": "a well-earned success with notes of the price paid",
+    "pyrrhic": "success bought at an irreparable cost — the bitterness of victory",
+    "stalemate": "survived, but the goal was never reached — incompleteness, things left unsaid",
+    "defeat": "failure and the reasons behind it",
+}
+
 _GAME_OVER_USER_EN = (
-    "Game outcome: {outcome_type}\n\n"
+    "DRY FACTS (the outcome was decided from these facts by the rules):\n"
+    "{mission_summary}\n"
+    "Hull: {hull}/{hull_max}, shields: {shields}/{shields_max}, threat: {threat}/{threat_max}\n"
+    "Crew: {alive_crew} survivors, {dead_crew} dead\n"
+    "Turns played: {turns}\n"
+    "{end_reason}\n\n"
     "Last events:\n{outcome_narrative}\n\n"
-    "Mission status:\n{mission_summary}\n\n"
-    "Write a finale narrative (2-3 paragraphs) and an image prompt for the finale scene. "
+    "Rules verdict: {outcome_token} — {outcome_label}\n"
+    "Required tone: {tone}\n\n"
+    "The outcome was decided by the rules and is not negotiable — you do NOT decide the outcome and must not soften or change it. "
+    "Write a finale narrative (2-3 paragraphs) strictly in the required tone and an image prompt for the finale scene. "
     "The narrative should wrap up the story and give a sense of closure. "
     "The image should be an epic scene reflecting the finale.\n\n"
     "All text in English."
@@ -491,12 +607,24 @@ def build_game_over_prompts(
     language: str,
     *,
     outcome_type: str,
+    outcome_label: str,
     outcome_narrative: str,
     mission_summary: str,
+    end_reason: str,
+    hull: int,
+    shields: int,
+    threat: int,
+    dead_crew_count: int,
+    alive_crew_count: int,
+    turns_played: int,
     use_vs: bool,
     vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for finale/game-over generation.
+
+    The user prompt carries only dry facts plus the rules verdict
+    (machine token + localized header) and the tone that verdict demands —
+    the LLM never decides the outcome, it only writes in the given tone.
 
     Returns:
         (system_prompt, user_prompt)
@@ -504,16 +632,40 @@ def build_game_over_prompts(
     if language == LANGUAGE_RU:
         system = _GAME_OVER_SYSTEM_RU
         user = _GAME_OVER_USER_RU.format(
-            outcome_type=outcome_type,
-            outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
+            hull=hull,
+            hull_max=HULL_MAX,
+            shields=shields,
+            shields_max=SHIELDS_MAX,
+            threat=threat,
+            threat_max=THREAT_MAX,
+            alive_crew=alive_crew_count,
+            dead_crew=dead_crew_count,
+            turns=turns_played,
+            end_reason=end_reason,
+            outcome_narrative=outcome_narrative,
+            outcome_token=outcome_type,
+            outcome_label=outcome_label,
+            tone=_GAME_OVER_TONES_RU.get(outcome_type, _GAME_OVER_TONES_RU["defeat"]),
         )
     else:
         system = _GAME_OVER_SYSTEM_EN
         user = _GAME_OVER_USER_EN.format(
-            outcome_type=outcome_type,
-            outcome_narrative=outcome_narrative,
             mission_summary=mission_summary,
+            hull=hull,
+            hull_max=HULL_MAX,
+            shields=shields,
+            shields_max=SHIELDS_MAX,
+            threat=threat,
+            threat_max=THREAT_MAX,
+            alive_crew=alive_crew_count,
+            dead_crew=dead_crew_count,
+            turns=turns_played,
+            end_reason=end_reason,
+            outcome_narrative=outcome_narrative,
+            outcome_token=outcome_type,
+            outcome_label=outcome_label,
+            tone=_GAME_OVER_TONES_EN.get(outcome_type, _GAME_OVER_TONES_EN["defeat"]),
         )
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["combined_outcome"], k=vs_k)
@@ -718,6 +870,16 @@ def build_game_title_prompts(
             "Приветствие должно быть атмосферным — будто игрок заходит на борт корабля. "
             "ВАЖНО: не используй символы звёздочка (*) или подчёркивание (_) в тексте приветствия — "
             "они сломают форматирование при отправке игроку. Используй только обычный текст. "
+            "В конце приветствия ОБЯЗАТЕЛЬНО помести краткий блок правил под заголовком «Как можно проиграть» "
+            "(по одной строке на правило, без нумерации): "
+            "угроза растёт каждый ход и на 100 миссия провалена; "
+            "корпус накапливает урон и не чинится сам — 0 означает гибель корабля; "
+            "раны копятся: тяжёлая рана плюс любая новая — смерть; "
+            "промедление (авто-действие по таймеру хода) ускоряет рост угрозы; "
+            "экипаж может взбунтоваться от тяжёлых потерь; "
+            "экипаж не пополняется — каждая смерть насовсем. "
+            "Сразу после блока добавь строку: "
+            "«Как победить: быстро двигайте миссию, чините корабль, лечите раны — действуйте до срока». "
         )
         if mission_hint:
             user += (
@@ -734,6 +896,16 @@ def build_game_title_prompts(
             "The welcome should be atmospheric — as if the player is stepping aboard the ship. "
             "IMPORTANT: do not use asterisk (*) or underscore (_) characters in the welcome text — "
             "they will break formatting when sent to the player. Use plain text only. "
+            "At the end of the welcome you MUST include a short rules block under the heading "
+            "'How you can lose' (one line per rule, no numbering): "
+            "threat rises every turn and at 100 the mission is failed; "
+            "hull damage accumulates and never self-repairs — 0 means the ship is destroyed; "
+            "wounds pile up: a critical wound plus any new one kills; "
+            "hesitation (timer auto-action) accelerates the threat; "
+            "the crew can mutiny after heavy losses; "
+            "the crew is never replenished — every death is permanent. "
+            "Right after the block add the line: "
+            "'How to win: push the mission fast, repair the ship, treat wounds — act before the clock runs out.' "
         )
         if mission_hint:
             user += (
@@ -743,41 +915,6 @@ def build_game_title_prompts(
         user += "All text in English."
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["game_title"], k=vs_k)
-    return system, user
-
-
-# ── Daily story prompts ────────────────────────────────────────────
-
-
-def build_turn_story_prompts(language: str, turn: int, previous_summary: str, player_role: str, *, use_vs: bool, vs_k: int) -> tuple[str, str]:
-    """Build system and user prompts for daily story generation."""
-    if language == LANGUAGE_RU:
-        system = "Ты — Game Master космической исследовательской игры в стиле Star Trek. Создаёшь увлекательные ежедневные эпизоды с конфликтами и выбором."
-        player_role_display = player_role or "Член экипажа"
-        user = (
-            f"Ход: {turn}\n"
-            f"Предыдущий день: {previous_summary or 'Первый день миссии'}\n"
-            f"Роль игрока: {player_role_display}\n\n"
-            "Создай эпизод с:\n"
-            "1. Место действия (космос, станция, планета)\n"
-            "2. Центральный конфликт или тайна\n"
-            "3. 3 точки выбора для игрока с действиями и скрытыми последствиями\n\n"
-            "Всё на русском языке."
-        )
-    else:
-        system = "You are a Game Master for a Star Trek-style space exploration game. Create compelling daily episodes with conflicts and player choices."
-        player_role_display = player_role or "Crew member"
-        user = (
-            f"Turn: {turn}\n"
-            f"Previous turn: {previous_summary or 'First turn of mission'}\n"
-            f"Player role: {player_role_display}\n\n"
-            "Create an episode with:\n"
-            "1. A setting (space location, station, planet)\n"
-            "2. A central conflict or mystery\n"
-            "3. 3 decision points for the player with visible actions and hidden consequences\n"
-        )
-    if use_vs:
-        system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["turn_story"], k=vs_k)
     return system, user
 
 
@@ -1233,8 +1370,24 @@ def build_role_flavour_prompts(
     return system, user
 
 
-# ── NPC decision prompts
-# ── NPC decision prompts ───────────────────────────────────────────
+# ── NPC decision prompts ────────────────────────────────────────────
+
+# How each loyalty band (game_rules.loyalty_band) tells the NPC to behave.
+# Loyalty is code-owned state: the number and its band come from the DB,
+# never from the LLM.
+_NPC_LOYALTY_RULES_RU = {
+    "steadfast": "ты действуешь в интересах миссии и командования",
+    "uneasy": "ты работаешь, но сомневаешься в приказах и командовании",
+    "on_edge": "твоё главное — самосохранение, ты уклоняешься от риска и не рискуешь жизнью ради миссии",
+    "mutinous": "ты открыто не подчиняешься приказам, саботируешь их и готовишь бунт против командования",
+}
+
+_NPC_LOYALTY_RULES_EN = {
+    "steadfast": "you act in the best interest of the mission and command",
+    "uneasy": "you keep working, but you doubt the orders and the command",
+    "on_edge": "your priority is self-preservation — you avoid risk and won't risk your life for the mission",
+    "mutinous": "you openly disobey orders, sabotage them, and are preparing to mutiny against command",
+}
 
 
 def build_npc_decision_prompts(
@@ -1244,17 +1397,28 @@ def build_npc_decision_prompts(
     traits: str | list[str],
     choices_text: str,
     *,
+    loyalty: int,
     use_vs: bool,
     vs_k: int,
 ) -> tuple[str, str]:
     """Build system and user prompts for NPC decision making."""
     traits_str = ", ".join(traits) if isinstance(traits, list) else traits
+    rules = _NPC_LOYALTY_RULES_RU if language == LANGUAGE_RU else _NPC_LOYALTY_RULES_EN
+    loyalty_rule = rules.get(loyalty_band(loyalty), rules["steadfast"])
     if language == LANGUAGE_RU:
-        system = f"Ты — {npc_name}, {npc_role} на космическом корабле. Твой характер: {traits_str}. Ты видишь ТОЛЬКО описания действий без последствий. Сделай выбор на основе своей личности и роли."
-        user = f"Текущая ситуация на корабле требует твоего решения.\n\nДоступные действия:\n{choices_text}\n\nВыбери одно действие, которое лучше всего соответствует твоему характеру и роли. Ты не знаешь последствий — действуй интуитивно."
+        system = (
+            f"Ты — {npc_name}, {npc_role} на космическом корабле. Твой характер: {traits_str}. "
+            f"Твоя лояльность командованию: {loyalty}/100 — {loyalty_rule}. "
+            "Ты видишь ТОЛЬКО описания действий без последствий. Сделай выбор на основе своей личности, роли и лояльности."
+        )
+        user = f"Текущая ситуация на корабле требует твоего решения.\n\nДоступные действия:\n{choices_text}\n\nВыбери одно действие, которое лучше всего соответствует твоему характеру, роли и уровню лояльности. Ты не знаешь последствий — действуй интуитивно."
     else:
-        system = f"You are {npc_name}, {npc_role} aboard a starship. Your personality: {traits_str}. You see ONLY action descriptions with no consequences. Make a choice based on your personality and role."
-        user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character and role. You don't know the consequences — act on instinct."
+        system = (
+            f"You are {npc_name}, {npc_role} aboard a starship. Your personality: {traits_str}. "
+            f"Your loyalty to command: {loyalty}/100 — {loyalty_rule}. "
+            "You see ONLY action descriptions with no consequences. Make a choice based on your personality, role, and loyalty."
+        )
+        user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character, role, and loyalty level. You don't know the consequences — act on instinct."
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_decision"], k=vs_k)
     return system, user
@@ -1319,6 +1483,38 @@ def build_auto_choice_prompts(
 # ── Global circumstances prompts ───────────────────────────────────
 
 
+# ── Doom clock: threat status line for per-turn prompts ─────────────
+
+THREAT_BAR_SEGMENTS = 10
+
+_THREAT_BANDS = {
+    LANGUAGE_RU: (
+        (70, "враг на пороге — время на исходе"),
+        (34, "враждебное окружение сжимает кольцо"),
+        (0, "напряжение нарастает"),
+    ),
+    LANGUAGE_EN: (
+        (70, "the enemy is at the gates — time is running out"),
+        (34, "the hostile environment is closing in"),
+        (0, "tension is building"),
+    ),
+}
+
+
+def format_threat_status(language: str, threat_level: int) -> str:
+    """One-line doom-clock status (bar + level + mood) for turn prompts.
+
+    Example: "Угроза миссии: ▓▓▓░░░░░░░ 34/100 — враждебное окружение сжимает кольцо"
+    """
+    lang = LANGUAGE_EN if language == LANGUAGE_EN else LANGUAGE_RU
+    label = "Mission threat" if lang == LANGUAGE_EN else "Угроза миссии"
+    level = max(0, min(THREAT_MAX, int(threat_level)))
+    filled = level * THREAT_BAR_SEGMENTS // THREAT_MAX
+    bar = "▓" * filled + "░" * (THREAT_BAR_SEGMENTS - filled)
+    mood = next((text for floor, text in _THREAT_BANDS[lang] if level >= floor), "")
+    return f"{label}: {bar} {level}/{THREAT_MAX} — {mood}"
+
+
 def build_global_circumstances_prompts(
     language: str,
     turn: int,
@@ -1328,18 +1524,26 @@ def build_global_circumstances_prompts(
     *,
     use_vs: bool,
     vs_k: int,
+    threat_status: str = "",
 ) -> tuple[str, str]:
     """Build system and user prompts for global circumstances generation."""
+    threat_block = f"{threat_status}\n" if threat_status else ""
     if language == LANGUAGE_RU:
         system = (
             "Ты — Game Master космической игры в стиле Star Trek. "
             "Создаёшь ОБЩИЕ обстоятельства дня — ситуацию, которая происходит на корабле или вокруг него. "
             "Эти обстоятельства едины для всех членов экипажа.\n\n"
             "Используй ПОЛНЫЕ ИМЕНА персонажей из списка экипажа в нарративе. "
-            "У каждого члена экипажа есть уникальное имя — обращайся к ним по имени.\n"
+            "У каждого члена экипажа есть уникальное имя — обращайся к ним по имени.\n\n"
+            "ЧАСЫ УГРОЗЫ: строка 'Угроза миссии' в запросе — это тикающий счётчик гибели. "
+            "Чем он выше, тем ближе провал миссии. Обязательно отражай нарастание угрозы в нарративе: "
+            "преследование подходит ближе, время тает, ресурсы на исходе, враги наглеют. "
+            "При угрозе выше 70/100 ОБЯЗАНА генерировать острые события — атаки, прорывы, "
+            "аварии, жертвы; спокойных ходов больше не бывает.\n"
         )
         user = (
             f"Ход: {turn}\n"
+            f"{threat_block}"
             f"Предыдущие события: {previous_summary or 'Первый день миссии'}\n"
             f"Экипаж:\n{player_descriptions or '  Экипаж формируется'}\n"
             f"{mission_str}\n"
@@ -1363,10 +1567,16 @@ def build_global_circumstances_prompts(
             "Create SHARED circumstances for the turn — the situation unfolding on or around the ship. "
             "These circumstances are common to all crew members.\n\n"
             "Use the actual CHARACTER NAMES from the crew list in the narrative. "
-            "Each crew member has a unique name — refer to them by name.\n"
+            "Each crew member has a unique name — refer to them by name.\n\n"
+            "DOOM CLOCK: the 'Mission threat' line in the request is a ticking countdown to failure. "
+            "The higher it is, the closer the mission is to collapse. You MUST reflect the rising "
+            "threat in the narrative: the pursuit closes in, time runs out, resources dwindle, "
+            "enemies grow bolder. Above 70/100 you MUST generate acute events — attacks, "
+            "breaches, failures, casualties; calm turns no longer happen.\n"
         )
         user = (
             f"Turn: {turn}\n"
+            f"{threat_block}"
             f"Previous events: {previous_summary or 'First turn of mission'}\n"
             f"Crew:\n{player_descriptions or '  Crew forming'}\n"
             f"{mission_str}\n"
@@ -1574,6 +1784,26 @@ def build_npc_name_user(
 
 # ── Personal briefing prompts ──────────────────────────────────────
 
+# Synthetic "hesitation" action used as the fallback when the LLM
+# auto-choice (player or NPC) fails or returns an invalid choice.
+# Formerly the fallback picked choices[0], which the briefing schema
+# orders progress→injury→fatal — a hidden progress subsidy. {name} is
+# the character the choice is made for.
+DELAY_ACTION_TEXT_RU = "Промедление — {name} замер(ла) в нерешительности, время ушло"
+DELAY_ACTION_TEXT_EN = "Hesitation — {name} froze, unable to decide, and the window closed"
+
+# Delay-kind bullet for the briefing action-format instructions (RU/EN),
+# interpolated into the user prompt built in game_server.py. The LLM never
+# generates 'delay' choices — the kind is assigned by code on fallback only.
+DELAY_KIND_RULE_RU = (
+    "- 'delay' — системное промедление (аварийный fallback кода): НЕ генерируй "
+    "его сам — он назначается только кодом.\n"
+)
+DELAY_KIND_RULE_EN = (
+    "- 'delay' — a system hesitation fallback (assigned by code when a choice fails): "
+    "NEVER generate it yourself.\n"
+)
+
 
 def build_personal_briefing_system(language: str) -> str:
     """Build system prompt for personal briefing generation."""
@@ -1582,11 +1812,25 @@ def build_personal_briefing_system(language: str) -> str:
             "Ты — Game Master космической игры. Создаёшь ПЕРСОНАЛЬНУЮ вводную для игрока, "
             "основываясь на общих обстоятельствах дня. "
             "Каждый игрок видит ситуацию со своей уникальной точки зрения.\n\n"
-            "Каждый ход ДОЛЖЕН ДВИГАТЬ ИСТОРИЮ ВПЕРЁД — неожиданные повороты, открытия, "
-            "новые союзники или враги, находки, ухудшение или улучшение ситуации. "
-            "Смелые и правильные решения → миссия продвигается, открываются новые возможности. "
-            "Рискованные решения → ранения, потери, вплоть до гибели. "
-            "Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО, а не просто 'наказать' игрока.\n\n"
+            "Ход может принести прогресс, стагнацию или откат — интересность рождается "
+            "из честных последствий решений, а не из гарантированного успеха. "
+            "Смелые и грамотные решения → миссия продвигается, открываются новые возможности. "
+            "Бездействие, ошибки и игнорирование угрозы → ранения, потери, откат миссии, "
+            "вплоть до гибели. Главное — ИНТЕРЕСНО и НЕПРЕДСКАЗУЕМО.\n\n"
+            "ЧАСЫ УГРОЗЫ: строка 'Угроза миссии' в запросе — это тикающий счётчик гибели. "
+            "Чем он выше, тем ближе провал. Отражай нарастание угрозы в брифинге: "
+            "преследование подходит ближе, время тает, враги наглеют. "
+            "При угрозе выше 70/100 ОБЯЗАНА предлагать острые, отчаянные ситуации — "
+            "атаки, прорывы, аварии; спокойных ходов больше не бывает.\n\n"
+            "ТЕЛЕГРАФИЯ РАН: строка 'Состояние' в запросе показывает здоровье персонажа. "
+            "Если персонаж ранен, текст вводной ОБЯЗАТЕЛЬНО и явно отражает его ранение — "
+            "тревога нарастает вместе с тяжестью: лёгкое ранение — раны ноют, вы держитесь; "
+            "среднее ранение — раны серьёзные, концентрация падает; тяжёлое ранение — "
+            "вы при смерти: следующая рана, скорее всего, станет последней.\n\n"
+            "ТЕЛЕГРАФИЯ КОРПУСА: строка 'Статус корабля' в запросе показывает целостность "
+            "корабля. При корпусе ниже 40/100 брифинг ОБЯЗАН отражать тяжёлое состояние "
+            "корабля — тревога, рваные отсеки, аварийные сирены. При корпусе ниже 20/100 "
+            "корабль при смерти: каждый следующий удар может стать последним.\n\n"
             "Каждый вариант действия ДОЛЖЕН содержать поле consequence_kind — его тип:\n"
             "  'progress' — действие, продвигающее миссию: успех приближает к цели, "
             "    открывает новые возможности и открытия;\n"
@@ -1594,6 +1838,8 @@ def build_personal_briefing_system(language: str) -> str:
             "    травма, ущерб здоровью, временная нетрудоспособность;\n"
             "  'fatal'    — СМЕРТЕЛЬНОЕ действие: ведёт к гибели члена экипажа "
             "    (самого персонажа или другого).\n"
+            "  'delay'    — системное промедление (аварийный fallback кода при сбое "
+            "    выбора): НЕ генерируй его сам — он назначается только кодом.\n"
             "Количество каждого типа задаётся в запросе; consequence_kind варианта должен "
             "соответствовать его группе.\n\n"
             "КРИТИЧЕСКОЕ ПРАВИЛО: текст действия НЕ ДОЛЖЕН выдавать его consequence_kind. "
@@ -1608,11 +1854,26 @@ def build_personal_briefing_system(language: str) -> str:
         "You are a Game Master. You create PERSONAL briefings for each player "
         "based on the shared global circumstances. "
         "Each player sees the situation from their unique perspective.\n\n"
-        "Every turn MUST MOVE THE STORY FORWARD — unexpected twists, discoveries, "
-        "new allies or enemies, findings, situation improvements or deteriorations. "
-        "Bold and correct decisions → mission progresses, new opportunities open. "
-        "Risky decisions → wounds, losses, up to death. "
-        "The key is INTERESTING and UNPREDICTABLE, not just 'punish' the player.\n\n"
+        "A turn can bring progress, stagnation or a setback — the interest comes from "
+        "honest consequences of decisions, not from guaranteed success. "
+        "Bold and smart decisions → the mission advances, new opportunities open. "
+        "Inaction, mistakes and ignoring the threat → wounds, losses, mission setbacks, "
+        "up to death. The key is INTERESTING and UNPREDICTABLE.\n\n"
+        "DOOM CLOCK: the 'Mission threat' line in the request is a ticking countdown to failure. "
+        "The higher it is, the closer the mission is to collapse. Reflect the rising threat "
+        "in the briefing: the pursuit closes in, time runs out, enemies grow bolder. "
+        "Above 70/100 you MUST offer acute, desperate situations — attacks, breaches, "
+        "failures; calm turns no longer happen.\n\n"
+        "WOUND TELEGRAPH: the 'Status' line in the request shows the character's health. "
+        "If the character is wounded, the briefing text MUST explicitly reflect the wound — "
+        "alarm rises with severity: lightly wounded — your wounds ache, but you are holding on; "
+        "moderately wounded — your wounds are serious, your concentration is slipping; "
+        "critically wounded — you are at death's door: the next wound will most likely be "
+        "your last.\n\n"
+        "HULL TELEGRAPH: the 'Ship status' line in the request shows the ship's integrity. "
+        "Below 40/100 hull the briefing MUST reflect the ship's grave condition — alarms, "
+        "torn compartments, emergency sirens. Below 20/100 the ship is at death's door: "
+        "the next hit may well be the last.\n\n"
         "Every action choice MUST include a consequence_kind field — its type:\n"
         "  'progress' — a mission-advancing action: success moves toward the goal, "
         "    opens new opportunities and discoveries;\n"
@@ -1620,6 +1881,8 @@ def build_personal_briefing_system(language: str) -> str:
         "    damage, temporary incapacitation;\n"
         "  'fatal'    — a DEADLY action: leads to the death of a crew member "
         "    (the character themselves or another).\n"
+        "  'delay'    — system hesitation (an emergency code fallback when a "
+        "    choice fails): NEVER generate it yourself — it is assigned by code only.\n"
         "The count of each type is specified in the request; a choice's consequence_kind "
         "must match its group.\n\n"
         "CRITICAL RULE: the action text MUST NOT reveal its consequence_kind. "

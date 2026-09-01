@@ -3,6 +3,10 @@ Language constants for Game Server API
 All user-facing strings should be defined here with Russian and English versions
 """
 
+import re
+
+from game_rules import HULL_MAX, SHIELDS_MAX, THREAT_MAX
+
 LANGUAGE_RU = "ru"
 LANGUAGE_EN = "en"
 
@@ -1242,10 +1246,20 @@ def get_gender_questions_data(language: str) -> list:
 GAME_STRINGS = {
     LANGUAGE_RU: {
         "game_title_fallback": "Звёздный Крейсер «Рассвет»: За горизонтом известного",
-        "welcome_text_fallback": "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд.",
+        "welcome_text_fallback": (
+            "Кают-компания звёздного корабля мерцает голографическими дисплеями. Экипаж ждёт нового члена. Докажите, что вы достойны места среди звёзд.\n\n"
+            "Как можно проиграть:\n"
+            "— Угроза растёт каждый ход: на 100 миссия провалена.\n"
+            "— Корпус накапливает урон и не чинится сам: 0 — гибель корабля.\n"
+            "— Раны копятся: тяжёлая рана плюс любая новая — смерть.\n"
+            "— Промедление (авто-действие по таймеру хода) ускоряет рост угрозы.\n"
+            "— Экипаж может взбунтоваться от тяжёлых потерь.\n"
+            "— Экипаж не пополняется: каждая смерть насовсем.\n\n"
+            "Как победить: быстро двигайте миссию, чините корабль, лечите раны — действуйте до срока."
+        ),
         "turn_prefix": "Ход {turn} — {title}",
         "turn_prefix_simple": "Ход {turn}",
-        "auto_select_notification": ("⏳ *Время вышло!*\n\nВы не успели сделать выбор, поэтому Game Master принял решение за вас:\n\nВыбрано действие: *{action_text}*\n\n_{rationale}_"),
+        "auto_select_notification": ("⏳ *Время хода вышло — зафиксировано ПРОМЕДЛЕНИЕ.*\n\nНерешительность имеет цену: угроза растёт. Game Master выбрал за вас:\n\nВыбрано действие: *{action_text}*\n\n_{rationale}_"),
         "turn_summary": {
             "ship_status": "Состояние корабля: {status}",
             "hull_shields": "Корпус: {hull}, Щиты: {shields}",
@@ -1310,24 +1324,74 @@ GAME_STRINGS = {
             "fallback_npc_default": "{role_name} экипажа",
         },
         "game_over": {
+            "triumph_header": "✨ МИССИЯ ВЫПОЛНЕНА БЕЗУПРЕЧНО — ТРИУМФ!",
             "victory_header": "🏆 МИССИЯ ВЫПОЛНЕНА — ПОБЕДА!",
+            "pyrrhic_header": "🔥 МИССИЯ ВЫПОЛНЕНА ЛЮБОЙ ЦЕНОЙ — ПИРРОВА ПОБЕДА",
+            "stalemate_header": "⚖️ ЦЕЛЬ НЕ ДОСТИГНУТА — НИЧЬЯ",
             "defeat_header": "💀 КОРАБЛЬ УНИЧТОЖЕН — ПОРАЖЕНИЕ",
+            "reason_mission_complete": "Причина конца: миссия выполнена",
+            "reason_ship_destroyed": "Причина конца: корабль уничтожен",
+            "reason_crew_wiped": "Причина конца: экипаж погиб",
+            "reason_overwhelmed": "Причина конца: угроза достигла предела",
+            "reason_mutiny": "Причина конца: мятеж экипажа",
+            "summary_title": "📊 Итоги миссии",
+            "summary_outcome_line": "Исход: {outcome} · Причина: {reason}",
+            "summary_stats_line": "Ходов: {turns} · Корпус: {hull}/{hull_max} · Щиты: {shields}/{shields_max} · Угроза: {threat}/{threat_max}",
+            "summary_casualties_line": "Погибли: {dead} · Выжили: {alive} из {total}",
+            "summary_no_dead": "нет",
+            "summary_actions_header": "Действия:",
+            "summary_actions_line": "{name} — {actions} (промедления {auto})",
+            "summary_reasons": {
+                "mission_complete": "миссия выполнена",
+                "ship_destroyed": "корабль уничтожен",
+                "crew_wiped": "экипаж погиб",
+                "overwhelmed": "угроза достигла предела",
+                "mutiny": "мятеж экипажа",
+            },
+            "fallback_triumph": {
+                "finale_narrative": "Миссия выполнена безупречно. Корабль цел, экипаж в строю, угроза отражена. Экипаж возвращается домой, и звёзды, кажется, салютуют им.",
+                "finale_image_prompt": "A pristine starship gliding triumphantly through calm space, crew celebrating on a spotless bridge, golden light, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
+            },
             "fallback_victory": {
                 "finale_narrative": "Миссия выполнена. Экипаж возвращается домой, зная, что их смелость и решительность изменили ход истории. Звёзды будут помнить этот день.",
                 "finale_image_prompt": "A victorious starship crew standing on the bridge, celebrating their successful mission, triumphant expressions, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
+            },
+            "fallback_pyrrhic": {
+                "finale_narrative": "Миссия выполнена — но цена оказалась невосполнимой. Корабль изранен, кто-то из экипажа не вернётся домой. Победа, которую почти невозможно назвать победой.",
+                "finale_image_prompt": "A heavily damaged starship limping home from a completed mission, hull breached and scarred, somber survivors on the bridge, tragic yet epic, cinematic lighting, Star Trek aesthetic, 4K quality, emotional composition.",
+            },
+            "fallback_stalemate": {
+                "finale_narrative": "Цель так и не достигнута, но экипаж уцелел и увёл корабль от гибели. История не окончена — она оборвалась на полуслове, и эта незавершённость останется с ними навсегда.",
+                "finale_image_prompt": "A battered starship retreating into deep space, leaving an unfinished objective behind, mood of survival and incompleteness, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
             },
             "fallback_defeat": {
                 "finale_narrative": "Корабль погиб в огне и тишине космоса. Но даже в поражении экипаж проявил мужество, достойное легенд. Их история будет рассказана.",
                 "finale_image_prompt": "A starship breaking apart in space, dramatic explosion, debris floating in zero gravity, tragic and epic, cinematic lighting, Star Trek aesthetic, 4K quality, emotional composition.",
             },
         },
+        "npc_loyalty": {
+            "steadfast": "предан",
+            "uneasy": "нервничает",
+            "on_edge": "на грани",
+            "mutinous": "готов взбунтоваться",
+        },
     },
     LANGUAGE_EN: {
         "game_title_fallback": "Star Cruiser «Dawn»: Beyond the Known Horizon",
-        "welcome_text_fallback": "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.",
+        "welcome_text_fallback": (
+            "The starship's mess hall glows with holographic displays. The crew awaits a new member. Prove you are worthy of a place among the stars.\n\n"
+            "How you can lose:\n"
+            "— Threat rises every turn: at 100 the mission is failed.\n"
+            "— Hull damage accumulates and never self-repairs: 0 means the ship is destroyed.\n"
+            "— Wounds pile up: a critical wound plus any new one kills.\n"
+            "— Hesitation (timer auto-action) accelerates the threat.\n"
+            "— The crew can mutiny after heavy losses.\n"
+            "— The crew is never replenished: every death is permanent.\n\n"
+            "How to win: push the mission fast, repair the ship, treat wounds — act before the clock runs out."
+        ),
         "turn_prefix": "Turn {turn} — {title}",
         "turn_prefix_simple": "Turn {turn}",
-        "auto_select_notification": ("⏳ *Time is up!*\n\nYou didn't make a choice in time, so the Game Master decided for you:\n\nSelected action: *{action_text}*\n\n_{rationale}_"),
+        "auto_select_notification": ("⏳ *Turn time ran out — DELAY recorded.*\n\nHesitation has a price: the threat grows. The Game Master chose for you:\n\nSelected action: *{action_text}*\n\n_{rationale}_"),
         "turn_summary": {
             "ship_status": "Ship status: {status}",
             "hull_shields": "Hull: {hull}, Shields: {shields}",
@@ -1392,16 +1456,56 @@ GAME_STRINGS = {
             "fallback_npc_default": "The {role_name}",
         },
         "game_over": {
+            "triumph_header": "✨ FLAWLESS MISSION — TRIUMPH!",
             "victory_header": "🏆 MISSION COMPLETE — VICTORY!",
+            "pyrrhic_header": "🔥 MISSION AT ANY COST — PYRRHIC VICTORY",
+            "stalemate_header": "⚖️ OBJECTIVE UNMET — STALEMATE",
             "defeat_header": "💀 SHIP DESTROYED — DEFEAT",
+            "reason_mission_complete": "End reason: mission accomplished",
+            "reason_ship_destroyed": "End reason: ship destroyed",
+            "reason_crew_wiped": "End reason: crew lost",
+            "reason_overwhelmed": "End reason: threat reached its peak",
+            "reason_mutiny": "End reason: crew mutiny",
+            "summary_title": "📊 Mission Summary",
+            "summary_outcome_line": "Outcome: {outcome} · Reason: {reason}",
+            "summary_stats_line": "Turns: {turns} · Hull: {hull}/{hull_max} · Shields: {shields}/{shields_max} · Threat: {threat}/{threat_max}",
+            "summary_casualties_line": "Lost: {dead} · Survived: {alive} of {total}",
+            "summary_no_dead": "none",
+            "summary_actions_header": "Actions:",
+            "summary_actions_line": "{name} — {actions} (delays {auto})",
+            "summary_reasons": {
+                "mission_complete": "mission accomplished",
+                "ship_destroyed": "ship destroyed",
+                "crew_wiped": "crew lost",
+                "overwhelmed": "threat reached its peak",
+                "mutiny": "crew mutiny",
+            },
+            "fallback_triumph": {
+                "finale_narrative": "The mission is accomplished flawlessly. The ship is intact, the crew stands unbroken, the threat repelled. They fly home, and the stars seem to salute them.",
+                "finale_image_prompt": "A pristine starship gliding triumphantly through calm space, crew celebrating on a spotless bridge, golden light, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
+            },
             "fallback_victory": {
                 "finale_narrative": "The mission is accomplished. The crew returns home knowing their courage and resolve changed the course of history. The stars will remember this turn.",
                 "finale_image_prompt": "A victorious starship crew standing on the bridge, celebrating their successful mission, triumphant expressions, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
+            },
+            "fallback_pyrrhic": {
+                "finale_narrative": "The mission is accomplished — but the price was irreparable. The ship is broken, and some of the crew will never come home. A victory that can barely be called one.",
+                "finale_image_prompt": "A heavily damaged starship limping home from a completed mission, hull breached and scarred, somber survivors on the bridge, tragic yet epic, cinematic lighting, Star Trek aesthetic, 4K quality, emotional composition.",
+            },
+            "fallback_stalemate": {
+                "finale_narrative": "The objective was never reached, yet the crew survived and pulled the ship back from doom. The story is not over — it broke off mid-sentence, and that incompleteness will stay with them forever.",
+                "finale_image_prompt": "A battered starship retreating into deep space, leaving an unfinished objective behind, mood of survival and incompleteness, cinematic lighting, Star Trek aesthetic, 4K quality, epic composition.",
             },
             "fallback_defeat": {
                 "finale_narrative": "The ship perished in fire and the silence of space. But even in defeat, the crew showed courage worthy of legends. Their story will be told.",
                 "finale_image_prompt": "A starship breaking apart in space, dramatic explosion, debris floating in zero gravity, tragic and epic, cinematic lighting, Star Trek aesthetic, 4K quality, emotional composition.",
             },
+        },
+        "npc_loyalty": {
+            "steadfast": "steadfast",
+            "uneasy": "uneasy",
+            "on_edge": "on edge",
+            "mutinous": "ready to mutiny",
         },
     },
 }
@@ -1410,3 +1514,53 @@ GAME_STRINGS = {
 def get_game_strings(language: str) -> dict:
     """Get game-level localized strings."""
     return GAME_STRINGS.get(language, GAME_STRINGS[LANGUAGE_RU])
+
+
+def _md_escape(text: str) -> str:
+    """Escape Telegram Markdown special characters in dynamic values."""
+    return re.sub(r"([_*`\[])", r"\\\1", text)
+
+
+def format_game_summary(
+    language: str,
+    *,
+    outcome_label: str,
+    end_status: str,
+    turns: int,
+    hull: int,
+    shields: int,
+    threat: int,
+    dead_names: list[str],
+    alive_crew: int,
+    total_crew: int,
+    player_stats: list[dict],
+) -> str:
+    """Build the compact post-finale mission summary (Telegram Markdown).
+
+    player_stats: [{name, actions, auto_actions}] — one line per player,
+    auto_actions being the code-assigned 'delay' (hesitation) count.
+    """
+    msgs = get_game_strings(language)["game_over"]
+    reason = msgs["summary_reasons"].get(end_status, end_status)
+    dead = ", ".join(_md_escape(n) for n in dead_names) if dead_names else msgs["summary_no_dead"]
+    lines = [
+        f"*{msgs['summary_title']}*",
+        msgs["summary_outcome_line"].format(outcome=outcome_label, reason=reason),
+        msgs["summary_stats_line"].format(
+            turns=turns, hull=hull, hull_max=HULL_MAX,
+            shields=shields, shields_max=SHIELDS_MAX,
+            threat=threat, threat_max=THREAT_MAX,
+        ),
+        msgs["summary_casualties_line"].format(dead=dead, alive=alive_crew, total=total_crew),
+    ]
+    if player_stats:
+        action_lines = [
+            msgs["summary_actions_line"].format(
+                name=_md_escape(str(s.get("name", ""))),
+                actions=s.get("actions", 0),
+                auto=s.get("auto_actions", 0),
+            )
+            for s in player_stats
+        ]
+        lines.append(f"*{msgs['summary_actions_header']}*\n" + "\n".join(action_lines))
+    return "\n".join(lines)
