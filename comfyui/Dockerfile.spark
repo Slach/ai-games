@@ -51,6 +51,13 @@ RUN git clone --depth 1 https://github.com/cubiq/ComfyUI_IPAdapter_plus.git /opt
 RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF && \
     /opt/ComfyUI/.venv/bin/pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
 
+# Install LLaDa-Image custom nodes (LLaDA-Image-Turbo text-to-image and
+# native instruction editing; reuses ComfyUI-GGUF for dequantization).
+# The bundled llada pipeline needs a recent diffusers (AutoencoderKLFlux2,
+# attention dispatch) which ComfyUI core does not ship.
+RUN git clone --depth 1 https://github.com/RealRebelAI/LLaDa-Image_ComfyUI.git /opt/ComfyUI/custom_nodes/LLaDa-Image_ComfyUI && \
+    /opt/ComfyUI/.venv/bin/pip install diffusers accelerate
+
 # Fix outdated channel URLs (ltdrdata -> Comfy-Org) in Manager source
 RUN sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main|g' \
     /opt/ComfyUI/custom_nodes/ComfyUI-Manager/channels.list.template && \
@@ -61,8 +68,11 @@ RUN sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|ht
 RUN /opt/ComfyUI/.venv/bin/pip install comfy-cli
 
 # Fix permissions: runtime user (from compose's user: field) needs write access
-# to .git directories inside custom_nodes for ComfyUI-Manager's .cnr-id files
-RUN chmod -R a+rw /opt/ComfyUI/custom_nodes
+# to .git directories inside custom_nodes for ComfyUI-Manager's .cnr-id files.
+# /root needs +rx so the runtime uid can traverse to the HF cache mounted at
+# /root/.cache/huggingface (LLaDA node downloads tokenizer/scheduler aux files
+# via huggingface_hub on first load).
+RUN chmod -R a+rw /opt/ComfyUI/custom_nodes && chmod a+rx /root
 
 EXPOSE 8188
 

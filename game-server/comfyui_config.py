@@ -80,6 +80,10 @@ MODELS: dict[str, ModelConfig] = {
         label="FLUX.2 [klein] 4B distilled GGUF Q4_K_S",
         builder="flux2_klein_4b",
     ),
+    "llada_image_turbo": ModelConfig(
+        label="LLaDA-Image-Turbo (INT8 transformer + Q4_K_M GGUF encoder)",
+        builder="llada_image_turbo",
+    ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.

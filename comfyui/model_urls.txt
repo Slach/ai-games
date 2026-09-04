@@ -32,3 +32,12 @@ https://huggingface.co/alibaba-pai/Qwen-Image-Edit-2511-Lightning/resolve/main/Q
 # encoder (same as Z-Image Turbo) and flux2-vae. Selected as
 # DEFAULT_TXT2IMG_MODEL for all txt2img kinds.
 https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_K_S.gguf -> unet/flux-2-klein-4b-Q4_K_S.gguf
+
+# ============== LLaDA-Image-Turbo (RealRebelAI ComfyUI port) ==============
+# Masked-diffusion model with native text-to-image and instruction editing.
+# Requires custom node: https://github.com/RealRebelAI/LLaDa-Image_ComfyUI
+# INT8 transformer (6.6 GB) + Q4_K_M GGUF text encoder (9.2 GB) fits the
+# GB10 unified memory; BF16 transformer (13 GB) also available upstream.
+https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDA-Image-Turbo-INT8.safetensors -> diffusion_models/LLaDA-Image-Turbo-INT8.safetensors
+https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf -> text_encoders/LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf
+https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDa_VAE.safetensors -> vae/LLaDa_VAE.safetensors

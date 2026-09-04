@@ -19,6 +19,12 @@ The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
     CLIP: qwen_3_4b.safetensors (CLIPLoader, type=flux2)
     VAE:  flux2-vae.safetensors
 
+  llada_image_turbo (masked diffusion, 4 steps, RealRebelAI custom nodes):
+    Transformer: LLaDA-Image-Turbo-INT8.safetensors (LLaDAImageLoader)
+    Text encoder: LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf
+    VAE:  LLaDa_VAE.safetensors
+    img2img goes through the native LLaDAImageEdit node (no latent path).
+
 img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
 (``_build_qwen_edit_workflow``) have their own fixed model combinations
 and are not routed through ``comfyui_config``.
@@ -483,12 +489,73 @@ def _build_flux2_klein_workflow(
     }
 
 
+def _build_llada_turbo_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a LLaDA-Image-Turbo text-to-image workflow for the ComfyUI API.
+
+    Uses the RealRebelAI LLaDa-Image custom nodes: a monolithic pipeline
+    loader (LLaDAImageLoader) followed by LLaDAImageTextToImage. There is
+    no KSampler/VAE graph — the node runs the full masked-diffusion
+    pipeline internally.
+
+    Model combination (RealRebelAI quantized port):
+      Transformer: LLaDA-Image-Turbo-INT8.safetensors (6.6 GB, native int8)
+      Text encoder: LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf (9.2 GB)
+      VAE: LLaDa_VAE.safetensors
+    Turbo settings: 4 steps, guidance 1.0.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    return {
+        # Monolithic pipeline loader (scans diffusion_models / text_encoders / vae)
+        "1": {
+            "class_type": "LLaDAImageLoader",
+            "inputs": {
+                "diffusion_model": "LLaDA-Image-Turbo-INT8.safetensors",
+                "text_encoder": "LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf",
+                "vae": "LLaDa_VAE.safetensors",
+                "dtype": "bfloat16",
+                "offload": "cuda",
+            },
+        },
+        # Text-to-image generation (Turbo: 4 steps, guidance 1.0)
+        "3": {
+            "class_type": "LLaDAImageTextToImage",
+            "inputs": {
+                "pipeline": ["1", 0],
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                "steps": 4,
+                "guidance_scale": 1.0,
+                "seed": seed,
+                "negative_prompt": "",
+            },
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": filename_prefix,
+                "images": ["3", 0],
+            },
+        },
+    }
+
+
 # Registry mapping comfyui_config.ModelConfig.builder -> workflow builder fn.
 # Each builder has the signature (prompt, width, height, seed, filename_prefix)
 # and returns a ComfyUI API workflow dict.
 _TXT2IMG_BUILDERS = {
     "z_image_turbo": _build_zimage_turbo_workflow,
     "flux2_klein_4b": _build_flux2_klein_workflow,
+    "llada_image_turbo": _build_llada_turbo_workflow,
 }
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
@@ -505,6 +572,7 @@ _EDIT_BUILDERS = {
 _IMG2IMG_BUILDER_METHODS = {
     "z_image_turbo": "_build_img2img_workflow",
     "flux2_klein_4b": "_build_flux2_klein_img2img_workflow",
+    "llada_image_turbo": "_build_llada_img2img_workflow",
 }
 
 
@@ -1060,6 +1128,73 @@ class ImageGenerator:
                 "inputs": {
                     "filename_prefix": filename_prefix,
                     "images": ["8", 0],
+                },
+            },
+        }
+
+    def _build_llada_img2img_workflow(
+        self,
+        prompt: str,
+        reference_filename: str,
+        denoise: float,
+        width: int,
+        height: int,
+        seed: int,
+        filename_prefix: str,
+    ) -> dict[str, Any]:
+        """Build a LLaDA-Image-Turbo img2img workflow via native editing.
+
+        LLaDA has no KSampler/latent pipeline to partially denoise, so the
+        classic VAEEncode + partial-denoise img2img path does not apply.
+        Instead the reference image (the avatar) goes through the model's
+        native ``generation_mode="editing"`` path (SigVQ image conditioning),
+        reshaped by the prompt — closer to instruction editing than to
+        denoise-strength img2img, so ``denoise`` is ignored.
+
+        The editing path requires width/height divisible by 32 (all game
+        image sizes — 768/1024/576 — satisfy this).
+        """
+        if seed == 0:
+            seed = secrets.randbelow(2**63)
+
+        return {
+            # Monolithic pipeline loader (same files as the txt2img builder)
+            "1": {
+                "class_type": "LLaDAImageLoader",
+                "inputs": {
+                    "diffusion_model": "LLaDA-Image-Turbo-INT8.safetensors",
+                    "text_encoder": "LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf",
+                    "vae": "LLaDa_VAE.safetensors",
+                    "dtype": "bfloat16",
+                    "offload": "cuda",
+                },
+            },
+            # Load reference image (uploaded to ComfyUI input folder)
+            "40": {
+                "class_type": "LoadImage",
+                "inputs": {"image": reference_filename},
+            },
+            # Native editing (Turbo: 4 steps, guidance 1.0)
+            "3": {
+                "class_type": "LLaDAImageEdit",
+                "inputs": {
+                    "pipeline": ["1", 0],
+                    "image": ["40", 0],
+                    "prompt": prompt,
+                    "width": width,
+                    "height": height,
+                    "steps": 4,
+                    "guidance_scale": 1.0,
+                    "seed": seed,
+                    "negative_prompt": "",
+                },
+            },
+            # Save image
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "filename_prefix": filename_prefix,
+                    "images": ["3", 0],
                 },
             },
         }
