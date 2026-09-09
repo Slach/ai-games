@@ -1,0 +1,26 @@
+{
+  "ornith-ai/Ornith-1.5-35B": {
+    "combined_outcome": {
+      "score": 9667.0,
+      "seconds": 52.5,
+      "n": 6
+    },
+    "npc_choice": {
+      "score": 9475.0,
+      "seconds": 102.1,
+      "n": 20
+    }
+  },
+  "mradermacher/Gemma-4-Novelist-31B": {
+    "combined_outcome": {
+      "score": 0.0,
+      "seconds": 232.2,
+      "n": 6
+    },
+    "npc_choice": {
+      "score": 9475.0,
+      "seconds": 156.5,
+      "n": 20
+    }
+  }
+}
