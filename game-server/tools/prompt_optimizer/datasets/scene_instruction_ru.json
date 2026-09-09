@@ -1,0 +1,142 @@
+[
+  {
+    "case_id": "crystal_engineer_reactor",
+    "action_text": "Резонирует с перегруженным кристаллическим ядром реактора, стабилизируя его пульсацию",
+    "species_desc": "Парящий кластер светящихся кристаллов без конечностей и лица, пульсирует светом при эмоциях",
+    "background_location": "engineering",
+    "scene_context": "Машинное отделение, реактор на грани перегрузки, аварийное освещение мигает красным",
+    "species_category": "non_humanoid",
+    "avatar_filename": "bqh3f0/avatar_281412419_00001_.png",
+    "background_filename": "bqh3f0/bg_engineering_00001_.png"
+  },
+  {
+    "case_id": "crystal_being_bridge",
+    "action_text": "Зависает над тактическим столом мостика, преломляя голограмму сектора сквозь свои грани",
+    "species_desc": "Парящий кластер светящихся кристаллов без конечностей и лица, меняет цвет свечения",
+    "background_location": "bridge",
+    "scene_context": "Капитанский мостик, вокруг голограмма звёздной системы, экипаж на постах",
+    "species_category": "non_humanoid",
+    "avatar_filename": "bqh3f0/avatar_281412419_00001_.png",
+    "background_filename": "bqh3f0/bg_bridge_00001_.png"
+  },
+  {
+    "case_id": "cyborg_medic_sickbay",
+    "action_text": "Склоняется над раненым пациентом, регулируя медкапсулу точными серво-движениями",
+    "species_desc": "Кибернетический андроид с открытыми механическими узлами и мягким внутренним свечением",
+    "background_location": "sickbay",
+    "scene_context": "Медицинский отсек после стычки, одна капсула мигает тревогой",
+    "species_category": "cybernetic",
+    "avatar_filename": "bqh3f0/avatar_379155725_00001_.png",
+    "background_filename": "bqh3f0/bg_sickbay_00001_.png"
+  },
+  {
+    "case_id": "android_science_lab",
+    "action_text": "Изучает инопланетный артефакт под сканером, данных на экране прибора множатся",
+    "species_desc": "Гуманоидный робот с гладкой синтетической кожей и техническими деталями",
+    "background_location": "lab",
+    "scene_context": "Научная лаборатория, на столе пульсирующий артефакт неизвестного происхождения",
+    "species_category": "cybernetic",
+    "avatar_filename": "bqh3f0/avatar_5175447533_00001_.png",
+    "background_filename": "bqh3f0/bg_lab_00001_.png"
+  },
+  {
+    "case_id": "android_corridor_patrol",
+    "action_text": "Патрулирует коридор корабля, сканируя переборки встроенными сенсорами",
+    "species_desc": "Гуманоидный андроид с бледной синтетической кожей, движения точные и экономные",
+    "background_location": "corridor",
+    "scene_context": "Коридор после аварии, мигает аварийное освещение, кое-где открытые панели",
+    "species_category": "cybernetic",
+    "avatar_filename": "bqh3f0/avatar_591032247_00001_.png",
+    "background_filename": "bqh3f0/bg_corridor_00001_.png"
+  },
+  {
+    "case_id": "crystal_being_planet",
+    "action_text": "Медленно дрейфует над поверхностью планеты среди кристаллических образований, исследуя их резонанс",
+    "species_desc": "Парящий кластер светящихся кристаллов без конечностей и лица, излучает мягкое свечение",
+    "background_location": "planet_surface",
+    "scene_context": "Поверхность кристаллической планеты, чужое солнце бросает длинные тени",
+    "species_category": "non_humanoid",
+    "avatar_filename": "bqh3f0/avatar_281412419_00001_.png",
+    "background_filename": "bqh3f0/bg_planet_surface_00001_.png"
+  },
+  {
+    "case_id": "bio_pod_engineering",
+    "action_text": "Раскрывает защитные створки своего корпуса, подключая биологическое сердце напрямую к энергосети",
+    "species_desc": "Негуманоидный механический стручок-капсула, внутри которого пульсирует светящееся биологическое сердце",
+    "background_location": "engineering",
+    "scene_context": "Машинное отделение, энергетический контур перегружен, инженеры отошли",
+    "species_category": "non_humanoid",
+    "avatar_filename": "7hkua6/avatar_281412419_00001_.png",
+    "background_filename": "7hkua6/bg_engineering_00001_.png"
+  },
+  {
+    "case_id": "bio_pod_sickbay",
+    "action_text": "Зависает над медицинской капсулой, биологическое сердце внутри пульсирует чаще волнами тревоги",
+    "species_desc": "Механическая капсула-стручок с живым светящимся сердцем внутри, без конечностей и лица",
+    "background_location": "sickbay",
+    "scene_context": "Медицинский отсек, в капсуле раненый товарищ, свет мониторов мигает",
+    "species_category": "non_humanoid",
+    "avatar_filename": "7hkua6/avatar_281412419_00001_.png",
+    "background_filename": "7hkua6/bg_sickbay_00001_.png"
+  },
+  {
+    "case_id": "grey_eyes_bridge",
+    "action_text": "Вскидывает голову, жёлтые глаза вспыхивают, считывая тактическую голограмму на центральном экране",
+    "species_desc": "Гуманоид с серой кожей и светящимися жёлтыми глазами, чёрный облегающий костюм",
+    "background_location": "bridge",
+    "scene_context": "Мостик, на главном экране тактическая карта с приближающимися контактами",
+    "species_category": "humanoid",
+    "avatar_filename": "7hkua6/avatar_231113575_00001_.png",
+    "background_filename": "7hkua6/bg_bridge_00001_.png"
+  },
+  {
+    "case_id": "grey_eyes_main_screen",
+    "action_text": "Стоит спиной к главному экрану, отбрасывая силуэт на сияющую звёздную карту",
+    "species_desc": "Серокожий гуманоид с жёлтыми глазами в чёрном костюме",
+    "background_location": "main_screen",
+    "scene_context": "Центральный экран мостика показывает звёздную систему, экипаж ждёт решения",
+    "species_category": "humanoid",
+    "avatar_filename": "7hkua6/avatar_231113575_00001_.png",
+    "background_filename": "7hkua6/bg_main_screen_00001_.png"
+  },
+  {
+    "case_id": "engineer_corridor_fire",
+    "action_text": "Бежит по коридору с переносным огнетушителем к очагу возгорания",
+    "species_desc": "Мужчина-инженер с растрёпанными волосами, кожаный жилет с инструментами, техно-ошейник",
+    "background_location": "corridor",
+    "scene_context": "Коридор корабля, аварийная сигнализация, дым из открытой панели",
+    "species_category": "human",
+    "avatar_filename": "7hkua6/avatar_chief_engineer_00001_.png",
+    "background_filename": "7hkua6/bg_corridor_00001_.png"
+  },
+  {
+    "case_id": "medic_sickbay_scan",
+    "action_text": "Водит медицинским сканером над пациентом, изучая показания на дисплее",
+    "species_desc": "Женщина-медик в синей форме, усталое сосредоточенное лицо",
+    "background_location": "sickbay",
+    "scene_context": "Медицинский отсек после боя, несколько капсул заняты",
+    "species_category": "human",
+    "avatar_filename": "7hkua6/action_turn1_npc_medical_officer_7hkua6_00001_.png",
+    "background_filename": "7hkua6/bg_sickbay_00001_.png"
+  },
+  {
+    "case_id": "pilot_exterior_eva",
+    "action_text": "В скафандре с магнитными захватами перемещается по внешнему корпусу корабля к повреждённой антенне",
+    "species_desc": "Женщина-пилот в облегающем полётном костюме, решительный взгляд",
+    "background_location": "exterior_ship",
+    "scene_context": "Открытый космос, корабль снаружи, звёзды и далёкая планета",
+    "species_category": "human",
+    "avatar_filename": "7hkua6/action_turn1_npc_pilot_7hkua6_00001_.png",
+    "background_filename": "7hkua6/bg_exterior_ship_00001_.png"
+  },
+  {
+    "case_id": "crystal_exterior_ship",
+    "action_text": "Дрейфует вдоль внешнего корпуса корабля, сияя отражённым светом ближней звезды",
+    "species_desc": "Парящий кластер светящихся кристаллов без конечностей и лица",
+    "background_location": "exterior_ship",
+    "scene_context": "Открытый космос у корпуса корабля, ремонтные работы снаружи",
+    "species_category": "non_humanoid",
+    "avatar_filename": "bqh3f0/avatar_281412419_00001_.png",
+    "background_filename": "bqh3f0/bg_exterior_ship_00001_.png"
+  }
+]

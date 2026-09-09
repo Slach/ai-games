@@ -1,0 +1,4 @@
+# Offline prompt-optimizer dependencies (dev tool, NOT part of the runtime image).
+# Install into the host .venv:
+#   uv pip install --python ../.venv/bin/python -r requirements.txt
+dspy>=3.3,<4

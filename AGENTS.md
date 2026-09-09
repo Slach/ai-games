@@ -261,3 +261,13 @@ Or run specific test modules:
 ```bash
 cd game-server && ../.venv/bin/python -m unittest tests.test_game_rules tests.test_mission_db
 ```
+
+`telegram-bot/` has the same layout. The `-t .` is required: without it
+unittest imports test modules as top-level files and skips
+`tests/__init__.py`, which redirects `PLAYER_STATE_DB` and root logging
+before `bot.py` (with its container-oriented module-level side effects)
+gets imported:
+
+```bash
+cd telegram-bot && ../.venv/bin/python -m unittest discover -s tests -t .
+```

@@ -3088,6 +3088,78 @@ async def cmd_gm_kick(message: types.Message):
         await message.answer(gm_msgs["kick_error"].format(error=e))
 
 
+def _build_gm_list_message(games: list, sched_by_game: dict[str, dict], gm_msgs: dict) -> str:
+    """Render the /gm_list message body (parse_mode='Markdown')."""
+    lines = [gm_msgs["games_list_header"], ""]
+    ended_lines = []
+
+    for idx, game in enumerate(games, start=1):
+        game_id = game.get("game_id", "unknown")
+        title = escape_markdown(game.get("title") or game.get("name") or gm_msgs["default_game_title"])
+        player_count = game.get("player_count", 0)
+        onboarding_count = game.get("onboarding_count", 0)
+        turn = game.get("current_turn", 0)
+        game_status = game.get("status", "active")
+        lang_flag = lang.get_language_flag(game.get("language", "ru"))
+        archetype = game.get("archetype", "")
+        arch_tag = f" 🎭 {escape_markdown(archetype)}" if archetype else ""
+
+        if game_status != "active":
+            # Ended game — collect separately, show the rules verdict if available
+            outcome_type = game.get("finale_outcome_type", "")
+            outcome_label = gm_msgs.get(
+                GAME_OVER_GM_LABEL_KEYS.get(outcome_type, ""), gm_msgs["game_ended_label"]
+            )
+            ended_lines.append(f"{idx}. `{game_id}` — {title} ({outcome_label}, 🎯 Turn: {turn}){arch_tag} {lang_flag}")
+        else:
+            started = game.get("started", False)
+            status = "started" if started else "waiting"
+            status_icon = "🚀" if started else "⏳"
+            line = (
+                gm_msgs["games_list_entry"].format(
+                    idx=idx,
+                    game_id=game_id,
+                    title=title,
+                    turn=turn,
+                    player_count=player_count,
+                    onboarding_count=onboarding_count,
+                    status_icon=status_icon,
+                    status=status,
+                )
+                + arch_tag
+                + f" {lang_flag}"
+            )
+
+            # Append per-game scheduling info
+            sched = sched_by_game.get(game_id)
+            if sched:
+                schedule_type = sched.get("schedule_type", "")
+                schedule_value = sched.get("schedule_value", "")
+                schedule_label = _format_schedule_label(schedule_type, schedule_value) if schedule_type else ""
+                mode = sched.get("mode", "")
+                if mode == "paused":
+                    if schedule_label:
+                        line += f"  — {schedule_label}, ⏸ {gm_msgs['scheduler_paused_label']}"
+                    else:
+                        line += f"  — ⏸ {gm_msgs['scheduler_paused_label']}"
+                elif sched.get("next_run_at"):
+                    time_str = _format_scheduler_time(sched["next_run_at"])
+                    if schedule_label:
+                        line += f"  — ⏭ {schedule_label}, {gm_msgs['next_turn_short'].format(time=time_str)}"
+                    else:
+                        line += f"  — ⏭ {gm_msgs['next_turn_short'].format(time=time_str)}"
+
+            lines.append(line)
+
+    # Append ended games section if any
+    if ended_lines:
+        lines.append("")
+        lines.append(f"*{gm_msgs['game_ended_label']}:*")
+        lines.extend(ended_lines)
+
+    return "\n".join(lines)
+
+
 async def cmd_gm_list(message: types.Message):
     """GM command: List available games.
 
@@ -3113,10 +3185,6 @@ async def cmd_gm_list(message: types.Message):
             await message.answer(gm_msgs["no_games"], parse_mode="Markdown")
             return
 
-        lines = [gm_msgs["games_list_header"], ""]
-        ended_lines = []
-        active_count = 0
-
         # Fetch per-game scheduler status for scheduling info
         sched_by_game: dict[str, dict] = {}
         try:
@@ -3136,72 +3204,7 @@ async def cmd_gm_list(message: types.Message):
         except Exception:
             logger.warning("Failed to fetch scheduler status for /gm_list", exc_info=True)
 
-        for idx, game in enumerate(games, start=1):
-            game_id = game.get("game_id", "unknown")
-            title = game.get("title") or game.get("name") or gm_msgs["default_game_title"]
-            player_count = game.get("player_count", 0)
-            onboarding_count = game.get("onboarding_count", 0)
-            turn = game.get("current_turn", 0)
-            game_status = game.get("status", "active")
-            lang_flag = lang.get_language_flag(game.get("language", "ru"))
-            archetype = game.get("archetype", "")
-            arch_tag = f" 🎭 {archetype}" if archetype else ""
-
-            if game_status != "active":
-                # Ended game — collect separately, show the rules verdict if available
-                outcome_type = game.get("finale_outcome_type", "")
-                outcome_label = gm_msgs.get(
-                    GAME_OVER_GM_LABEL_KEYS.get(outcome_type, ""), gm_msgs["game_ended_label"]
-                )
-                ended_lines.append(f"{idx}. `{game_id}` — {title} ({outcome_label}, 🎯 Turn: {turn}){arch_tag} {lang_flag}")
-            else:
-                active_count += 1
-                started = game.get("started", False)
-                status = "started" if started else "waiting"
-                status_icon = "🚀" if started else "⏳"
-                line = (
-                    gm_msgs["games_list_entry"].format(
-                        idx=idx,
-                        game_id=game_id,
-                        title=title,
-                        turn=turn,
-                        player_count=player_count,
-                        onboarding_count=onboarding_count,
-                        status_icon=status_icon,
-                        status=status,
-                    )
-                    + arch_tag
-                    + f" {lang_flag}"
-                )
-
-                # Append per-game scheduling info
-                sched = sched_by_game.get(game_id)
-                if sched:
-                    schedule_type = sched.get("schedule_type", "")
-                    schedule_value = sched.get("schedule_value", "")
-                    schedule_label = _format_schedule_label(schedule_type, schedule_value) if schedule_type else ""
-                    mode = sched.get("mode", "")
-                    if mode == "paused":
-                        if schedule_label:
-                            line += f"  — {schedule_label}, ⏸ {gm_msgs['scheduler_paused_label']}"
-                        else:
-                            line += f"  — ⏸ {gm_msgs['scheduler_paused_label']}"
-                    elif sched.get("next_run_at"):
-                        time_str = _format_scheduler_time(sched["next_run_at"])
-                        if schedule_label:
-                            line += f"  — ⏭ {schedule_label}, {gm_msgs['next_turn_short'].format(time=time_str)}"
-                        else:
-                            line += f"  — ⏭ {gm_msgs['next_turn_short'].format(time=time_str)}"
-
-                lines.append(line)
-
-        # Append ended games section if any
-        if ended_lines:
-            lines.append("")
-            lines.append(f"*{gm_msgs['game_ended_label']}:*")
-            lines.extend(ended_lines)
-
-        await message.answer("\n".join(lines), parse_mode="Markdown")
+        await message.answer(_build_gm_list_message(games, sched_by_game, gm_msgs), parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Failed to list games: {e}", exc_info=True)
         await message.answer(gm_msgs["list_games_error"].format(error=e))
@@ -3633,8 +3636,8 @@ async def cmd_gm_status(message: types.Message):
             reason = reason_map.get(game_status, game_status)
             header = gm_msgs["status_ended_header"].format(
                 game_id=game_id,
-                mission_name=result.get("mission_name", "") or "—",
-                archetype=result.get("archetype", "") or "—",
+                mission_name=escape_markdown(result.get("mission_name", "") or "—"),
+                archetype=escape_markdown(result.get("archetype", "") or "—"),
                 turn=result.get("current_turn", result.get("turn", 1)),
                 reason=reason,
                 ship=ship,
@@ -3647,8 +3650,8 @@ async def cmd_gm_status(message: types.Message):
             status_label = game_status
             header = gm_msgs["status_header"].format(
                 game_id=game_id,
-                mission_name=result.get("mission_name", "") or "—",
-                archetype=result.get("archetype", "") or "—",
+                mission_name=escape_markdown(result.get("mission_name", "") or "—"),
+                archetype=escape_markdown(result.get("archetype", "") or "—"),
                 turn=result.get("current_turn", result.get("turn", 1)),
                 status=status_label,
                 ship=ship,

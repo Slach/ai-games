@@ -1,0 +1,131 @@
+{
+  "z_image_turbo": {
+    "label": "Z-Image Turbo (8-step distilled)",
+    "avg_score": 8.45,
+    "avg_seconds": 23.8,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.0,
+        "seconds": 24.1,
+        "feedback": "The image is a high-quality, cinematic realization of the prompt with excellent lighting and detail, though the central seating arrangement is slightly ambiguou"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 7.5,
+        "seconds": 24.1,
+        "feedback": "The image successfully captures the alien landscape, glowing crystals, and violet atmosphere, but it fails to include the requested \"twin moons,\" showing only a"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 22.1,
+        "feedback": "Excellent prompt adherence and cinematic quality, with only minor, subtle text artifacts on the insignia."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.0,
+        "seconds": 24.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the prompt's requirements, with a beautiful, luminous crystal cluster that feels alive and "
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 24.1,
+        "feedback": "The image is a stunning piece of cinematic sci-fi concept art that perfectly captures the epic scale and dramatic rim lighting requested, with the only minor fl"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 6.5,
+        "seconds": 24.1,
+        "feedback": "The image captures the epic scale and doom of a dying red star, but the planetary rings are rendered as a blurry, indistinct halo rather than a sharp, cutting s"
+      }
+    ]
+  },
+  "flux2_klein_4b_gguf_q4": {
+    "label": "FLUX.2 [klein] 4B distilled GGUF Q4_K_S",
+    "avg_score": 9.28,
+    "avg_seconds": 14.7,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.5,
+        "seconds": 18.1,
+        "feedback": "The image is a flawless, high-fidelity cinematic render that perfectly captures the requested empty bridge, cool blue lighting, and detailed tactical consoles w"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.5,
+        "seconds": 14.0,
+        "feedback": "The image is a stunning, high-fidelity concept art piece that perfectly captures the cinematic sci-fi atmosphere, with the glowing crystals and twin moons provi"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 14.1,
+        "feedback": "Excellent cinematic execution with realistic anatomy and lighting, though the insignia design leans slightly more medieval than sci-fi."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.5,
+        "seconds": 14.0,
+        "feedback": "Excellent cinematic concept art that perfectly captures the prompt's requirements with high-quality rendering and atmospheric lighting."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 14.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the epic scale and dramatic rim lighting requested, with the only minor flaw being the ship"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 8.5,
+        "seconds": 14.0,
+        "feedback": "The image successfully captures the epic scale and cinematic mood of a space opera, though the planetary rings are rendered as a faint, subtle halo rather than "
+      }
+    ]
+  },
+  "llada_image_turbo": {
+    "label": "LLaDA-Image-Turbo (INT8 transformer + Q4_K_M GGUF encoder)",
+    "avg_score": 5.08,
+    "avg_seconds": 21.8,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 8.5,
+        "seconds": 58.2,
+        "feedback": "The image is a high-quality, cinematic sci-fi scene that perfectly matches the prompt's requirements for an empty bridge, cool blue lighting, and tactical conso"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 4.5,
+        "seconds": 16.1,
+        "feedback": "The image fails the explicit \"no people\" constraint by including a human figure in the foreground."
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 7.5,
+        "seconds": 14.0,
+        "feedback": "The background features a world map and starship instead of the requested simple starfield."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 2.0,
+        "seconds": 14.2,
+        "feedback": "The image completely ignores the \"no limbs, no face\" constraint by depicting a humanoid robot instead of an abstract crystal cluster."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 3.5,
+        "seconds": 14.1,
+        "feedback": "The surreal, floating world map overlay is a severe hallucination that contradicts the \"deep space\" setting, and the ship is bulky rather than sleek."
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 4.5,
+        "seconds": 14.1,
+        "feedback": "The image is cluttered with nonsensical elements, specifically a giant 2D map of Earth floating in space and an unrequested crowd of people in the foreground, w"
+      }
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "use_case": "scene_instruction",
+  "language": "ru",
+  "instructions": {
+    "self": "Ты — эксперт по написанию инструкций для AI image-editing модели\nQwen-Image-Edit. Модель получает два изображения: Picture 1 — персонаж\n(аватар), Picture 2 — фон сцены. Напиши инструкцию на АНГЛИЙСКОМ, как\nразместить персонажа из Picture 1 в окружение из Picture 2: поза,\nдействие, эмоция, освещение, композиция. Описание персонажа и его\nидентичность НЕ повторяй — модель сохранит их сама. Фокус на действии\nи постановке."
+  },
+  "demos": [
+    {
+      "predictor": "self",
+      "augmented": true,
+      "action_text": "Резонирует с перегруженным кристаллическим ядром реактора, стабилизируя его пульсацию",
+      "species_desc": "Парящий кластер светящихся кристаллов без конечностей и лица, пульсирует светом при эмоциях",
+      "background_location": "engineering",
+      "scene_context": "Машинное отделение, реактор на грани перегрузки, аварийное освещение мигает красным",
+      "species_category": "non_humanoid",
+      "instruction": "Place the character from Picture 1 floating at the center of the engine room, directly interfacing with the overloaded reactor core. The being is a limbless, faceless cluster of glowing crystals that hovers just before the reactor, its crystalline body pulsing with intense light that rhythmically syncs with the reactor's unstable oscillations as it stabilizes the surging energy. Position it slightly elevated, suspended mid-air, with light beams and energy ripples radiating outward from where its glow meets the reactor. The emergency lighting casts a flashing red glow across the scene, contrasting with the bright crystalline luminescence of the entity. Dramatic high-contrast lighting, cinematic composition, the pulsing light reflecting off the surrounding machinery and metallic walls.",
+      "scene_background_location": "engineering"
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "action_text": "Склоняется над раненым пациентом, регулируя медкапсулу точными серво-движениями",
+      "species_desc": "Кибернетический андроид с открытыми механическими узлами и мягким внутренним свечением",
+      "background_location": "sickbay",
+      "scene_context": "Медицинский отсек после стычки, одна капсула мигает тревогой",
+      "species_category": "cybernetic",
+      "instruction": "Place the character from Picture 1 leaning over a wounded patient on a sickbay bio-bed, torso bent forward in a focused working posture with arms extended toward a medical capsule device being adjusted. Pose the android with precise, deliberate servo-movement gestures in the hands and forearms, conveying calm technical concentration. Express a composed, intent facial expression reflecting medical diligence. Let the soft internal glow emanating from the exposed mechanical components illuminate the immediate area, casting faint luminous reflections on nearby surfaces. Match the sickbay lighting — cool clinical tones with a pulsing warning glow from an active capsule in the background. Compose the scene so the android dominates the foreground, angled over the patient, with medical consoles, equipment, and a blinking capsule visible behind, establishing the aftermath of a recent skirmish in the medbay environment.",
+      "scene_background_location": "sickbay"
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "action_text": "Изучает инопланетный артефакт под сканером, данных на экране прибора множатся",
+      "species_desc": "Гуманоидный робот с гладкой синтетической кожей и техническими деталями",
+      "background_location": "lab",
+      "scene_context": "Научная лаборатория, на столе пульсирующий артефакт неизвестного происхождения",
+      "species_category": "cybernetic",
+      "instruction": "Place the character from Picture 1 standing at the laboratory workbench, leaning slightly forward with focused attention while operating a handheld scanner held over the pulsating alien artifact on the table. Position the scanner in one hand, angling it toward the glowing artifact, with the other hand possibly adjusting settings or steadying the device. Display an expression of concentrated analysis and quiet curiosity, eyes fixed on the artifact and its readouts. Adjust the device's screen to show multiple layers of scanning data, graphs, and holographic readouts reflecting faint light onto the character's face and synthetic skin. Illuminate the scene with the artifact's ambient pulsing glow mixed with cool laboratory overhead lighting, casting soft dynamic highlights on the cybernetic features. Compose the character centered or slightly off-center in a three-quarter stance, framed by lab equipment and monitors in the background to establish the scientific setting.",
+      "scene_background_location": "lab"
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "action_text": "Медленно дрейфует над поверхностью планеты среди кристаллических образований, исследуя их резонанс",
+      "species_desc": "Парящий кластер светящихся кристаллов без конечностей и лица, излучает мягкое свечение",
+      "background_location": "planet_surface",
+      "scene_context": "Поверхность кристаллической планеты, чужое солнце бросает длинные тени",
+      "species_category": "non_humanoid",
+      "instruction": "Place the character from Picture 1 slowly drifting just above the crystalline planet surface, suspended mid-air among tall jagged crystal formations without any limbs or facial features. The glowing crystal cluster emits a soft radiant glow that illuminates the surrounding spires from within. Position it slightly off-center, hovering at a gentle angle as if carefully studying the resonance of the crystals nearby. Cast long dramatic shadows across the terrain from the alien sun's low light, creating a serene and mysterious atmosphere. Use cool ambient tones balanced by the character's warm internal luminance, with soft light gradients blending between the glowing crystals and the rugged extraterrestrial ground.",
+      "scene_background_location": "planet_surface"
+    }
+  ],
+  "meta": {
+    "optimizer": "bootstrap",
+    "baseline_score": 75.0,
+    "compiled_score": 80.0,
+    "n_train": 8,
+    "n_dev": 6,
+    "seed": 42
+  }
+}

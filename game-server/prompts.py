@@ -437,6 +437,182 @@ _COMBINED_OUTCOME_SYSTEM_EN = (
     "time runs out, the environment grows more hostile."
 )
 
+
+# Few-shot demo block compiled offline by tools/prompt_optimizer against the
+# code metric (entity_id addressing, [fatal]/[injury] tag obligations, bare
+# character_name, delta sanity). Appended to the user prompt when non-empty.
+COMBINED_OUTCOME_DEMOS = {
+    LANGUAGE_RU: "",
+    LANGUAGE_EN: "",
+}
+
+# Compiled by tools/prompt_optimizer against the code metric (entity_id
+# addressing, [fatal]/[injury] tag obligations, bare character_name, delta
+# sanity): baseline 88.3 -> compiled 100.0. Type glitches and typos of the
+# raw model output were fixed during review; see
+# tools/prompt_optimizer/compiled/combined_outcome_ru.json for the original.
+COMBINED_OUTCOME_DEMOS[LANGUAGE_RU] = """
+ПРИМЕРЫ ДЛЯ КАЛИБРОВКИ (ходы вымышлены; соблюдай КОНТРАКТ: entity_id строго из ростера, метки [fatal]/[injury] — обязательства, character_name без роли и id, дельты вместо абсолютов; буквально не копируй):
+
+--- Пример 1 ---
+Локация хода: Разгрузочный шлюз, грузовой отсек C
+Конфликт: Метеоритный поток пробил обшивку; отсек теряет атмосферу
+Нарратив: Сирены рвут тишину. Грузовой отсек C разгерметизирован, аварийные переборки дрожат от напора вакуума. Экипаж бросился по постам: кто-то тянет ремкомплект, кто-то считает головы.
+Предыдущие события: Предыдущий ход: экипаж отбился от пиратского рейдера, щиты просели.
+Статус миссии:
+  Stage 1: Загерметизировать отсеки - Вернуть целостность корпуса
+    Progress: 2/4
+    Status: CURRENT
+Статус корабля: Hull integrity: 62/100, Shields: 40/100, Systems offline: warp drive
+Решения:
+--- Decision 1 (Weight: HIGH (PLAYER)) ---
+Character: Марат Ким (Science Officer) [p202]
+Chose: Запечатать пробоину полевым композитом со стороны коридора (patch_panel)
+HIDDEN CONSEQUENCE: [progress] Заплата держится, отсек стабилизирован
+
+--- Decision 2 (Weight: NORMAL (NPC)) ---
+Character: Гжорг (Chief Engineer) [nengineer]
+Chose: Лично заварить пробоину изнутри отсека (weld_inside)
+HIDDEN CONSEQUENCE: [fatal] Второй прорыв рвёт шов, инженера выбрасывает в вакуум
+
+--- Decision 3 (Weight: NORMAL (NPC)) ---
+Character: Т'Лен (Pilot) [npilot]
+Chose: Резким маневром сместить корабль и сбить давление потока (hard_roll)
+HIDDEN CONSEQUENCE: [injury] Маневр удаётся, но пилота бьёт о переборку — перелом
+
+--- Decision 4 (Weight: HIGH (PLAYER)) ---
+Character: Ольга Ветрова (Captain) [p101]
+Chose: Держать мостик и координировать по связи (hold_bridge)
+HIDDEN CONSEQUENCE: [delay] Координация помогает, но время упущено
+Ростер экипажа:
+  - Ольга Ветрова (Captain) [p101] — ALIVE
+  - Марат Ким (Science Officer) [p202] — ALIVE (WOUNDED: moderate)
+  - Гжорг (Chief Engineer) [nengineer] — ALIVE
+  - Т'Лен (Pilot) [npilot] — ALIVE
+  - Зиара Вентрис (Medical Officer) [nmedic] — ALIVE
+  - К'рртх (Security Chief) [nsecurity] — DEAD
+Ответ: {
+  "outcome_narrative": "Сирены всё ещё выют, но хаос начинает укладываться в картину. Марат Ким хладнокровно наносит композит на пробоину — наука не подвела, заплата держится, и отсек C перестаёт выдыхать воздух в вакуум. Однако Гжорг решил справиться сам, изнутри, и это стоило ему жизни: второй прорыв рвёт заваренный шов, и инженера с глухим стуком втягивает в кромешную тьму космоса — его крик поглощает беззвучная пустота. Т'Лен берёт резкий маневр, пытаясь стряхнуть поток обломков, но при удачном результате маневра сам не успевает сориентироваться — о переборку бьёт резкий рывок, раздаётся треск перелома, и пилот сжимается от боли. Ольга Ветрова удерживает мостик и координирует по связи, видит всю картину целиком, но идеального момента не бывает: время, ушедшее на синхронизацию усилий, безвозвратно упущено, и пока экипаж собирался с силами, обшивка приняла ещё один удар.",
+  "ship_status_change": "Корпус ослаблен повторным прорывом и потерей времени на координацию, щиты продолжают истощаться на поддержание барьера против потока.",
+  "crew_morale_change": "Дух экипажа заметно упал: гибель инженера и ранение пилота в один ход давят на всех.",
+  "next_turn_hook": "Гжорг исчез — только пустая перчатка, медленно дрейфующая в проёме пробоины. Кто теперь возьмёт на себя восстановление герметичности, пока Марат ещё не закончил с заплатой?",
+  "mission_progress": [{"stage": 1, "points": 1}],
+  "dead_crew_members": [{"entity_id": "nengineer", "cause": "Второй прорыв рвёт заваренный шов и выбрасывает инженера в вакуум"}],
+  "ship_hull_change": -8,
+  "ship_shields_change": -5,
+  "systems_taken_offline": [],
+  "systems_restored": ["warp drive"],
+  "crew_injured": [{"entity_id": "npilot", "severity": "moderate"}],
+  "crew_healed": [],
+  "personal_outcomes": [
+    {"character_name": "Ольга Ветрова", "role": "Captain", "outcome_text": "Капитан удержал мостик и держал экипаж на связи, но осознание, что именно упущенное время стоило жизни Гжорга, ляжет тяжелым грузом на совесть."},
+    {"character_name": "Марат Ким", "role": "Science Officer", "outcome_text": "Наука оказалась самым надёжным инструментом: полевой композит держит вакуум, и его заплата — последнее светлое достижение в этом ходу."},
+    {"character_name": "Гжорг", "role": "Chief Engineer", "outcome_text": "Гордый мастер, решивший положиться лишь на свою руку, оплачивает самоуверенность жизнью: второй прорыв втянул его в себя."},
+    {"character_name": "Т'Лен", "role": "Pilot", "outcome_text": "Маневр удался — поток сдвинулся, но собственное тело не успело за кораблём. Перелом — расплата за смелость."}
+  ]
+}
+
+--- Пример 2 ---
+Локация хода: Машинное отделение, палуба 4
+Конфликт: В контроллере жизнеобеспечения чужеродный код перенаправляет кислород
+Нарратив: Воздух на грузовых палубах густеет, датчики мигают жёлтым. Инженерная пара перешёптывается у распределителя: кто-то явно не хочет, чтобы систему починили сегодня.
+Предыдущие события: Предыдущий ход: найден подозрительный узел, изоляция отложена.
+Статус миссии:
+  Stage 1: Вычистить вирус - Вернуть контроль над жизнеобеспечением (COMPLETED)
+  Stage 2: Найти источник - Проследить, кто внёс код (CURRENT, Progress: 1/4)
+Статус корабля: Hull integrity: 88/100, Shields: 70/100, Systems offline: life support
+Решения:
+--- Decision 1 (Weight: NORMAL (NPC)) ---
+Character: Дмитрий Ланской (Chief Engineer) [nengineer2]
+Chose: Проследить источник заражения по журналам доступа (trace_logs)
+HIDDEN CONSEQUENCE: [progress] След ведёт к резервному терминалу связи
+
+--- Decision 2 (Weight: HIGH (PLAYER)) ---
+Character: Яна Меркулова (Captain) [p301]
+Chose: Развести кислород вручную по вахтенным постам (manual_air)
+HIDDEN CONSEQUENCE: [progress] Экипаж обеспечивает себя воздухом без автоматики
+
+--- Decision 3 (Weight: NORMAL (NPC)) ---
+Character: Ийоки Три-Семь (Communications Officer) [ncomms]
+Chose: Задержать отчёт о диагностике до утра (delay_report)
+HIDDEN CONSEQUENCE: [delay] Диагностика откладывается, угроза растёт
+Ростер экипажа:
+  - Яна Меркулова (Captain) [p301] — ALIVE
+  - Сса'хет (Navigator) [p302] — ALIVE
+  - Ийоки Три-Семь (Communications Officer) [ncomms] — ALIVE
+  - Дмитрий Ланской (Chief Engineer) [nengineer2] — ALIVE
+Ответ: {
+  "outcome_narrative": "Ручное разведение кислорода принято капитаном, и уже к концу вахты палубы начали дышать ровно — датчики перешли из жёлтого в зелёный, экипаж получил воздух без оглядки на больную автоматику. Дмитрий Ланской погрузился в журналы доступа, и чужеродный код, казавшийся бесследным, оставил чёткий след — инженер вывел его на резервный терминал связи, где, судя по всему, и скрывался источник заражения. Однако Ийоки Три-Семь, решив отложить диагностический отчёт до утра, намеренно затянул время: пока команда занималась ручным восстановлением, вирус в контроллере жизнеобеспечения тихо распространялся глубже, и угроза за ход заметно выросла. Кто-то из тех, кто отвечал за систему, явно не торопился её спасать — и сегодня, при всём старании экипажа, окончательно проблему не решили.",
+  "ship_status_change": "Ручное разведение кислорода позволило экипажу дышать без автоматики, но сам контроллер жизнеобеспечения остаётся в офлайне — система не восстановлена. Угроза выросла из-за задержки диагностики.",
+  "crew_morale_change": "Небольшой подъём: экипаж обеспечен воздухом и чувствует прогресс, но нарастающая угроза оставляет тревожный фон.",
+  "next_turn_hook": "След Ланского уводит на резервный терминал связи — следующий ход должен раскрыть, кто и зачем внёс чужеродный код в жизненно важную систему.",
+  "mission_progress": [{"stage": 2, "points": 1}],
+  "dead_crew_members": [],
+  "ship_hull_change": 0,
+  "ship_shields_change": 0,
+  "systems_taken_offline": [],
+  "systems_restored": [],
+  "crew_injured": [],
+  "crew_healed": [],
+  "personal_outcomes": [
+    {"character_name": "Яна Меркулова", "role": "Captain", "outcome_text": "Приняла верное решение развести кислород вручную — вахта дышит благодаря её холодной расчётливости. Авторитет капитана укрепился, но за спокойным воздухом чувствуется нарастающая тревога."},
+    {"character_name": "Дмитрий Ланской", "role": "Chief Engineer", "outcome_text": "Журналы не врут: след привёл его к резервному терминалу связи. Инженер сделал шаг к разгадке, но источник заражения ещё не пойман."},
+    {"character_name": "Ийоки Три-Семь", "role": "Communications Officer", "outcome_text": "Решение отложить отчёт до утра обернулось скрытой задержкой: диагностика упущена, угроза выросла. Спокойствие офицера связи стоило команде драгоценного времени."}
+  ]
+}
+
+--- Пример 3 ---
+Локация хода: Поверхность кристаллической планеты, разлом
+Конфликт: Грунтовая волна идёт по разлому к лагерю
+Нарратив: Кристаллы поют и ломаются одновременно. Разлом ширится, осыпь уже щёлкает по ботинкам. До челнока триста метров по сыпучему склону.
+Предыдущие события: Предыдущий ход: высадка успешна, найден резонирующий кластер.
+Статус миссии:
+  Stage 1: Снять резонанс - Забрать кластер с планеты (COMPLETED)
+  Stage 2: Вернуться к челноку - Дойти до точки эвакуации (CURRENT, Progress: 1/3)
+Статус корабля: Hull integrity: 90/100, Shields: 95/100, Systems offline: none
+Решения:
+--- Decision 1 (Weight: HIGH (PLAYER)) ---
+Character: Марат Ким (Science Officer) [p202]
+Chose: Вырвать кластер из стены разлома перед самой волной (grab_cluster)
+HIDDEN CONSEQUENCE: [fatal] Осыпь накрывает научника вместе с кластером
+
+--- Decision 2 (Weight: NORMAL (NPC)) ---
+Character: Зиара Вентрис (Medical Officer) [nmedic]
+Chose: Волочь раненого Марата к челноку вопреки его приказу (drag_wounded)
+HIDDEN CONSEQUENCE: [injury] Оба выбираются, но медик ломает ключицу об осыпь
+
+--- Decision 3 (Weight: HIGH (PLAYER)) ---
+Character: Ольга Ветрова (Captain) [p101]
+Chose: Прогревать двигатели челнока к погрузке (prep_launch)
+HIDDEN CONSEQUENCE: [progress] Челнок готов, эвакуация возможна
+Ростер экипажа:
+  - Ольга Ветрова (Captain) [p101] — ALIVE
+  - Марат Ким (Science Officer) [p202] — ALIVE (WOUNDED: moderate)
+  - Гжорг (Chief Engineer) [nengineer] — ALIVE
+  - Т'Лен (Pilot) [npilot] — ALIVE
+  - Зиара Вентрис (Medical Officer) [nmedic] — ALIVE
+  - К'рртх (Security Chief) [nsecurity] — DEAD
+Ответ: {
+  "outcome_narrative": "Кристаллический разлом выдал грунтовую волну — пластом лёг рёв разрывающейся породы. Марат Ким увидел момент: кластер ещё резонирует в стене, челнок в трёхстах метрах, но отступать некуда. Он рванул не к челноку, а к стене, вырывая образец руками — образец дороже страховки, и это он знал. Осыпь накрыла его раньше, чем он сделал последний вдох; кристаллы сомкнулись над научником вместе с уловом, и кластер остался с ним. Зиара Вентрис не стала спорить с безрассудным приказом — она схватила его за комбинезон и потащила через осыпь, ломая ключицу о камни, но вытащила раненого живым. Ольга Ветрова тем временем прогревала двигатели челнока, держа палец над кнопкой погрузки — и когда волна догнала склон, челнок был готов уйти в любую секунду.",
+  "ship_status_change": "Челнок с экипажем и образцом поднялся с планеты; корабль ожидал стыковки без новых повреждений.",
+  "crew_morale_change": "Дух экипажа надломлен: гибель научника тяжело ударила по всем, спасённый образец не утешает.",
+  "next_turn_hook": "Кластер доставлен, но за него уплачена цена — Марат Ким мёртв. Теперь Ольге Ветровой предстоит ответить перед командой за то, что научник отдал жизнь ради образца, и за то, что Зиара сломала ключицу, чтобы его спасти.",
+  "mission_progress": [{"stage": 2, "points": 2}],
+  "dead_crew_members": [{"entity_id": "p202", "cause": "Осыпь накрывает научника вместе с кластером"}],
+  "ship_hull_change": -5,
+  "ship_shields_change": -5,
+  "systems_taken_offline": [],
+  "systems_restored": [],
+  "crew_injured": [{"entity_id": "nmedic", "severity": "moderate"}],
+  "crew_healed": [],
+  "personal_outcomes": [
+    {"character_name": "Ольга Ветрова", "role": "Captain", "outcome_text": "Эвакуация прошла успешно — челнок был готов уйти в любую секунду, и это спасло всех, кто остался на склоне. Но теперь капитан несёт вину за то, что научник отдал жизнь за образцы, а не за команду."},
+    {"character_name": "Марат Ким", "role": "Science Officer", "outcome_text": "Успел вырвать кластер из стены — образец в челноке. Но осыпь накрыла его вместе с уловом; научник погиб, не добежав до челнока."},
+    {"character_name": "Зиара Вентрис", "role": "Medical Officer", "outcome_text": "Выбрала встать между безрассудным приказом и своим долгом — вытащила раненого Марата живым, даже вопреки его словам. За это сломала ключицу об осыпь, но не раскаялась."}
+  ]
+}
+"""
+
 _COMBINED_OUTCOME_USER_EN = (
     "Global circumstances:\n"
     "Setting: {setting}\n"
@@ -544,6 +720,9 @@ def build_combined_outcome_prompts(
             decisions_text=decisions_text,
             roster_text=roster_text,
         )
+    demos = COMBINED_OUTCOME_DEMOS[LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN]
+    if demos:
+        user += "\n\n" + demos
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["combined_outcome"], k=vs_k)
     return system, user
@@ -1168,6 +1347,17 @@ _NPC_LOYALTY_RULES_EN = {
 }
 
 
+# Few-shot demo blocks compiled offline by tools/prompt_optimizer
+# (run_optimize.py + export_demos.py). Empty by default: the builder appends
+# the block verbatim to the user prompt only after a compiled block is pasted
+# here, so runtime behavior is unchanged until then.
+NPC_DECISION_DEMOS = {
+    LANGUAGE_RU: "",
+    LANGUAGE_EN: "",
+}
+
+
+
 def build_npc_decision_prompts(
     language: str,
     npc_name: str,
@@ -1197,6 +1387,9 @@ def build_npc_decision_prompts(
             "You see ONLY action descriptions with no consequences. Make a choice based on your personality, role, and loyalty."
         )
         user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character, role, and loyalty level. You don't know the consequences — act on instinct."
+    demos = NPC_DECISION_DEMOS[LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN]
+    if demos:
+        user += "\n\n" + demos
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["npc_decision"], k=vs_k)
     return system, user
@@ -1753,6 +1946,53 @@ def build_background_prompts_system(language: str) -> str:
 
 # ── Scene instruction prompt (Qwen-Image-Edit) ─────────────────────
 
+# Few-shot demo block compiled offline by tools/prompt_optimizer. The output
+# instruction is always English; the block is appended to the user prompt of
+# the matching language when non-empty (see NPC_DECISION_DEMOS above).
+SCENE_INSTRUCTION_DEMOS = {
+    LANGUAGE_RU: "",
+    LANGUAGE_EN: "",
+}
+
+# Compiled by tools/prompt_optimizer (BootstrapFewShot + VL judge over ComfyUI
+# generations, trainset 4 / devset 2); see
+# tools/prompt_optimizer/compiled/scene_instruction_ru.json.
+SCENE_INSTRUCTION_DEMOS[LANGUAGE_RU] = """
+ПРИМЕРЫ ДЛЯ КАЛИБРОВКИ (инструкция всегда на английском и начинается с 'Place the character from Picture 1'; буквально не копируй):
+
+--- Пример 1 ---
+Действие: Резонирует с перегруженным кристаллическим ядром реактора, стабилизируя его пульсацию
+Описание вида: Парящий кластер светящихся кристаллов без конечностей и лица, пульсирует светом при эмоциях
+Локация: engineering
+Обстановка: Машинное отделение, реактор на грани перегрузки, аварийное освещение мигает красным
+Категория вида: non_humanoid
+Ответ: {"instruction": "Place the character from Picture 1 floating at the center of the reactor chamber, positioned directly before the glowing reactor core. Suspend the crystalline cluster in mid-air, gently rotating as it resonates with the core, its luminous shards pulsing in rhythm with the reactor's unstable energy waves. Emit radiant light rays and energy ripples radiating outward from the character, visually harmonizing with the reactor's pulsation. Illuminate the crystal cluster with a bright inner glow that contrasts against the flashing red emergency lighting, casting an ethereal luminescence across the surrounding machinery. Compose the scene with the reactor core dominating the background and the floating crystalline figure in the foreground, using dramatic low-key lighting with red emergency strobes and cool cyan accents to emphasize the critical overload atmosphere.", "background_location": "engineering"}
+
+--- Пример 2 ---
+Действие: Зависает над тактическим столом мостика, преломляя голограмму сектора сквозь свои грани
+Описание вида: Парящий кластер светящихся кристаллов без конечностей и лица, меняет цвет свечения
+Локация: bridge
+Обстановка: Капитанский мостик, вокруг голограмма звёздной системы, экипаж на постах
+Категория вида: non_humanoid
+Ответ: {"instruction": "Place the character from Picture 1 hovering just above the tactical table on the ship's bridge, its floating crystalline cluster suspended mid-air without any limbs or facial features. Orient the crystals so they refract and project the glowing holographic sector display upward through their faceted surfaces, scattering prismatic light. Let the creature's luminous glow shift and pulse with chromatic color changes across its facets, casting animated colored reflections onto the surrounding console panels. Position it centered over the tactical table, slightly elevated above the holographic starmap projection, with the bridge crew visible at their stations in the background. Illuminate the scene with the cool blue-green glow of the star system hologram combined with the creature's own shifting multicolored light, creating dynamic contrasting highlights across the crystals. Compose the shot to emphasize the floating crystalline form dominating the tactical display, with soft atmospheric glow and light scatter effects blending the creature into the holographic projection.", "background_location": "bridge"}
+
+--- Пример 3 ---
+Действие: Склоняется над раненым пациентом, регулируя медкапсулу точными серво-движениями
+Описание вида: Кибернетический андроид с открытыми механическими узлами и мягким внутренним свечением
+Локация: sickbay
+Обстановка: Медицинский отсек после стычки, одна капсула мигает тревогой
+Категория вида: cybernetic
+Ответ: {"instruction": "Place the character from Picture 1 leaning over a wounded patient lying on a med-bed, torso bent forward and slightly downward in a focused working posture. Position the android with one or both arms extended, hands precisely adjusting a glowing medical capsule unit, conveying smooth deliberate servo-movements. The cybernetic body should reveal exposed mechanical joints and components with a soft inner glow illuminating the immediate area. Illuminate the scene with low clinical lighting, cool blue and amber emergency tones, the capsule pulsing a warm warning light that casts subtle flickering highlights across the android's metallic surfaces. Compose the character at a three-quarter angle, centered and dominant in the frame, with medical consoles, blinking panels, and equipment softly blurred in the sickbay background. Maintain a tense, concentrated atmosphere befitting a medical emergency after a battle, with a shallow depth of field isolating the android and the patient from the dimmed surroundings.", "background_location": "sickbay"}
+
+--- Пример 4 ---
+Действие: Изучает инопланетный артефакт под сканером, данных на экране прибора множатся
+Описание вида: Гуманоидный робот с гладкой синтетической кожей и техническими деталями
+Локация: lab
+Обстановка: Научная лаборатория, на столе пульсирующий артефакт неизвестного происхождения
+Категория вида: cybernetic
+Ответ: {"instruction": "Place the character from Picture 1 standing at a scientific workbench in the laboratory, leaning slightly forward with focused attention while operating a handheld scanner aimed at a pulsating unknown alien artifact resting on the table. Position the character so the scanner's beam or light reaches toward the artifact, and arrange glowing data readouts to multiply and scatter across the device's screen in front of them. Convey an expression of intense concentration and scientific curiosity, with the character's posture suggesting active analysis and discovery. Illuminate the scene with the artifact's pulsing glow combined with the device's screen light casting dynamic highlights on the character's synthetic skin and mechanical details, creating strong contrast against the laboratory surroundings. Compose the shot to emphasize the interaction between the character, the scanner, and the artifact, with the lab equipment and technology visible in the background to establish the scientific setting.", "background_location": "lab"}
+"""
+
 
 def build_scene_instruction_system(language: str) -> str:
     """System prompt for the Qwen-Image-Edit scene-instruction LLM call.
@@ -1849,7 +2089,7 @@ def build_scene_instruction_user(
             "orientation (above / between / next to objects) rather than \"standing in the center\".\n"
         )
     if language == LANGUAGE_RU:
-        return (
+        user = (
             f"Действие: {action_text}.{bg_note}\n"
             f"Описание вида: {species_desc}{ctx_block}\n"
             f"{anatomy_guard_ru}"
@@ -1870,8 +2110,9 @@ def build_scene_instruction_user(
             "начиная с 'Place the character from Picture 1...'. "
             "Опиши позу, действие, освещение. Без описания внешности персонажа."
         )
-    return (
-        f"Action: {action_text}.{bg_note}\n"
+    else:
+        user = (
+            f"Action: {action_text}.{bg_note}\n"
         f"Species: {species_desc}{ctx_block}\n"
         f"{anatomy_guard_en}"
         "Important about location: pick the location from the COMBINATION of scene_context "
@@ -1891,6 +2132,10 @@ def build_scene_instruction_user(
         "starting with 'Place the character from Picture 1...'. "
         "Describe pose, action, lighting. Do not describe the character's appearance."
     )
+    demos = SCENE_INSTRUCTION_DEMOS[LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN]
+    if demos:
+        user += "\n\n" + demos
+    return user
 
 
 def build_death_notice_prompts(
