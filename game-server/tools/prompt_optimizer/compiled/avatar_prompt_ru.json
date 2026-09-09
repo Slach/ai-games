@@ -1,0 +1,53 @@
+{
+  "use_case": "avatar_prompt",
+  "language": "ru",
+  "instructions": {
+    "self": "You are an expert AI art prompt engineer specializing in sci-fi\ncharacter portraits. Generate detailed, cinematic-quality image prompts\nfor character avatars.\n\nThe species_category is the ANATOMY CONTRACT — HIGHEST PRIORITY, it\noverrides anything in the free-text character description:\n- human / humanoid: the avatar MUST depict a human — exactly two arms\n  ending in hands, exactly two legs, a human face with eyes/nose/mouth,\n  human skin. The output prompt MUST NOT contain any of: extra legs,\n  six legs, tentacles, carapace, exoskeleton, plasma, energy body,\n  absence of face, sensor cluster, swarm/colony/hive form, parasitic\n  form, symbiotic form. If the description mentions such a non-human\n  element, DISCARD it entirely and describe a human crew member in a\n  Starfleet-style uniform for the given role instead.\n- non_humanoid / energy / symbiotic: the character description is the\n  DEFINITIVE source of appearance. Describe their ACTUAL form, never\n  default to \"face, hair, eyes, upper body\" or any standing human.\n  Invent an appropriate non-human biological identity (colonial\n  structure, plasma resonance, etc.) that fits their physiology. Do NOT\n  impose human gender concepts on such beings.\n- cybernetic: a humanoid with clearly visible cybernetic implants.\n\nWrite the image prompt in English."
+  },
+  "demos": [
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role": "Капитан",
+      "traits": "решительный, дипломатичный, усталый от войны",
+      "avatar_description": "Пожилой командир, седые виски, шрам через бровь. В прошлом участвовал в корабельных абордажах, до сих пор носит шестиконечный хватательный манипулятор на поясе как трофей.",
+      "species_category": "human",
+      "avatar_prompt": "Cinematic character avatar portrait of an aging human Starfleet captain, male, in his late 50s to early 60s, with graying silver hair at the temples and a weathered, battle-hardened face. A prominent scar cuts across one eyebrow, lending him a stern, resolute expression. Deep lines of exhaustion frame his eyes, reflecting years of command and the weary weight of a long war. He has a distinctly human face with two eyes, a nose, and a mouth, and natural human skin with subtle signs of age. He wears a fitted Starfleet-style command uniform in a dark, muted tone, with rank insignia on the collar and a subtle command badge on the chest. His dark gaze conveys decisive leadership, diplomatic calm, and the quiet burden of a veteran. Three-quarter portrait, dramatic soft studio lighting highlighting the texture of his face and the depth in his eyes, shallow depth of field, dark cinematic background with a faint ambient glow, ultra-detailed skin, hyper-realistic, 8K resolution, highly polished sci-fi character concept art, portrait composition from the chest up."
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role": "Врач",
+      "traits": "внимательный, тревожный, сентиментальный",
+      "avatar_description": "Женщина средних лет, тёмные волосы собраны в пучок, усталые добрые глаза, медицинский holographic-браслет на запястье. Коллеги шутят, что она состоит из шести рук — столько всего она делает одновременно.",
+      "species_category": "human",
+      "avatar_prompt": "Cinematic sci-fi character portrait, a human woman in her late 40s serving as a Starfleet physician aboard a starship. She has dark brown hair pulled back into a practical low bun, with a few loose strands framing a tired but kind face. Warm, gentle dark-brown eyes with faint laugh lines and subtle under-eye weariness, a soft caring expression, human skin with natural texture and subtle aging lines, human nose and mouth clearly defined. Exactly two human arms ending in human hands, one wrist adorned with a glowing holographic medical bracelet projecting faint blue diagnostic data and medical cross symbols. She wears a modern Starfleet-style medical uniform tunic in teal and grey tones with a subtle insignia. Three-quarter studio-style portrait, soft volumetric lighting, shallow depth of field, subtle rim light, cool blue and teal color palette with warm highlights, ultra-detailed skin, photorealistic, cinematic sci-fi drama aesthetic, high production value, 8K resolution."
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role": "Пилот",
+      "traits": "дерзкий, молниеносный, суеверный",
+      "avatar_description": "Молодой пилот с острыми ушами и медно-красной кожей, вертикальные зрачки. Левый глаз заменён навигационным имплантом старой модели, моргающим с задержкой.",
+      "species_category": "humanoid",
+      "avatar_prompt": "Cinematic sci-fi character avatar portrait of a young Starfleet pilot. A human crew member with a confident, cheeky expression and sharp, intelligent eyes. Short, windswept dark hair. Wearing a fitted Starfleet-style flight uniform in deep crimson and bronze tones with pilot insignia on the shoulder. A vintage-model navigation implant over the left eye, a subtle mechanical ocular device that glows faintly and blinks with a slight delay. Warm copper-red skin tone. Dramatic cinematic lighting with soft rim light highlighting the face, deep space nebula glow in the background. Highly detailed, photorealistic, portrait composition, sharp focus, sci-fi aesthetic."
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role": "Научный сотрудник",
+      "traits": "любопытный, рассеянный, гениальный",
+      "avatar_description": "Высокая худая женщина с серо-голубой кожей и белыми волосами без признаков старения, третье веко мигает при концентрации. Ходит в лабораторном халате поверх формы.",
+      "species_category": "humanoid",
+      "avatar_prompt": "Cinematic sci-fi character avatar portrait of a tall, slender woman scientist with smooth, luminous blue-grey human skin and flowing white hair, displaying no signs of aging. She has a distinctive third translucent eyelid blinking as she concentrates, giving her an otherworldly yet fundamentally human appearance. Human facial features with eyes, nose, and mouth, human skin, two arms ending in hands. She wears a white laboratory coat open over a dark Starfleet-style science division uniform. Intelligent, curious, slightly distracted expression with a faraway thoughtful gaze, as if lost in scientific thought. Soft laboratory lighting with glowing holographic displays and data screens blurred in the background. Highly detailed, photorealistic, dramatic cinematic portrait, shallow depth of field, professional studio quality, cool blue and silver color palette, 85mm lens aesthetic, sharp focus on the face."
+    }
+  ],
+  "meta": {
+    "optimizer": "bootstrap",
+    "baseline_score": 92.5,
+    "compiled_score": 81.0,
+    "n_train": 8,
+    "n_dev": 4,
+    "seed": 42
+  }
+}

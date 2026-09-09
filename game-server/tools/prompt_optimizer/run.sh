@@ -8,7 +8,9 @@
 #   ./run.sh --list-usecases  список юзкейсов оптимизатора и статус демо
 #   ./run.sh --use-case X  только один юзкейс:
 #                         combined_outcome | npc_choice | scene_instruction
-#                         (scene медленный: каждая оценка = картинка в ComfyUI)
+#                         | avatar_prompt | npc_avatar | bridge_image
+#                         (кроме первых двух — медленные: каждая оценка =
+#                         картинка в ComfyUI + VL-судья)
 #
 # Оптимизатор — bootstrap (демо). GEPA (переписывание инструкций, 30-60 мин)
 # не опция по умолчанию: на насыщенных метриках он не обходит текущие промпты,
@@ -81,8 +83,20 @@ for uc in "${USE_CASES[@]}"; do
             # Каждая оценка метрики = картинка в ComfyUI + VL-судья.
             run_case scene_instruction 8 6 --demos 4
             ;;
+        avatar_prompt)
+            # Портрет игрока: контракт анатомии вида + VL-судья по портрету.
+            run_case avatar_prompt 8 4 --demos 4
+            ;;
+        npc_avatar)
+            # Портрет NPC: контракт пола для людей + VL-судья по портрету.
+            run_case npc_avatar 8 4 --demos 4
+            ;;
+        bridge_image)
+            # Сцена мостика: экипаж живые люди в кадре + VL-судья по сцене.
+            run_case bridge_image 6 4 --demos 4
+            ;;
         *)
-            echo "неизвестный юзкейс: $uc (combined_outcome|npc_choice|scene_instruction)" >&2
+            echo "неизвестный юзкейс: $uc (combined_outcome|npc_choice|scene_instruction|avatar_prompt|npc_avatar|bridge_image)" >&2
             exit 1
             ;;
     esac

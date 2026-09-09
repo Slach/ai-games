@@ -1286,7 +1286,29 @@ def _ensure_player_language(player_id: int, from_user: types.User | None) -> str
     return detected
 
 
-async def lang_set_callback(callback: types.CallbackQuery):
+async def send_language_selection(message: types.Message):
+    """Show the 🌐 language keyboard (used by /lang and after /reset)."""
+    lang_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{lang.HELLO['ru']} {lang.get_language_flag('ru')}",
+                    callback_data="lang_set:ru",
+                ),
+                InlineKeyboardButton(
+                    text=f"{lang.HELLO['en']} {lang.get_language_flag('en')}",
+                    callback_data="lang_set:en",
+                ),
+            ],
+        ]
+    )
+    await message.answer(
+        "> " * 5 + "🌐" + " <" * 5 + "\n\n",
+        reply_markup=lang_keyboard,
+    )
+
+
+async def lang_set_callback(callback: types.CallbackQuery, state: FSMContext):
     """Handle language selection from /lang command, confirm and show game language if in game."""
     await callback.answer()
 
@@ -1330,6 +1352,11 @@ async def lang_set_callback(callback: types.CallbackQuery):
         lines.append(player_lang_msgs["game_language"].format(language=game_lang_name, flag=game_flag))
 
     await message.answer("\n".join(lines), parse_mode="Markdown")
+
+    # Fresh player (just reset or never started): continue into game selection
+    player_state = get_player_state(player_id)
+    if not profile and not player_state.get("onboarding_session_id"):
+        await show_game_selection(message, state, lang_code)
 
 
 async def show_game_selection(message: types.Message, state: FSMContext, language: str):
@@ -2848,12 +2875,13 @@ async def reset_confirm_callback(callback: types.CallbackQuery, state: FSMContex
     except Exception as e:
         logger.error(f"Failed to clear delivery dedup for player {player_id}: {e}", exc_info=True)
 
-    # Wipe FSM + business state, then restart from game selection.
+    # Wipe FSM + business state (including the stored language), then restart
+    # from language selection so the player explicitly re-picks it.
     await state.clear()
     delete_player_state(player_id)
 
     await message.answer(reset_msgs["success"], parse_mode="Markdown")
-    await show_game_selection(message, state, get_player_language(player_id))
+    await send_language_selection(message)
 
 
 async def cmd_help(message: types.Message):
@@ -2902,24 +2930,7 @@ async def cmd_lang(message: types.Message):
         return
     logger.info("[HANDLER] cmd_lang")
 
-    lang_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"{lang.HELLO['ru']} {lang.get_language_flag('ru')}",
-                    callback_data="lang_set:ru",
-                ),
-                InlineKeyboardButton(
-                    text=f"{lang.HELLO['en']} {lang.get_language_flag('en')}",
-                    callback_data="lang_set:en",
-                ),
-            ],
-        ]
-    )
-    await message.answer(
-        "> " * 5 + "🌐" + " <" * 5 + "\n\n",
-        reply_markup=lang_keyboard,
-    )
+    await send_language_selection(message)
 
 
 async def cmd_gm_start(message: types.Message):

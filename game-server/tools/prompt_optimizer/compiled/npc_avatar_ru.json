@@ -1,0 +1,53 @@
+{
+  "use_case": "npc_avatar",
+  "language": "ru",
+  "instructions": {
+    "self": "You are an expert AI art prompt engineer specializing in sci-fi\ncharacter portraits. Generate VARIED, DIVERSE character portrait prompts\nin English.\n\nFor non-humanoid, energy, and symbiotic beings: invent an appropriate\nnon-human biological identity (reproductive cycle, colonial structure,\nplasma resonance, etc.) that fits their physiology. Do NOT impose human\ngender concepts (male/female) on beings whose biology would not have\nthem.\n\nFor human, humanoid, and cybernetic characters: the gender line is\nMANDATORY. Every prompt MUST name the gender explicitly (e.g. 'a woman',\n'a man', 'an androgynous person') and describe facial features\nconsistent with it. Never default an unspecified human to a man — if the\ngender line names a woman, the face, hair, and build must read as\nfeminine."
+  },
+  "demos": [
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role_name": "Инженер",
+      "species": "human",
+      "gender_line": "a woman, feminine facial features",
+      "traits": "упрямая, изобретательная, ворчливая",
+      "avatar_prompt": "Portrait of a stubborn, inventive, cantankerous woman engineer aboard a starship, feminine facial features with strong jaw and determined set of the mouth, medium-length dark hair pulled back into a practical messy bun with loose strands, warm brown skin with faint grease smudged on the cheek, intelligent sharp eyes framed by thin brow furrowed in concentration, weathered calloused hands, wearing a grease-stained dark coveralls with rolled sleeves revealing forearms, utility tool belt heavy with wrenches and datapads, small mechanical earpiece, standing in a dim industrial engineering bay with glowing conduits and pipes behind her, cinematic dramatic lighting highlighting texture of sweat and grime, hyper-detailed realistic style, sci-fi character portrait, moody atmospheric glow of copper and teal panels, medium shot, intense expressive gaze conveying stubborn competence [[ ## completed ## ]]"
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role_name": "Врач",
+      "species": "human",
+      "gender_line": "a man, masculine facial features",
+      "traits": "спокойный, ироничный, преданный",
+      "avatar_prompt": "Portrait of a calm, wry-faced male physician aboard a starship medical bay, masculine facial features with a strong jaw, short-cropped dark hair, subtle laugh lines around sharp, amused eyes, light stubble, lean muscular build wearing a fitted white medical tunic with glowing cyan insignia and a holographic diagnostic band on his wrist, warm but knowing expression conveying dry wit and quiet dedication, soft ambient medical lighting with holographic vitals and pulsing blue glow in the background, cinematic sci-fi character portrait, detailed facial texture, shallow depth of field, dramatic rim lighting, ultra-detailed, 8k resolution, moody atmospheric tones, professional concept art style"
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role_name": "Пилот",
+      "species": "human",
+      "gender_line": "a woman, feminine facial features",
+      "traits": "дерзкая, быстрая, азартная",
+      "avatar_prompt": "Portrait of a fierce and daring young human woman pilot, feminine facial features with sharp cheekbones, a confident challenging smirk, and bright spark of mischief and gambling spirit in her eyes. Her athletic yet streamlined build suggests agility and reflexes. She has a few scars on her face hinting at reckless stunts pulled off. Hair is tousled and practical, perhaps a striking dark or vivid color, swept back as if just ripped off a helmet. Wears a weathered, form-fitting pilot flight suit with worn leather and tech accents, harness straps, and patched jacket. Slight sweat on her brow, a wild and exhilarated expression, as if caught mid-adrenaline rush from a daring maneuver. Dim cockpit lighting glows behind her with flickering console LEDs and starfield streaking past a viewport, cinematic sci-fi atmosphere, dramatic rim light, intense gaze, hyper-detailed, portrait composition, moody neon and warm highlights, professional character concept art"
+    },
+    {
+      "predictor": "self",
+      "augmented": true,
+      "role_name": "Капитан",
+      "species": "human",
+      "gender_line": "a man, masculine facial features",
+      "traits": "авторитетный, расчётливый, скрытный",
+      "avatar_prompt": "Cinematic sci-fi character portrait of a commanding ship captain, a man with sharp masculine facial features—strong jawline, deep-set eyes, weathered lines of hard-earned authority around his brow and mouth. Short-cropped dark hair with subtle streaks of grey at the temples, suggesting years of command. Steady, calculating gaze that seems to weigh every hidden variable in the room. Lean, disciplined build conveyed through crisp tailored uniform with rank insignia on the collar. Dim dramatic lighting casting deep shadows across his composed face, evoking a secretive mind concealing his true plans. Cool blue and steel color palette, faint console glow reflecting in his eyes. Shot on 85mm lens, shallow depth of field, hyper-detailed skin texture and expression, moody atmospheric sci-fi aesthetic, highly detailed, portrait composition."
+    }
+  ],
+  "meta": {
+    "optimizer": "bootstrap",
+    "baseline_score": 73.75,
+    "compiled_score": 73.75,
+    "n_train": 8,
+    "n_dev": 4,
+    "seed": 42
+  }
+}

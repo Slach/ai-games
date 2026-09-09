@@ -30,6 +30,9 @@ INPUT_FIELD_ORDER = {
     "npc_choice": ["npc_name", "npc_role", "traits", "loyalty", "loyalty_rule", "choices_text"],
     "scene_instruction": ["action_text", "species_desc", "background_location", "scene_context", "species_category"],
     "combined_outcome": ["setting", "conflict", "narrative", "previous_summary", "mission_text", "ship_status_text", "decisions_text", "roster_text"],
+    "avatar_prompt": ["role", "traits", "avatar_description", "species_category"],
+    "npc_avatar": ["role_name", "species", "gender_line", "traits"],
+    "bridge_image": ["mission_name", "mission_description", "crew_list"],
 }
 
 FIELD_LABELS_RU = {
@@ -52,6 +55,14 @@ FIELD_LABELS_RU = {
     "ship_status_text": "Статус корабля",
     "decisions_text": "Решения",
     "roster_text": "Ростер экипажа",
+    "role": "Роль",
+    "avatar_description": "Описание персонажа",
+    "role_name": "Роль NPC",
+    "species": "Вид",
+    "gender_line": "Пол",
+    "mission_name": "Миссия",
+    "mission_description": "Описание миссии",
+    "crew_list": "Экипаж",
 }
 FIELD_LABELS_EN = {
     "npc_name": "Name",
@@ -73,6 +84,14 @@ FIELD_LABELS_EN = {
     "ship_status_text": "Ship status",
     "decisions_text": "Decisions",
     "roster_text": "Crew roster",
+    "role": "Role",
+    "avatar_description": "Character description",
+    "role_name": "NPC role",
+    "species": "Species",
+    "gender_line": "Gender",
+    "mission_name": "Mission",
+    "mission_description": "Mission description",
+    "crew_list": "Crew",
 }
 
 HEADER_RU = {
@@ -89,6 +108,19 @@ HEADER_RU = {
         "из ростера, метки [fatal]/[injury] — обязательства, character_name без роли "
         "и id, дельты вместо абсолютов; буквально не копируй):"
     ),
+    "avatar_prompt": (
+        "ПРИМЕРЫ ДЛЯ КАЛИБРОВКИ (промпт всегда на английском; категория вида — "
+        "КОНТРАКТ АНАТОМИИ, она главнее описания; буквально не копируй):"
+    ),
+    "npc_avatar": (
+        "ПРИМЕРЫ ДЛЯ КАЛИБРОВКИ (промпт всегда на английском; для людей и киборгов "
+        "пол ОБЯЗАТЕЛЬНО назван явно, для чужих — не навязывай человеческий пол; "
+        "буквально не копируй):"
+    ),
+    "bridge_image": (
+        "ПРИМЕРЫ ДЛЯ КАЛИБРОВКИ (промпт всегда на английском; экипаж — живые люди "
+        "в кадре на уровне глаз, не схема и не вид сверху; буквально не копируй):"
+    ),
 }
 HEADER_EN = {
     "npc_choice": (
@@ -104,24 +136,47 @@ HEADER_EN = {
         "from the roster, [fatal]/[injury] tags are obligations, bare character_name, "
         "deltas not absolutes; do not copy verbatim):"
     ),
+    "avatar_prompt": (
+        "CALIBRATION EXAMPLES (the prompt is always English; the species category is "
+        "the ANATOMY CONTRACT and overrides the description; do not copy verbatim):"
+    ),
+    "npc_avatar": (
+        "CALIBRATION EXAMPLES (the prompt is always English; for humans and cyborgs "
+        "the gender MUST be named explicitly, for aliens do not impose human gender; "
+        "do not copy verbatim):"
+    ),
+    "bridge_image": (
+        "CALIBRATION EXAMPLES (the prompt is always English; the crew are living "
+        "people in frame at eye level, never a schematic or top-down view; do not "
+        "copy verbatim):"
+    ),
 }
 
 OUTPUT_FIELDS = {
     "npc_choice": ["action_id", "rationale"],
     "scene_instruction": ["instruction", "scene_background_location"],
     "combined_outcome": ["outcome_json"],
+    "avatar_prompt": ["avatar_prompt"],
+    "npc_avatar": ["avatar_prompt"],
+    "bridge_image": ["bridge_prompt", "crew_positions"],
 }
 
 OUTPUT_KEYS = {
     "npc_choice": ["action_id", "rationale"],
     "scene_instruction": ["instruction", "background_location"],
     "combined_outcome": ["outcome_json"],
+    "avatar_prompt": ["avatar_prompt"],
+    "npc_avatar": ["avatar_prompt"],
+    "bridge_image": ["bridge_prompt", "crew_positions"],
 }
 
 DEMO_CONSTANT = {
     "npc_choice": "NPC_DECISION_DEMOS",
     "scene_instruction": "SCENE_INSTRUCTION_DEMOS",
     "combined_outcome": "COMBINED_OUTCOME_DEMOS",
+    "avatar_prompt": "AVATAR_PROMPT_DEMOS",
+    "npc_avatar": "NPC_AVATAR_DEMOS",
+    "bridge_image": "BRIDGE_IMAGE_DEMOS",
 }
 
 
@@ -142,7 +197,7 @@ def build_demo_block(use_case: str, language: str, demos: list[dict]) -> str:
         lines.append(f"--- {marker} {i} ---")
         for field in INPUT_FIELD_ORDER[use_case]:
             value = str(demo.get(field, "")).rstrip()
-            if field == "choices_text":
+            if field in ("choices_text", "crew_list"):
                 lines.append(f"{labels[field]}:")
                 lines.append(value)
             else:

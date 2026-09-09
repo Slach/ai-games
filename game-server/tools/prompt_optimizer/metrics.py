@@ -29,11 +29,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from image_generator import ImageGenerator  # noqa: E402
 from prompts import BACKGROUND_LOCATION_TYPES  # noqa: E402
-from signatures import NPCChoiceJudge, SceneVLJudge  # noqa: E402
+from signatures import AvatarVLJudge, BridgeVLJudge, NPCChoiceJudge, SceneVLJudge  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 _CHOICE_ID_RE = re.compile(r"\[([a-z0-9_]+)\]")
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+_WOMAN_RE = re.compile(r"\b(woman|women|female|feminine)\b", re.IGNORECASE)
+_MAN_RE = re.compile(r"\b(man|men|male|masculine)\b", re.IGNORECASE)
+_ANDROGYNE_RE = re.compile(r"\b(androgynous|androgyn|gender-ambiguous|genderless|synthetic)\b", re.IGNORECASE)
+
+# The runtime ANATOMY CONTRACT for humans forbids these terms in the output
+# prompt verbatim (game_server.generate_avatar_prompt).
+_FORBIDDEN_HUMAN_TERMS = (
+    "extra legs", "six legs", "tentacle", "carapace", "exoskeleton",
+    "plasma", "energy body", "absence of face", "sensor cluster",
+    "swarm", "colony", "hive", "parasitic", "symbiotic",
+)
+
+_HUMAN_LIKE = {"human", "humanoid"}
 
 # Files directory of the ComfyUI output volume (repo mount), used to turn
 # generated image URLs into local files for the VL judge.
@@ -44,6 +58,8 @@ _COMFYUI_FILES_DIR = os.path.join(
 
 _npc_judge: dspy.Predict | None = None
 _vl_judge: dspy.Predict | None = None
+_avatar_vl_judge: dspy.Predict | None = None
+_bridge_vl_judge: dspy.Predict | None = None
 
 
 def _clamp01(value: float) -> float:
@@ -194,6 +210,182 @@ def make_scene_vl_metric(judge_lm: dspy.LM):
     return metric
 
 
+def _generate_txt2img(prompt: str, *, width: int, height: int, kind: str, prefix: str) -> str | None:
+    """Run one txt2img generation through the runtime ImageGenerator."""
+    generator = ImageGenerator()
+
+    async def _run() -> str | None:
+        return await generator.generate_image(
+            prompt=prompt,
+            filename_prefix=prefix,
+            width=width,
+            height=height,
+            max_retries=2,
+            game_id="optimizer",
+            player_id=None,
+            turn=0,
+            kind=kind,
+        )
+
+    return asyncio.run(_run())
+
+
+def _avatar_common_gates(prompt: str, species_category: str) -> str | None:
+    """Shared code gates for player and NPC avatar prompts. Returns an error
+    reason when the prompt violates the runtime contracts, else None."""
+    if len(prompt.split()) < 15:
+        return f"prompt too short ({len(prompt.split())} words)"
+    if _CYRILLIC_RE.search(prompt):
+        return "prompt is not English"
+    if species_category in _HUMAN_LIKE:
+        lowered = prompt.lower()
+        hits = [t for t in _FORBIDDEN_HUMAN_TERMS if t in lowered]
+        if hits:
+            return f"human contract violated: {hits}"
+    return None
+
+
+def _gender_gate(prompt: str, gender_line: str) -> str | None:
+    """The npc_avatar gender contract: humans must name the gender explicitly."""
+    lowered = gender_line.lower()
+    if "woman" in lowered:
+        if not _WOMAN_RE.search(prompt):
+            return "gender line names a woman but the prompt does not"
+    elif "androgyn" in lowered or "genderless" in lowered or "synthetic" in lowered:
+        if not _ANDROGYNE_RE.search(prompt):
+            return "gender line names an androgynous/synthetic person but the prompt does not"
+    elif "man" in lowered:
+        if not _MAN_RE.search(prompt):
+            return "gender line names a man but the prompt does not"
+    return None
+
+
+def _judge_avatar(judge_lm: dspy.LM, *, image_prompt: str, species_category: str,
+                  gender_line: str, role: str, filename: str, case_id: str) -> float:
+    global _avatar_vl_judge
+    if _avatar_vl_judge is None:
+        _avatar_vl_judge = dspy.Predict(AvatarVLJudge)
+    try:
+        with dspy.context(lm=judge_lm):
+            verdict = _avatar_vl_judge(
+                image_prompt=image_prompt,
+                species_category=species_category,
+                gender_line=gender_line,
+                role=role,
+                image=dspy.Image(url=_data_url(filename)),
+            )
+    except Exception:
+        logger.warning("avatar VL judge call failed", exc_info=True)
+        return 0.0
+    score = _parse_score(verdict.score)
+    if score is None:
+        logger.warning("avatar VL judge returned unparsable score %r", verdict.score)
+        return 0.0
+    logger.info("metric[avatar_vl]: %s -> %.2f (%s)", case_id, score, verdict.feedback)
+    return score
+
+
+def _avatar_vl_pipeline(example, pred, judge_lm: dspy.LM, *, kind: str, prefix: str) -> float:
+    """Shared metric body for avatar_prompt and npc_avatar use cases."""
+    prompt = str(getattr(pred, "avatar_prompt", "") or "").strip()
+    species = str(getattr(example, "species_category", "") or
+                  getattr(example, "species", "") or "").strip()
+    gate = _avatar_common_gates(prompt, species)
+    if gate:
+        logger.info("metric[avatar_vl]: %s gate failed: %s", getattr(example, "case_id", "?"), gate)
+        return 0.0
+    gender_line = str(getattr(example, "gender_line", "") or "not applicable")
+    if gender_line != "not applicable" and species not in {"non_humanoid", "energy", "symbiotic"}:
+        gate = _gender_gate(prompt, gender_line)
+        if gate:
+            logger.info("metric[avatar_vl]: %s gate failed: %s", getattr(example, "case_id", "?"), gate)
+            return 0.0
+
+    url = _generate_txt2img(prompt, width=768, height=1024, kind=kind, prefix=prefix)
+    if not url:
+        logger.warning("metric[avatar_vl]: ComfyUI returned no image for %s", getattr(example, "case_id", "?"))
+        return 0.0
+    filename = ImageGenerator._extract_filename_from_url(url)
+    if not filename:
+        logger.warning("metric[avatar_vl]: cannot parse filename from %s", url, stack_info=True)
+        return 0.0
+    role = str(getattr(example, "role", "") or getattr(example, "role_name", "") or "?")
+    return _judge_avatar(
+        judge_lm,
+        image_prompt=prompt,
+        species_category=species,
+        gender_line=gender_line,
+        role=role,
+        filename=filename,
+        case_id=str(getattr(example, "case_id", "?")),
+    )
+
+
+def make_avatar_vl_metric(judge_lm: dspy.LM):
+    """Build the avatar_prompt metric bound to a judge LM."""
+
+    def metric(example, pred, trace=None) -> float:
+        return _avatar_vl_pipeline(example, pred, judge_lm, kind="avatar_prompt_eval", prefix="optimizer_avatar")
+
+    return metric
+
+
+def make_npc_avatar_vl_metric(judge_lm: dspy.LM):
+    """Build the npc_avatar metric bound to a judge LM."""
+
+    def metric(example, pred, trace=None) -> float:
+        return _avatar_vl_pipeline(example, pred, judge_lm, kind="npc_avatar_eval", prefix="optimizer_npc_avatar")
+
+    return metric
+
+
+def make_bridge_vl_metric(judge_lm: dspy.LM):
+    """Build the bridge_image metric bound to a judge LM."""
+    global _bridge_vl_judge
+    if _bridge_vl_judge is None:
+        _bridge_vl_judge = dspy.Predict(BridgeVLJudge)
+
+    def metric(example, pred, trace=None) -> float:
+        prompt = str(getattr(pred, "bridge_prompt", "") or "").strip()
+        positions = str(getattr(pred, "crew_positions", "") or "").strip()
+        if len(prompt.split()) < 20:
+            logger.info("metric[bridge_vl]: bridge_prompt too short (%d words)", len(prompt.split()))
+            return 0.0
+        if _CYRILLIC_RE.search(prompt):
+            logger.info("metric[bridge_vl]: bridge_prompt is not English")
+            return 0.0
+        if not positions:
+            logger.info("metric[bridge_vl]: crew_positions empty")
+            return 0.0
+
+        url = _generate_txt2img(prompt, width=1024, height=1024, kind="bridge_image_eval", prefix="optimizer_bridge")
+        if not url:
+            logger.warning("metric[bridge_vl]: ComfyUI returned no image for %s", getattr(example, "case_id", "?"))
+            return 0.0
+        filename = ImageGenerator._extract_filename_from_url(url)
+        if not filename:
+            logger.warning("metric[bridge_vl]: cannot parse filename from %s", url, stack_info=True)
+            return 0.0
+        try:
+            with dspy.context(lm=judge_lm):
+                verdict = _bridge_vl_judge(
+                    bridge_prompt=prompt,
+                    crew_list=str(example.crew_list),
+                    image=dspy.Image(url=_data_url(filename)),
+                )
+        except Exception:
+            logger.warning("bridge VL judge call failed", exc_info=True)
+            return 0.0
+        score = _parse_score(verdict.score)
+        if score is None:
+            logger.warning("bridge VL judge returned unparsable score %r", verdict.score)
+            return 0.0
+        logger.info("metric[bridge_vl]: %s -> %.2f (%s)", getattr(example, "case_id", "?"), score, verdict.feedback)
+        return score
+
+    return metric
+
+
 def make_combined_outcome_metric(judge_lm: dspy.LM | None = None):
     """Build the combined_outcome metric — pure code checks, no judge.
 
@@ -294,4 +486,7 @@ METRIC_FACTORIES = {
     "npc_choice": make_npc_choice_metric,
     "scene_instruction": make_scene_vl_metric,
     "combined_outcome": make_combined_outcome_metric,
+    "avatar_prompt": make_avatar_vl_metric,
+    "npc_avatar": make_npc_avatar_vl_metric,
+    "bridge_image": make_bridge_vl_metric,
 }

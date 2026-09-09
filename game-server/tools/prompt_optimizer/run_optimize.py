@@ -43,19 +43,32 @@ STUDENT_PARAMS = {
     "npc_choice": {"temperature": 0.8, "max_tokens": 1024},
     "scene_instruction": {"temperature": 0.7, "max_tokens": 1024},
     "combined_outcome": {"temperature": 0.7, "max_tokens": 6144},
+    "avatar_prompt": {"temperature": 0.7, "max_tokens": 1024},
+    "npc_avatar": {"temperature": 0.7, "max_tokens": 1024},
+    "bridge_image": {"temperature": 0.7, "max_tokens": 1536},
 }
 
+# Manifest-based use cases: dataset lives in datasets/<use_case>_<language>.json,
+# inputs are the dspy.Example input fields.
+MANIFEST_INPUTS = {
+    "scene_instruction": ("action_text", "species_desc", "background_location", "scene_context", "species_category"),
+    "avatar_prompt": ("role", "traits", "avatar_description", "species_category"),
+    "npc_avatar": ("role_name", "species", "gender_line", "traits"),
+    "bridge_image": ("mission_name", "mission_description", "crew_list"),
+}
 
-def load_scene_examples(language: str, limit: int) -> list[dspy.Example]:
-    path = os.path.join(DATASETS_DIR, f"scene_instruction_{language}.json")
+# Every metric call of these use cases generates an image in ComfyUI — serial only.
+IMAGE_USE_CASES = {"scene_instruction", "avatar_prompt", "npc_avatar", "bridge_image"}
+
+
+def load_manifest_examples(use_case: str, language: str, limit: int) -> list[dspy.Example]:
+    path = os.path.join(DATASETS_DIR, f"{use_case}_{language}.json")
     with open(path, encoding="utf-8") as f:
         manifest = json.load(f)
     if limit > 0:
         manifest = manifest[:limit]
     return [
-        dspy.Example(**entry).with_inputs(
-            "action_text", "species_desc", "background_location", "scene_context", "species_category"
-        )
+        dspy.Example(**entry).with_inputs(*MANIFEST_INPUTS[use_case])
         for entry in manifest
     ]
 
@@ -66,7 +79,7 @@ def build_dataset(use_case: str, language: str, n: int, seed: int) -> list[dspy.
         return build_examples(language, n, seed=seed, extra_scenarios=extra)
     if use_case == "combined_outcome":
         return build_outcome_examples(language, n, seed=seed)
-    return load_scene_examples(language, n)
+    return load_manifest_examples(use_case, language, n)
 
 
 def save_artifacts(program: dspy.Module, use_case: str, language: str, path: str, meta: dict) -> None:
@@ -105,7 +118,7 @@ def preflight_lm(lm: dspy.LM) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(description="Compile better prompts with dspy (offline)")
-    parser.add_argument("--use-case", required=True, choices=["npc_choice", "scene_instruction", "combined_outcome"])
+    parser.add_argument("--use-case", required=True, choices=list(METRIC_FACTORIES))
     parser.add_argument("--language", default="ru", choices=["ru", "en"])
     parser.add_argument("--optimizer", default="bootstrap", choices=["bootstrap", "gepa"])
     parser.add_argument("--n-train", type=int, default=40)
@@ -119,8 +132,8 @@ def main() -> None:
 
     language = LANGUAGE_RU if args.language == "ru" else LANGUAGE_EN
     signature = SIGNATURES[(args.use_case, language)]
-    # scene VL metric generates an image per call — keep it serial
-    threads = 1 if args.use_case == "scene_instruction" else args.threads
+    # image metrics generate one ComfyUI image per call — keep them serial
+    threads = 1 if args.use_case in IMAGE_USE_CASES else args.threads
 
     student_lm = make_lm(**STUDENT_PARAMS[args.use_case])
     judge_lm = make_judge_lm()

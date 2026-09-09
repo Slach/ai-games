@@ -1954,6 +1954,26 @@ SCENE_INSTRUCTION_DEMOS = {
     LANGUAGE_EN: "",
 }
 
+# ── txt2img prompt demos (avatar / npc_avatar / bridge_image) ──────
+# Compiled offline by tools/prompt_optimizer against the FLUX.2 [klein]
+# txt2img model with a VL judge. The generated prompts are always English.
+# Empty by default: the corresponding inline generators in game_server.py
+# pick a block up only after a compiled block is pasted here.
+AVATAR_PROMPT_DEMOS = {
+    LANGUAGE_RU: "",
+    LANGUAGE_EN: "",
+}
+
+NPC_AVATAR_DEMOS = {
+    LANGUAGE_RU: "",
+    LANGUAGE_EN: "",
+}
+
+BRIDGE_IMAGE_DEMOS = {
+    LANGUAGE_RU: "",
+    LANGUAGE_EN: "",
+}
+
 # Compiled by tools/prompt_optimizer (BootstrapFewShot + VL judge over ComfyUI
 # generations, trainset 4 / devset 2); see
 # tools/prompt_optimizer/compiled/scene_instruction_ru.json.

@@ -151,6 +151,17 @@ cd ../../ && ../.venv/bin/python -m unittest discover -s tests
 генерирует картинку на каждый вызов — держите `--n-train/--n-dev` малыми
 (10-20 кейсов) и закладывайте время ComfyUI на каждый скор.
 
+### txt2img-промпты: avatar_prompt / npc_avatar / bridge_image
+
+Те же манифесты в `datasets/` (`avatar_prompt_ru.json` — роль, характер,
+описание, категория вида; `npc_avatar_ru.json` — роль, вид, директива пола,
+характер; `bridge_image_ru.json` — миссия и ростер экипажа). Метрика:
+кодовые гейты (промпт на английском, контракт анатомии вида для людей,
+явный пол для людей-и-киборгов) → генерация портрета 768x1024 / сцены
+мостика 1024x1024 во FLUX.2 → VL-судья. Оптимизируют инлайн-промпты
+генераторов `generate_avatar_prompt` / `generate_npc_avatar_prompts` /
+`generate_bridge_image_prompt` в `game_server.py`.
+
 ## Оптимизаторы
 
 - `--optimizer bootstrap` (по умолчанию) — BootstrapFewShot: учитель (та же

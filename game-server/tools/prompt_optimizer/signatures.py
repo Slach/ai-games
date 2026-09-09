@@ -114,6 +114,127 @@ class CombinedOutcomeRU(dspy.Signature):
     outcome_json: str = dspy.OutputField(desc="Валидный JSON объекта combined_outcome: outcome_narrative, ship_status_change, crew_morale_change, next_turn_hook, mission_progress[{stage,points}], dead_crew_members[{entity_id,cause}], ship_hull_change, ship_shields_change, systems_taken_offline[], systems_restored[], crew_injured[{entity_id,severity}], crew_healed[{entity_id,new_severity}], personal_outcomes[{character_name,role,outcome_text}] — дельты, не абсолюты; entity_id строго из ростера")
 
 
+# ── Avatar / bridge image prompts (mirror the inline generators in
+# game_server.py: generate_avatar_prompt, generate_npc_avatar_prompts,
+# generate_bridge_image_prompt). The image prompt output is ALWAYS English
+# (consumed by the txt2img model); input texts come from RU games. ──
+
+
+class AvatarPrompt(dspy.Signature):
+    """You are an expert AI art prompt engineer specializing in sci-fi
+    character portraits. Generate detailed, cinematic-quality image prompts
+    for character avatars.
+
+    The species_category is the ANATOMY CONTRACT — HIGHEST PRIORITY, it
+    overrides anything in the free-text character description:
+    - human / humanoid: the avatar MUST depict a human — exactly two arms
+      ending in hands, exactly two legs, a human face with eyes/nose/mouth,
+      human skin. The output prompt MUST NOT contain any of: extra legs,
+      six legs, tentacles, carapace, exoskeleton, plasma, energy body,
+      absence of face, sensor cluster, swarm/colony/hive form, parasitic
+      form, symbiotic form. If the description mentions such a non-human
+      element, DISCARD it entirely and describe a human crew member in a
+      Starfleet-style uniform for the given role instead.
+    - non_humanoid / energy / symbiotic: the character description is the
+      DEFINITIVE source of appearance. Describe their ACTUAL form, never
+      default to "face, hair, eyes, upper body" or any standing human.
+      Invent an appropriate non-human biological identity (colonial
+      structure, plasma resonance, etc.) that fits their physiology. Do NOT
+      impose human gender concepts on such beings.
+    - cybernetic: a humanoid with clearly visible cybernetic implants.
+
+    Write the image prompt in English."""
+
+    role: str = dspy.InputField(desc="Character's role on the ship")
+    traits: str = dspy.InputField(desc="Personality traits, comma-separated")
+    avatar_description: str = dspy.InputField(desc="Full character visual description (flavour ONLY; the species contract above wins)")
+    species_category: str = dspy.InputField(desc="Anatomy contract key: human / humanoid / non_humanoid / energy / cybernetic / symbiotic")
+    avatar_prompt: str = dspy.OutputField(desc="Detailed English image-generation prompt for the character avatar portrait")
+
+
+class NpcAvatarPrompt(dspy.Signature):
+    """You are an expert AI art prompt engineer specializing in sci-fi
+    character portraits. Generate VARIED, DIVERSE character portrait prompts
+    in English.
+
+    For non-humanoid, energy, and symbiotic beings: invent an appropriate
+    non-human biological identity (reproductive cycle, colonial structure,
+    plasma resonance, etc.) that fits their physiology. Do NOT impose human
+    gender concepts (male/female) on beings whose biology would not have
+    them.
+
+    For human, humanoid, and cybernetic characters: the gender line is
+    MANDATORY. Every prompt MUST name the gender explicitly (e.g. 'a woman',
+    'a man', 'an androgynous person') and describe facial features
+    consistent with it. Never default an unspecified human to a man — if the
+    gender line names a woman, the face, hair, and build must read as
+    feminine."""
+
+    role_name: str = dspy.InputField(desc="NPC role name on the ship")
+    species: str = dspy.InputField(desc="Species key: human / humanoid / non_humanoid / energy / cybernetic / symbiotic")
+    gender_line: str = dspy.InputField(desc="Gender directive, e.g. 'a woman, feminine facial features' or 'invent a non-human biological identity fitting the species'")
+    traits: str = dspy.InputField(desc="NPC personality traits, comma-separated")
+    avatar_prompt: str = dspy.OutputField(desc="Detailed English image-generation prompt for the NPC avatar portrait")
+
+
+class BridgeImagePrompt(dspy.Signature):
+    """You are an expert cinematic prompt engineer for AI image generation.
+    Create detailed English prompts for a cinematic starship bridge scene
+    showing recognizable crew members in action. The image must depict the
+    crew — their faces, bodies, and poses — never a floor plan, schematic,
+    or architectural diagram. The viewpoint MUST be at crew level — never
+    overhead, bird's-eye, top-down, isometric, or satellite. Focus on
+    composition, lighting, the crew, and a space opera aesthetic."""
+
+    mission_name: str = dspy.InputField(desc="Mission name")
+    mission_description: str = dspy.InputField(desc="Mission description")
+    crew_list: str = dspy.InputField(desc="Crew on the bridge, one line each: role (type): species=..., traits=...")
+    bridge_prompt: str = dspy.OutputField(desc="Detailed English image prompt for the bridge scene with the full crew at their stations")
+    crew_positions: str = dspy.OutputField(desc="One line per crew member: role — where they stand on the bridge and what they do")
+
+
+class AvatarVLJudge(dspy.Signature):
+    """You are a strict visual judge of AI-generated character portraits in
+    a cinematic sci-fi / space-opera context. Given the image prompt that
+    produced the portrait, the species contract, the gender directive, and
+    the image itself, score 0.0-1.0 on: (a) ANATOMY CONTRACT — decisive: a
+    human/humanoid contract must yield a human (two arms, two legs, a human
+    face); a non_humanoid/energy contract must NOT collapse into a standing
+    uniformed human; symbiotic means a host body with a clearly visible
+    alien symbiote organism growing on it; cybernetic means a humanoid with
+    visible implants; (b) GENDER — when the gender line names a woman, a man, or an
+    androgynous person, the face, hair, and build must read that way;
+    'not applicable' means skip this criterion; (c) ROLE — uniform or
+    station cues make the role recognizable; (d) portrait quality — no
+    deformed anatomy, garbled text, or artifacts."""
+
+    image_prompt: str = dspy.InputField(desc="The image-generation prompt that produced the portrait")
+    species_category: str = dspy.InputField(desc="Anatomy contract key: human / humanoid / non_humanoid / energy / cybernetic / symbiotic")
+    gender_line: str = dspy.InputField(desc="Gender directive, or 'not applicable'")
+    role: str = dspy.InputField(desc="Character's role on the ship")
+    image: dspy.Image = dspy.InputField(desc="The generated portrait")
+    score: float = dspy.OutputField(desc="Contract+gender+role+quality score from 0.0 to 1.0")
+    feedback: str = dspy.OutputField(desc="One short sentence explaining the score")
+
+
+class BridgeVLJudge(dspy.Signature):
+    """You are a strict visual judge of AI-generated starship bridge scenes.
+    Given the image prompt, the crew roster it was built from, and the image
+    itself, score 0.0-1.0 on: (a) CREW DEPICTED AS PEOPLE — visible faces,
+    bodies, and poses at their stations; a floor plan, schematic, top-down,
+    isometric, or satellite view, or an empty bridge, is a failure; (b)
+    ENVIRONMENT — a recognizable bridge: consoles, holographic displays,
+    viewport with stars, dramatic lighting; (c) CREW — roughly the roster
+    size, distinct individuals; (d) quality — anatomy, no garbled text or
+    artifacts."""
+
+    bridge_prompt: str = dspy.InputField(desc="The image-generation prompt that produced the scene")
+    crew_list: str = dspy.InputField(desc="The crew roster the prompt was built from")
+    image: dspy.Image = dspy.InputField(desc="The generated bridge scene")
+    score: float = dspy.OutputField(desc="Crew+environment+count+quality score from 0.0 to 1.0")
+    feedback: str = dspy.OutputField(desc="One short sentence explaining the score")
+
+
 class ImageBakeoffJudge(dspy.Signature):
     """You are a strict judge of AI-generated images in a cinematic sci-fi /
     space-opera context. Given the prompt the image was generated from and
@@ -171,4 +292,7 @@ SIGNATURES = {
     ("scene_instruction", LANGUAGE_RU): SceneInstruction,
     ("scene_instruction", LANGUAGE_EN): SceneInstruction,
     ("combined_outcome", LANGUAGE_RU): CombinedOutcomeRU,
+    ("avatar_prompt", LANGUAGE_RU): AvatarPrompt,
+    ("npc_avatar", LANGUAGE_RU): NpcAvatarPrompt,
+    ("bridge_image", LANGUAGE_RU): BridgeImagePrompt,
 }

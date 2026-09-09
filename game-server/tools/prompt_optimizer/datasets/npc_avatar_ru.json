@@ -1,0 +1,86 @@
+[
+  {
+    "case_id": "npc_engineer_woman",
+    "role_name": "Инженер",
+    "species": "human",
+    "gender_line": "a woman, feminine facial features",
+    "traits": "упрямая, изобретательная, ворчливая"
+  },
+  {
+    "case_id": "npc_medic_man",
+    "role_name": "Врач",
+    "species": "human",
+    "gender_line": "a man, masculine facial features",
+    "traits": "спокойный, ироничный, преданный"
+  },
+  {
+    "case_id": "npc_pilot_woman",
+    "role_name": "Пилот",
+    "species": "human",
+    "gender_line": "a woman, feminine facial features",
+    "traits": "дерзкая, быстрая, азартная"
+  },
+  {
+    "case_id": "npc_captain_man",
+    "role_name": "Капитан",
+    "species": "human",
+    "gender_line": "a man, masculine facial features",
+    "traits": "авторитетный, расчётливый, скрытный"
+  },
+  {
+    "case_id": "npc_security_androgyne",
+    "role_name": "Офицер безопасности",
+    "species": "human",
+    "gender_line": "an androgynous person, gender-ambiguous features",
+    "traits": "бдительный, немногословный, дисциплинированный"
+  },
+  {
+    "case_id": "npc_science_genderless",
+    "role_name": "Научный сотрудник",
+    "species": "cybernetic",
+    "gender_line": "a genderless synthetic humanoid, smooth androgynous features",
+    "traits": "любопытный, буквальный, неутомимый"
+  },
+  {
+    "case_id": "npc_comms_woman",
+    "role_name": "Связист",
+    "species": "humanoid",
+    "gender_line": "a woman, feminine facial features",
+    "traits": "болтливая, дружелюбная, наблюдательная"
+  },
+  {
+    "case_id": "npc_navigator_man",
+    "role_name": "Навигатор",
+    "species": "humanoid",
+    "gender_line": "a man, masculine facial features",
+    "traits": "сосредоточенный, суеверный, молчаливый"
+  },
+  {
+    "case_id": "npc_doctor_fluid",
+    "role_name": "Врач",
+    "species": "human",
+    "gender_line": "an androgynous person with fluid, gender-ambiguous features",
+    "traits": "нежный, стойкий, ироничный"
+  },
+  {
+    "case_id": "npc_engineer_alien",
+    "role_name": "Инженер",
+    "species": "non_humanoid",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "методичный, педантичный, безмятежный"
+  },
+  {
+    "case_id": "npc_sensor_alien",
+    "role_name": "Офицер безопасности",
+    "species": "energy",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "стремительный, язвительный, вспыльчивый"
+  },
+  {
+    "case_id": "npc_gardener_alien",
+    "role_name": "Эколог",
+    "species": "symbiotic",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "двойной, заботливый, скрытный"
+  }
+]

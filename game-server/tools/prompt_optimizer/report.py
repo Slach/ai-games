@@ -24,12 +24,27 @@ METRIC_NOTES = {
         "VL-судья по картинке из ComfyUI: сохранение формы (нет коллапса в гуманоида), "
         "действие, окружение — шум судьи около ±5 пунктов"
     ),
+    "avatar_prompt": (
+        "VL-судья по портрету из ComfyUI: контракт анатомии вида, пол, роль, "
+        "качество — шум судьи около ±5 пунктов"
+    ),
+    "npc_avatar": (
+        "VL-судья по портрету из ComfyUI: контракт анатомии вида, пол, роль, "
+        "качество — шум судьи около ±5 пунктов"
+    ),
+    "bridge_image": (
+        "VL-судья по сцене мостика из ComfyUI: экипаж живые люди в кадре (не схема), "
+        "окружение, количество, качество — шум судьи около ±5 пунктов"
+    ),
 }
 
 NOISE = {
     "combined_outcome": 0.0,
     "npc_choice": 3.0,
     "scene_instruction": 5.0,
+    "avatar_prompt": 5.0,
+    "npc_avatar": 5.0,
+    "bridge_image": 5.0,
 }
 
 USE_TTY = sys.stdout.isatty()
@@ -130,6 +145,9 @@ def print_usecase_list() -> int:
         "make_combined_outcome_metric": "код (без шума)",
         "make_npc_choice_metric": "LLM-судья",
         "make_scene_vl_metric": "VL-судья (ComfyUI)",
+        "make_avatar_vl_metric": "VL-судья (ComfyUI)",
+        "make_npc_avatar_vl_metric": "VL-судья (ComfyUI)",
+        "make_bridge_vl_metric": "VL-судья (ComfyUI)",
     }
     by_case: dict[str, list[str]] = {}
     for use_case, language in SIGNATURES:

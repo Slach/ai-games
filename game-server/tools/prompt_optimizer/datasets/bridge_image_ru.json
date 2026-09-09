@@ -1,0 +1,62 @@
+[
+  {
+    "case_id": "bridge_full_crew",
+    "mission_name": "Тихий флот",
+    "mission_description": "Секретная миссия по доставке беженцев через блокированную систему, не привлекая внимания патрулей.",
+    "crew_list": "  - Капитан (player): species=human, traits=решительный, дипломатичный\n  - Пилот (npc): species=human, traits=дерзкая, быстрая, азартная\n  - Инженер (npc): species=non_humanoid, traits=методичный, педантичный, безмятежный\n  - Офицер безопасности (npc): species=cybernetic, traits=бдительный, немногословный, дисциплинированный"
+  },
+  {
+    "case_id": "bridge_crisis",
+    "mission_name": "Спираль Андромеды",
+    "mission_description": "Спасательная операция на станции-ловушке у коллапсирующей звезды, обратный отсчёт до вспышки.",
+    "crew_list": "  - Капитан (player): species=humanoid, traits=авторитетный, расчётливый\n  - Научный сотрудник (npc): species=human, traits=любопытный, рассеянный, гениальный\n  - Врач (npc): species=human, traits=спокойный, ироничный, преданный\n  - Связист (npc): species=energy, traits=стремительный, язвительный"
+  },
+  {
+    "case_id": "bridge_big_crew",
+    "mission_name": "Долгий путь домой",
+    "mission_description": "Повреждённый корабль с сокращённой командой пытается вернуться на территорию Федерации через неизученный сектор.",
+    "crew_list": "  - Капитан (player): species=human, traits=усталый, стойкий, отважный\n  - Пилот (npc): species=humanoid, traits=суеверный, молчаливый\n  - Инженер (npc): species=human, traits=упрямая, изобретательная\n  - Навигатор (npc): species=human, traits=сосредоточенный, точный\n  - Офицер безопасности (npc): species=human, traits=бдительный, дисциплинированный\n  - Врач (npc): species=symbiotic, traits=двойной, заботливый"
+  },
+  {
+    "case_id": "bridge_first_contact",
+    "mission_name": "Голоса из глубины",
+    "mission_description": "Первый контакт с неразумным на вид сигналом из туманности, который оказывается коллективным разумом.",
+    "crew_list": "  - Капитан (player): species=human, traits=любопытный, осторожный\n  - Научный сотрудник (npc): species=humanoid, traits=восторженный, болтливая\n  - Связист (npc): species=human, traits=терпеливый, дотошный"
+  },
+  {
+    "case_id": "bridge_mutiny",
+    "mission_name": "Цена приказа",
+    "mission_description": "Приказ, грозящий погибелью трети экипажа, раскалывает мостик: часть офицеров на грани бунта.",
+    "crew_list": "  - Капитан (player): species=human, traits=жёсткий, конфликтный, уверенный\n  - Офицер безопасности (npc): species=human, traits=бдительный, неуверенный\n  - Инженер (npc): species=human, traits=вспыльчивая, прямолинейная\n  - Пилот (npc): species=cybernetic, traits=точный, лояльный"
+  },
+  {
+    "case_id": "bridge_alien_majority",
+    "mission_name": "Консилиум",
+    "mission_description": "Дипломатическая миссия: экипаж-меньшинство людей ведёт переговоры от имени союза разумов.",
+    "crew_list": "  - Капитан (player): species=non_humanoid, traits=мудрый, медлительный, поэтичный\n  - Советник (npc): species=energy, traits=стремительный, непредсказуемый\n  - Связист (npc): species=human, traits=дружелюбная, наблюдательная\n  - Врач (npc): species=symbiotic, traits=нежный, стойкий"
+  },
+  {
+    "case_id": "bridge_battle",
+    "mission_name": "Последний рубеж",
+    "mission_description": "Отбивание атаки рейдеров у пограничной колонии, щиты на пределе, раненые на мостике.",
+    "crew_list": "  - Капитан (player): species=human, traits=решительный, холоднокровный\n  - Пилот (npc): species=human, traits=азартная, дерзкая\n  - Офицер безопасности (npc): species=humanoid, traits=бдительный, безжалостный\n  - Инженер (npc): species=non_humanoid, traits=безмятежный, методичный"
+  },
+  {
+    "case_id": "bridge_quiet_shift",
+    "mission_name": "Вахта полночи",
+    "mission_description": "Ночная вахта в пустом секторе: рутина, мелкий ремонт и первый странный сигнал бедствия за месяц.",
+    "crew_list": "  - Офицер связи (player): species=human, traits=спокойная, наблюдательная\n  - Навигатор (npc): species=human, traits=сонный, добродушный\n  - Инженер (npc): species=cybernetic, traits=точный, ироничный"
+  },
+  {
+    "case_id": "bridge_ceremony",
+    "mission_name": "Знамя Федерации",
+    "mission_description": "Церемониальный рейс с новым послом на борту: парадный строй, инсигнии, официальная тоска.",
+    "crew_list": "  - Капитан (player): species=human, traits=парадный, сдержанный\n  - Помощник капитана (npc): species=cybernetic, traits=безупречный, вежливый\n  - Связист (npc): species=human, traits=болтливая, дружелюбная\n  - Врач (npc): species=human, traits=ироничный, преданный"
+  },
+  {
+    "case_id": "bridge_derelict",
+    "mission_name": "Корабль-призрак",
+    "mission_description": "Обследование дрейфующего судна-близнеца, пропавшего двадцать лет назад; экипаж весь на мостике на всякий случай.",
+    "crew_list": "  - Капитан (player): species=humanoid, traits=подозрительный, методичный\n  - Научный сотрудник (npc): species=human, traits=нервный, дотошный\n  - Офицер безопасности (npc): species=non_humanoid, traits=бдительный, немногословный\n  - Инженер (npc): species=human, traits=ворчливая, изобретательная\n  - Врач (npc): species=energy, traits=язвительный, вспыльчивый"
+  }
+]
