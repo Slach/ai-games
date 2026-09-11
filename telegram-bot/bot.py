@@ -1528,7 +1528,7 @@ async def game_selection_callback(callback: types.CallbackQuery, state: FSMConte
             if not game_id:
                 raise Exception("No game_id selected")
 
-            await _start_join_flow(message, state, game_id, fallback_lang=player_lang)
+            await _start_join_flow(message, state, game_id, fallback_lang=player_lang, user=callback.from_user)
 
     except Exception as e:
         logger.error(f"Failed to process game selection for player {player_id}: {e}", exc_info=True)
@@ -1553,11 +1553,12 @@ async def show_new_game_schedule_selection(message: types.Message, language: str
 async def _finalize_new_game_creation(
     message: types.Message,
     state: FSMContext,
-    player_id: int,
+    user: types.User,
     language: str,
     schedule: str,
 ) -> None:
     """Create the new game with the chosen schedule and start onboarding right away."""
+    player_id = user.id
     onboarding_msgs = lang.get_onboarding(language)
     # create_new_game blocks on mission + title + asset generation (~1 min).
     # Tell the player up front so the wait is not silent.
@@ -1572,7 +1573,7 @@ async def _finalize_new_game_creation(
         parse_mode="Markdown",
     )
 
-    player_name = (message.from_user.first_name if message.from_user else "") or f"Player {player_id}"
+    player_name = (user.first_name or "").strip() or f"Player {player_id}"
     await state.update_data(game_id=game_id, game_language=language)
     await start_onboarding_flow(message, state, player_id, game_id, player_name, language=language)
 
@@ -1612,7 +1613,7 @@ async def new_game_schedule_callback(callback: types.CallbackQuery, state: FSMCo
         logger.error(f"Failed to remove schedule keyboard: {e}", exc_info=True)
 
     try:
-        await _finalize_new_game_creation(message, state, player_id, player_lang, choice)
+        await _finalize_new_game_creation(message, state, callback.from_user, player_lang, choice)
     except Exception as e:
         logger.error(f"Failed to create new game with schedule '{choice}' for player {player_id}: {e}", exc_info=True)
         error_msgs = lang.get_errors(player_lang)
@@ -1639,7 +1640,7 @@ async def handle_custom_schedule_input(message: types.Message, state: FSMContext
         return
 
     try:
-        await _finalize_new_game_creation(message, state, player_id, player_lang, raw.lower())
+        await _finalize_new_game_creation(message, state, message.from_user, player_lang, raw.lower())
     except Exception as e:
         logger.error(f"Failed to create new game with custom schedule '{raw}' for player {player_id}: {e}", exc_info=True)
         error_msgs = lang.get_errors(player_lang)
@@ -1651,17 +1652,17 @@ async def _start_join_flow(
     state: FSMContext,
     game_id: str,
     fallback_lang: str,
+    user: types.User,
 ) -> None:
     """Begin onboarding for a specific game.
 
     Looks up the game's language and name, announces the selected game, then
-    starts the onboarding flow immediately — the character name is taken from
-    the Telegram profile. Shared by the game-list selection, the new-player
-    deep-link path and the deep-link conflict "Join" button.
+    starts the onboarding flow immediately. Shared by the game-list selection,
+    the new-player deep-link path and the deep-link conflict "Join" button.
+    The joining player is passed explicitly: `message` is often the bot's own
+    message (the button card), whose from_user is the bot itself.
     """
-    if message.from_user is None:
-        return
-    player_id = message.from_user.id
+    player_id = user.id
 
     game_lang = fallback_lang
     game_name = ""
@@ -1683,7 +1684,7 @@ async def _start_join_flow(
             parse_mode="Markdown",
         )
 
-    player_name = (message.from_user.first_name or "").strip() or f"Player {player_id}"
+    player_name = (user.first_name or "").strip() or f"Player {player_id}"
     await state.update_data(
         game_id=game_id,
         game_language=game_lang,
@@ -1767,7 +1768,7 @@ async def deeplink_conflict_callback(callback: types.CallbackQuery, state: FSMCo
 
     if action == "join":
         logger.info(f"Player {player_id} chose to join new game {game_id} via deeplink conflict")
-        await _start_join_flow(message, state, game_id, fallback_lang=player_lang)
+        await _start_join_flow(message, state, game_id, fallback_lang=player_lang, user=callback.from_user)
     elif action == "back":
         msgs = lang.get_onboarding(player_lang)
         await message.answer(
@@ -1916,7 +1917,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
                     await _show_deeplink_game_conflict(message, player_lang, game_id, existing_game_id)
                 else:
                     logger.info(f"Player {player_id} deep-linked to game {game_id}; previous game {existing_game_id} ended, joining new game")
-                    await _start_join_flow(message, state, game_id, fallback_lang=player_lang)
+                    await _start_join_flow(message, state, game_id, fallback_lang=player_lang, user=message.from_user)
                 return
 
             # Game already ended — show finale + game list instead of welcoming back.
@@ -2017,7 +2018,7 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
         else:
             if game_id:
                 # Deep link to a specific game — ask for player name before onboarding
-                await _start_join_flow(message, state, game_id, fallback_lang=DEFAULT_LANGUAGE)
+                await _start_join_flow(message, state, game_id, fallback_lang=DEFAULT_LANGUAGE, user=message.from_user)
             else:
                 # New player — straight to game selection in the Telegram locale
                 await show_game_selection(message, state, player_lang)

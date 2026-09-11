@@ -1,25 +1,25 @@
 {
   "ornith-ai/Ornith-1.5-35B": {
     "combined_outcome": {
-      "score": 9667.0,
-      "seconds": 52.5,
+      "score": 93.3,
+      "seconds": 49.6,
       "n": 6
     },
     "npc_choice": {
-      "score": 9475.0,
-      "seconds": 102.1,
+      "score": 89.5,
+      "seconds": 102.4,
       "n": 20
     }
   },
-  "mradermacher/Gemma-4-Novelist-31B": {
+  "Jackrong/Qwopus3.8-27B-Flash": {
     "combined_outcome": {
-      "score": 0.0,
-      "seconds": 232.2,
+      "score": 100.0,
+      "seconds": 110.8,
       "n": 6
     },
     "npc_choice": {
-      "score": 9475.0,
-      "seconds": 156.5,
+      "score": 52.2,
+      "seconds": 112.2,
       "n": 20
     }
   }
