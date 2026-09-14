@@ -66,8 +66,6 @@ services:
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
       - COMFYUI_TXT2IMG_MODEL=${COMFYUI_TXT2IMG_MODEL:-flux2_klein_4b_gguf_q4}
       - COMFYUI_AVATAR_MODEL=${COMFYUI_AVATAR_MODEL:-}
-      - ONBOARDING_QUESTIONS_COUNT=${ONBOARDING_QUESTIONS_COUNT:-5}
-      - ONBOARDING_OPTIONS_COUNT=${ONBOARDING_OPTIONS_COUNT:-5}
       # Web server bind address (0.0.0.0 needed in Docker)
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-8000}

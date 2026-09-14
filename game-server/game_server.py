@@ -3248,8 +3248,8 @@ class GameServer:
     ) -> list[dict[str, str]]:
         """Generate simplified avatar prompts for NPCs at game start.
 
-        Unlike human players who go through full onboarding with species/gender interviews,
-        NPCs get randomized prompts for variety. No interview needed.
+        Unlike human players who accept a proposed character at onboarding,
+        NPCs get randomized prompts for variety.
         """
         logger.info(f"[NPC_AVATAR] Generating avatar prompts for {len(npc_roles)} NPCs")
 

@@ -404,8 +404,6 @@ All inter-service dependencies use `condition: service_healthy`.
 | `GAME_SERVER_URL` | `http://game-server:8000` | telegram-bot, game-scheduler | API URL |
 | `GAME_SCHEDULE` | `8h` | game-scheduler | Turn schedule: Nh/Nm/Ns, HH:MM, HH:MM,..., DAY-HH:MM |
 | `GAME_SCHEDULER_MODE` | `scheduled` | game-scheduler | Run mode |
-| `ONBOARDING_QUESTIONS_COUNT` | `5` | game-server | Questions per onboarding |
-| `ONBOARDING_OPTIONS_COUNT` | `5` | game-server | Options per question |
 | `AI_FSM_DB` | `./bot_storage.db` | telegram-bot | Bot state database path |
 | `TELEGRAM_SOCKS_PROXY` | — | telegram-bot | Optional SOCKS5 proxy |
 
