@@ -84,6 +84,10 @@ MODELS: dict[str, ModelConfig] = {
         label="LLaDA-Image-Turbo (INT8 transformer + Q4_K_M GGUF encoder)",
         builder="llada_image_turbo",
     ),
+    "qwen_image_2512": ModelConfig(
+        label="Qwen-Image-2512 (GGUF Q4_K_M + Lightning 4-step LoRA)",
+        builder="qwen_image_2512",
+    ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
@@ -95,6 +99,21 @@ DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "flux2_klein_4b_gguf_
 # covers every "npc_avatar_<role>" kind (see _prefix_override).
 KIND_MODEL_OVERRIDES: dict[str, str] = {
 }
+
+# Route avatar generation (player "avatar" and "npc_avatar_<role>" kinds) to
+# a stronger txt2img model. The 4B FLUX.2 [klein] default tends to collapse
+# complex prompts (exotic non-humanoid aliens) into a generic person; the 20B
+# Qwen-Image-2512 follows them. Set in .env, e.g. COMFYUI_AVATAR_MODEL=qwen_image_2512.
+# Empty/unset = avatars use the global default model.
+_avatar_model_env = os.getenv("COMFYUI_AVATAR_MODEL", "").strip()
+if _avatar_model_env:
+    if _avatar_model_env not in MODELS:
+        raise ValueError(
+            f"COMFYUI_AVATAR_MODEL={_avatar_model_env!r} is not a registered model "
+            f"(known: {', '.join(MODELS)})"
+        )
+    KIND_MODEL_OVERRIDES["avatar"] = _avatar_model_env
+    KIND_MODEL_OVERRIDES["npc_avatar"] = _avatar_model_env
 
 
 def _prefix_override(overrides: dict[str, str], kind: str) -> str | None:

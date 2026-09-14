@@ -19,7 +19,6 @@ from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaPhoto,
 )
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiohttp import web
@@ -777,7 +776,7 @@ async def _deliver_outcome(
                 len(wait_events),
             )
 
-    # Pre-download action images for album
+    # Pre-download action images (each is sent as its own message)
     _prefetched_action_photos: dict[int | str, BufferedInputFile | None] = {}
     if action_images:
         for img_entry in action_images:
@@ -915,11 +914,12 @@ async def _deliver_outcome(
 
     outcome_message = "\n".join(parts)
 
-    # Helper: send album of other players'/NPCs' actions
-    async def _send_others_album(target_player_id: int):
+    # Helper: send other players'/NPCs' actions as individual photo messages
+    # with captions. Telegram's desktop client truncates captions inside a
+    # media album, so each action image goes out as its own message.
+    async def _send_others_actions(target_player_id: int):
         if not action_images:
             return
-        media_items = []
         for img_entry in action_images:
             pid = img_entry.get("player_id")
             caption = img_entry.get("caption", "")
@@ -934,36 +934,34 @@ async def _deliver_outcome(
                 continue
             if not caption:
                 caption = outcome_msgs["turn_prefix"].format(turn=turn)
-            media_items.append(InputMediaPhoto(media=photo, caption=caption))
-
-        if not media_items:
-            return
-
-        max_group_size = 10
-        for chunk_start in range(0, len(media_items), max_group_size):
-            chunk = media_items[chunk_start : chunk_start + max_group_size]
             try:
                 await call_with_retry(
-                    lambda: bot.send_media_group(
+                    lambda: bot.send_photo(
                         chat_id=target_player_id,
-                        media=chunk,
+                        photo=photo,
+                        caption=caption,
                     )
                 , max_retries=3, base_delay=1.0, max_delay=10.0)
-            except TelegramBadRequest as album_err:
-                err_str = str(album_err)
+            except TelegramBadRequest as send_err:
+                err_str = str(send_err)
                 if "USER_IS_BLOCKED" in err_str:
                     asyncio.create_task(_auto_kick_blocked_player(target_player_id))
                 logger.warning(
-                    "[PUSH_OUTCOME] Failed to send actions album to player %d: %s",
+                    "[PUSH_OUTCOME] Failed to send action photo to player %d: %s",
                     target_player_id,
-                    album_err,
+                    send_err,
                 )
-            except Exception as album_err:
+                return
+            except Exception as send_err:
                 logger.warning(
-                    "[PUSH_OUTCOME] Actions album error for player %d: %s",
+                    "[PUSH_OUTCOME] Action photo error for player %d: %s",
                     target_player_id,
-                    album_err,
+                    send_err,
                 )
+                return
+            # Per-chat flood limit is ~1 msg/sec; stay under it when the
+            # crew produces many action images in a row.
+            await asyncio.sleep(1.1)
 
     current_player_delivered = False
     for player_id in alive_players:
@@ -972,7 +970,7 @@ async def _deliver_outcome(
                 current_player_delivered = True
             continue
         try:
-            await _send_others_album(player_id)
+            await _send_others_actions(player_id)
 
             if outcome_image_url:
                 img_data = await _download_image(outcome_image_url, 30)

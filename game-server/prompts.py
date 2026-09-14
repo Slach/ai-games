@@ -1866,11 +1866,12 @@ def build_personal_briefing_system(language: str) -> str:
     )
 
 
-# ── Background library prompts ─────────────────────────────────────
+# ── Shared per-turn background prompt ───────────────────────────────
 
-# Canonical empty-location types. Each is generated once per game (no
-# characters present) and later used as the scene backdrop when Qwen-Image-Edit
-# composes a character into the environment.
+# Canonical location keys, kept ONLY for tools/prompt_optimizer (its historical
+# scene_instruction trainset validates against this list). Runtime no longer
+# uses per-location backgrounds: each turn gets ONE shared scene background
+# generated from its setting/conflict (see build_turn_background_prompts).
 BACKGROUND_LOCATION_TYPES = [
     "bridge",
     "engineering",
@@ -1882,73 +1883,64 @@ BACKGROUND_LOCATION_TYPES = [
     "main_screen",
 ]
 
-_BACKGROUND_LOCATION_LABELS = {
-    "bridge": ("Мостик корабля — капитанский мостик", "Ship bridge — the command bridge"),
-    "engineering": ("Машинное отделение / инженерный отсек", "Engineering / engine room"),
-    "sickbay": ("Медицинский отсек", "Sickbay / medical bay"),
-    "lab": ("Научная лаборатория", "Science laboratory"),
-    "corridor": ("Коридор корабля", "Ship corridor"),
-    "exterior_ship": ("Корабль снаружи в космосе", "Ship exterior in space"),
-    "planet_surface": ("Поверхность планеты", "Planet surface"),
-    "main_screen": ("Главный экран мостика (тактическая карта)", "Bridge main screen (tactical display)"),
-}
 
+def build_turn_background_prompts(
+    language: str,
+    setting: str,
+    conflict: str,
+) -> tuple[str, str]:
+    """Build (system, user) prompts for the shared per-turn background LLM call.
 
-def build_background_prompts_user(language: str, mission: dict, crew_summary: str) -> str:
-    """Build the user prompt for the background-library LLM call.
-
-    The model returns one English image prompt per location type, reflecting the
-    mission's tone and the crew's species composition (so stations and decor fit
-    humanoids / energy beings / cybernetic forms alike).
+    The model returns ONE English txt2img prompt describing the turn's shared
+    scene — the environment where every action of the turn takes place — with
+    no characters present. The prompt is later passed to Qwen-Image-Edit as
+    the scene description so action instructions reference only objects that
+    actually exist in that shared background.
     """
-    labels = _BACKGROUND_LOCATION_LABELS
-    loc_lines = "\n".join(f"- {k}: {labels[k][0 if language == LANGUAGE_RU else 1]}" for k in BACKGROUND_LOCATION_TYPES)
-    mission_name = mission.get("name", "")
-    mission_desc = mission.get("description", "") or mission.get("short_description", "")
-
     if language == LANGUAGE_RU:
-        return (
-            f"Миссия: {mission_name}\n{mission_desc}\n\n"
-            f"Состав экипажа:\n{crew_summary}\n\n"
-            "Для КАЖДОЙ из перечисленных локаций напиши промпт на АНГЛИЙСКОМ для генерации "
-            "пустого интерьера/экстерьера БЕЗ персонажей. Фоны должны быть консистентны "
-            "эстетике корабля и миссии; рабочие станции и терминалы — соответствовать "
-            f"видовому составу экипажа. Кинематографично, sci-fi/space opera, 4K.\n"
-            f"Локации:\n{loc_lines}"
-        )
-    return (
-        f"Mission: {mission_name}\n{mission_desc}\n\n"
-        f"Crew:\n{crew_summary}\n\n"
-        "For EACH of the listed locations, write an ENGLISH image-generation prompt for an "
-        "empty interior/exterior with NO characters. Backgrounds must be consistent with the "
-        "ship/mission aesthetic; workstations and terminals should fit the crew's species "
-        f"composition. Cinematic, sci-fi/space opera, 4K quality.\n"
-        f"Locations:\n{loc_lines}"
-    )
-
-
-def build_background_prompts_system(language: str) -> str:
-    """System prompt for the background-library LLM call."""
-    if language == LANGUAGE_RU:
-        return (
+        system = (
             "Ты — эксперт по cinematic prompt engineering для AI-генерации изображений. "
-            "Создаёшь промпты для пустых фоновых локаций космического корабля (БЕЗ персонажей), "
-            "которые позже будут использоваться как холст для вставки персонажей. "
-            "Каждый промпт — детальное описание окружения, освещения, атмосферы на английском."
+            "Пишешь промпты для пустых сцен (БЕЗ персонажей) в эстетике sci-fi/space opera. "
+            "Промпт всегда на английском: окружение, объекты, освещение, атмосфера, композиция."
         )
-    return (
+        user = (
+            f"Обстановка хода (Setting): {setting}\n"
+            f"Ситуация хода (Conflict): {conflict or '—'}\n\n"
+            "Напиши ОДИН промпт на АНГЛИЙСКОМ для генерации общей сцены этого хода — "
+            "место, где происходят все действия экипажа в этом ходу. "
+            "Строго БЕЗ персонажей и людей: только окружение, техника, объекты, освещение. "
+            "Сцена должна быть конкретной и узнаваемой (интерьер отсека, поверхность планеты, "
+            "открытый космос с кораблём — что следует из Setting), с 2-4 заметными объектами, "
+            "на которые можно ссылаться при последующей вставке персонажей. "
+            "Кинематографичный широкий кадр, детализация, 4K."
+        )
+        return system, user
+    system = (
         "You are an expert cinematic prompt engineer for AI image generation. "
-        "You create prompts for empty starship/space-opera locations (NO characters) "
-        "that will later serve as backdrops for composing characters into the scene. "
-        "Each prompt is a detailed English description of environment, lighting, and atmosphere."
+        "You write prompts for empty scenes (NO characters) in a sci-fi/space-opera aesthetic. "
+        "The prompt is always English: environment, objects, lighting, atmosphere, composition."
     )
+    user = (
+        f"Turn setting: {setting}\n"
+        f"Turn situation: {conflict or '—'}\n\n"
+        "Write ONE English txt2img prompt for this turn's shared scene — the place where "
+        "every crew action of the turn takes place. "
+        "Strictly NO characters or people: only environment, machinery, objects, lighting. "
+        "The scene must be concrete and recognizable (a ship compartment interior, a planet "
+        "surface, open space with the ship — whatever the setting implies), with 2-4 notable "
+        "objects that character placements can later refer to. "
+        "Cinematic wide shot, detailed, 4K quality."
+    )
+    return system, user
 
 
 # ── Scene instruction prompt (Qwen-Image-Edit) ─────────────────────
 
-# Few-shot demo block compiled offline by tools/prompt_optimizer. The output
-# instruction is always English; the block is appended to the user prompt of
-# the matching language when non-empty (see NPC_DECISION_DEMOS above).
+# Few-shot demo blocks were compiled for the old per-location-background flow
+# (the LLM picked a background_location) and are invalidated by the shared
+# per-turn background rework: inputs/answers no longer match the schema.
+# Left empty until re-compiled by tools/prompt_optimizer against the new
+# signature (scene_description in, instruction out).
 SCENE_INSTRUCTION_DEMOS = {
     LANGUAGE_RU: "",
     LANGUAGE_EN: "",
@@ -1974,44 +1966,7 @@ BRIDGE_IMAGE_DEMOS = {
     LANGUAGE_EN: "",
 }
 
-# Compiled by tools/prompt_optimizer (BootstrapFewShot + VL judge over ComfyUI
-# generations, trainset 4 / devset 2); see
-# tools/prompt_optimizer/compiled/scene_instruction_ru.json.
-SCENE_INSTRUCTION_DEMOS[LANGUAGE_RU] = """
-ПРИМЕРЫ ДЛЯ КАЛИБРОВКИ (инструкция всегда на английском и начинается с 'Place the character from Picture 1'; буквально не копируй):
 
---- Пример 1 ---
-Действие: Резонирует с перегруженным кристаллическим ядром реактора, стабилизируя его пульсацию
-Описание вида: Парящий кластер светящихся кристаллов без конечностей и лица, пульсирует светом при эмоциях
-Локация: engineering
-Обстановка: Машинное отделение, реактор на грани перегрузки, аварийное освещение мигает красным
-Категория вида: non_humanoid
-Ответ: {"instruction": "Place the character from Picture 1 floating at the center of the reactor chamber, positioned directly before the glowing reactor core. Suspend the crystalline cluster in mid-air, gently rotating as it resonates with the core, its luminous shards pulsing in rhythm with the reactor's unstable energy waves. Emit radiant light rays and energy ripples radiating outward from the character, visually harmonizing with the reactor's pulsation. Illuminate the crystal cluster with a bright inner glow that contrasts against the flashing red emergency lighting, casting an ethereal luminescence across the surrounding machinery. Compose the scene with the reactor core dominating the background and the floating crystalline figure in the foreground, using dramatic low-key lighting with red emergency strobes and cool cyan accents to emphasize the critical overload atmosphere.", "background_location": "engineering"}
-
---- Пример 2 ---
-Действие: Зависает над тактическим столом мостика, преломляя голограмму сектора сквозь свои грани
-Описание вида: Парящий кластер светящихся кристаллов без конечностей и лица, меняет цвет свечения
-Локация: bridge
-Обстановка: Капитанский мостик, вокруг голограмма звёздной системы, экипаж на постах
-Категория вида: non_humanoid
-Ответ: {"instruction": "Place the character from Picture 1 hovering just above the tactical table on the ship's bridge, its floating crystalline cluster suspended mid-air without any limbs or facial features. Orient the crystals so they refract and project the glowing holographic sector display upward through their faceted surfaces, scattering prismatic light. Let the creature's luminous glow shift and pulse with chromatic color changes across its facets, casting animated colored reflections onto the surrounding console panels. Position it centered over the tactical table, slightly elevated above the holographic starmap projection, with the bridge crew visible at their stations in the background. Illuminate the scene with the cool blue-green glow of the star system hologram combined with the creature's own shifting multicolored light, creating dynamic contrasting highlights across the crystals. Compose the shot to emphasize the floating crystalline form dominating the tactical display, with soft atmospheric glow and light scatter effects blending the creature into the holographic projection.", "background_location": "bridge"}
-
---- Пример 3 ---
-Действие: Склоняется над раненым пациентом, регулируя медкапсулу точными серво-движениями
-Описание вида: Кибернетический андроид с открытыми механическими узлами и мягким внутренним свечением
-Локация: sickbay
-Обстановка: Медицинский отсек после стычки, одна капсула мигает тревогой
-Категория вида: cybernetic
-Ответ: {"instruction": "Place the character from Picture 1 leaning over a wounded patient lying on a med-bed, torso bent forward and slightly downward in a focused working posture. Position the android with one or both arms extended, hands precisely adjusting a glowing medical capsule unit, conveying smooth deliberate servo-movements. The cybernetic body should reveal exposed mechanical joints and components with a soft inner glow illuminating the immediate area. Illuminate the scene with low clinical lighting, cool blue and amber emergency tones, the capsule pulsing a warm warning light that casts subtle flickering highlights across the android's metallic surfaces. Compose the character at a three-quarter angle, centered and dominant in the frame, with medical consoles, blinking panels, and equipment softly blurred in the sickbay background. Maintain a tense, concentrated atmosphere befitting a medical emergency after a battle, with a shallow depth of field isolating the android and the patient from the dimmed surroundings.", "background_location": "sickbay"}
-
---- Пример 4 ---
-Действие: Изучает инопланетный артефакт под сканером, данных на экране прибора множатся
-Описание вида: Гуманоидный робот с гладкой синтетической кожей и техническими деталями
-Локация: lab
-Обстановка: Научная лаборатория, на столе пульсирующий артефакт неизвестного происхождения
-Категория вида: cybernetic
-Ответ: {"instruction": "Place the character from Picture 1 standing at a scientific workbench in the laboratory, leaning slightly forward with focused attention while operating a handheld scanner aimed at a pulsating unknown alien artifact resting on the table. Position the character so the scanner's beam or light reaches toward the artifact, and arrange glowing data readouts to multiply and scatter across the device's screen in front of them. Convey an expression of intense concentration and scientific curiosity, with the character's posture suggesting active analysis and discovery. Illuminate the scene with the artifact's pulsing glow combined with the device's screen light casting dynamic highlights on the character's synthetic skin and mechanical details, creating strong contrast against the laboratory surroundings. Compose the shot to emphasize the interaction between the character, the scanner, and the artifact, with the lab equipment and technology visible in the background to establish the scientific setting.", "background_location": "lab"}
-"""
 
 
 def build_scene_instruction_system(language: str) -> str:
@@ -2019,23 +1974,33 @@ def build_scene_instruction_system(language: str) -> str:
 
     Qwen-Image-Edit understands instruction-style prompts that refer to the
     reference images as "Picture 1" (character) and "Picture 2" (background).
+    Picture 2 is the turn's SHARED background: the whole crew acts in the same
+    scene, so the instruction must stage the action inside that exact scene
+    instead of inventing a new environment.
     """
     if language == LANGUAGE_RU:
         return (
             "Ты — эксперт по написанию инструкций для AI image-editing модели Qwen-Image-Edit. "
-            "Модель получает два изображения: Picture 1 — персонаж (аватар), Picture 2 — фон сцены. "
-            "Напиши инструкцию на АНГЛИЙСКОМ, как разместить персонажа из Picture 1 в окружение "
-            "из Picture 2: поза, действие, эмоция, освещение, композиция. "
+            "Модель получает два изображения: Picture 1 — персонаж (аватар), Picture 2 — ОБЩИЙ фон "
+            "сцены текущего хода (в нём действуют все члены экипажа в этом ходу). "
+            "Напиши инструкцию на АНГЛИЙСКОМ, как разместить персонажа из Picture 1 в сцену из "
+            "Picture 2: поза, действие, положение относительно объектов сцены, освещение. "
+            "Опирайся ТОЛЬКО на объекты, которые есть в описании сцены (и объекты из самого "
+            "действия) — НЕ добавляй новых локаций, планет, кораблей, чёрных дыр и прочего, "
+            "чего нет в сцене. "
             "Описание персонажа и его идентичность НЕ повторяй — модель сохранит их сама. "
-            "Фокус на действии и постановке."
+            "Фокус на действии и постановке внутри заданной сцены."
         )
     return (
         "You are an expert at writing instructions for the Qwen-Image-Edit AI model. "
-        "The model receives two images: Picture 1 — a character (avatar), Picture 2 — the scene background. "
-        "Write an ENGLISH instruction on how to place the character from Picture 1 into the environment "
-        "of Picture 2: pose, action, emotion, lighting, composition. "
+        "The model receives two images: Picture 1 — a character (avatar), Picture 2 — the SHARED "
+        "scene background of the current turn (the whole crew acts in this same scene). "
+        "Write an ENGLISH instruction on how to place the character from Picture 1 into the scene "
+        "of Picture 2: pose, action, position relative to the scene's objects, lighting. "
+        "Refer ONLY to objects present in the scene description (and objects named by the action "
+        "itself) — do NOT add new locations, planets, ships, black holes or anything not in the scene. "
         "Do NOT restate the character's description or identity — the model preserves it automatically. "
-        "Focus on the action and staging."
+        "Focus on the action and staging within the given scene."
     )
 
 
@@ -2043,7 +2008,7 @@ def build_scene_instruction_user(
     language: str,
     action_text: str,
     species_desc: str,
-    background_location: str | None,
+    scene_description: str,
     scene_context: str,
     species_category: str = "",
 ) -> str:
@@ -2062,15 +2027,23 @@ def build_scene_instruction_user(
     the action through the physics of the being's form instead.
 
     Args:
+        scene_description: English description of the turn's SHARED background
+            (Picture 2, as generated by build_turn_background_prompts). The
+            instruction must stage the action inside this exact scene and use
+            only its objects. Empty when no shared background exists — the
+            instruction then stages the action from scene_context alone.
         scene_context: Free-form description of the current turn's setting and
-            situation (typically global_circumstances setting + conflict). Lets
-            the model pick a background_location that actually matches the scene
-            rather than guessing from the action text alone.
+            situation (typically global_circumstances setting + conflict).
         species_category: Canonical species key (human / humanoid / non_humanoid
             / energy / cybernetic / symbiotic). Empty string = human fallback.
             Only non_humanoid / energy / symbiotic trigger the anatomy guard.
     """
-    bg_note = f" Scene location hint: {background_location}." if background_location else ""
+    if scene_description:
+        scene_block_ru = f"\nСцена из Picture 2 (общий фон хода, БЕЗ персонажей): {scene_description}\n"
+        scene_block_en = f"\nPicture 2 scene (the turn's shared background, NO characters in it): {scene_description}\n"
+    else:
+        scene_block_ru = ""
+        scene_block_en = ""
     ctx_block = f"\nScene context: {scene_context}\n" if scene_context else ""
     anatomy_guard_ru = ""
     anatomy_guard_en = ""
@@ -2110,47 +2083,29 @@ def build_scene_instruction_user(
         )
     if language == LANGUAGE_RU:
         user = (
-            f"Действие: {action_text}.{bg_note}\n"
-            f"Описание вида: {species_desc}{ctx_block}\n"
+            f"Действие: {action_text}\n"
+            f"Описание вида: {species_desc}{scene_block_ru}{ctx_block}\n"
             f"{anatomy_guard_ru}"
-            "Важно о локации: выбирай её по СОВОКУПНОСТИ scene_context (Setting) и текста действия, "
-            "а не по одному только действию. "
-            "Если Setting явно описывает поверхность планеты, высадку, лагерь, руины, джунгли, пещеру, "
-            "шахту, болото и т.п. — выбирай planet_surface. "
-            "Если Setting или действие явно помещают персонажа физически вне корабля (скафандр, шлюз, "
-            "шаттл, выход в открытый космос) — выбирай exterior_ship. "
-            "В остальных случаях выбирай внутренний отсек: bridge (по умолчанию для приказов/управления), "
-            "engineering (ремонт/двигатели/энергосистемы), sickbay (лечение), lab (исследования), corridor. "
-            "Оговорка: слова «гравитационный шторм, обломки, орбита, радиация» в действии — это то, "
-            "КУДА НАПРАВЛЕНО действие (например, персонаж смотрит на шторм через иллюминатор), а НЕ то, "
-            "где стоит персонаж. Не помещай в космос только из-за таких слов — но если Setting прямо "
-            "говорит о поверхности планеты, этому нужно доверять и выбирать planet_surface. "
-            "Допустимые значения: " + ", ".join(BACKGROUND_LOCATION_TYPES) + ".\n\n"
             "Напиши ОДНУ инструкцию (1-3 предложения) для Qwen-Image-Edit, "
             "начиная с 'Place the character from Picture 1...'. "
-            "Опиши позу, действие, освещение. Без описания внешности персонажа."
+            "Персонаж действует ВНУТРИ сцены из Picture 2: привяжи позу и действие к конкретным "
+            "объектам этой сцены (у консоли, над столом, между механизмами — что реально есть "
+            "в описании сцены). Освещение бери из сцены. "
+            "НЕ добавляй объекты и локации, которых нет в описании сцены и в действии. "
+            "Без описания внешности персонажа."
         )
     else:
         user = (
-            f"Action: {action_text}.{bg_note}\n"
-        f"Species: {species_desc}{ctx_block}\n"
+            f"Action: {action_text}\n"
+        f"Species: {species_desc}{scene_block_en}{ctx_block}\n"
         f"{anatomy_guard_en}"
-        "Important about location: pick the location from the COMBINATION of scene_context "
-        "(Setting) and the action text, not from the action alone. "
-        "If the Setting explicitly describes a planet surface, landing, camp, ruins, jungle, cave, "
-        "mine, swamp, etc. — pick planet_surface. "
-        "If the Setting or the action explicitly places the character physically off the ship "
-        "(spacesuit, airlock, shuttle, open space walk) — pick exterior_ship. "
-        "Otherwise pick an interior compartment: bridge (default for command/controls), engineering "
-        "(repairs/engines/power systems), sickbay (healing), lab (research), corridor. "
-        "Caveat: words like \"gravitational storm, debris, orbit, radiation\" in the action describe "
-        "WHERE THE ACTION IS DIRECTED (e.g. the character watches a storm through a viewport), NOT "
-        "where the character stands — do not place them in space just because of those words. But when "
-        "the Setting plainly states a planet surface, trust it and pick planet_surface. "
-        "Valid values: " + ", ".join(BACKGROUND_LOCATION_TYPES) + ".\n\n"
         "Write ONE instruction (1-3 sentences) for Qwen-Image-Edit, "
         "starting with 'Place the character from Picture 1...'. "
-        "Describe pose, action, lighting. Do not describe the character's appearance."
+        "The character acts INSIDE the scene of Picture 2: anchor the pose and action to concrete "
+        "objects of that scene (at a console, above the table, between the machinery — whatever "
+        "is actually in the scene description). Take the lighting from the scene. "
+        "Do NOT add objects or locations that are absent from the scene description and the action. "
+        "Do not describe the character's appearance."
     )
     demos = SCENE_INSTRUCTION_DEMOS[LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN]
     if demos:

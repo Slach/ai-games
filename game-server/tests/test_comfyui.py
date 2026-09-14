@@ -23,6 +23,7 @@ from image_generator import (
     ImageGenerator,
     _build_flux2_klein_workflow,
     _build_qwen_edit_workflow,
+    _build_qwen_image_2512_workflow,
     _build_zimage_turbo_workflow,
     create_image_generator,
 )
@@ -280,6 +281,67 @@ class TestFlux2KleinImg2ImgWorkflow(unittest.TestCase):
         self.assertEqual(wf["3"]["inputs"]["steps"], 4)
 
 
+class TestQwenImage2512Workflow(unittest.TestCase):
+    """Test Qwen-Image-2512 (Lightning) text-to-image workflow JSON structure."""
+
+    def test_basic_workflow_structure(self):
+        """Workflow should have all required nodes."""
+        wf = _build_qwen_image_2512_workflow(prompt="test prompt", width=768, height=1024, seed=0, filename_prefix="")
+        required_nodes = ["10", "11", "12", "30", "29", "27", "28", "13", "3", "8", "9"]
+        for node_id in required_nodes:
+            self.assertIn(node_id, wf, f"Missing node {node_id}")
+
+    def test_gguf_loader(self):
+        """UnetLoaderGGUF should load the 2512 Q4_K_M GGUF."""
+        wf = _build_qwen_image_2512_workflow(prompt="t", width=768, height=1024, seed=0, filename_prefix="")
+        self.assertEqual(wf["10"]["class_type"], "UnetLoaderGGUF")
+        self.assertEqual(wf["10"]["inputs"]["unet_name"], "qwen-image-2512-Q4_K_M.gguf")
+
+    def test_lightning_lora_then_shift(self):
+        """Lightning LoRA must sit between the UNET and ModelSamplingAuraFlow."""
+        wf = _build_qwen_image_2512_workflow(prompt="t", width=768, height=1024, seed=0, filename_prefix="")
+        lora = wf["11"]
+        self.assertEqual(lora["class_type"], "LoraLoaderModelOnly")
+        self.assertIn("2512-Lightning-4steps", lora["inputs"]["lora_name"])
+        self.assertEqual(lora["inputs"]["strength_model"], 1.0)
+        shift = wf["12"]
+        self.assertEqual(shift["class_type"], "ModelSamplingAuraFlow")
+        self.assertEqual(shift["inputs"]["shift"], 3.1)
+        self.assertEqual(shift["inputs"]["model"], ["11", 0])
+
+    def test_clip_and_vae_match_edit_model(self):
+        """Text encoder and VAE are shared with the Qwen-Edit model files."""
+        wf = _build_qwen_image_2512_workflow(prompt="t", width=768, height=1024, seed=0, filename_prefix="")
+        self.assertEqual(wf["30"]["inputs"]["clip_name"], "qwen_2.5_vl_7b_fp8_scaled.safetensors")
+        self.assertEqual(wf["30"]["inputs"]["type"], "qwen_image")
+        self.assertEqual(wf["29"]["inputs"]["vae_name"], "qwen_image_vae.safetensors")
+
+    def test_ksampler_lightning_settings(self):
+        """KSampler should use Lightning settings: 4 steps, cfg 1.0, euler/simple."""
+        wf = _build_qwen_image_2512_workflow(prompt="t", width=768, height=1024, seed=0, filename_prefix="")
+        ks = wf["3"]
+        self.assertEqual(ks["class_type"], "KSampler")
+        self.assertEqual(ks["inputs"]["steps"], 4)
+        self.assertEqual(ks["inputs"]["cfg"], 1.0)
+        self.assertEqual(ks["inputs"]["sampler_name"], "euler")
+        self.assertEqual(ks["inputs"]["scheduler"], "simple")
+        self.assertEqual(ks["inputs"]["model"], ["12", 0])
+        self.assertEqual(ks["inputs"]["latent_image"][0], "13")
+
+    def test_sd3_latent(self):
+        """Latent must be EmptySD3LatentImage (16-channel SD3-style)."""
+        wf = _build_qwen_image_2512_workflow(prompt="t", width=768, height=1024, seed=0, filename_prefix="")
+        self.assertEqual(wf["13"]["class_type"], "EmptySD3LatentImage")
+        self.assertEqual(wf["13"]["inputs"]["width"], 768)
+        self.assertEqual(wf["13"]["inputs"]["height"], 1024)
+
+    def test_negative_prompt_not_empty(self):
+        """Unlike distilled models, 2512 Lightning uses a real negative prompt."""
+        wf = _build_qwen_image_2512_workflow(prompt="t", width=768, height=1024, seed=0, filename_prefix="")
+        self.assertTrue(wf["28"]["inputs"]["text"].strip())
+        self.assertEqual(wf["28"]["class_type"], "CLIPTextEncode")
+
+
 class TestQwenEditWorkflow(unittest.TestCase):
     """Test Qwen-Image-Edit-2511 workflow JSON structure."""
 
@@ -358,13 +420,13 @@ class TestQwenEditWorkflow(unittest.TestCase):
         self.assertEqual(ks["inputs"]["scheduler"], "simple")
         self.assertEqual(ks["inputs"]["denoise"], 1.0)
 
-    def test_alien_species_no_lora_8_steps(self):
-        """Non-humanoid species must skip Lightning LoRA and use 8 steps.
+    def test_alien_species_no_lora_20_steps(self):
+        """Non-humanoid species must skip Lightning LoRA and use 20 steps.
 
         At strength 1.0 the Lightning LoRA suppresses avatar identity and
         collapses non-humanoid characters into a humanoid. The LoRA node is
-        removed and the sampler runs the full 8-step schedule directly on the
-        GGUF model.
+        removed and the sampler runs the full step budget directly on the
+        GGUF model (8 steps at cfg 1.0 produced undercooked output).
         """
         wf = _build_qwen_edit_workflow(
             instruction="t", character_filename="a.png", background_filename=None,
@@ -374,11 +436,11 @@ class TestQwenEditWorkflow(unittest.TestCase):
         )
         self.assertNotIn("50", wf)
         ks = wf["100"]
-        self.assertEqual(ks["inputs"]["steps"], 8)
+        self.assertEqual(ks["inputs"]["steps"], 20)
         self.assertEqual(ks["inputs"]["model"], ["10", 0])
 
-    def test_energy_species_no_lora_8_steps(self):
-        """Energy species must also skip Lightning LoRA and use 8 steps."""
+    def test_energy_species_no_lora_20_steps(self):
+        """Energy species must also skip Lightning LoRA and use 20 steps."""
         wf = _build_qwen_edit_workflow(
             instruction="t", character_filename="a.png", background_filename=None,
             width=1024, height=1024, seed=0, filename_prefix="",
@@ -386,7 +448,7 @@ class TestQwenEditWorkflow(unittest.TestCase):
             species_category="energy",
         )
         self.assertNotIn("50", wf)
-        self.assertEqual(wf["100"]["inputs"]["steps"], 8)
+        self.assertEqual(wf["100"]["inputs"]["steps"], 20)
         self.assertEqual(wf["100"]["inputs"]["model"], ["10", 0])
 
     def test_human_species_keeps_lora(self):

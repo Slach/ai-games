@@ -14,7 +14,11 @@ import inspect
 import unittest
 
 from language import LANGUAGE_EN, LANGUAGE_RU
-from prompts import build_scene_instruction_system, build_scene_instruction_user
+from prompts import (
+    build_scene_instruction_system,
+    build_scene_instruction_user,
+    build_turn_background_prompts,
+)
 
 # Categories that must trigger the anatomy guard.
 ALIEN_CATEGORIES = ("non_humanoid", "energy", "symbiotic")
@@ -74,15 +78,39 @@ class TestSceneInstructionUserPrompt(unittest.TestCase):
         self.assertIn(self.ACTION, prompt)
         self.assertIn(self.SPECIES, prompt)
 
-    def test_keeps_background_location_hint(self):
+    def test_embeds_shared_scene_description(self):
+        """The turn's shared background description must reach the LLM so the
+        instruction is staged inside that exact scene (Picture 2)."""
+        desc = "Derelict reactor hall, cracked containment pillar, red strobes"
         prompt = build_scene_instruction_user(
             LANGUAGE_EN,
             self.ACTION,
             self.SPECIES,
-            "bridge",
+            desc,
             "",
         )
-        self.assertIn("Scene location hint: bridge", prompt)
+        self.assertIn(desc, prompt)
+        self.assertIn("Picture 2", prompt)
+
+    def test_forbids_inventing_scene_objects_en(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_EN,
+            self.ACTION,
+            self.SPECIES,
+            "A corridor with sparking conduits",
+            "",
+        )
+        self.assertIn("Do NOT add objects or locations", prompt)
+
+    def test_forbids_inventing_scene_objects_ru(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_RU,
+            self.ACTION,
+            self.SPECIES,
+            "Коридор с искрящими кабелями",
+            "",
+        )
+        self.assertIn("НЕ добавляй объекты и локации", prompt)
 
     def test_keeps_scene_context(self):
         ctx = "Orbit of asteroid Hive in the Black Hole system (Sector 7G)."
@@ -178,6 +206,25 @@ class TestAnatomyGuardAbsentForHumanoidSpecies(unittest.TestCase):
                 self.assertNotIn("Do NOT impose human anatomy", prompt)
 
 
+class TestTurnBackgroundPrompt(unittest.TestCase):
+    """The shared per-turn background prompt must carry the turn's setting and
+    forbid characters, so the same empty scene backs every action image."""
+
+    SETTING = "Орбита разрушенного мегаполиса, сектор 7-Delta"
+    CONFLICT = "Дрон «Хронов» сканирует обломки"
+
+    def test_user_prompt_carries_setting_and_conflict(self):
+        _, user = build_turn_background_prompts(LANGUAGE_RU, self.SETTING, self.CONFLICT)
+        self.assertIn(self.SETTING, user)
+        self.assertIn(self.CONFLICT, user)
+        self.assertIn("БЕЗ персонажей", user)
+
+    def test_user_prompt_en(self):
+        _, user = build_turn_background_prompts(LANGUAGE_EN, "Orbit of ruins", "A drone scans debris")
+        self.assertIn("Orbit of ruins", user)
+        self.assertIn("NO characters", user)
+
+
 class TestSceneInstructionSystemPrompt(unittest.TestCase):
     def test_forbids_character_description_ru(self):
         system = build_scene_instruction_system(LANGUAGE_RU)
@@ -186,6 +233,14 @@ class TestSceneInstructionSystemPrompt(unittest.TestCase):
     def test_forbids_character_description_en(self):
         system = build_scene_instruction_system(LANGUAGE_EN)
         self.assertIn("Do NOT restate", system)
+
+    def test_scene_is_shared_ru(self):
+        system = build_scene_instruction_system(LANGUAGE_RU)
+        self.assertIn("ОБЩИЙ фон", system)
+
+    def test_scene_is_shared_en(self):
+        system = build_scene_instruction_system(LANGUAGE_EN)
+        self.assertIn("SHARED", system)
 
 
 if __name__ == "__main__":

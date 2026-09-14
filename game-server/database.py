@@ -1653,6 +1653,36 @@ def get_game_image_count(
         return 0
 
 
+def get_turn_background(game_id: str, turn: int) -> dict[str, Any] | None:
+    """Get the shared per-turn background image (URL + generation prompt).
+
+    Args:
+        game_id: Game identifier.
+        turn: Turn number.
+
+    Returns:
+        {"image_url": str, "prompt": str} or None when this turn has no
+        shared background yet.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT image_url, prompt FROM game_images
+               WHERE type = 'turn_background' AND game_id = ? AND turn = ?
+               ORDER BY id DESC LIMIT 1""",
+            (game_id, turn),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"image_url": row["image_url"], "prompt": row["prompt"] or ""}
+        return None
+    except Exception as e:
+        logger.error(f"[IMAGE] Failed to get turn_background for turn {turn}: {e}", exc_info=True)
+        return None
+
+
 # ============== NPC Profiles ==============
 
 

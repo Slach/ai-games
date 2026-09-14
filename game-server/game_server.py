@@ -32,14 +32,11 @@ from openai import AsyncOpenAI
 from prompts import (
     COMBINED_OUTCOME_SCHEMA,
     GAME_OVER_SCHEMA,
-    BACKGROUND_LOCATION_TYPES,
     DELAY_ACTION_TEXT_EN,
     DELAY_ACTION_TEXT_RU,
     DELAY_KIND_RULE_EN,
     DELAY_KIND_RULE_RU,
     build_auto_choice_prompts,
-    build_background_prompts_system,
-    build_background_prompts_user,
     build_character_flavour_prompts,
     build_combined_outcome_prompts,
     build_content_prompt_note,
@@ -59,6 +56,7 @@ from prompts import (
     build_role_flavour_prompts,
     build_scene_instruction_system,
     build_scene_instruction_user,
+    build_turn_background_prompts,
 )
 from openai.types.chat import (
     ChatCompletionSystemMessageParam,
@@ -576,35 +574,23 @@ BRIDGE_IMAGE_SCHEMA = {
 }
 
 
-BACKGROUND_PROMPTS_SCHEMA = {
+TURN_BACKGROUND_PROMPT_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
-        "name": "background_prompts",
+        "name": "turn_background_prompt",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "backgrounds": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "location_type": {
-                                "type": "string",
-                                "description": "One of: " + ", ".join(BACKGROUND_LOCATION_TYPES),
-                            },
-                            "prompt": {
-                                "type": "string",
-                                "description": "Detailed English image prompt for the empty location (no characters)",
-                            },
-                        },
-                        "required": ["location_type", "prompt"],
-                        "additionalProperties": False,
-                    },
-                    "description": "One entry per location type",
+                "background_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Detailed English txt2img prompt for this turn's shared empty "
+                        "scene (environment, objects, lighting; strictly no characters)"
+                    ),
                 },
             },
-            "required": ["backgrounds"],
+            "required": ["background_prompt"],
             "additionalProperties": False,
         },
     },
@@ -623,12 +609,8 @@ SCENE_INSTRUCTION_SCHEMA = {
                     "type": "string",
                     "description": "English instruction for Qwen-Image-Edit, starting with 'Place the character from Picture 1...'",
                 },
-                "background_location": {
-                    "type": ["string", "null"],
-                    "description": "Best-matching location type for this scene, or null if no background applies",
-                },
             },
-            "required": ["instruction", "background_location"],
+            "required": ["instruction"],
             "additionalProperties": False,
         },
     },
@@ -3028,63 +3010,46 @@ class GameServer:
 
     # ============== Background Library Prompts ==============
 
-    async def generate_background_prompts(
+    async def generate_turn_background_prompt(
         self,
-        mission: dict[str, Any],
-        all_participants: list[dict[str, Any]],
         language: str,
+        setting: str,
+        conflict: str,
         *,
         game_id: str | None,
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
-    ) -> dict[str, str]:
-        """Generate empty-location background prompts via LLM.
+    ) -> str:
+        """Generate an English txt2img prompt for the turn's shared background.
 
-        Returns a mapping of ``location_type -> English image prompt`` covering
-        the canonical ship locations (bridge, engineering, sickbay, ...). The
-        prompts reflect the mission tone and the crew's species composition so
-        that workstations and decor fit the inhabitants.
+        One empty scene (no characters) derived from the turn's global
+        circumstances (setting + conflict). Every action image of the turn is
+        composed onto this same background, so the crew's actions share a
+        coherent environment instead of each floating in its own abstract void.
 
-        Args:
-            mission: Mission dict (name + description used for tone).
-            all_participants: Crew list (species/gender composition informs decor).
-            language: Game content language (prompts are always English; this
-                only affects the LLM instruction language).
-
-        Returns:
-            Dict mapping location_type -> prompt. Missing locations on failure
-            are simply absent; callers should treat the dict as best-effort.
+        Returns the prompt string, or "" on failure (the caller falls back to
+        a prompt built from the raw setting text).
         """
-        logger.info("[BACKGROUND] Generating prompts for %d participants", len(all_participants))
-        crew_summary = "\n".join(f"- {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, gender={p.get('gender') or '?'}" for p in all_participants)
-
-        system = build_background_prompts_system(language)
-        user = build_background_prompts_user(language, mission, crew_summary)
-
+        system, user = build_turn_background_prompts(language, setting, conflict)
         try:
             result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=BACKGROUND_PROMPTS_SCHEMA,
-                use_case='background_prompts',
+                response_schema=TURN_BACKGROUND_PROMPT_SCHEMA,
+                use_case='turn_background_prompt',
                 game_id=game_id,
                 player_id=player_id,
                 turn=turn,
                 kind=kind,
             )
-            backgrounds = result.get("backgrounds", [])
-            mapping: dict[str, str] = {}
-            for entry in backgrounds:
-                loc = entry.get("location_type", "")
-                prompt = entry.get("prompt", "")
-                if loc in BACKGROUND_LOCATION_TYPES and prompt:
-                    mapping[loc] = prompt
-            logger.info("[BACKGROUND] Generated %d/%d location prompts", len(mapping), len(BACKGROUND_LOCATION_TYPES))
-            return mapping
+            prompt = result.get("background_prompt", "").strip()
+            if prompt:
+                logger.info("[TURN_BACKGROUND] Prompt generated (%d chars)", len(prompt))
+            return prompt
         except Exception:
-            logger.error("[BACKGROUND] Generation failed", exc_info=True)
-            return {}
+            logger.warning("[TURN_BACKGROUND] Prompt generation failed", exc_info=True)
+            return ""
 
     # ============== Scene Instruction (Qwen-Image-Edit) ==============
 
@@ -3093,7 +3058,7 @@ class GameServer:
         action_text: str,
         species_desc: str,
         language: str,
-        background_location: str | None,
+        scene_description: str,
         scene_context: str,
         species_category: str = "",
         *,
@@ -3101,20 +3066,21 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
-    ) -> dict[str, Any]:
+    ) -> str:
         """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
 
-        Returns an instruction string referring to "Picture 1" (the character)
-        and the best-matching background location for this action.
+        The returned instruction refers to "Picture 1" (the character) and
+        stages the action inside the turn's SHARED scene (Picture 2), using
+        only the objects present in ``scene_description`` so all action images
+        of the turn stay logically consistent.
 
         Args:
             action_text: What the character is doing (player action or scene setup).
             species_desc: Short species description (informs pose/environment fit).
             language: Game content language (instruction is always English).
-            background_location: Optional explicit location override.
+            scene_description: English description of the turn's shared background
+                (Picture 2). Empty when no shared background exists.
             scene_context: Current turn setting + conflict (from global_circumstances).
-                Lets the model pick a background_location matching the scene rather
-                than guessing from action_text alone.
             species_category: Canonical species key (human / humanoid / non_humanoid
                 / energy / cybernetic / symbiotic). For non_humanoid / energy /
                 symbiotic an anatomy guard is added to the prompt forbidding
@@ -3122,10 +3088,11 @@ class GameServer:
                 Qwen-Image-Edit back into a humanoid.
 
         Returns:
-            Dict with "instruction" (str) and "background_location" (str|None).
+            The instruction string (never empty — falls back to a generic
+            staging instruction built from the action text).
         """
         system = build_scene_instruction_system(language)
-        user = build_scene_instruction_user(language, action_text, species_desc, background_location, scene_context, species_category)
+        user = build_scene_instruction_user(language, action_text, species_desc, scene_description, scene_context, species_category)
 
         try:
             result = await self._call_llm(
@@ -3139,14 +3106,12 @@ class GameServer:
                 kind=kind,
             )
             instruction = result.get("instruction", "").strip()
-            if not instruction:
-                instruction = f"Place the character from Picture 1 in the scene. {action_text}. Cinematic lighting, photorealistic, 4K."
-            loc = result.get("background_location")
-            return {"instruction": instruction, "background_location": loc}
+            if instruction:
+                return instruction
+            logger.warning("[SCENE_INSTRUCTION] Empty instruction, using fallback")
         except Exception:
             logger.warning("[SCENE_INSTRUCTION] failed, using fallback", exc_info=True)
-            fallback = f"Place the character from Picture 1 in the scene. {action_text}. Cinematic lighting, photorealistic, 4K."
-            return {"instruction": fallback, "background_location": background_location}
+        return f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic lighting, photorealistic, 4K."
 
     async def generate_death_notice(
         self,

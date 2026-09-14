@@ -25,6 +25,14 @@ The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
     VAE:  LLaDa_VAE.safetensors
     img2img goes through the native LLaDAImageEdit node (no latent path).
 
+  qwen_image_2512 (20B GGUF Q4_K_M + Lightning 4-step LoRA):
+    UNET: qwen-image-2512-Q4_K_M.gguf (via ComfyUI-GGUF UnetLoaderGGUF)
+    CLIP: qwen_2.5_vl_7b_fp8_scaled.safetensors (CLIPLoader, type=qwen_image)
+    VAE:  qwen_image_vae.safetensors
+    Routed to per-kind via COMFYUI_AVATAR_MODEL (avatar / npc_avatar kinds) —
+    the 20B model follows complex alien-physiology prompts that FLUX.2 [klein]
+    collapses into a person.
+
 img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
 (``_build_qwen_edit_workflow``) have their own fixed model combinations
 and are not routed through ``comfyui_config``.
@@ -109,8 +117,8 @@ def _build_qwen_edit_workflow(
     Uses Qwen-Image-Edit-2511 GGUF (Q4_K_M). For human/humanoid/cybernetic
     characters the Lightning LoRA is applied for 4-step fast generation. For
     non-humanoid / energy / symbiotic species (``species_category``) the LoRA
-    is skipped and the sampler runs 8 steps: at strength 1.0 the distilled LoRA
-    suppresses the avatar identity in ``image1`` and the model hallucinates a
+    is skipped and the sampler runs 20 steps: at strength 1.0 the distilled
+    LoRA suppresses the avatar identity in ``image1`` and the model hallucinates a
     humanoid from the text instruction + background, collapsing a crystalline
     or energy being back into a human figure.
 
@@ -131,7 +139,7 @@ def _build_qwen_edit_workflow(
         species_category: Canonical species key (human / humanoid /
             non_humanoid / energy / cybernetic / symbiotic). When it is a
             non-humanoid/energy/symbiotic species the Lightning LoRA is
-            disabled and the sampler uses 8 steps to preserve identity.
+            disabled and the sampler uses 20 steps to preserve identity.
 
     Returns:
         ComfyUI API workflow dict.
@@ -141,12 +149,14 @@ def _build_qwen_edit_workflow(
 
     # Lightning LoRA at strength 1.0 suppresses the avatar identity in image1
     # for non-humanoid / energy / symbiotic species, collapsing them into a
-    # humanoid. Skip the LoRA and run 8 steps for those species to preserve
-    # identity (experimentally confirmed: LoRA off → crystals preserved,
-    # LoRA on → humanoid).
+    # humanoid. Skip the LoRA for those species to preserve identity
+    # (experimentally confirmed: LoRA off → crystals preserved, LoRA on →
+    # humanoid). Without the LoRA the base model needs the full step budget
+    # (Qwen-Image-Edit-2511 official workflows use 20-40 steps; 8 steps at
+    # cfg 1.0 produced undercooked, mushy output).
     alien_species = {"non_humanoid", "energy", "symbiotic"}
     use_lightning = species_category not in alien_species
-    sampler_steps = 4 if use_lightning else 8
+    sampler_steps = 4 if use_lightning else 20
 
     if background_filename:
         # Two references: image1 = character, image2 = background.
@@ -489,6 +499,117 @@ def _build_flux2_klein_workflow(
     }
 
 
+def _build_qwen_image_2512_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a Qwen-Image-2512 GGUF Q4_K_M text-to-image workflow.
+
+    Full-size Qwen-Image model (20B) for complex prompts (exotic non-humanoid
+    aliens, unusual compositions) that the 4B FLUX.2 [klein] default collapses
+    into a person. Lightning 4-step LoRA keeps generation speed comparable.
+
+    Follows the official ComfyUI template for Qwen-Image-2512: euler/simple,
+    ModelSamplingAuraFlow shift=3.1, SD3 16-channel latents, and the
+    lightx2v Lightning-4steps LoRA (steps=4, cfg=1).
+
+    Model combination:
+      UNET: qwen-image-2512-Q4_K_M.gguf (~13 GB, via ComfyUI-GGUF ``UnetLoaderGGUF``)
+      CLIP: qwen_2.5_vl_7b_fp8_scaled.safetensors (``CLIPLoader``, type=qwen_image)
+      VAE:  qwen_image_vae.safetensors
+      LoRA: Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors
+      Sampler: 4 steps, cfg 1.0, euler/simple
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+
+    # Negative from the official template (translated): low quality, deformed
+    # limbs/fingers, oversaturated, waxy, AI look, messy composition, blur.
+    negative = (
+        "low resolution, low quality, deformed limbs, deformed fingers, "
+        "oversaturated, waxy skin, face without detail, overly smooth, "
+        "AI artifacts, messy composition, blurry, distorted text"
+    )
+
+    return {
+        # Load GGUF UNET (ComfyUI-GGUF custom node)
+        "10": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": "qwen-image-2512-Q4_K_M.gguf"},
+        },
+        # Lightning 4-step LoRA (steps=4, cfg=1 with it attached)
+        "11": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": ["10", 0],
+                "lora_name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+                "strength_model": 1.0,
+            },
+        },
+        # AuraFlow-style sigma shift — required by the official 2512 template
+        "12": {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": ["11", 0], "shift": 3.1},
+        },
+        # Qwen2.5-VL text encoder (same file as the edit model, type=qwen_image)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                "type": "qwen_image",
+            },
+        },
+        # Qwen-Image VAE
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_vae.safetensors"},
+        },
+        # Encode prompts
+        "27": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": prompt, "clip": ["30", 0]},
+        },
+        "28": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": negative, "clip": ["30", 0]},
+        },
+        # Empty SD3 latent (Qwen-Image uses 16-channel SD3-style latents)
+        "13": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # KSampler — Lightning-distilled: 4 steps, cfg 1.0, euler/simple
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 4,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["12", 0],
+                "positive": ["27", 0],
+                "negative": ["28", 0],
+                "latent_image": ["13", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+
 def _build_llada_turbo_workflow(
     prompt: str,
     width: int,
@@ -556,6 +677,7 @@ _TXT2IMG_BUILDERS = {
     "z_image_turbo": _build_zimage_turbo_workflow,
     "flux2_klein_4b": _build_flux2_klein_workflow,
     "llada_image_turbo": _build_llada_turbo_workflow,
+    "qwen_image_2512": _build_qwen_image_2512_workflow,
 }
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
@@ -1486,41 +1608,6 @@ class ImageGenerator:
             player_id=player_id,
             turn=turn,
             kind=kind,
-        )
-
-    async def generate_background_image(
-        self,
-        prompt: str,
-        location_type: str,
-        *,
-        game_id: str,
-        width: int,
-        height: int,
-    ) -> str | None:
-        """Generate a single empty-location background via Z-Image Turbo.
-
-        Backgrounds are plain text-to-image (no characters) generated once per
-        game and later reused as backdrops for Qwen-Image-Edit scene compositing.
-
-        Args:
-            prompt: English image prompt for the empty location.
-            location_type: Canonical location key (e.g. "bridge", "engineering").
-            game_id: Game to scope the image to.
-            width, height: Output dimensions (landscape by default).
-
-        Returns:
-            URL of the generated background, or None on failure.
-        """
-        return await self.generate_image(
-            prompt=prompt,
-            filename_prefix=f"{game_id}/bg_{location_type}",
-            width=width,
-            height=height,
-            max_retries=2,
-            game_id=game_id,
-            player_id=None,
-            turn=None,
-            kind=f"background_{location_type}",
         )
 
     # ============== Batch Image Generation ==============

@@ -41,3 +41,10 @@ https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b
 https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDA-Image-Turbo-INT8.safetensors -> diffusion_models/LLaDA-Image-Turbo-INT8.safetensors
 https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf -> text_encoders/LLaDA-Image-Turbo-text_encoder-Q4_K_M.gguf
 https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDa_VAE.safetensors -> vae/LLaDa_VAE.safetensors
+
+# ============== Qwen-Image-2512 (avatar override, COMFYUI_AVATAR_MODEL) ==============
+# Full-size 20B Qwen-Image txt2img for complex prompts (exotic aliens) that
+# FLUX.2 [klein] collapses into a person. Lightning LoRA keeps it at 4 steps.
+# Shares the qwen_2.5_vl_7b text encoder and qwen_image_vae with the edit model.
+https://huggingface.co/unsloth/Qwen-Image-2512-GGUF/resolve/main/qwen-image-2512-Q4_K_M.gguf -> unet/qwen-image-2512-Q4_K_M.gguf
+https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning/resolve/main/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors -> loras/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors

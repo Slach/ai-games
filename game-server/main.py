@@ -82,6 +82,7 @@ from database import (
     get_players_in_game,
     get_players_who_need_to_choose,
     get_random_game_image,
+    get_turn_background,
     get_role_by_key,
     get_role_key_for_player,
     deactivate_npc,
@@ -1027,48 +1028,6 @@ async def _generate_game_concept(game_id: str, language: str) -> dict:
     )
 
 
-async def _generate_background_library(
-    game_id: str,
-    mission_data: dict,
-    all_participants: list[dict],
-    gm,
-    language: str,
-) -> None:
-    """Pre-generate empty-location backgrounds for a game (best-effort).
-
-    Generates one background per canonical location type (bridge, engineering,
-    sickbay, ...) via Z-Image Turbo, then stores each under
-    ``game_images.type = "background_{location}"`` so scene generation can look
-    them up by location. Safe to call repeatedly: existing backgrounds are
-    skipped. Failures are logged and do not abort the caller.
-    """
-    from prompts import BACKGROUND_LOCATION_TYPES
-
-    existing = {loc for loc in BACKGROUND_LOCATION_TYPES if get_random_game_image(type=f"background_{loc}", game_id=game_id, turn=None)}
-    if existing:
-        logger.info("[BACKGROUND] %d/%d backgrounds already exist for game %s, skipping", len(existing), len(BACKGROUND_LOCATION_TYPES), game_id)
-        return
-
-    try:
-        prompts_by_loc = await gm.generate_background_prompts(mission_data, all_participants, language=language, game_id=game_id, player_id=None, turn=None, kind="background_prompts")
-    except Exception:
-        logger.error("[BACKGROUND] Prompt generation failed for game %s", game_id, exc_info=True)
-        return
-    if not prompts_by_loc:
-        logger.warning("[BACKGROUND] No prompts returned for game %s", game_id)
-        return
-
-    image_gen = create_image_generator()
-    for loc, prompt in prompts_by_loc.items():
-        try:
-            url = await image_gen.generate_background_image(prompt=prompt, location_type=loc, game_id=game_id, width=1024, height=576)
-            if url:
-                save_game_image(type=f"background_{loc}", image_url=url, prompt=prompt, game_id=game_id, turn=None)
-                logger.info("[BACKGROUND] Generated %s for game %s: %s", loc, game_id, url)
-        except Exception:
-            logger.error("[BACKGROUND] Failed to generate %s for game %s", loc, game_id, exc_info=True)
-
-
 async def _generate_started_game_assets(game_id: str, language: str) -> None:
     """Generate and persist bridge image + background library for an
     auto-started game.
@@ -1131,12 +1090,6 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                 except Exception:
                     logger.error("[MISSION] Backfill failed for legacy game %s", game_id, exc_info=True)
                 mission_data = get_mission(None, game_id=game_id)
-
-            # Pre-generate empty-location backgrounds (used as backdrops for Qwen-Image-Edit scene compositing)
-            try:
-                await _generate_background_library(game_id, mission_data or {}, all_participants, gm, language)
-            except Exception:
-                logger.error(f"[BACKGROUND] Library generation failed for auto-started game {game_id}", exc_info=True)
 
             # Bridge image (needs the mission for crew positioning context)
             if not get_random_game_image(type="bridge", game_id=game_id, turn=None):
@@ -2303,6 +2256,80 @@ async def get_splash_image(game_id: str):
     return {"image_url": url, "available": get_game_image_count("splash", game_id, None)}
 
 
+# {game_id: turn} -> Lock serializing first-time generation of a turn's
+# shared background so parallel action-image tasks don't duplicate it.
+_turn_bg_locks: dict[tuple[str, int], asyncio.Lock] = {}
+
+
+async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
+    """Return the turn's shared background ({"image_url", "prompt"}), generating it on first use.
+
+    One empty scene per turn, built from the turn's global circumstances
+    (setting + conflict). Every action / character / death image of the turn
+    is composed onto this same Picture 2 so the crew's actions share one
+    coherent environment. Persisted in game_images (type="turn_background"),
+    so a restart reuses it; generation races are serialized per (game, turn).
+    Returns None when the background cannot be produced (callers then pass
+    no Picture 2 and the edit model imagines the scene from the instruction).
+    """
+    existing = get_turn_background(game_id, turn)
+    if existing:
+        return existing
+
+    lock = _turn_bg_locks.setdefault((game_id, turn), asyncio.Lock())
+    async with lock:
+        existing = get_turn_background(game_id, turn)
+        if existing:
+            return existing
+
+        turn_data = get_game_turn(turn, game_id)
+        try:
+            global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
+        except (json.JSONDecodeError, TypeError):
+            global_circ = {}
+        setting = global_circ.get("setting", "") or (turn_data.get("story", "")[:400] if turn_data else "")
+        conflict = global_circ.get("conflict", "")
+
+        language = get_game_language(game_id)
+        gm = create_game_server(language=language)
+        try:
+            prompt = await gm.generate_turn_background_prompt(
+                language=language,
+                setting=setting,
+                conflict=conflict,
+                game_id=game_id,
+                player_id=None,
+                turn=turn,
+                kind="turn_background_prompt",
+            )
+        except Exception:
+            logger.warning(f"[TURN_BACKGROUND] Prompt LLM call failed for {game_id} turn {turn}", exc_info=True)
+            prompt = ""
+        if not prompt:
+            prompt = (
+                f"Cinematic wide shot of a sci-fi space-opera scene: {setting}. "
+                "Environment and objects only, dramatic lighting, detailed, 4K. No characters, no people."
+            )
+
+        image_gen = create_image_generator()
+        url = await image_gen.generate_scene_image(
+            prompt=prompt,
+            filename_prefix=f"{game_id}/turn_bg_turn{turn}",
+            width=1024,
+            height=1024,
+            game_id=game_id,
+            player_id=None,
+            turn=turn,
+            kind="turn_background",
+        )
+        if not url:
+            logger.warning(f"[TURN_BACKGROUND] Generation failed for {game_id} turn {turn}")
+            return None
+        save_game_image(type="turn_background", image_url=url, prompt=prompt, game_id=game_id, turn=turn)
+        logger.info(f"[TURN_BACKGROUND] Generated for {game_id} turn {turn}: {url}")
+        return {"image_url": url, "prompt": prompt}
+
+
 async def _generate_chosen_action_image(
     player_id: int,
     game_id: str,
@@ -2358,19 +2385,22 @@ async def _generate_chosen_action_image(
         # toward a human in uniform. Species only.
         character_description = species if species and species not in ("Unknown", "Неизвестно") else ""
 
-        # Generate Qwen-Image-Edit instruction via LLM (refers to the avatar as
-        # "Picture 1" and the best-matching background as "Picture 2"), with a
-        # plain-text fallback if the LLM call fails.
+        # Generate Qwen-Image-Edit instruction via LLM. Picture 2 is the turn's
+        # shared background; the instruction stages the action inside it using
+        # only the objects present in that scene.
+        turn_bg = await _ensure_turn_background(game_id, turn)
+        background_url = turn_bg["image_url"] if turn_bg else None
+        scene_desc = turn_bg["prompt"] if turn_bg else ""
         conflict = global_circ.get("conflict", "")
         scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
         gm = None
         try:
             gm = create_game_server(language=language)
-            scene = await gm.generate_scene_instruction(
+            instruction = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc or species,
                 language=language,
-                background_location=None,
+                scene_description=scene_desc,
                 scene_context=scene_context,
                 species_category=profile.get("species_primary_key") or "",
                 game_id=game_id,
@@ -2378,21 +2408,13 @@ async def _generate_chosen_action_image(
                 turn=turn,
                 kind="player_action",
             )
-            instruction = scene.get("instruction", "")
-            bg_location = scene.get("background_location")
             logger.info(f"[ACTION_IMAGE] Scene instruction for {role}: {instruction[:120]}...")
         except Exception as llm_err:
             logger.warning(f"[ACTION_IMAGE] Scene instruction failed for {role}: {llm_err}, using fallback")
             instruction = ""
-            bg_location = None
 
         if not instruction:
-            instruction = f"Place the character from Picture 1 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
-
-        # Look up a pre-generated background for the chosen location (if any)
-        background_url = None
-        if bg_location:
-            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id, turn=None)
+            instruction = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
 
         # Get player's avatar URL for reference
         avatar_url = profile.get("avatar_url") or None
@@ -2484,14 +2506,15 @@ async def _generate_death_image(
         character_description = species if species and species not in ("Unknown", "Неизвестно") else ""
 
         gm = create_game_server(language=language)
-        instruction = ""
-        bg_location = None
+        turn_bg = await _ensure_turn_background(game_id, turn)
+        background_url = turn_bg["image_url"] if turn_bg else None
+        scene_desc = turn_bg["prompt"] if turn_bg else ""
         try:
-            scene = await gm.generate_scene_instruction(
+            instruction = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc or species,
                 language=language,
-                background_location=None,
+                scene_description=scene_desc,
                 scene_context=scene_context,
                 species_category=profile.get("species_primary_key") or "",
                 game_id=game_id,
@@ -2499,10 +2522,9 @@ async def _generate_death_image(
                 turn=turn,
                 kind="player_death",
             )
-            instruction = scene.get("instruction", "")
-            bg_location = scene.get("background_location")
         except Exception as llm_err:
             logger.warning(f"[DEATH_IMAGE] Scene instruction failed for {player_id}: {llm_err}, using fallback")
+            instruction = ""
 
         if not instruction:
             instruction = (
@@ -2510,10 +2532,6 @@ async def _generate_death_image(
                 f"Dramatic, somber cinematic sci-fi scene, dramatic lighting, "
                 f"space opera aesthetic, photorealistic, 4K."
             )
-
-        background_url = None
-        if bg_location:
-            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id, turn=None)
 
         avatar_url = profile.get("avatar_url") or None
         image_gen = create_image_generator()
@@ -2657,20 +2675,23 @@ async def _generate_npc_chosen_action_image(
 
         character_description = f"{npc_name}, the {role}"
 
-        # Generate Qwen-Image-Edit instruction via LLM
+        # Generate Qwen-Image-Edit instruction via LLM (Picture 2 = the turn's
+        # shared background)
         npc_species = npc_profile.get("species", "") or ""
         instruction = ""
-        bg_location = None
         conflict = global_circ.get("conflict", "")
         scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
+        turn_bg = await _ensure_turn_background(game_id, turn)
+        background_url = turn_bg["image_url"] if turn_bg else None
+        scene_desc = turn_bg["prompt"] if turn_bg else ""
         try:
             game_lang = get_game_language(game_id)
             gm = create_game_server(language=game_lang)
-            scene = await gm.generate_scene_instruction(
+            instruction = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=npc_species,
                 language=game_lang,
-                background_location=None,
+                scene_description=scene_desc,
                 scene_context=scene_context,
                 species_category=npc_profile.get("species", "") or "",
                 game_id=game_id,
@@ -2678,17 +2699,11 @@ async def _generate_npc_chosen_action_image(
                 turn=turn,
                 kind="npc_action",
             )
-            instruction = scene.get("instruction", "")
-            bg_location = scene.get("background_location")
         except Exception as llm_err:
             logger.warning(f"[NPC_ACTION_IMAGE] Scene instruction failed for {npc_name}: {llm_err}")
 
         if not instruction:
-            instruction = f"Place the character from Picture 1 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, detailed environment, space opera aesthetic, photorealistic, 4K."
-
-        background_url = None
-        if bg_location:
-            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id, turn=None)
+            instruction = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
 
         image_gen = create_image_generator()
         chosen_action_url = await image_gen.generate_character_in_scene(
@@ -4048,7 +4063,7 @@ async def _run_language_change(game_id: str, language: str) -> None:
         # Mission + title + splash are plot-driven: regenerate regardless of
         # whether participants exist yet (before the game starts nobody may have
         # finished onboarding, but the concept must match the new language).
-        # Old mission and images (splash/bridge/background_*) are removed first.
+        # Old mission and images (splash/bridge/scene/turn_background) are removed first.
         delete_mission(game_id)
         delete_game_images(game_id)
 
@@ -4806,15 +4821,9 @@ async def _original_start_game(request: StartGameRequest):
         mission_result = concept.get("mission") or {}
         mission_data = mission_result
         if mission_result.get("name"):
-            logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_result.get('total_stages', 0)} stages), title='{concept.get('title', '')}'")
+            logger.info(f"[MISSION] Mission created: {mission_result.get('name', '')} ({mission_data.get('total_stages', 0)} stages), title='{concept.get('title', '')}'")
         else:
             logger.error("[MISSION] Failed to create mission", stack_info=True)
-
-    # 6b.5 Pre-generate empty-location backgrounds (best-effort)
-    try:
-        await _generate_background_library(game_id, mission_data or {}, all_participants, gm, language)
-    except Exception:
-        logger.error("[BACKGROUND] Library generation failed for game %s", game_id, exc_info=True)
 
     # 6c. Generate bridge image (resume: skip if already generated)
     try:
@@ -4901,6 +4910,14 @@ async def _original_start_game(request: StartGameRequest):
                 logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
         except Exception as e:
             logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
+
+    # Step A3: Generate the turn's SHARED background — every action/character/
+    # death image of this turn is composed onto this one scene (Picture 2),
+    # so the crew's actions stay in one coherent environment.
+    try:
+        await _ensure_turn_background(game_id, turn_num)
+    except Exception as e:
+        logger.warning(f"[TURN_BACKGROUND] Eager generation failed for turn {turn_num} (will retry lazily): {e}")
 
     # Create game turn record EARLY to prevent race condition with polling loop.
     # Poll needs the game_turn record to exist before briefings are visible,
@@ -5151,14 +5168,15 @@ async def _original_start_game(request: StartGameRequest):
         # image_prompt is the LLM-generated visual-only scene description
         # (pose/action/species, no name/role) for Qwen-Image-Edit conditioning.
         char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting[:120]}"
-        instruction = ""
-        bg_location = None
+        turn_bg = await _ensure_turn_background(game_id, turn_num)
+        background_url = turn_bg["image_url"] if turn_bg else None
+        scene_desc = turn_bg["prompt"] if turn_bg else ""
         try:
-            scene = await gm.generate_scene_instruction(
+            instruction = await gm.generate_scene_instruction(
                 action_text=char_action,
                 species_desc=species_desc or species_type,
                 language=language,
-                background_location=bg_location,
+                scene_description=scene_desc,
                 scene_context=f"Setting: {setting}",
                 species_category=profile.get("species_primary_key") or "",
                 game_id=game_id,
@@ -5166,17 +5184,12 @@ async def _original_start_game(request: StartGameRequest):
                 turn=turn_num,
                 kind="character_scene",
             )
-            instruction = scene.get("instruction", "")
-            bg_location = scene.get("background_location")
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
+            instruction = ""
 
         if not instruction:
-            instruction = f"Place the character from Picture 1 in the scene. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
-
-        background_url = None
-        if bg_location:
-            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id, turn=None)
+            instruction = f"Place the character from Picture 1 in the scene of Picture 2. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
@@ -6335,14 +6348,15 @@ async def _original_continue_game(
         # Qwen-Image-Edit instruction for placing this character in the scene.
         # image_prompt is the LLM-generated visual-only description (no name/role).
         char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting[:120]}"
-        instruction = ""
-        bg_location = None
+        turn_bg = await _ensure_turn_background(game_id, turn_num)
+        background_url = turn_bg["image_url"] if turn_bg else None
+        scene_desc = turn_bg["prompt"] if turn_bg else ""
         try:
-            scene = await gm.generate_scene_instruction(
+            instruction = await gm.generate_scene_instruction(
                 action_text=char_action,
                 species_desc=species_desc or species_type,
                 language=language,
-                background_location=None,
+                scene_description=scene_desc,
                 scene_context=f"Setting: {setting}",
                 species_category=profile.get("species_primary_key") or "",
                 game_id=game_id,
@@ -6350,17 +6364,12 @@ async def _original_continue_game(
                 turn=turn_num,
                 kind="character_scene",
             )
-            instruction = scene.get("instruction", "")
-            bg_location = scene.get("background_location")
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
+            instruction = ""
 
         if not instruction:
-            instruction = f"Place the character from Picture 1 in the scene. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
-
-        background_url = None
-        if bg_location:
-            background_url = get_random_game_image(type=f"background_{bg_location}", game_id=game_id, turn=None)
+            instruction = f"Place the character from Picture 1 in the scene of Picture 2. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
