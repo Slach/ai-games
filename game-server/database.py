@@ -2745,7 +2745,7 @@ def fail_generation_job(job_id: int, error: str) -> bool:
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generation_jobs SET status = ?, error = ?, updated_at = ?, finished_at = ? WHERE id = ?",
-        (JOB_FAILED, error[:2000], now, now, job_id),
+        (JOB_FAILED, error, now, now, job_id),
     )
     changed = cursor.rowcount > 0
     conn.commit()

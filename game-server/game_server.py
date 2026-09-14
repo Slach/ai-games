@@ -2132,7 +2132,7 @@ class GameServer:
             setting = global_circumstances.get("setting", "")
             conflict = global_circumstances.get("conflict", "")
             narrative = global_circumstances.get("narrative", "")
-            gc_settings = f"\n\nLocation: {setting}\nConflict: {conflict}\nSituation: {narrative[:500]}"
+            gc_settings = f"\n\nLocation: {setting}\nConflict: {conflict}\nSituation: {narrative}"
 
         species_line = f"\nSpecies: {species}" if species else ""
 

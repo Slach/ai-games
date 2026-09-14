@@ -2287,7 +2287,7 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
             global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
         except (json.JSONDecodeError, TypeError):
             global_circ = {}
-        setting = global_circ.get("setting", "") or (turn_data.get("story", "")[:400] if turn_data else "")
+        setting = global_circ.get("setting", "") or (turn_data.get("story", "") if turn_data else "")
         conflict = global_circ.get("conflict", "")
 
         language = get_game_language(game_id)
@@ -2744,14 +2744,13 @@ def _build_turn_summary(combined_outcome_str: str, language: str) -> str:
         oc = json.loads(combined_outcome_str)
     except (json.JSONDecodeError, TypeError):
         # Not JSON — might be a plain text summary already
-        return str(combined_outcome_str)[:2000]
+        return str(combined_outcome_str)
 
     parts = []
 
-    # Narrative summary (first ~400 chars for compactness)
     narrative = oc.get("outcome_narrative", "")
     if narrative:
-        parts.append(narrative[:400])
+        parts.append(narrative)
 
     # Ship status
     ship_status = oc.get("ship_status_change", "")
@@ -2817,7 +2816,7 @@ def _build_turn_summary(combined_outcome_str: str, language: str) -> str:
     if hook:
         parts.append(ds["next_turn_hook"].format(hook=hook))
 
-    return " | ".join(parts) if parts else narrative[:500]
+    return " | ".join(parts) if parts else narrative
 
 
 def _build_cumulative_story_summary(
@@ -2859,7 +2858,7 @@ def _build_cumulative_story_summary(
         if combined_outcome:
             turn_summary = _build_turn_summary(combined_outcome, language=language)
         elif turn_record.get("story"):
-            turn_summary = turn_record["story"][:300]
+            turn_summary = turn_record["story"]
 
         if turn_summary:
             summaries.append(f"{turn_label} {d}: {turn_summary}")
@@ -2867,12 +2866,7 @@ def _build_cumulative_story_summary(
     if not summaries:
         return ""
 
-    result = header + "\n" + "\n".join(summaries)
-    # Truncate to 3000 chars to avoid blowing up the LLM prompt
-    if len(result) > 3000:
-        result = result[:3000] + "..."
-
-    return result
+    return header + "\n" + "\n".join(summaries)
 
 
 def _parse_entity_id(entity_id: Any) -> tuple[int | None, str | None]:
@@ -3413,8 +3407,7 @@ async def _analyze_turn_outcome(
             outcome_text = outcome.get("outcome_narrative", "") or outcome.get("narrative", "") or outcome.get("summary", "") or outcome.get("outcome", "")
             if not outcome_text:
                 # Fallback: clean up JSON string for display
-                raw = json.dumps(outcome, ensure_ascii=False)
-                outcome_text = raw[:500] + ("..." if len(raw) > 500 else "")
+                outcome_text = json.dumps(outcome, ensure_ascii=False)
 
             # Build death notices as a persistent roster from DB state — dead
             # players plus dead (deactivated) NPCs — so losses remain visible
@@ -3458,9 +3451,9 @@ async def _analyze_turn_outcome(
                 # Build a prompt from the outcome narrative
                 outcome_prompt = (
                     f"Sci-fi cinematic scene illustrating the aftermath of events. "
-                    f"{outcome_narrative[:600]} "
-                    f"Ship status: {ship_status_str[:200]}. "
-                    f"Crew morale: {crew_morale_str[:200]}. "
+                    f"{outcome_narrative} "
+                    f"Ship status: {ship_status_str}. "
+                    f"Crew morale: {crew_morale_str}. "
                     f"Dramatic lighting, starship interior or exterior, "
                     f"Star Trek aesthetic, 4K quality, cinematic composition."
                 )
@@ -3608,10 +3601,7 @@ async def _analyze_turn_outcome(
                 if not action_text:
                     action_text = selected_id or ""
 
-                # Truncate action text for caption (max 60 chars)
-                short_action = action_text[:57] + "..." if len(action_text) > 60 else action_text
-
-                caption = f"{caption_prefix} — {entity_name} — {role_name} — {short_action}"
+                caption = f"{caption_prefix} — {entity_name} — {role_name} — {action_text}"
                 action_images.append(
                     {
                         "image_url": action_url,
@@ -3810,7 +3800,7 @@ async def _analyze_turn_outcome(
 
                     gm = create_game_server(language=language)
                     game_over = await gm.generate_game_over_outcome(
-                        outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text[:2000], mission_summary=mission_summary,
+                        outcome_type=outcome_type, outcome_label=outcome_label, outcome_narrative=outcome_text, mission_summary=mission_summary,
                         end_reason=end_reason,
                         hull=ship_hull, shields=ship_shields, threat=new_threat,
                         dead_crew_count=total_crew - alive_crew, alive_crew_count=alive_crew, turns_played=turn,
@@ -3865,7 +3855,7 @@ async def _analyze_turn_outcome(
 
                     await push_game_over(
                         game_id=game_id,
-                        finale_narrative=finale_narrative or outcome_text[:1000],
+                        finale_narrative=finale_narrative or outcome_text,
                         finale_image_url=finale_image_url,
                         outcome_type=outcome_type,
                         alive_players=outcome_recipients,
@@ -3877,7 +3867,7 @@ async def _analyze_turn_outcome(
                     # Persist finale so /turn can replay it later
                     save_game_finale(
                         game_id=game_id,
-                        finale_narrative=finale_narrative or outcome_text[:2000],
+                        finale_narrative=finale_narrative or outcome_text,
                         finale_outcome_type=outcome_type,
                         finale_image_url=finale_image_url or "",
                     )
@@ -4246,8 +4236,8 @@ async def generate_chosen_action_image(
             role=role,
             traits=traits,
             avatar_description=profile.get("avatar_description", ""),
-            action_text=turn_data["story"][:200],
-            setting=turn_data["story"][:300],
+            action_text=turn_data["story"],
+            setting=turn_data["story"],
             species_desc=profile.get("species_description", ""),
             species_type=profile.get("species", ""),
             species_category=profile.get("species_primary_key") or "",
@@ -4262,7 +4252,7 @@ async def generate_chosen_action_image(
     if not prompt:
         prompt = (
             f"{role} performing a critical action during a space mission. "
-            f"Story: {turn_data['story'][:200]}. "
+            f"Story: {turn_data['story']}. "
             f"Character traits: {', '.join(traits)}. "
             f"Dynamic composition, dramatic lighting, detailed environment. "
             f"Cinematic space opera aesthetic, photorealistic quality, 4K."
@@ -4891,7 +4881,7 @@ async def _original_start_game(request: StartGameRequest):
             if not scene_prompt:
                 # Fallback: build from setting + narrative
                 scene_prompt = (
-                    f"Sci-fi scene: {global_circ.get('setting', '')}. {global_narrative[:500]} Cinematic starship interior, crew interacting with holographic displays, dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
+                    f"Sci-fi scene: {global_circ.get('setting', '')}. {global_narrative} Cinematic starship interior, crew interacting with holographic displays, dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
                 )
             # Remove [avatar: ...] markers before sending to image gen
             import re
@@ -5167,7 +5157,7 @@ async def _original_start_game(request: StartGameRequest):
         # Qwen-Image-Edit instruction for placing this character in the scene.
         # image_prompt is the LLM-generated visual-only scene description
         # (pose/action/species, no name/role) for Qwen-Image-Edit conditioning.
-        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting[:120]}"
+        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting}"
         turn_bg = await _ensure_turn_background(game_id, turn_num)
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
@@ -5199,7 +5189,7 @@ async def _original_start_game(request: StartGameRequest):
         if species_type and species_type not in ("Unknown", "Неизвестно"):
             character_description = species_type
         if species_desc:
-            character_description = f"{character_description}. {species_desc[:200]}" if character_description else species_desc[:200]
+            character_description = f"{character_description}. {species_desc}" if character_description else species_desc
 
         url = await image_gen.generate_character_in_scene(
             instruction_prompt=instruction,
@@ -6068,7 +6058,7 @@ async def _original_continue_game(
                 # Fallback: build from setting + narrative
                 scene_prompt = (
                     f"Sci-fi scene: {global_circ.get('setting', '')}. "
-                    f"{global_circ.get('narrative', '')[:500]} "
+                    f"{global_circ.get('narrative', '')} "
                     f"Cinematic starship interior, crew interacting with holographic displays, "
                     f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
                 )
@@ -6347,7 +6337,7 @@ async def _original_continue_game(
 
         # Qwen-Image-Edit instruction for placing this character in the scene.
         # image_prompt is the LLM-generated visual-only description (no name/role).
-        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting[:120]}"
+        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting}"
         turn_bg = await _ensure_turn_background(game_id, turn_num)
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
@@ -6379,7 +6369,7 @@ async def _original_continue_game(
         if species_type and species_type not in ("Unknown", "Неизвестно"):
             character_description = species_type
         if species_desc:
-            character_description = f"{character_description}. {species_desc[:200]}" if character_description else species_desc[:200]
+            character_description = f"{character_description}. {species_desc}" if character_description else species_desc
 
         url = await image_gen.generate_character_in_scene(
             instruction_prompt=instruction,
