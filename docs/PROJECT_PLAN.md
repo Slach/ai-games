@@ -70,7 +70,7 @@ while players make individual choices to progress through the narrative.
 
 Database: SQLite (game_server.db per service)
 - Player profiles with species/gender/role
-- Onboarding sessions with score history
+- Onboarding sessions with character proposals
 - Game turns (story, circumstances, outcomes)
 - Player actions (per turn, per player)
 - Player briefings (personal per-turn narrative)
@@ -145,7 +145,7 @@ Database: SQLite (game_server.db per service)
 ### 2. Game Server API — `game-server/main.py`
 
 - FastAPI service for game orchestration
-- Onboarding endpoints (questions, profile creation)
+- Onboarding endpoints (character proposals, profile creation)
 - Player management (join, leave, kick, ban)
 - Game lifecycle (start, continue, end, reset)
 - Turn management (create turn, get story, briefings, actions)
@@ -184,7 +184,7 @@ Database: SQLite (game_server.db per service)
 
 - SQLite database (`game_server.db`)
 - Player profiles (species, gender, role, traits, name)
-- Onboarding sessions with score history
+- Onboarding sessions with character proposals and rejection counter
 - Game turns (global circumstances, story, outcomes)
 - Player actions per turn
 - Player briefings (personal narrative, available actions)
@@ -197,7 +197,7 @@ Database: SQLite (game_server.db per service)
 
 - Ship role definitions and constraints
 - Mission normalization and seed selection
-- Species and gender definitions for onboarding
+- NPC role selection for unfilled key seats
 - Deterministic rules layer over LLM outcomes: mission regression caps and
   stage freeze, persistent ship state from per-turn deltas, wound escalation
   ladder (critical + new wound = death), doom-clock tick, NPC loyalty changes
@@ -205,7 +205,7 @@ Database: SQLite (game_server.db per service)
 
 ### 8. Prompts — `game-server/prompts.py`
 
-- All LLM prompts: onboarding, story, briefings, NPC decisions,
+- All LLM prompts: character generation, story, briefings, NPC decisions,
   outcomes, missions, game-over, auto-action, content generation
 - JSON schema definitions for structured LLM output
 
@@ -262,7 +262,7 @@ cd game-server && ../.venv/bin/python -m unittest discover -s tests
 - [x] Telegram bot with FSM onboarding and action selection
 - [x] Turn scheduler with configurable interval
 - [x] Player profiles (species, gender, role, traits)
-- [x] Onboarding flow with dynamic questions
+- [x] Onboarding flow with character proposals (accept / reroll)
 - [x] Player action system with auto-selection (LLM pick, honest "delay" fallback)
 - [x] NPC system (decisions, dialogues, bounded pool of 4 key roles)
 - [x] Mission system

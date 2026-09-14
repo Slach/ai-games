@@ -29,8 +29,6 @@ ComfyUI appends `_00001_` (batch counter) and `.png` automatically.
 | `character` | `{game_id}/char_turn{turn}_p{pid}` | `http://comfyui:8188/view?filename=char_turn3_p123456_00001_.png&subfolder=default_game&type=output` |
 | `action` (player) | `{game_id}/action_turn{turn}_p{pid}` | `http://comfyui:8188/view?filename=action_turn3_p123456_00001_.png&subfolder=default_game&type=output` |
 | `action` (NPC) | `{game_id}/action_turn{turn}_{npc_key}` | `http://comfyui:8188/view?filename=action_turn3_npc_captain_default_game_00001_.png&subfolder=default_game&type=output` |
-| `onboarding_q` | `{game_id}/onboarding_q_{q_id}` | `http://comfyui:8188/view?filename=onboarding_q_2_00001_.png&subfolder=default_game&type=output` |
-| `species_opt` | `{game_id}/species_{pid}_{q_id}_{opt_val}` | `http://comfyui:8188/view?filename=species_123456_7_s3_a_00001_.png&subfolder=default_game&type=output` |
 
 How each type reaches the client:
 
@@ -38,7 +36,6 @@ How each type reaches the client:
 - `action` — stored in `player_briefings.chosen_action_url` column, returned in `/game/poll/{player_id}`
 - `character` — stored in push payload as `character_image_url`, not persisted in DB beyond `game_images`
 - `outcome`, `finale` — stored in `game_images` table, pushed via `push_turn_outcome`/`push_game_over`
-- `onboarding_q`, `species_opt` — embedded directly in question/option JSON via `image_url` field
 
 ## Endpoints
 
@@ -66,6 +63,10 @@ How each type reaches the client:
 
 ### Onboarding
 
+Onboarding is a **character proposal** flow: the server rolls a random character
+(role + species + gender + flavour + avatar) and the player either accepts it or
+asks for another one. There is no interview.
+
 #### Start Onboarding Session
 
 **POST** `/onboarding/start`
@@ -83,62 +84,53 @@ How each type reaches the client:
 
 ```json
 {
-  "session_id": "abc123",
+  "session_id": "onboarding_281412419_1769548800.0",
   "game_id": "default_game",
-  "question": {
-    "id": 1,
-    "text": "Корабль обнаружил неизвестный сигнал. Ваши действия?",
-    "image_url": "http://comfyui:8188/output/default_game/onboarding_q_1_00001_.png",
-    "options": [
-      {
-        "value": "cautious",
-        "label": "Изучить сигнал с осторожностью",
-        "role_scores": {"captain": 1, "science_officer": 3, "chief_engineer": 0, ...}
-      }
-    ]
-  },
   "game_title": "«Звёздный Странник: За гранью известного»",
-  "welcome_message": "Добро пожаловать на борт «Звёздного Странника»..."
+  "welcome_message": "Добро пожаловать на борт «Звёздного Странника»...",
+  "pending_images": true
 }
 ```
 
-Questions are generated dynamically by LLM. Each option has `role_scores` dict (points per role key).
-Optionally includes `image_url` if ComfyUI generates an illustration for the question, and
-`image_prompt` (English prompt used for generation).
+Returns immediately. The first player of a game also triggers generation of the
+game concept (title + welcome text + mission). A background task then rolls a
+random character proposal (one LLM call for all flavour, ComfyUI for the avatar)
+and pushes the card to the telegram-bot via `/push/onboarding-ready` — with 3
+splash images on the first proposal of a game.
 
-After the initial role-assignment questions, the onboarding continues with species/gender
-questions (up to 5, alternating species/gender/species/gender/species). These are generated
-one-at-a-time by the LLM as the player answers, with per-option images (`image_url` on each option)
-showing cumulative visual effects of all previous choices.
+Errors: 400 `"Player already has a profile"` / `"Player already played in this
+game"` (re-onboarding into the same still-active game is blocked), 400 when the
+game is full (`GAME_START_MAX_PLAYERS`).
 
-#### Submit Onboarding Answer
+#### Reject Proposal (Reroll)
 
-**POST** `/onboarding/{session_id}/answer?language=en`
+**POST** `/onboarding/{session_id}/reroll`
+
+Rejects the current character proposal and generates another one in the
+background. Roles and species the player has already rejected are not repeated
+while alternatives exist. After **3 rejections** (`ONBOARDING_MAX_REROLLS`) the
+next character is generated and assigned automatically — the push carries the
+completion payload instead of yes/no buttons.
 
 ```json
-{"question_id": 1, "answer": "cautious"}
+{"rejections": 2, "forced": false}
 ```
 
-**Response (not yet completed):**
+Errors: 404 unknown session, 400 already completed, 409 no proposal to reject
+yet or duplicate reroll race.
+
+#### Complete Onboarding (Accept Proposal)
+
+**POST** `/onboarding/{session_id}/complete`
+
+Accepts the proposed character: builds the player profile from the stored
+proposal (the avatar was already generated with it), marks the session
+completed and runs post-join logic. Idempotent: calling it for an
+already-completed session just re-derives the payload.
 
 ```json
 {
-  "completed": false,
-  "next_question": {
-    "id": 2,
-    "text": "...",
-    "image_url": "...",
-    "options": [{"value": "...", "label": "...", "image_url": "..."}]
-  }
-}
-```
-
-**Response (completed):**
-
-```json
-{
-  "completed": true,
-  "next_question": null,
+  "status": "completed",
   "profile": {
     "player_id": 281412419,
     "player_name": "Alex",
@@ -152,49 +144,42 @@ showing cumulative visual effects of all previous choices.
     "species_secondary": null,
     "gender_secondary": null,
     "species_primary_key": "human",
+    "avatar_url": "http://comfyui:8188/view?filename=avatar_281412419_00001_.png&subfolder=default_game&type=output",
     "game_id": "default_game"
-  }
-}
-```
-
-#### Complete Onboarding
-
-**POST** `/onboarding/{session_id}/complete`
-
-Triggers avatar generation via ComfyUI. Returns player profile with avatar URL
-and information about whether the game has just started (when enough players joined).
-
-```json
-{
-  "status": "completed",
-  "profile": {
-    "player_id": 281412419,
-    "role": "Главный инженер",
-    "avatar_url": "http://comfyui:8188/output/default_game/avatar_281412419_00001_.png",
-    ...
   },
-  "avatar_url": "http://comfyui:8188/output/default_game/avatar_281412419_00001_.png",
+  "avatar_url": "http://comfyui:8188/view?filename=avatar_281412419_00001_.png&subfolder=default_game&type=output",
   "game_started": true,
   "game_just_started": false,
   "player_count": 5,
   "other_player_ids": [123, 456, 789],
+  "game_title": "«Звёздный Странник»",
   "language": "ru"
 }
 ```
 
+`game_just_started: true` means this onboarding pushed the game over
+`GAME_START_MIN_PLAYERS` and started it (NPCs, mission, bridge image and the
+first turn are generated in the background, and the game is registered with the
+scheduler). When joining an already-running game, the player inherits the
+current turn's NPC briefing so they can participate immediately.
+
 #### Get Onboarding Status
 
-**GET** `/onboarding/{session_id}?language=ru`
+**GET** `/onboarding/{session_id}`
 
 ```json
 {
-  "session_id": "abc123",
+  "session_id": "onboarding_281412419_1769548800.0",
   "game_id": "default_game",
-  "current_question": 1,
+  "rejections": 1,
   "completed": false,
-  "next_question": {"id": 1, "text": "...", "options": [...]}
+  "proposal": {"role_key": "chief_engineer", "...": "CharacterProposal, see Data Models"}
 }
 ```
+
+`rejections` is the number of rejected proposals; `proposal` is the pending
+[CharacterProposal](#characterproposal) or `null` while the first one is still
+generating.
 
 ---
 
@@ -1052,26 +1037,34 @@ Immediately triggers a turn generation for the given game, bypassing schedule.
 
 ## Data Models
 
-### OnboardingQuestion
+### CharacterProposal
+
+Rolled by the server for each onboarding proposal; stored on the onboarding
+session and shown to the player as a card in the bot:
 
 ```json
 {
-  "id": 1,
-  "text": "Корабль обнаружил неизвестный сигнал. Ваши действия?",
-  "image_url": "http://comfyui:8188/output/...",
-  "image_prompt": "A starship bridge with crew looking at a mysterious signal on the main viewscreen...",
-  "options": [
-    {
-      "value": "cautious",
-      "label": "Изучить сигнал с осторожностью",
-      "role_scores": {"captain": 1, "science_officer": 3, "chief_engineer": 0, ...},
-      "image_url": "http://comfyui:8188/output/..."
-    }
-  ]
+  "role_key": "chief_engineer",
+  "role": "Главный инженер",
+  "role_name_en": "Chief Engineer",
+  "role_description": "Отвечает за все технические системы корабля...",
+  "avatar_description": "Высокий мужчина в инженерной форме...",
+  "personality_traits": ["технический", "практичный"],
+  "species": "Человек",
+  "species_secondary": null,
+  "gender": "Мужской",
+  "gender_secondary": null,
+  "species_description": "Человек с Земли, потомок первых колонистов...",
+  "species_primary_key": "human",
+  "avatar_url": "http://comfyui:8188/view?filename=avatar_281412419_00001_.png&subfolder=default_game&type=output",
+  "past_roles": ["captain", "pilot"],
+  "past_species": ["energy", "human"]
 }
 ```
 
-For species/gender questions, options carry `species_tags` or `gender_tags` instead of `role_scores`.
+- `past_roles` / `past_species` accumulate rejected rolls and prevent repeats
+  while alternatives exist
+- `species_secondary` is set for hybrid species (rolled with a 20% chance)
 
 ### PlayerProfile
 

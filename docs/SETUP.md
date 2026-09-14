@@ -111,7 +111,9 @@ curl http://localhost:8000/game/state
 ### Start Onboarding
 
 ```bash
-curl -X POST "http://localhost:8000/onboarding/start?player_id=123"
+curl -X POST http://localhost:8000/onboarding/start \
+  -H "Content-Type: application/json" \
+  -d '{"player_id": 123, "game_id": "default_game", "language": "en", "player_name": "Alex"}'
 ```
 
 ### Generate Next Turn

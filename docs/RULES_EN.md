@@ -12,14 +12,18 @@ make decisions that influence the plot development.
 
 ### 1. Registration and Onboarding
 
-- After `/start`, the player goes through an interview (5+ questions with options)
-- Questions are LLM-generated; each option contains role_scores for role assignment
-- Additional questions determine the character's **species** and **gender**:
-  - 10 species questions (human, humanoid, non-humanoid, energy, cybernetic, symbiotic)
-  - 4 gender questions (male, female, neutral, fluid, multiple, etc.)
-- Avatar is generated via ComfyUI with species/gender info
-- Role is assigned deterministically by maximum role_scores points
-- After onboarding: role, description, species, gender, avatar are sent to the player
+- After `/start`, the player is offered a **ready-made character** — no interview
+- The server rolls a free ship role + species + gender (20% chance of a hybrid
+  species), never repeating a role/species the player has already rejected
+  while alternatives exist
+- One LLM call generates all flavour: role description, personality traits,
+  appearance; ComfyUI renders the avatar
+- The bot shows a **proposal card** (avatar + role, species, gender, flavour)
+  with Accept / Reroll buttons
+- Up to **3 rerolls** (`ONBOARDING_MAX_REROLLS`); the character rolled after
+  the third rejection is assigned automatically
+- On accept the profile is created; role, description, species, gender and
+  avatar are sent to the player
 
 ### 2. Crew Assembly
 
@@ -39,7 +43,7 @@ When enough players have joined (>= GAME_START_MIN_PLAYERS live players):
 
 1. **NPC Generation** — NPCs are created for unfilled key roles (up to
    NPC_COUNT = 4 seats) with avatars:
-   - No onboarding/interview
+   - No proposal card — NPCs are created directly at game start
    - Species and gender are randomized
    - Avatar prompt is randomized for variety
    - Each NPC starts with **loyalty** 70/100 (see "NPC Loyalty and Mutiny")

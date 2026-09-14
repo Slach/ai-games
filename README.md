@@ -53,7 +53,8 @@ FastAPI service that orchestrates the game:
 **Key Endpoints:**
 
 - `POST /onboarding/start` - Start onboarding for a player
-- `POST /onboarding/{session_id}/answer` - Submit onboarding answer
+- `POST /onboarding/{session_id}/reroll` - Reject the proposed character and roll another
+- `POST /onboarding/{session_id}/complete` - Accept the proposed character
 - `GET /players/{player_id}/profile` - Get player profile
 - `GET /game/current-turn` - Get current turn's episode
 - `GET /game/turn-deadline/{game_id}` - Get the playable turn's deadline
@@ -146,17 +147,18 @@ GAME_SCHEDULER_MODE=single docker compose run --rm game-scheduler
 ## Onboarding Flow
 
 1. Player sends `/start` to the bot
-2. Bot creates onboarding session
-3. Player answers 5 behavioral questions:
-   - Response to unknown signals
-   - Handling risky plans
-   - Moral dilemmas
-   - Specialization preference
-   - Conflict resolution style
-4. System generates player profile:
-   - Role (Chief Engineer, XO, Science Officer)
-   - Personality traits
-   - Avatar description
+2. Bot starts an onboarding session (`POST /onboarding/start`); the first
+   player of a game also triggers the game concept (title + welcome + mission)
+3. In the background the server rolls a random character — a free ship role,
+   species (20% chance of a hybrid) and gender — generates all flavour text in
+   one LLM call and renders the avatar via ComfyUI
+4. The bot shows a proposal card (avatar + role, species, gender, flavour) with
+   Accept / Reroll buttons; already-rejected roles and species are not repeated
+   while alternatives exist
+5. After 3 rerolls the next character is assigned automatically
+6. On accept (`POST /onboarding/{session_id}/complete`) the profile is created;
+   once enough players have joined (`GAME_START_MIN_PLAYERS`), the game starts
+   automatically
 
 ## Turn Game Loop
 

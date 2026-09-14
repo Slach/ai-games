@@ -42,7 +42,7 @@
 ## Important Rules
 
 - **LLM prompts go in `prompts.py`.** All system prompts, user prompts,
-  onboarding questions, outcome generation, NPC dialogue, and daily
+  character proposal generation, outcome generation, NPC dialogue, and daily
   briefings must be defined in `game-server/prompts.py`. Never embed
   prompt strings in handlers, routers, or other modules.
 

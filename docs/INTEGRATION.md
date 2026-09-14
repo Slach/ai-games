@@ -78,11 +78,9 @@ All LLM calls use `response_format` with JSON schema (Structured Outputs). Each 
 |--------|-------|-------------|
 | `NPC_DIALOGUE_SCHEMA` | `generate_npc_dialogues()` | NPC reactions |
 | `CONTENT_PROMPTS_SCHEMA` | `generate_content_prompts()` | Image/video/comic prompts |
-| `ONBOARDING_QUESTIONS_SCHEMA` | `generate_onboarding_questions()` | Dynamic onboarding quiz |
+| `CHARACTER_FLAVOUR_SCHEMA` | `generate_character_flavour()` | Onboarding proposal flavour (role description, traits, appearance) |
 | `PLAYER_MESSAGE_SCHEMA` | `process_player_message()` | GM response to player |
 | `AVATAR_PROMPT_SCHEMA` | Avatar prompt generation | Character image prompts |
-| `ROLE_ASSIGNMENT_SCHEMA` | Role assignment (fallback) | Player role from answers |
-| `SPECIES_GENDER_DESC_SCHEMA` | Species/gender description | Narrative character identity |
 | `GAME_TITLE_SCHEMA` | Game title generation | Ship name + welcome text |
 | `NPC_CHOICE_SCHEMA` | NPC choice selection | NPC action selection logic |
 | `GLOBAL_CIRCUMSTANCES_SCHEMA` | Global game state | Shared turn circumstances |
@@ -263,8 +261,8 @@ TELEGRAM_SOCKS_PROXY  = os.getenv("TELEGRAM_SOCKS_PROXY")  # Optional
 The bot makes HTTP requests to the Game Master API:
 
 - `POST /onboarding/start` — Create onboarding session
-- `POST /onboarding/{session_id}/answer` — Submit question answers
-- `POST /onboarding/{session_id}/complete` — Finalize onboarding
+- `POST /onboarding/{session_id}/reroll` — Reject the proposed character
+- `POST /onboarding/{session_id}/complete` — Accept the proposed character
 - `GET /players/{player_id}/profile` — Get player info
 - `GET /game/current-turn` — Get current turn's episode
 - `GET /game/poll/{player_id}` — Check for updates
@@ -334,9 +332,8 @@ SQLite database for all persistent state.
 | `game_turns` | Turn episodes (story, NPC dialogues, combined_outcome, deadline) |
 | `player_actions` | Player choices per turn |
 | `player_action_stats` | Per-action analytics log (action, consequence_kind, hull snapshot; feeds win-rate/summary) |
-| `onboarding_sessions` | In-progress onboarding state |
+| `onboarding_sessions` | In-progress onboarding state (character proposal, rejection counter) |
 | `game_messages` | Player message history |
-| `onboarding_questions` | Generated question cache |
 | `games` | Multi-game support |
 | `npc_profiles` | NPC state, role assignments, wound_severity, loyalty (0-100) |
 | `game_missions` | Mission objectives, stage progress, archetype + seeds |
