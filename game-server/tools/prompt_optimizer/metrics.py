@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import sys
+import threading
 
 import dspy
 
@@ -64,6 +65,28 @@ _bridge_vl_judge: dspy.Predict | None = None
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+# One persistent event loop for every async runtime call (ComfyUI generation).
+# asyncio.run() per metric call would create and close a fresh loop each time,
+# while image_generator's module-level semaphore binds to the loop that first
+# contends it: under GEPA's multi-threaded evaluation mixed loops raise
+# "bound to a different event loop" and a slot is never released, deadlocking
+# every later generation. A single shared loop keeps the binding stable and is
+# safe to call from any worker thread; the timeout turns a stuck request into
+# a scored-zero case instead of a hung run.
+_async_loop: asyncio.AbstractEventLoop | None = None
+_async_loop_lock = threading.Lock()
+_ASYNC_CALL_TIMEOUT = 900.0
+
+
+def _run_async(coro, timeout: float = _ASYNC_CALL_TIMEOUT):
+    global _async_loop
+    with _async_loop_lock:
+        if _async_loop is None:
+            _async_loop = asyncio.new_event_loop()
+            threading.Thread(target=_async_loop.run_forever, daemon=True, name="optimizer-async").start()
+    return asyncio.run_coroutine_threadsafe(coro, _async_loop).result(timeout)
 
 
 def _parse_score(raw: str) -> float | None:
@@ -138,9 +161,8 @@ def _compose_scene(example, instruction: str) -> str | None:
         else None
     )
     generator = ImageGenerator()
-
-    async def _run() -> str | None:
-        return await generator.generate_character_in_scene(
+    try:
+        return _run_async(generator.generate_character_in_scene(
             instruction_prompt=instruction,
             character_avatar_url=avatar_url,
             background_url=background_url,
@@ -153,9 +175,10 @@ def _compose_scene(example, instruction: str) -> str | None:
             turn=0,
             kind="scene_instruction_eval",
             species_category=str(getattr(example, "species_category", "") or ""),
-        )
-
-    return asyncio.run(_run())
+        ))
+    except Exception:
+        logger.warning("metric[scene_vl]: scene compose failed", exc_info=True)
+        return None
 
 
 def make_scene_vl_metric(judge_lm: dspy.LM):
@@ -211,11 +234,16 @@ def make_scene_vl_metric(judge_lm: dspy.LM):
 
 
 def _generate_txt2img(prompt: str, *, width: int, height: int, kind: str, prefix: str) -> str | None:
-    """Run one txt2img generation through the runtime ImageGenerator."""
-    generator = ImageGenerator()
+    """Run one txt2img generation through the runtime ImageGenerator.
 
-    async def _run() -> str | None:
-        return await generator.generate_image(
+    Returns None on failure: a failed generation is an honest 0.0 score for
+    the case. Raising instead breaks py-gepa's bookkeeping (its valset eval
+    assumes one output per example and dies with IndexError when dspy
+    Evaluate drops failed examples).
+    """
+    generator = ImageGenerator()
+    try:
+        return _run_async(generator.generate_image(
             prompt=prompt,
             filename_prefix=prefix,
             width=width,
@@ -225,9 +253,10 @@ def _generate_txt2img(prompt: str, *, width: int, height: int, kind: str, prefix
             player_id=None,
             turn=0,
             kind=kind,
-        )
-
-    return asyncio.run(_run())
+        ))
+    except Exception:
+        logger.warning("metric[txt2img]: generation failed for kind=%s", kind, exc_info=True)
+        return None
 
 
 def _avatar_common_gates(prompt: str, species_category: str) -> str | None:

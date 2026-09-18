@@ -73,6 +73,16 @@ except (ValueError, TypeError):
 _image_semaphore = asyncio.Semaphore(COMFYUI_IMAGE_CONCURRENCY)
 logger.info(f"ComfyUI image concurrency set to {COMFYUI_IMAGE_CONCURRENCY}")
 
+# Total time (queue wait + generation) a txt2img prompt may take in
+# _wait_for_completion. 180s is fine for an idle ComfyUI; under load (several
+# jobs queued ahead) the same image legitimately takes longer, and timing out
+# then re-queueing a retry only deepens the queue — raise via env instead.
+try:
+    COMFYUI_WAIT_TIMEOUT = int(os.getenv("COMFYUI_WAIT_TIMEOUT", "180"))
+except (ValueError, TypeError):
+    logger.warning("Invalid COMFYUI_WAIT_TIMEOUT, using default 180")
+    COMFYUI_WAIT_TIMEOUT = 180
+
 # Default fallback splash image URL (user can place a manually generated image in ComfyUI output)
 # Place a file named 'splash_default.png' in comfyui/output/ directory
 COMFYUI_BASE_URL = os.getenv("COMFYUI_URL", "http://comfyui:8188")
@@ -897,7 +907,7 @@ class ImageGenerator:
                     )
 
                     prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
-                    outputs = await self._wait_for_completion(prompt_id, timeout=180)
+                    outputs = await self._wait_for_completion(prompt_id, timeout=COMFYUI_WAIT_TIMEOUT)
                     image_url = self._extract_image_url(outputs)
 
                     if image_url:

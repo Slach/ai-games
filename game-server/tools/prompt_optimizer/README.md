@@ -8,15 +8,25 @@
 ## Как это устроено
 
 ```
-npc_dataset.py ──► datasets/npc_choice_<lang>.json ─┐
-scene manifest   ─► datasets/scene_instruction_... ─┤
-                                                    ▼
-run_optimize.py ── baseline Evaluate ──► BootstrapFewShot / GEPA ──► compiled/<use_case>_<lang>.json
-                                                    │ (LLM llama.cpp; для сцены ещё ComfyUI)
-                                                    ▼
+prompts.py (билдеры + константы промптов) ── сеют инструкции сигнатур ──┐
+                                                                        ▼
+npc_dataset.py ──► datasets/npc_choice_<lang>.json ──► run_optimize.py ── baseline Evaluate
+scene manifest   ─► datasets/scene_instruction_...        │ (LLM llama.cpp; для картинок ещё ComfyUI)
+                                                           ▼
+                                          BootstrapFewShot / GEPA ──► compiled/<use_case>_<lang>.json
+                                                           │
+                                                           ▼
 export_demos.py ──► оптимизированная инструкция (ревью) + блок демо для вставки в prompts.py
+                                                           │
+                                                           ▼
+eval_prod_path.py ──► проверка артефакта на БОЕВОМ пути (реальные билдеры + json_schema)
 ```
 
+- **Инструкции сигнатур сеются из `prompts.py`** (`signatures.py` внизу — блок
+  сеяния). Прод-текст — единственный источник правды: правите промпт в
+  `prompts.py`, оптимизатор на следующем прогоне измеряет уже его. Рукописные
+  копии в сигнатурах запрещены — они дрейфовали (npc_avatar оптимизировался
+  без продовых species rules и «лечил» не тот промпт).
 - **Датасет npc_choice** — симуляция решений NPC: банк синтетических ситуаций
   (пробоина, неопознанный объект, вирус в жизнеобеспечении, ...) × профили
   NPC × лояльность из всех четырёх полос (`game_rules.loyalty_band`).
@@ -27,6 +37,9 @@ export_demos.py ──► оптимизированная инструкция 
   `ImageGenerator.generate_character_in_scene` (Qwen-Image-Edit, ComfyUI) и
   VL-судья по паре картинок (аватар ↔ результат): сохранение формы (нет
   коллапса в стоящего человека), изображённое действие, окружение.
+- **Манифест npc_avatar** — 22 кейса, половина energy / non_humanoid /
+  symbiotic: это historic-слабое место (коллапс чужих в стоящего гуманоида),
+  дев-сет 10 кейсов держит оценку вне шума VL-судьи (±5).
 - **VS не трогается**: оптимизация идёт по базовым промптам (без VS-обёртки),
   рантимная Verbalized Sampling продолжает работать как раньше.
 
@@ -82,14 +95,19 @@ npc_choice_ru (bootstrap)            86.0%      85.5%  -0.5  БЕЗ ИЗМЕНЕ
 | bootstrap, combined_outcome | ~4 мин | 88.3→100 и 95.0→100 (+5…+11.7) |
 | bootstrap, npc_choice | ~5 мин | 86.0→85.5 (насыщена, шум) |
 | GEPA, npc_choice | 55 мин | 88.2→89.5 — инструкцию переписать не смог, вернул исходную |
+| GEPA, npc_avatar (ночь) | ~6 ч | 59.5→66.0, пик valset 0.712 — инструкция вставлена в `NPC_AVATAR_PROMPT_SYSTEM` |
 
 Выводы:
 
 - Наши узкие места — **дисциплина контракта** (entity_id, метки [fatal],
   дельты) — лечатся few-shot демо, это bootstrap.
-- GEPA переписывает инструкции и требует запаса для улучшения И сильной
-  reflection-модели; когда student = judge = reflection = одна и та же
-  локальная модель, его потолок низок, а цена — 30-60 минут.
+- GEPA оправдан, когда промпт реально можно переписать (npc_avatar:
+  анти-коллапс формулировки против humanoid-приора txt2img), но на
+  image-метриках он дорог: каждая оценка = картинка. Дефолтный бюджет GEPA —
+  420 rollout (~12 ч); для картинок обязательно `--max-metric-calls 120–160`
+  и ночной запуск, когда ComfyUI не делит очередь с ботом (`COMFYUI_WAIT_TIMEOUT`
+  в .env проде поднят до 600с, но днём таймауты всё равно депрессируют скор
+  честными нулями).
 - Остальные оптимизаторы dspy 3.3.1: Bootstrap+RandomSearch/Optuna (подбор
   подмножества демо, дороже, выигрыш небольшой), MIPROv2/SIMBA/COPRO
   (переписывают инструкции, предложения пишут по-английски — портит RU-промпты),
@@ -170,10 +188,32 @@ cd ../../ && ../.venv/bin/python -m unittest discover -s tests
 - `--optimizer gepa` — GEPA (`auto=light`): итеративно переписывает инструкцию
   по фидбеку судьи. Дороже по GPU-времени, затрагивает и инструкцию, и демо.
 
+## Проверка на боевом пути (eval_prod_path.py)
+
+`run_optimize.py` оценивает `dspy.Predict(signature)` — форматирование dspy,
+без `response_format`. Прод шлёт другой запрос: билдеры `prompts.py` +
+`response_format=json_schema` + сэмплинг из `llm_config`. `eval_prod_path.py`
+замыкает петлю — прогоняет датасет через настоящий запрос и показывает,
+держится ли скомпилированный артефакт на боевом пути (эхо `[relay_only]`,
+отказ json_schema, кривой fallback — всё это ловится только здесь):
+
+```bash
+# текущее состояние prompts.py (какие демо вставлены сейчас):
+../../../.venv/bin/python eval_prod_path.py --use-case combined_outcome --language ru --n 12
+
+# кандидат из compiled/ до вставки в prompts.py:
+../../../.venv/bin/python eval_prod_path.py --use-case npc_choice --language ru --n 20 \
+    --demos-from compiled/npc_choice_ru.json
+```
+
+Поддержаны текстовые юзкейсы (npc_choice, combined_outcome); для картинок
+боевой путь уже встроен в саму метрику (настоящий `ImageGenerator`).
+
 ## Добавление нового юзкейса
 
 1. Класс-сигнатура в `signatures.py` (входы/выходы = контракт схемы из
-   `game_server.py`, докстринг = текущий system-промпт из `prompts.py`).
+   `game_server.py`), инструкции сеются из `prompts.py` в блоке сеяния внизу
+   модуля — рукописные копии промптов в сигнатурах не заводить (дрейфуют).
 2. Метрика в `metrics.py` + запись в `METRIC_FACTORIES`.
 3. Датасет-билдер в `run_optimize.py::build_dataset`.
 4. Константа демо в `prompts.py` по образцу `NPC_DECISION_DEMOS`.

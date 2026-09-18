@@ -30,12 +30,17 @@ from language import (
 )
 from openai import AsyncOpenAI
 from prompts import (
+    BRIDGE_IMAGE_PROMPT_SYSTEM,
+    BRIDGE_IMAGE_VIEWPOINT_RULE,
     COMBINED_OUTCOME_SCHEMA,
     GAME_OVER_SCHEMA,
     DELAY_ACTION_TEXT_EN,
     DELAY_ACTION_TEXT_RU,
     DELAY_KIND_RULE_EN,
     DELAY_KIND_RULE_RU,
+    NPC_AVATAR_PROMPT_SYSTEM,
+    NPC_AVATAR_SPECIES_RULES,
+    build_avatar_prompt_system,
     build_auto_choice_prompts,
     build_character_flavour_prompts,
     build_combined_outcome_prompts,
@@ -1593,45 +1598,13 @@ class GameServer:
         logger.info(f"[AVATAR] Using species category: {species_cat}")
         instr = self._species_prompt_instructions(species_cat)
 
-        # The species category is the ANATOMY CONTRACT: it decides whether the
-        # avatar is a human (two arms, two legs, human face) or an alien being.
-        # The free-text character description is flavour, but it MUST NOT
-        # contradict the species category — a Human is never drawn as a six-
-        # legged machine even if the description rambles about carapaces, and a
-        # non-humanoid alien is never collapsed back into a uniformed human.
         is_human_like = species_cat in ("human", "humanoid")
         if is_human_like:
-            anatomy_contract = (
-                "ANATOMY CONTRACT (HIGHEST PRIORITY — overrides anything in the description): "
-                "this character is a HUMAN/HUMANOID. The avatar MUST depict a human: exactly two "
-                "arms ending in hands, exactly two legs, a human face with eyes/nose/mouth, human "
-                "skin. The output prompt MUST NOT contain any of: extra legs, six legs, tentacles, "
-                "carapace, exoskeleton, plasma, energy body, absence of face, sensor cluster, "
-                "swarm/colony/hive form, parasitic form, symbiotic form. If the character "
-                "description below mentions any such non-human element, DISCARD it entirely and "
-                "describe a human crew member in a Starfleet uniform for the given role instead. "
-                "The traits and description are flavour only — the species is human."
-            )
             species_line = "MANDATORY SPECIES: HUMAN/HUMANOID (do not contradict this under any circumstance)"
         else:
-            anatomy_contract = (
-                "CRITICAL RULE: The character description below is the DEFINITIVE source for "
-                "the character's appearance. If it describes an alien, non-humanoid, energy, "
-                "or symbiotic being — describe their ACTUAL form, NOT human anatomy. "
-                'Never default to "face, hair, eyes, upper body" for non-human characters.'
-            )
             species_line = f"MANDATORY SPECIES: {species_cat.upper()} (alien/non-human)"
 
-        system = (
-            "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
-            "Generate detailed, cinematic-quality image prompts for character avatars.\n\n"
-            + anatomy_contract
-            + "\n\n"
-            "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
-            "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
-            "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
-            "beings whose biology would not have them."
-        )
+        system = build_avatar_prompt_system(species_cat)
 
         user = (
             f"Generate an image prompt for a {instr['genre']} {instr['intro']}.\n"
@@ -2940,14 +2913,7 @@ class GameServer:
         mission_name = mission.get("name", "Unknown mission")
         mission_desc = mission.get("description", "")
 
-        system = (
-            "You are an expert cinematic prompt engineer for AI image generation. "
-            "Create detailed English prompts for a cinematic starship bridge scene "
-            "showing recognizable crew members in action. The image must depict the "
-            "crew — their faces, bodies, and poses — never a floor plan, schematic, "
-            "or architectural diagram. Focus on composition, lighting, the crew, "
-            "and a space opera aesthetic."
-        )
+        system = BRIDGE_IMAGE_PROMPT_SYSTEM
         user = (
             f"Mission: {mission_name}\n"
             f"Mission description: {mission_desc}\n\n"
@@ -2957,9 +2923,7 @@ class GameServer:
             "eye-level or low-angle hero shot of the crew at their stations, Star Trek "
             "style. Show the crew members' faces, bodies, and poses clearly as they "
             "operate their consoles. Include holographic displays, stars visible "
-            "through the viewport, dramatic lighting, 4K. The viewpoint MUST be at "
-            "crew level — NEVER overhead, bird's-eye, top-down, isometric, satellite, "
-            "or any floor-plan / architectural-diagram view.\n"
+            "through the viewport, dramatic lighting, 4K. " + BRIDGE_IMAGE_VIEWPOINT_RULE + "\n"
             "2. Position descriptions for each crew member — where they are "
             "on the bridge and what they are doing at their station.\n\n"
             "Write the prompt and descriptions in English."
@@ -3291,47 +3255,10 @@ class GameServer:
                 )
             return f"  - {r.get('role_key', '?')}: {r.get('role_name', '?')} | species={sp} gender={gender} | traits: {', '.join(r.get('personality_traits', []))}"
 
-        system = (
-            "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
-            "Generate VARIED, DIVERSE character portrait prompts in English.\n\n"
-            "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
-            "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
-            "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
-            "beings whose biology would not have them.\n\n"
-            "For human, humanoid, and cybernetic characters: the gender line is MANDATORY. Every "
-            "prompt MUST name the gender explicitly (e.g. 'a woman', 'a man', 'an androgynous person') "
-            "and describe facial features consistent with it. Never default an unspecified human to a "
-            "man — if the gender line names a woman, the face, hair, and build must read as feminine."
-        )
+        system = NPC_AVATAR_PROMPT_SYSTEM
 
         # Species-specific instructions mirroring _species_prompt_instructions
-        species_rules = {
-            "human": "The character is human. Describe face, expression, uniform details. Portrait style, upper body.",
-            "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Portrait style, upper body.",
-            "non_humanoid": (
-                "The creature is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline "
-                "structure, multiple limbs, amorphous form, hive cluster, etc.). "
-                "The image MUST NOT look like a human or humanoid: NO two arms ending in hands, NO two legs, "
-                "NO human face or hair, NOT a bipedal silhouette. The creature does NOT wear a uniform or clothing. "
-                "Start the prompt with the creature itself (e.g. 'A towering crystalline entity', 'A mass of pulsating bio-gel', "
-                "'An insectoid being with chitinous armor'). Alien creature concept art, NOT a Star Trek officer. "
-                "Full body or 3/4 view showing the alien physiology."
-            ),
-            "cybernetic": "The character is CYBERNETIC/SYNTHETIC — mechanical or cybernetic body (metal, circuits, synthetic components, digital displays). If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts. Start the prompt with the species/mechanical description. Full body or 3/4 view.",
-            "energy": (
-                "The being is an ENERGY BEING — NO solid physical body, composed of energy, plasma, or light. "
-                "Describe the visual signature (glow, frequency patterns, luminosity). "
-                "The image MUST NOT resemble a human: NO solid body, NO face, NO limbs, NO two arms/two legs. "
-                "The being does NOT wear a uniform or clothing. Start the prompt with the energy-form description. "
-                "Abstract energy-being concept art, NOT a Star Trek officer. Full body view."
-            ),
-            "symbiotic": (
-                "The creature is a SYMBIOTIC/COMPOSITE being — a hybrid of multiple organisms. Describe how different "
-                "parts coexist. The image MUST NOT default to a single humanoid body: NO two arms/two legs/human face. "
-                "The creature does NOT wear a uniform or clothing. Start the prompt with the composite nature. "
-                "Alien creature concept art, NOT a Star Trek officer. Full body view."
-            ),
-        }
+        species_rules = NPC_AVATAR_SPECIES_RULES
 
         def _build_user(roles: list[dict[str, Any]]) -> str:
             roles_text = "\n".join(_role_line(r) for r in roles)

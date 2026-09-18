@@ -82,5 +82,75 @@
     "species": "symbiotic",
     "gender_line": "invent a non-human biological identity fitting the species",
     "traits": "двойной, заботливый, скрытный"
+  },
+  {
+    "case_id": "npc_signal_energy",
+    "role_name": "Связист",
+    "species": "energy",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "внимательный, многоголосый, терпеливый"
+  },
+  {
+    "case_id": "npc_reactor_energy",
+    "role_name": "Инженер-реакторщик",
+    "species": "energy",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "горячий, точный, безжалостный к ошибкам"
+  },
+  {
+    "case_id": "npc_cartographer_energy",
+    "role_name": "Картограф",
+    "species": "energy",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "мечтательный, дотошный, тихий"
+  },
+  {
+    "case_id": "npc_medbay_energy",
+    "role_name": "Фельдшер",
+    "species": "energy",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "мягкий, неумолимый, памятливый"
+  },
+  {
+    "case_id": "npc_quartermaster_alien",
+    "role_name": "Квартирмейстер",
+    "species": "non_humanoid",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "педантичный, гостеприимный, ворчливый"
+  },
+  {
+    "case_id": "npc_xenobiologist_alien",
+    "role_name": "Ксенобиолог",
+    "species": "non_humanoid",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "любопытный, отрешённый, болтливый"
+  },
+  {
+    "case_id": "npc_gunner_alien",
+    "role_name": "Артиллерист",
+    "species": "non_humanoid",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "хладнокровный, расчётливый, одинокий"
+  },
+  {
+    "case_id": "npc_counselor_symbiotic",
+    "role_name": "Советник",
+    "species": "symbiotic",
+    "gender_line": "invent a non-human biological identity fitting the species",
+    "traits": "двойной, эмпатичный, проницательный"
+  },
+  {
+    "case_id": "npc_technician_woman",
+    "role_name": "Техник",
+    "species": "human",
+    "gender_line": "a woman, feminine facial features",
+    "traits": "ловкая, насмешливая, выносливая"
+  },
+  {
+    "case_id": "npc_first_officer_man",
+    "role_name": "Первый помощник",
+    "species": "human",
+    "gender_line": "a man, masculine facial features",
+    "traits": "верный, резкий, бессонный"
   }
 ]

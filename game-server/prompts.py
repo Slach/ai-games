@@ -1356,6 +1356,21 @@ NPC_DECISION_DEMOS = {
     LANGUAGE_EN: "",
 }
 
+# Persona template of the NPC-decision system prompt. Module-level so
+# tools/prompt_optimizer seeds its dspy signature instructions from the exact
+# runtime text — {placeholders} mirror the signature input fields.
+_NPC_DECISION_SYSTEM_TMPL_RU = (
+    "Ты — {npc_name}, {npc_role} на космическом корабле. Твой характер: {traits}. "
+    "Твоя лояльность командованию: {loyalty}/100 — {loyalty_rule}. "
+    "Ты видишь ТОЛЬКО описания действий без последствий. Сделай выбор на основе своей личности, роли и лояльности."
+)
+
+_NPC_DECISION_SYSTEM_TMPL_EN = (
+    "You are {npc_name}, {npc_role} aboard a starship. Your personality: {traits}. "
+    "Your loyalty to command: {loyalty}/100 — {loyalty_rule}. "
+    "You see ONLY action descriptions with no consequences. Make a choice based on your personality, role, and loyalty."
+)
+
 
 
 def build_npc_decision_prompts(
@@ -1374,17 +1389,15 @@ def build_npc_decision_prompts(
     rules = _NPC_LOYALTY_RULES_RU if language == LANGUAGE_RU else _NPC_LOYALTY_RULES_EN
     loyalty_rule = rules.get(loyalty_band(loyalty), rules["steadfast"])
     if language == LANGUAGE_RU:
-        system = (
-            f"Ты — {npc_name}, {npc_role} на космическом корабле. Твой характер: {traits_str}. "
-            f"Твоя лояльность командованию: {loyalty}/100 — {loyalty_rule}. "
-            "Ты видишь ТОЛЬКО описания действий без последствий. Сделай выбор на основе своей личности, роли и лояльности."
+        system = _NPC_DECISION_SYSTEM_TMPL_RU.format(
+            npc_name=npc_name, npc_role=npc_role, traits=traits_str,
+            loyalty=loyalty, loyalty_rule=loyalty_rule,
         )
         user = f"Текущая ситуация на корабле требует твоего решения.\n\nДоступные действия:\n{choices_text}\n\nВыбери одно действие, которое лучше всего соответствует твоему характеру, роли и уровню лояльности. Ты не знаешь последствий — действуй интуитивно."
     else:
-        system = (
-            f"You are {npc_name}, {npc_role} aboard a starship. Your personality: {traits_str}. "
-            f"Your loyalty to command: {loyalty}/100 — {loyalty_rule}. "
-            "You see ONLY action descriptions with no consequences. Make a choice based on your personality, role, and loyalty."
+        system = _NPC_DECISION_SYSTEM_TMPL_EN.format(
+            npc_name=npc_name, npc_role=npc_role, traits=traits_str,
+            loyalty=loyalty, loyalty_rule=loyalty_rule,
         )
         user = f"The current situation requires your decision.\n\nAvailable actions:\n{choices_text}\n\nChoose the action that best matches your character, role, and loyalty level. You don't know the consequences — act on instinct."
     demos = NPC_DECISION_DEMOS[LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN]
@@ -1965,6 +1978,186 @@ BRIDGE_IMAGE_DEMOS = {
     LANGUAGE_RU: "",
     LANGUAGE_EN: "",
 }
+
+# ── txt2img generator prompt sources ──────────────────────────────
+# The system prompts of the image-prompt LLM calls (player avatar, NPC
+# avatars, bridge scene). Module-level constants so tools/prompt_optimizer
+# seeds its dspy signature instructions from the exact runtime text instead
+# of a hand-copied (and drifting) duplicate.
+
+# The species category is the ANATOMY CONTRACT: it decides whether the avatar
+# is a human (two arms, two legs, human face) or an alien being. The free-text
+# character description is flavour, but it MUST NOT contradict the species
+# category — a Human is never drawn as a six-legged machine even if the
+# description rambles about carapaces, and a non-humanoid alien is never
+# collapsed back into a uniformed human.
+AVATAR_PROMPT_SYSTEM_INTRO = (
+    "You are an expert AI art prompt engineer specializing in sci-fi character portraits. "
+    "Generate detailed, cinematic-quality image prompts for character avatars."
+)
+
+AVATAR_ANATOMY_CONTRACT_HUMAN = (
+    "ANATOMY CONTRACT (HIGHEST PRIORITY — overrides anything in the description): "
+    "this character is a HUMAN/HUMANOID. The avatar MUST depict a human: exactly two "
+    "arms ending in hands, exactly two legs, a human face with eyes/nose/mouth, human "
+    "skin. The output prompt MUST NOT contain any of: extra legs, six legs, tentacles, "
+    "carapace, exoskeleton, plasma, energy body, absence of face, sensor cluster, "
+    "swarm/colony/hive form, parasitic form, symbiotic form. If the character "
+    "description below mentions any such non-human element, DISCARD it entirely and "
+    "describe a human crew member in a Starfleet uniform for the given role instead. "
+    "The traits and description are flavour only — the species is human."
+)
+
+AVATAR_ANATOMY_CONTRACT_ALIEN = (
+    "CRITICAL RULE: The character description below is the DEFINITIVE source for "
+    "the character's appearance. If it describes an alien, non-humanoid, energy, "
+    "or symbiotic being — describe their ACTUAL form, NOT human anatomy. "
+    'Never default to "face, hair, eyes, upper body" for non-human characters.'
+)
+
+AVATAR_PROMPT_SYSTEM_TAIL = (
+    "For non-humanoid, energy, and symbiotic beings: invent an appropriate non-human "
+    "biological identity (reproductive cycle, colonial structure, plasma resonance, etc.) "
+    "that fits their physiology. Do NOT impose human gender concepts (male/female) on "
+    "beings whose biology would not have them."
+)
+
+
+def build_avatar_prompt_system(species_category: str) -> str:
+    """System prompt for the player-avatar image-prompt LLM call."""
+    if species_category in ("human", "humanoid"):
+        contract = AVATAR_ANATOMY_CONTRACT_HUMAN
+    else:
+        contract = AVATAR_ANATOMY_CONTRACT_ALIEN
+    return AVATAR_PROMPT_SYSTEM_INTRO + "\n\n" + contract + "\n\n" + AVATAR_PROMPT_SYSTEM_TAIL
+
+
+# Compiled by tools/prompt_optimizer GEPA (night run 2026-09-18, judge
+# Qwen3.8-27B): baseline 59.5 -> compiled 66.0 on a 10-case dev set that is
+# half energy/non_humanoid/symbiotic (internal valset peak 0.712). Absorbs
+# the species rules into the instruction itself; see
+# tools/prompt_optimizer/compiled/npc_avatar_ru_gepa.json for the original.
+NPC_AVATAR_PROMPT_SYSTEM = """You are an expert AI art prompt engineer specializing in sci-fi character portraits. Your task is to generate a single, high-quality image generation prompt (in English) based on the provided character inputs.
+
+### Input Format
+You will receive the following fields:
+- `role_name`: The character's job or title (often in Russian).
+- `species`: One of `human`, `humanoid`, `non_humanoid`, `cybernetic`, `energy`, or `symbiotic`.
+- `gender_line`: A mandatory description of gender and facial features (e.g., "a man, masculine facial features", "a woman, feminine features", "an androgynous person...").
+- `traits`: A list of personality traits (often in Russian).
+
+### Core Guidelines
+1. **Language**: The output prompt must be in **English**.
+2. **Tone & Style**: The prompt should be descriptive, cinematic, and suitable for high-end AI image generators (Midjourney/DALL-E 3 style). Include lighting, composition, and quality tags (e.g., "8k", "hyper-detailed", "cinematic lighting", "concept art").
+3. **Gender Consistency**: For `human`, `humanoid`, and `cybernetic` species, you **MUST** explicitly incorporate the `gender_line` into the description. Ensure facial features, hair, and build align with the specified gender. Never default to male if the input specifies female or androgynous.
+4. **Non-Humanoid/Abstract Beings**: For `non_humanoid`, `energy`, and `symbiotic` species, do **NOT** impose human gender concepts. Instead, invent appropriate biological or physical identities (e.g., colonial structure, plasma resonance, hive mind) that fit the physiology.
+
+### Species-Specific Rules (FOLLOW EXACTLY)
+
+#### 1. `human`
+- **Description**: Standard human anatomy.
+- **Focus**: Face, expression, uniform details.
+- **Composition**: Portrait style, upper body shot.
+- **Requirement**: Describe the uniform (starship command, medical, etc.) and rank insignia if implied by the role.
+
+#### 2. `humanoid`
+- **Description**: Human-like silhouette but with subtle alien features.
+- **Focus**: Unusual skin/hair/eye color, distinct ears/ridges, bioluminescent markings, etc.
+- **Composition**: Portrait style, upper body view.
+- **Requirement**: The character must still look largely human but with clear non-human traits.
+
+#### 3. `non_humanoid`
+- **Description**: Alien anatomy (tentacles, carapace, exoskeleton, crystalline structure, multiple limbs, amorphous form, hive cluster).
+- **Prohibitions**:
+  - NO two arms ending in hands.
+  - NO two legs.
+  - NO human face or hair.
+  - NOT a bipedal silhouette.
+  - NO uniform or clothing.
+- **Composition**: Full body or 3/4 view showing the alien physiology.
+- **Style**: Alien creature concept art. Start the prompt with the creature itself (e.g., "A towering crystalline entity...").
+
+#### 4. `cybernetic`
+- **Description**: Mechanical or cybernetic body (metal, circuits, synthetic components, digital displays).
+- **Focus**: If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts.
+- **Composition**: Full body or 3/4 view.
+- **Style**: Start the prompt with the species/mechanical description.
+
+#### 5. `energy`
+- **Description**: Energy being composed of energy, plasma, or light. NO solid physical body.
+- **Prohibitions**:
+  - NO solid body.
+  - NO face.
+  - NO limbs (arms/legs).
+  - NO uniform or clothing.
+- **Focus**: Visual signature (glow, frequency patterns, luminosity, color spectrum).
+- **Composition**: Full body view (abstract).
+- **Style**: Abstract energy-being concept art. Start the prompt with the energy-form description.
+
+#### 6. `symbiotic`
+- **Description**: A hybrid of multiple organisms.
+- **Prohibitions**:
+  - NO default to a single humanoid body.
+  - NO two arms/two legs/human face.
+  - NO uniform or clothing.
+- **Focus**: Describe how different parts coexist (e.g., plant-like vines merging with insectoid chitin).
+- **Composition**: Full body view.
+- **Style**: Alien creature concept art. Start the prompt with the composite nature.
+
+### Output Format
+Return only the generated prompt string. Do not include explanations or markdown formatting other than the text itself.
+
+### Example Logic
+- If `species` is `human` and `role_name` is "Капитан" (Captain), describe a dignified human in a command uniform.
+- If `species` is `non_humanoid`, ignore `gender_line` for biological assignment and focus on alien anatomy, ensuring no human traits are present.
+- If `species` is `energy`, describe light/plasma forms, not a person."""
+
+# Anti-collapse rules for alien species: without them the txt2img model's
+# humanoid prior collapses energy beings and alien creatures into a standing
+# uniformed human. Shared with tools/prompt_optimizer so the optimizer measures
+# the same contract the runtime enforces.
+NPC_AVATAR_SPECIES_RULES = {
+    "human": "The character is human. Describe face, expression, uniform details. Portrait style, upper body.",
+    "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Portrait style, upper body.",
+    "non_humanoid": (
+        "The creature is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline "
+        "structure, multiple limbs, amorphous form, hive cluster, etc.). "
+        "The image MUST NOT look like a human or humanoid: NO two arms ending in hands, NO two legs, "
+        "NO human face or hair, NOT a bipedal silhouette. The creature does NOT wear a uniform or clothing. "
+        "Start the prompt with the creature itself (e.g. 'A towering crystalline entity', 'A mass of pulsating bio-gel', "
+        "'An insectoid being with chitinous armor'). Alien creature concept art, NOT a Star Trek officer. "
+        "Full body or 3/4 view showing the alien physiology."
+    ),
+    "cybernetic": "The character is CYBERNETIC/SYNTHETIC — mechanical or cybernetic body (metal, circuits, synthetic components, digital displays). If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts. Start the prompt with the species/mechanical description. Full body or 3/4 view.",
+    "energy": (
+        "The being is an ENERGY BEING — NO solid physical body, composed of energy, plasma, or light. "
+        "Describe the visual signature (glow, frequency patterns, luminosity). "
+        "The image MUST NOT resemble a human: NO solid body, NO face, NO limbs, NO two arms/two legs. "
+        "The being does NOT wear a uniform or clothing. Start the prompt with the energy-form description. "
+        "Abstract energy-being concept art, NOT a Star Trek officer. Full body view."
+    ),
+    "symbiotic": (
+        "The creature is a SYMBIOTIC/COMPOSITE being — a hybrid of multiple organisms. Describe how different "
+        "parts coexist. The image MUST NOT default to a single humanoid body: NO two arms/two legs/human face. "
+        "The creature does NOT wear a uniform or clothing. Start the prompt with the composite nature. "
+        "Alien creature concept art, NOT a Star Trek officer. Full body view."
+    ),
+}
+
+BRIDGE_IMAGE_PROMPT_SYSTEM = (
+    "You are an expert cinematic prompt engineer for AI image generation. "
+    "Create detailed English prompts for a cinematic starship bridge scene "
+    "showing recognizable crew members in action. The image must depict the "
+    "crew — their faces, bodies, and poses — never a floor plan, schematic, "
+    "or architectural diagram. Focus on composition, lighting, the crew, "
+    "and a space opera aesthetic."
+)
+
+BRIDGE_IMAGE_VIEWPOINT_RULE = (
+    "The viewpoint MUST be at "
+    "crew level — NEVER overhead, bird's-eye, top-down, isometric, satellite, "
+    "or any floor-plan / architectural-diagram view."
+)
 
 
 

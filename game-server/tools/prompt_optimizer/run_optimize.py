@@ -18,6 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # host-exposed port before any game-server module gets imported.
 os.environ.setdefault("COMFYUI_URL", "http://localhost:8188")
 os.environ.setdefault("COMFYUI_IMAGE_CONCURRENCY", "2")
+# The optimizer shares ComfyUI with the live bot: under evening load several
+# jobs queue ahead and a 180s wait times out, re-queues a retry and deepens
+# the queue — every such case wastes the student tokens that wrote the prompt.
+os.environ.setdefault("COMFYUI_WAIT_TIMEOUT", "600")
 
 import argparse  # noqa: E402
 import json  # noqa: E402
@@ -127,6 +131,12 @@ def main() -> None:
     parser.add_argument("--pass-threshold", type=float, default=0.7, help="Score needed to accept a bootstrap demo")
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-metric-calls", type=int, default=0,
+                        help="GEPA only: hard cap on metric calls (rollouts). "
+                             "Each rollout is one dev-example eval; image metrics "
+                             "cost ~90-140s per rollout, and the default budget of "
+                             "420 rollouts runs for ~12h. 160 covers the initial "
+                             "candidate pool plus ~8 refinement iterations.")
     parser.add_argument("--out", default="", help="Output JSON path (default compiled/<use_case>_<lang>.json)")
     args = parser.parse_args()
 
@@ -170,7 +180,16 @@ def main() -> None:
 
         # Reflection honors JUDGE_MODEL too (see llm.make_judge_lm).
         reflection_lm = make_judge_lm(temperature=0.3, max_tokens=4096)
-        optimizer = GEPA(metric=gepa_metric, reflection_lm=reflection_lm, auto="light")
+        # GEPA accepts exactly ONE of auto / max_metric_calls / max_full_evals;
+        # auto is merely a preset that computes max_metric_calls internally.
+        if args.max_metric_calls:
+            optimizer = GEPA(
+                metric=gepa_metric,
+                reflection_lm=reflection_lm,
+                max_metric_calls=args.max_metric_calls,
+            )
+        else:
+            optimizer = GEPA(metric=gepa_metric, reflection_lm=reflection_lm, auto="light")
         compiled = optimizer.compile(student, trainset=trainset, valset=devset)
 
     final = evaluate(compiled)

@@ -38,8 +38,15 @@ def make_lm(
     )
 
 
-def make_judge_lm(model: str | None = None, api_base: str | None = None) -> dspy.LM:
-    """Low-temperature LM for judge/rubric scoring.
+def make_judge_lm(
+    model: str | None = None,
+    api_base: str | None = None,
+    *,
+    temperature: float = 0.1,
+    max_tokens: int = 1024,
+) -> dspy.LM:
+    """Low-temperature LM for judge/rubric scoring. GEPA's reflection LM
+    overrides temperature/max_tokens via the keyword arguments.
 
     Set JUDGE_MODEL (e.g. unsloth/Qwen3.8-27B-MTP) to grade with a model
     other than the student — reduces self-agreement bias and, for GEPA,
@@ -49,4 +56,4 @@ def make_judge_lm(model: str | None = None, api_base: str | None = None) -> dspy
     otherwise runs thrash.
     """
     model = model or os.getenv("JUDGE_MODEL") or None
-    return make_lm(temperature=0.1, max_tokens=1024, model=model, api_base=api_base)
+    return make_lm(temperature=temperature, max_tokens=max_tokens, model=model, api_base=api_base)

@@ -89,7 +89,9 @@ for uc in "${USE_CASES[@]}"; do
             ;;
         npc_avatar)
             # Портрет NPC: контракт пола для людей + VL-судья по портрету.
-            run_case npc_avatar 8 4 --demos 4
+            # 22 кейса в манифесте, половина — energy/non_humanoid/symbiotic
+            # (historic-слабое место: коллапс чужих в гуманоида).
+            run_case npc_avatar 12 10 --demos 4
             ;;
         bridge_image)
             # Сцена мостика: экипаж живые люди в кадре + VL-судья по сцене.

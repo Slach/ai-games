@@ -1,12 +1,16 @@
 """dspy signatures for the offline prompt optimizer.
 
-Each signature mirrors the input/output contract of the corresponding
-prompts.py builder (same fields the runtime schema validates), seeded with
-the current system-prompt text so the optimizer starts from today's
-behavior and improves from there.
+Student signatures mirror the input/output contract of the corresponding
+prompts.py builder (same fields the runtime schema validates). Their
+instructions are SEEDED FROM prompts.py at the bottom of this module —
+the runtime prompt text is the single source of truth, so the optimizer
+always measures today's prompt and cannot drift from it.
 
-Adding a new use case: define signature classes here, register them in
-SIGNATURES / JUDGE registry, and wire a metric in metrics.py.
+Judge signatures have no runtime counterpart and stay hand-written.
+
+Adding a new use case: define the signature class here, seed its
+instructions from the prompts.py source, register it in SIGNATURES, and
+wire a metric in metrics.py.
 """
 
 import os
@@ -17,16 +21,25 @@ import dspy
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from language import LANGUAGE_EN, LANGUAGE_RU  # noqa: E402
+from prompts import (  # noqa: E402
+    AVATAR_ANATOMY_CONTRACT_ALIEN,
+    AVATAR_ANATOMY_CONTRACT_HUMAN,
+    AVATAR_PROMPT_SYSTEM_INTRO,
+    AVATAR_PROMPT_SYSTEM_TAIL,
+    BRIDGE_IMAGE_PROMPT_SYSTEM,
+    BRIDGE_IMAGE_VIEWPOINT_RULE,
+    NPC_AVATAR_PROMPT_SYSTEM,
+    _COMBINED_OUTCOME_SYSTEM_RU,
+    _NPC_DECISION_SYSTEM_TMPL_EN,
+    _NPC_DECISION_SYSTEM_TMPL_RU,
+    build_scene_instruction_system,
+)
 
 # ── NPC decision (mirrors build_npc_decision_prompts + NPC_CHOICE_SCHEMA) ──
 
 
 class NPCChoiceRU(dspy.Signature):
-    """Ты — член экипажа космического корабля, принимающий решение в текущей
-    ситуации. Тебе даны твоё имя, роль, характер и уровень лояльности
-    командованию, а также список доступных действий — ТОЛЬКО их описания,
-    без последствий. Сделай выбор одного действия на основе своей личности,
-    роли и лояльности. Ты не знаешь последствий — действуй интуитивно."""
+    """Instructions seeded from prompts._NPC_DECISION_SYSTEM_TMPL_RU below."""
 
     npc_name: str = dspy.InputField(desc="Имя NPC")
     npc_role: str = dspy.InputField(desc="Роль NPC на корабле")
@@ -39,11 +52,7 @@ class NPCChoiceRU(dspy.Signature):
 
 
 class NPCChoiceEN(dspy.Signature):
-    """You are a starship crew member making a decision in the current
-    situation. You are given your name, role, personality, loyalty to
-    command, and the list of available actions — ONLY their descriptions,
-    with no consequences. Choose one action based on your personality,
-    role, and loyalty. You don't know the consequences — act on instinct."""
+    """Instructions seeded from prompts._NPC_DECISION_SYSTEM_TMPL_EN below."""
 
     npc_name: str = dspy.InputField(desc="NPC name")
     npc_role: str = dspy.InputField(desc="NPC role aboard the ship")
@@ -57,18 +66,24 @@ class NPCChoiceEN(dspy.Signature):
 
 # ── Scene instruction (mirrors build_scene_instruction_* + SCENE_INSTRUCTION_SCHEMA) ──
 # The output instruction is ALWAYS English (it is consumed by Qwen-Image-Edit);
-# only the input texts vary by game language. The docstring is seeded from the
-# RU system prompt because the RU builder is the one real games exercise.
+# only the input texts vary by game language. One class per language because
+# dspy instructions live on the signature class.
 
 
-class SceneInstruction(dspy.Signature):
-    """Ты — эксперт по написанию инструкций для AI image-editing модели
-    Qwen-Image-Edit. Модель получает два изображения: Picture 1 — персонаж
-    (аватар), Picture 2 — фон сцены. Напиши инструкцию на АНГЛИЙСКОМ, как
-    разместить персонажа из Picture 1 в окружение из Picture 2: поза,
-    действие, эмоция, освещение, композиция. Описание персонажа и его
-    идентичность НЕ повторяй — модель сохранит их сама. Фокус на действии
-    и постановке."""
+class SceneInstructionRU(dspy.Signature):
+    """Instructions seeded from prompts.build_scene_instruction_system(ru) below."""
+
+    action_text: str = dspy.InputField(desc="Выбранное действие персонажа")
+    species_desc: str = dspy.InputField(desc="Описание вида персонажа")
+    background_location: str = dspy.InputField(desc="Подсказка локации сцены (может быть пустой)")
+    scene_context: str = dspy.InputField(desc="Описание текущей обстановки хода (Setting/Conflict)")
+    species_category: str = dspy.InputField(desc="Канонический ключ вида: human / humanoid / non_humanoid / energy / cybernetic / symbiotic")
+    instruction: str = dspy.OutputField(desc="English instruction for Qwen-Image-Edit starting with 'Place the character from Picture 1...'")
+    scene_background_location: str = dspy.OutputField(desc="Best-matching location type from: bridge, engineering, sickbay, lab, corridor, exterior_ship, planet_surface, main_screen")
+
+
+class SceneInstructionEN(dspy.Signature):
+    """Instructions seeded from prompts.build_scene_instruction_system(en) below."""
 
     action_text: str = dspy.InputField(desc="Выбранное действие персонажа")
     species_desc: str = dspy.InputField(desc="Описание вида персонажа")
@@ -83,25 +98,7 @@ class SceneInstruction(dspy.Signature):
 
 
 class CombinedOutcomeRU(dspy.Signature):
-    """Ты — Game Master космической игры. Ты анализируешь ВСЕ решения, принятые
-    игроками и NPC, вместе с их СКРЫТЫМИ последствиями, и создаёшь единый
-    связный результат хода.
-
-    ГЛАВНЫЕ ПРИНЦИПЫ:
-    1. Решения ИГРОКОВ (Weight: HIGH) имеют БОЛЬШИЙ вес, чем решения NPC.
-    2. Прогресс и регресс — равновозможные последствия решений.
-    3. Космос враждебен и безразличен. Раны и гибель — законная цена риска.
-    4. Гибель и ранения наступают СТРОГО по метке в HIDDEN CONSEQUENCE:
-       [fatal] — участник гибнет; [injury] — ранение без смерти; [progress] —
-       миссия продвигается без жертв; [delay] — потерянное время. Метка —
-       ОБЯЗАТЕЛЬСТВО, не смягчай и не игнорируй.
-    5. У каждого принявшего решение должен быть ПЕРСОНАЛЬНЫЙ ИСХОД.
-    6. Корпус, щиты и офлайн-системы — накопленное состояние; ты возвращаешь
-       ТОЛЬКО ИЗМЕНЕНИЯ за ход.
-
-    АДРЕСАЦИЯ ЖЕРТВ: в dead_crew_members / crew_injured / crew_healed адресуй
-    персонажей ТОЛЬКО по entity_id из ростера экипажа, копируй ТОЧНО.
-    В personal_outcomes.character_name — ТОЛЬКО чистое имя, без роли и id."""
+    """Instructions seeded from prompts._COMBINED_OUTCOME_SYSTEM_RU below."""
 
     setting: str = dspy.InputField(desc="Локация текущего хода")
     conflict: str = dspy.InputField(desc="Центральный конфликт хода")
@@ -114,36 +111,14 @@ class CombinedOutcomeRU(dspy.Signature):
     outcome_json: str = dspy.OutputField(desc="Валидный JSON объекта combined_outcome: outcome_narrative, ship_status_change, crew_morale_change, next_turn_hook, mission_progress[{stage,points}], dead_crew_members[{entity_id,cause}], ship_hull_change, ship_shields_change, systems_taken_offline[], systems_restored[], crew_injured[{entity_id,severity}], crew_healed[{entity_id,new_severity}], personal_outcomes[{character_name,role,outcome_text}] — дельты, не абсолюты; entity_id строго из ростера")
 
 
-# ── Avatar / bridge image prompts (mirror the inline generators in
-# game_server.py: generate_avatar_prompt, generate_npc_avatar_prompts,
-# generate_bridge_image_prompt). The image prompt output is ALWAYS English
-# (consumed by the txt2img model); input texts come from RU games. ──
+# ── Avatar / bridge image prompts (mirror the txt2img prompt generators;
+# their system prompts live in prompts.py as module constants). The image
+# prompt output is ALWAYS English (consumed by the txt2img model); input
+# texts come from RU games. ──
 
 
 class AvatarPrompt(dspy.Signature):
-    """You are an expert AI art prompt engineer specializing in sci-fi
-    character portraits. Generate detailed, cinematic-quality image prompts
-    for character avatars.
-
-    The species_category is the ANATOMY CONTRACT — HIGHEST PRIORITY, it
-    overrides anything in the free-text character description:
-    - human / humanoid: the avatar MUST depict a human — exactly two arms
-      ending in hands, exactly two legs, a human face with eyes/nose/mouth,
-      human skin. The output prompt MUST NOT contain any of: extra legs,
-      six legs, tentacles, carapace, exoskeleton, plasma, energy body,
-      absence of face, sensor cluster, swarm/colony/hive form, parasitic
-      form, symbiotic form. If the description mentions such a non-human
-      element, DISCARD it entirely and describe a human crew member in a
-      Starfleet-style uniform for the given role instead.
-    - non_humanoid / energy / symbiotic: the character description is the
-      DEFINITIVE source of appearance. Describe their ACTUAL form, never
-      default to "face, hair, eyes, upper body" or any standing human.
-      Invent an appropriate non-human biological identity (colonial
-      structure, plasma resonance, etc.) that fits their physiology. Do NOT
-      impose human gender concepts on such beings.
-    - cybernetic: a humanoid with clearly visible cybernetic implants.
-
-    Write the image prompt in English."""
+    """Instructions seeded from the prompts.py avatar-prompt constants below."""
 
     role: str = dspy.InputField(desc="Character's role on the ship")
     traits: str = dspy.InputField(desc="Personality traits, comma-separated")
@@ -153,22 +128,7 @@ class AvatarPrompt(dspy.Signature):
 
 
 class NpcAvatarPrompt(dspy.Signature):
-    """You are an expert AI art prompt engineer specializing in sci-fi
-    character portraits. Generate VARIED, DIVERSE character portrait prompts
-    in English.
-
-    For non-humanoid, energy, and symbiotic beings: invent an appropriate
-    non-human biological identity (reproductive cycle, colonial structure,
-    plasma resonance, etc.) that fits their physiology. Do NOT impose human
-    gender concepts (male/female) on beings whose biology would not have
-    them.
-
-    For human, humanoid, and cybernetic characters: the gender line is
-    MANDATORY. Every prompt MUST name the gender explicitly (e.g. 'a woman',
-    'a man', 'an androgynous person') and describe facial features
-    consistent with it. Never default an unspecified human to a man — if the
-    gender line names a woman, the face, hair, and build must read as
-    feminine."""
+    """Instructions seeded from prompts.NPC_AVATAR_PROMPT_SYSTEM below."""
 
     role_name: str = dspy.InputField(desc="NPC role name on the ship")
     species: str = dspy.InputField(desc="Species key: human / humanoid / non_humanoid / energy / cybernetic / symbiotic")
@@ -178,13 +138,7 @@ class NpcAvatarPrompt(dspy.Signature):
 
 
 class BridgeImagePrompt(dspy.Signature):
-    """You are an expert cinematic prompt engineer for AI image generation.
-    Create detailed English prompts for a cinematic starship bridge scene
-    showing recognizable crew members in action. The image must depict the
-    crew — their faces, bodies, and poses — never a floor plan, schematic,
-    or architectural diagram. The viewpoint MUST be at crew level — never
-    overhead, bird's-eye, top-down, isometric, or satellite. Focus on
-    composition, lighting, the crew, and a space opera aesthetic."""
+    """Instructions seeded from prompts.BRIDGE_IMAGE_PROMPT_SYSTEM below."""
 
     mission_name: str = dspy.InputField(desc="Mission name")
     mission_description: str = dspy.InputField(desc="Mission description")
@@ -286,11 +240,45 @@ class SceneVLJudge(dspy.Signature):
     feedback: str = dspy.OutputField(desc="One short sentence explaining the score")
 
 
+# ── Instruction seeding: the runtime prompts are the single source of truth ──
+# Every student signature gets its instructions from prompts.py below, so the
+# optimizer always measures the prompt the game actually sends. Only the
+# connective glue (branch selection for the avatar anatomy contract, the
+# species-rules rendering) is local to this module.
+
+NPCChoiceRU.instructions = _NPC_DECISION_SYSTEM_TMPL_RU
+NPCChoiceEN.instructions = _NPC_DECISION_SYSTEM_TMPL_EN
+SceneInstructionRU.instructions = build_scene_instruction_system(LANGUAGE_RU)
+SceneInstructionEN.instructions = build_scene_instruction_system(LANGUAGE_EN)
+CombinedOutcomeRU.instructions = _COMBINED_OUTCOME_SYSTEM_RU
+
+# The runtime avatar system branches on the species category in code; the
+# signature sees the category as an input, so both branches are spelled out
+# over the same shared constants.
+AvatarPrompt.instructions = (
+    AVATAR_PROMPT_SYSTEM_INTRO
+    + "\n\nThe species_category input is the ANATOMY CONTRACT — HIGHEST PRIORITY, "
+    "it overrides anything in the free-text character description.\n"
+    "- human / humanoid: " + AVATAR_ANATOMY_CONTRACT_HUMAN + "\n"
+    "- non_humanoid / energy / symbiotic: " + AVATAR_ANATOMY_CONTRACT_ALIEN + "\n"
+    "- cybernetic: a humanoid with clearly visible cybernetic implants.\n\n"
+    + AVATAR_PROMPT_SYSTEM_TAIL
+    + "\n\nWrite the image prompt in English."
+)
+
+# The runtime npc-avatar system prompt already carries the species rules
+# inside (the GEPA-compiled text absorbs them), so it seeds verbatim.
+NpcAvatarPrompt.instructions = NPC_AVATAR_PROMPT_SYSTEM
+
+BridgeImagePrompt.instructions = (
+    BRIDGE_IMAGE_PROMPT_SYSTEM + " " + BRIDGE_IMAGE_VIEWPOINT_RULE
+)
+
 SIGNATURES = {
     ("npc_choice", LANGUAGE_RU): NPCChoiceRU,
     ("npc_choice", LANGUAGE_EN): NPCChoiceEN,
-    ("scene_instruction", LANGUAGE_RU): SceneInstruction,
-    ("scene_instruction", LANGUAGE_EN): SceneInstruction,
+    ("scene_instruction", LANGUAGE_RU): SceneInstructionRU,
+    ("scene_instruction", LANGUAGE_EN): SceneInstructionEN,
     ("combined_outcome", LANGUAGE_RU): CombinedOutcomeRU,
     ("avatar_prompt", LANGUAGE_RU): AvatarPrompt,
     ("npc_avatar", LANGUAGE_RU): NpcAvatarPrompt,
