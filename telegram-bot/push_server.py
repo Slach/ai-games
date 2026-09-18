@@ -1354,38 +1354,41 @@ async def _deliver_onboarding_ready(
         if game_title:
             welcome_text = f"*{_escape_md(game_title)}*\n\n{_escape_md(welcome_text)}" if welcome_text else f"*{_escape_md(game_title)}*"
 
-        # Send splash image (first proposal of a game only)
+        # Send splash image (first proposal of a game only). The server sends
+        # game_title/welcome_message only for the first proposal; without them
+        # the splash would arrive as an unexplained image with no caption.
         splash_sent = False
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    f"{GAME_SERVER_URL}/content/splash-image",
-                    params={"game_id": game_id},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp,
-            ):
-                if resp.status == 200:
-                    splash_data = await resp.json()
-                    splash_url = splash_data.get("image_url")
-                    if splash_url:
-                        async with session.get(splash_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
-                            if img_resp.status == 200:
-                                photo_data = await img_resp.read()
-                                photo = BufferedInputFile(photo_data, filename="splash.png")
-                                await bot.send_photo(
-                                    chat_id=player_id,
-                                    photo=photo,
-                                    caption=welcome_text,
-                                    parse_mode="Markdown",
-                                )
-                                splash_sent = True
-        except Exception as e:
-            logger.warning(
-                "[PUSH_ONBOARDING] Failed to send splash image for player %d: %s",
-                player_id,
-                e,
-            )
+        if welcome_text:
+            try:
+                async with (
+                    aiohttp.ClientSession() as session,
+                    session.get(
+                        f"{GAME_SERVER_URL}/content/splash-image",
+                        params={"game_id": game_id},
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp,
+                ):
+                    if resp.status == 200:
+                        splash_data = await resp.json()
+                        splash_url = splash_data.get("image_url")
+                        if splash_url:
+                            async with session.get(splash_url, timeout=aiohttp.ClientTimeout(total=30)) as img_resp:
+                                if img_resp.status == 200:
+                                    photo_data = await img_resp.read()
+                                    photo = BufferedInputFile(photo_data, filename="splash.png")
+                                    await bot.send_photo(
+                                        chat_id=player_id,
+                                        photo=photo,
+                                        caption=welcome_text,
+                                        parse_mode="Markdown",
+                                    )
+                                    splash_sent = True
+            except Exception as e:
+                logger.warning(
+                    "[PUSH_ONBOARDING] Failed to send splash image for player %d: %s",
+                    player_id,
+                    e,
+                )
 
         if not splash_sent and welcome_text:
             await bot.send_message(
