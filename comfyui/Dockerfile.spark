@@ -2,6 +2,10 @@
 ARG NPROC=8
 ARG UBUNTU_VERSION=24.04
 ARG CUDA_VERSION=13.3.1
+# ComfyUI commit pin: bump to pull a newer master (new model nodes usually
+# need it — template notes say "update ComfyUI first"). The pin also busts
+# the clone layer cache; a plain --depth 1 clone would stay cached forever.
+ARG COMFYUI_COMMIT=0f74f7fb9f83a78bf46188fd4fd53e6bc44c1ae8
 
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS base
 
@@ -19,8 +23,16 @@ RUN apt update && apt install -y \
     ffmpeg \
     && apt autoremove && apt clean && rm -rf /var/lib/apt/lists/*
 
-# Clone ComfyUI
-RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+# Re-declare inside the stage: a global (pre-FROM) ARG is empty unless
+# re-declared here. Placed after the apt layer so bumping the pin does not
+# invalidate the cached system-packages layer.
+ARG COMFYUI_COMMIT
+# Clone ComfyUI at the pinned commit (see COMFYUI_COMMIT above); fetch only
+# that commit's tree, not the full history
+RUN git init /opt/ComfyUI \
+    && git -C /opt/ComfyUI remote add origin https://github.com/comfyanonymous/ComfyUI.git \
+    && git -C /opt/ComfyUI fetch --depth 1 origin ${COMFYUI_COMMIT} \
+    && git -C /opt/ComfyUI checkout --detach FETCH_HEAD
 WORKDIR /opt/ComfyUI
 
 # Create virtual environment with system site packages

@@ -88,6 +88,10 @@ MODELS: dict[str, ModelConfig] = {
         label="Qwen-Image-2512 (GGUF Q4_K_M + Lightning 4-step LoRA)",
         builder="qwen_image_2512",
     ),
+    "qwen_image_2_1": ModelConfig(
+        label="Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
+        builder="qwen_image_2_1",
+    ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
@@ -180,6 +184,14 @@ EDIT_MODELS: dict[str, EditModelConfig] = {
         clip="qwen_2.5_vl_7b_fp8_scaled.safetensors",
         vae="qwen_image_vae.safetensors",
         lora="Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    ),
+    "qwen_image_edit_2_1": EditModelConfig(
+        label="Qwen-Image-2.1 edit (int8_convrot, unified t2i+edit)",
+        builder="qwen_image_edit_21",
+        unet="qwen_image_2.1_int8_convrot.safetensors",
+        clip="qwen3vl_8b_int8_convrot.safetensors",
+        vae="qwen_image_2.1_vae_bf16.safetensors",
+        lora="",  # 2.1 has no Lightning LoRA; single 25-step path for all species
     ),
 }
 

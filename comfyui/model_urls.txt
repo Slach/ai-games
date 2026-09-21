@@ -48,3 +48,11 @@ https://huggingface.co/realrebelai/LLaDa-Image-Turbo_ComfyUI/resolve/main/LLaDa_
 # Shares the qwen_2.5_vl_7b text encoder and qwen_image_vae with the edit model.
 https://huggingface.co/unsloth/Qwen-Image-2512-GGUF/resolve/main/qwen-image-2512-Q4_K_M.gguf -> unet/qwen-image-2512-Q4_K_M.gguf
 https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning/resolve/main/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors -> loras/Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors
+
+# ============== Qwen-Image-2.1 (Comfy-Org repack, int8_convrot for GB10) ==============
+# Native 2K txt2img. New qwen3vl_8b text encoder + its own VAE; needs
+# TextEncodeQwenImage21 (recent ComfyUI master) instead of CLIPTextEncode,
+# EmptyLatentImage instead of EmptySD3LatentImage, no shift node.
+https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors -> diffusion_models/qwen_image_2.1_int8_convrot.safetensors
+https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors -> text_encoders/qwen3vl_8b_int8_convrot.safetensors
+https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors -> vae/qwen_image_2.1_vae_bf16.safetensors

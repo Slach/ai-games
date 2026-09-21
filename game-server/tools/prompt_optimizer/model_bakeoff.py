@@ -35,6 +35,7 @@ PROMPTS = [
     ("bg_planet", "Alien planet surface at dusk, crystalline formations glowing faintly, twin moons on the horizon, dense violet atmosphere, cinematic wide shot, no people"),
     ("avatar_human", "Portrait of a stern human starship captain, 40s, short greying hair, dark uniform with silver insignia, starfield background, cinematic lighting"),
     ("avatar_nonhumanoid", "A floating cluster of luminous crystals forming a sentient being, no limbs, no face, pulsing inner light, dark engineering bay background, cinematic sci-fi concept art"),
+    ("bridge_crew", "Cinematic starship bridge scene with five recognizable crew members in action at their stations: a human captain in the command chair, a tall insectoid navigator at the helm, a reptilian science officer by the holographic display, a cyborg engineer at a console and a floating energy being near the viewport, viewpoint at crew level, space opera lighting, no text"),
     ("exterior_ship", "Sleek exploration starship in deep space approaching a swirling amber nebula, dramatic rim lighting, epic scale, cinematic sci-fi"),
     ("splash_epic", "Epic space opera vista: fleet silhouettes against a dying red star, planetary rings cutting the frame, sense of doom and grandeur, cinematic"),
 ]

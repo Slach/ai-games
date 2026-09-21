@@ -1,0 +1,217 @@
+{
+  "z_image_turbo": {
+    "label": "Z-Image Turbo (8-step distilled)",
+    "avg_score": 8.65,
+    "avg_seconds": 14.0,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.2,
+        "seconds": 20.1,
+        "feedback": "The image is a high-quality, cinematic realization of the prompt, featuring excellent lighting and detail, though the presence of two chairs slightly deviates f"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 8.5,
+        "seconds": 14.0,
+        "feedback": "The image successfully captures the alien landscape with glowing crystals and a violet dusk atmosphere, though the twin moons are rendered as small, distant poi"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 14.0,
+        "feedback": "Flawless cinematic portrait with accurate prompt adherence, realistic anatomy, and high-quality lighting."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.0,
+        "seconds": 12.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the prompt's requirements, with a beautiful, luminous crystal cluster that feels alive and "
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 12.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the epic scale and cinematic quality requested, with the ship's sleek design and the swirli"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 6.5,
+        "seconds": 12.0,
+        "feedback": "The central figure is a humanoid character rather than the requested fleet of spaceships."
+      }
+    ]
+  },
+  "flux2_klein_4b_gguf_q4": {
+    "label": "FLUX.2 [klein] 4B distilled GGUF Q4_K_S",
+    "avg_score": 9.23,
+    "avg_seconds": 10.7,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.2,
+        "seconds": 14.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi atmosphere, with excellent lighting, detailed consoles, and a flawless"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.5,
+        "seconds": 10.0,
+        "feedback": "The image is a stunning, high-quality cinematic wide shot that perfectly captures the alien landscape, glowing crystals, and dense violet atmosphere, with only "
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 10.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the stern demeanor, age, and uniform details requested, with only minor imperfections in th"
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.5,
+        "seconds": 10.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the prompt's requirements, with a luminous crystal cluster that feels sentient and a detail"
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 10.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi aesthetic, with the amber nebula providing a dramatic and beautiful ba"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 8.5,
+        "seconds": 10.0,
+        "feedback": "The image perfectly captures the epic scale and cinematic mood, though the central celestial body reads more like a dying planet than a star, and the watermark "
+      }
+    ]
+  },
+  "llada_image_turbo": {
+    "label": "LLaDA-Image-Turbo (INT8 transformer + Q4_K_M GGUF encoder)",
+    "avg_score": 5.08,
+    "avg_seconds": 101.6,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 7.5,
+        "seconds": 180.6,
+        "feedback": "The image is a strong, high-quality cinematic sci-fi scene that perfectly captures the empty bridge, cool blue lighting, and tactical consoles, but it is marred"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 4.5,
+        "seconds": 88.3,
+        "feedback": "The image fails the explicit \"no people\" constraint by including a prominent human figure in the center."
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 8.5,
+        "seconds": 86.3,
+        "feedback": "The portrait is highly detailed and cinematic, but the background features a literal Earth map and a naval-style ship rather than a pure starfield, slightly dev"
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 2.0,
+        "seconds": 86.3,
+        "feedback": "The image completely ignores the \"no limbs, no face\" constraint by depicting a humanoid robot with a skull face and full limbs."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 3.5,
+        "seconds": 84.2,
+        "feedback": "The background features a literal map of Earth's continents instead of the requested nebula, which is a major hallucination and prompt failure."
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 4.5,
+        "seconds": 84.2,
+        "feedback": "The image is visually striking and captures the epic scale, but it fails prompt adherence by including a surreal, floating Earth map and four human figures that"
+      }
+    ]
+  },
+  "qwen_image_2512": {
+    "label": "Qwen-Image-2512 (GGUF Q4_K_M + Lightning 4-step LoRA)",
+    "avg_score": 8.27,
+    "avg_seconds": 82.9,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.2,
+        "seconds": 104.3,
+        "feedback": "Excellent cinematic composition and lighting that perfectly captures the requested empty, cool-toned sci-fi bridge atmosphere."
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.5,
+        "seconds": 72.2,
+        "feedback": "The image is a stunning, high-fidelity realization of the prompt, perfectly capturing the alien landscape, glowing crystals, and twin moons with excellent cinem"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 74.2,
+        "feedback": "Excellent cinematic portrait with perfect prompt adherence, realistic anatomy, and high-quality lighting."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 3.0,
+        "seconds": 74.2,
+        "feedback": "The image fails the prompt's explicit negative constraints by including a face and limbs on the crystal being."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 86.2,
+        "feedback": "The image is a stunning piece of cinematic sci-fi concept art that perfectly captures the prompt's requirements, with only minor nitpicks regarding the ship's d"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 9.2,
+        "seconds": 86.2,
+        "feedback": "The image perfectly captures the epic, cinematic scale and mood, with the planetary rings and dying star creating a stunning, high-quality composition."
+      }
+    ]
+  },
+  "qwen_image_2_1": {
+    "label": "Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
+    "avg_score": 8.28,
+    "avg_seconds": 28.5,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.5,
+        "seconds": 30.2,
+        "feedback": "The image is a flawless cinematic concept art piece that perfectly captures the requested empty bridge, cool blue lighting, and high-quality sci-fi aesthetic wi"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 8.5,
+        "seconds": 28.1,
+        "feedback": "The image successfully captures the alien landscape, twin moons, and dense violet atmosphere, though the crystalline formations lack the distinct \"faint glow\" r"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 28.1,
+        "feedback": "Flawless cinematic execution with perfect prompt adherence, realistic anatomy, and high-quality lighting."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 4.5,
+        "seconds": 28.1,
+        "feedback": "The image fails the prompt's explicit negative constraints by depicting a humanoid figure with distinct arms and legs instead of a limbless cluster."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 8.5,
+        "seconds": 28.1,
+        "feedback": "The image successfully captures the epic scale and dramatic rim lighting of the starship against the amber nebula, though the ship's design leans slightly more "
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 9.2,
+        "seconds": 28.1,
+        "feedback": "The image perfectly captures the epic, cinematic mood with a strong composition, though the fleet ships appear somewhat small relative to the massive scale of t"
+      }
+    ]
+  }
+}

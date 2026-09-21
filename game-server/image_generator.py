@@ -33,6 +33,14 @@ The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
     the 20B model follows complex alien-physiology prompts that FLUX.2 [klein]
     collapses into a person.
 
+  qwen_image_2_1 (int8_convrot repack + qwen3vl_8b text encoder):
+    UNET: qwen_image_2.1_int8_convrot.safetensors (UNETLoader)
+    CLIP: qwen3vl_8b_int8_convrot.safetensors (CLIPLoader, type=qwen_image)
+    VAE:  qwen_image_2.1_vae_bf16.safetensors
+    Uses the TextEncodeQwenImage21 node (no CLIPTextEncode, no shift node)
+    and EmptyLatentImage; 25 steps euler/simple at cfg 1 (no Lightning LoRA).
+    Needs recent ComfyUI (COMFYUI_COMMIT pin in comfyui/Dockerfile.spark).
+
 img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
 (``_build_qwen_edit_workflow``) have their own fixed model combinations
 and are not routed through ``comfyui_config``.
@@ -282,6 +290,121 @@ def _build_qwen_edit_workflow(
         workflow["42"] = load_bg_node
     # Drop placeholder None entries (e.g. node "50" when Lightning is skipped).
     workflow = {k: v for k, v in workflow.items() if v is not None}
+    return workflow
+
+
+def _build_qwen_edit_21_workflow(
+    instruction: str,
+    character_filename: str,
+    background_filename: str | None,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    cfg: EditModelConfig,
+    *,
+    species_category: str = "",
+) -> dict[str, Any]:
+    """Build a Qwen-Image-2.1 instruction-edit workflow (unified t2i+edit ckpt).
+
+    Follows the official image-edit template: TextEncodeQwenImage21 takes the
+    reference images as ``image_1`` / ``image_2`` slots (the encoder splices
+    them into the token sequence AND appends their VAE latents to the
+    conditioning), resolution=0 keeps each reference at its own size, and
+    QwenImage21Cache tunes the KV-cache device between the UNET and the
+    sampler. The latent canvas is EmptyLatentImage at the requested output
+    size (the template's custom_size mode) so width/height are honored.
+
+    One sampling path for every species (25 steps, cfg 1, euler/simple) —
+    2.1 has no Lightning LoRA and none is needed for identity preservation.
+
+    Args mirror :func:`_build_qwen_edit_workflow`; ``species_category`` is
+    accepted for builder-signature parity and unused.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+
+    workflow: dict[str, Any] = {
+        # Unified t2i+edit checkpoint (int8_convrot repack, safetensors)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": cfg.unet, "weight_dtype": "default"},
+        },
+        # Qwen3-VL-8B text encoder (sees image_1/image_2 as vision slots)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": cfg.clip,
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE (encodes references, decodes the result)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": cfg.vae},
+        },
+        # Load character avatar
+        "41": {
+            "class_type": "LoadImage",
+            "inputs": {"image": character_filename},
+        },
+        # KV-cache device/precision tuning between UNET and sampler
+        "45": {
+            "class_type": "QwenImage21Cache",
+            "inputs": {"model": ["10", 0], "device": "auto", "dtype": "default"},
+        },
+        # Conditioning: instruction + reference images. resolution=0 keeps each
+        # reference at its own size (rounded to a multiple of 32). Autogrow
+        # inputs are addressed by their dotted API keys ("images.image_1");
+        # ComfyUI's build_nested_inputs regroups them into the node's
+        # ``images`` dict at execution time.
+        "70": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": instruction,
+                "negative_prompt": "",
+                "resolution": 0,
+                "vae": ["29", 0],
+                "images.image_1": ["41", 0],
+            },
+        },
+        # Latent canvas at the requested output size (template custom_size mode)
+        "90": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        "100": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 25,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["45", 0],
+                "positive": ["70", 0],
+                "negative": ["70", 1],
+                "latent_image": ["90", 0],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["100", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    if background_filename:
+        workflow["42"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": background_filename},
+        }
+        workflow["70"]["inputs"]["images.image_2"] = ["42", 0]
     return workflow
 
 
@@ -620,6 +743,99 @@ def _build_qwen_image_2512_workflow(
     }
 
 
+def _build_qwen_image_21_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a Qwen-Image-2.1 text-to-image workflow (int8_convrot repack).
+
+    Follows the official ComfyUI template. Differences from the 2512
+    workflow above: TextEncodeQwenImage21 replaces CLIPTextEncode (its
+    ``resolution`` param only sizes reference images — plain txt2img sends
+    none) and replaces the ModelSamplingAuraFlow shift; EmptyLatentImage
+    replaces EmptySD3LatentImage (sampling auto-fixes the 4ch /8 latent to
+    the model's 64ch /16 format); no Lightning LoRA exists for 2.1 yet, so
+    euler/simple runs 25 steps at cfg 1.
+
+    Model combination:
+      UNET: qwen_image_2.1_int8_convrot.safetensors (``UNETLoader``)
+      CLIP: qwen3vl_8b_int8_convrot.safetensors (``CLIPLoader``, type=qwen_image)
+      VAE:  qwen_image_2.1_vae_bf16.safetensors
+      Sampler: 25 steps, cfg 1.0, euler/simple
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    return {
+        # int8_convrot UNET (GB10-optimized repack, safetensors — not GGUF)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+                "weight_dtype": "default",
+            },
+        },
+        # Qwen3-VL-8B text encoder (CLIPLoader type stays qwen_image)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"},
+        },
+        # Encode prompts (cfg 1 makes the empty negative free at sampling)
+        "27": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "prompt": prompt,
+                "negative_prompt": "",
+                "resolution": 1024,
+                "clip": ["30", 0],
+            },
+        },
+        # Empty latent — sampling resizes it to the model's own format
+        "13": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # KSampler — official template: 25 steps, cfg 1, euler/simple
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 25,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["10", 0],
+                "positive": ["27", 0],
+                "negative": ["27", 1],
+                "latent_image": ["13", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+
 def _build_llada_turbo_workflow(
     prompt: str,
     width: int,
@@ -653,6 +869,7 @@ def _build_llada_turbo_workflow(
                 "vae": "LLaDa_VAE.safetensors",
                 "dtype": "bfloat16",
                 "offload": "cuda",
+                "vae_tiling": "On",
             },
         },
         # Text-to-image generation (Turbo: 4 steps, guidance 1.0)
@@ -688,6 +905,7 @@ _TXT2IMG_BUILDERS = {
     "flux2_klein_4b": _build_flux2_klein_workflow,
     "llada_image_turbo": _build_llada_turbo_workflow,
     "qwen_image_2512": _build_qwen_image_2512_workflow,
+    "qwen_image_2_1": _build_qwen_image_21_workflow,
 }
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
@@ -696,6 +914,7 @@ _TXT2IMG_BUILDERS = {
 # species_category) where cfg is the EditModelConfig carrying the file refs.
 _EDIT_BUILDERS = {
     "qwen_image_edit": _build_qwen_edit_workflow,
+    "qwen_image_edit_21": _build_qwen_edit_21_workflow,
 }
 
 # img2img builders are instance methods (they live on ImageGenerator because
