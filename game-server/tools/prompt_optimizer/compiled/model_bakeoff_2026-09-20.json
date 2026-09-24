@@ -1,8 +1,8 @@
 {
   "z_image_turbo": {
     "label": "Z-Image Turbo (8-step distilled)",
-    "avg_score": 8.65,
-    "avg_seconds": 14.0,
+    "avg_score": 8.06,
+    "avg_seconds": 15.2,
     "rows": [
       {
         "prompt": "bg_bridge",
@@ -39,13 +39,19 @@
         "score": 6.5,
         "seconds": 12.0,
         "feedback": "The central figure is a humanoid character rather than the requested fleet of spaceships."
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 4.5,
+        "seconds": 22.1,
+        "feedback": "The image fails to include the requested reptilian science officer and cyborg engineer, replacing them with generic human crew members."
       }
     ]
   },
   "flux2_klein_4b_gguf_q4": {
     "label": "FLUX.2 [klein] 4B distilled GGUF Q4_K_S",
-    "avg_score": 9.23,
-    "avg_seconds": 10.7,
+    "avg_score": 9.13,
+    "avg_seconds": 11.5,
     "rows": [
       {
         "prompt": "bg_bridge",
@@ -82,13 +88,19 @@
         "score": 8.5,
         "seconds": 10.0,
         "feedback": "The image perfectly captures the epic scale and cinematic mood, though the central celestial body reads more like a dying planet than a star, and the watermark "
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 8.5,
+        "seconds": 16.1,
+        "feedback": "The image successfully captures all five distinct crew members and the cinematic bridge atmosphere, though the \"insectoid\" navigator is rendered more as a skele"
       }
     ]
   },
   "llada_image_turbo": {
     "label": "LLaDA-Image-Turbo (INT8 transformer + Q4_K_M GGUF encoder)",
-    "avg_score": 5.08,
-    "avg_seconds": 101.6,
+    "avg_score": 4.71,
+    "avg_seconds": 114.3,
     "rows": [
       {
         "prompt": "bg_bridge",
@@ -125,13 +137,19 @@
         "score": 4.5,
         "seconds": 84.2,
         "feedback": "The image is visually striking and captures the epic scale, but it fails prompt adherence by including a surreal, floating Earth map and four human figures that"
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 2.5,
+        "seconds": 190.5,
+        "feedback": "The image fails to depict the specific crew members requested (missing reptilian officer and energy being, incorrect species for others) and includes numerous u"
       }
     ]
   },
   "qwen_image_2512": {
     "label": "Qwen-Image-2512 (GGUF Q4_K_M + Lightning 4-step LoRA)",
-    "avg_score": 8.27,
-    "avg_seconds": 82.9,
+    "avg_score": 8.01,
+    "avg_seconds": 86.5,
     "rows": [
       {
         "prompt": "bg_bridge",
@@ -168,13 +186,19 @@
         "score": 9.2,
         "seconds": 86.2,
         "feedback": "The image perfectly captures the epic, cinematic scale and mood, with the planetary rings and dying star creating a stunning, high-quality composition."
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 6.5,
+        "seconds": 108.3,
+        "feedback": "The prompt requested a reptilian science officer, but the image depicts a human woman in that position instead."
       }
     ]
   },
   "qwen_image_2_1": {
     "label": "Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
-    "avg_score": 8.28,
-    "avg_seconds": 28.5,
+    "avg_score": 8.31,
+    "avg_seconds": 28.7,
     "rows": [
       {
         "prompt": "bg_bridge",
@@ -211,6 +235,12 @@
         "score": 9.2,
         "seconds": 28.1,
         "feedback": "The image perfectly captures the epic, cinematic mood with a strong composition, though the fleet ships appear somewhat small relative to the massive scale of t"
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 8.5,
+        "seconds": 30.1,
+        "feedback": "Excellent cinematic composition and lighting that effectively captures the space opera atmosphere and includes all five distinct crew members."
       }
     ]
   }
