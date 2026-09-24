@@ -832,6 +832,42 @@ class TestBridgeImageFallbacks(unittest.TestCase):
         self.assertEqual(captured["kind"], "bridge")
         self.assertIn("Crew positions: Капитан: At the throne", captured["prompt"])
 
+    def test_references_do_not_append_crew_positions(self):
+        """With references the trailing 'Crew positions' block must be absent.
+
+        The block re-describes every crew member without Picture bindings;
+        the model then renders extra/duplicated figures (e.g. the science
+        officer twice), so it is only allowed on the txt2img fallback path.
+        """
+        gen = ImageGenerator()
+        captured = {}
+
+        async def fake_queue(workflow, **kwargs):
+            captured["workflow"] = workflow
+            return "pid-1"
+
+        async def fake_wait(prompt_id, timeout):
+            return {"120": {"images": [{"filename": "bridge.png", "subfolder": "", "type": "output"}]}}
+
+        with patch.object(gen, "_queue_prompt", new=fake_queue), patch.object(gen, "_wait_for_completion", new=fake_wait):
+            url = asyncio.get_event_loop().run_until_complete(
+                gen.generate_bridge_image(
+                    prompt="Place the character from Picture 1 at the engineering console.",
+                    crew_descriptions=[
+                        {"role": "Научный офицер", "position_description": "Right science console"},
+                    ],
+                    avatar_urls=["http://comfyui:8188/view?filename=avatar_1.png&subfolder=g&type=output"],
+                    filename_prefix="g/bridge",
+                    width=1024,
+                    height=1024,
+                    game_id="g",
+                )
+            )
+        self.assertIsNotNone(url)
+        encode_prompt = captured["workflow"]["70"]["inputs"]["prompt"]
+        self.assertNotIn("Crew positions", encode_prompt)
+        self.assertIn("Place the character from Picture 1 at the engineering console.", encode_prompt)
+
 
 class TestImageGeneratorIntegration(unittest.TestCase):
     """Integration tests that require running ComfyUI service.

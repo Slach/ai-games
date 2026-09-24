@@ -2073,10 +2073,16 @@ class ImageGenerator:
             URL of the generated image, or None on failure
         """
         logger.info("[BRIDGE] Generating bridge scene image")
-        enriched_prompt = prompt
+        # Crew positions are appended ONLY on the prompt-only txt2img fallback.
+        # With avatar references the bridge_prompt already stages every
+        # character, and re-describing them in an unbound trailing block makes
+        # the model render extra/duplicated figures (the enrichment text has
+        # no Picture binding, so the model reuses the last-reinforced
+        # reference for it — e.g. the science officer twice).
+        fallback_prompt = prompt
         if crew_descriptions:
             positions = "; ".join([f"{d.get('role', '?')}: {d.get('position_description', '')}" for d in crew_descriptions])
-            enriched_prompt = f"{prompt}. Crew positions: {positions}"
+            fallback_prompt = f"{prompt}. Crew positions: {positions}"
 
         ref_filenames = []
         for url in avatar_urls or []:
@@ -2091,7 +2097,7 @@ class ImageGenerator:
         if not ref_filenames:
             logger.info("[BRIDGE] No avatar references, generating crew-agnostic txt2img")
             return await self.generate_scene_image(
-                prompt=enriched_prompt,
+                prompt=fallback_prompt,
                 filename_prefix=filename_prefix,
                 width=width,
                 height=height,
@@ -2102,7 +2108,7 @@ class ImageGenerator:
             )
 
         workflow = _build_qwen_image_21_multiref_workflow(
-            prompt=enriched_prompt,
+            prompt=prompt,
             reference_filenames=ref_filenames,
             width=width,
             height=height,
@@ -2120,7 +2126,7 @@ class ImageGenerator:
                     f"Size: {width}x{height}\n"
                     f"Filename prefix: {filename_prefix}\n"
                     f"Attempt: {attempt}/{max_attempts}\n\n"
-                    f"--- PROMPT ---\n{enriched_prompt}\n\n"
+                    f"--- PROMPT ---\n{prompt}\n\n"
                     f"--- REFERENCE AVATARS ---\n" + "\n".join(f"Picture {i}: {fn}" for i, fn in enumerate(ref_filenames, start=1)) + "\n\n"
                     f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
                 )
@@ -2163,7 +2169,7 @@ class ImageGenerator:
                 logger.warning("[BRIDGE] multi-reference generation failed, falling back to txt2img", exc_info=True)
 
         return await self.generate_scene_image(
-            prompt=enriched_prompt,
+            prompt=fallback_prompt,
             filename_prefix=filename_prefix,
             width=width,
             height=height,

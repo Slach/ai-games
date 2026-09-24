@@ -2926,6 +2926,8 @@ class GameServer:
                 "The bridge_prompt MUST be a composition instruction for these references:\n"
                 "- Refer to every crew member as \"the character from Picture N\" using the exact\n"
                 "  pre-assigned numbers above — every picture must appear in the scene exactly once.\n"
+                "- The scene must contain EXACTLY these N characters and NO ONE else: no extra\n"
+                "  people, no background crew, no duplicate of any character.\n"
                 "- For EACH member repeat their key visual traits right after the Picture reference,\n"
                 "  in the form \"render this character EXACTLY as in Picture N: same <2-4 distinctive\n"
                 "  traits from the description above>\" — without this reinforcement the model quietly\n"
