@@ -160,6 +160,21 @@ MODEL_USE_CASES: dict[str, dict[str, dict[str, LLMParams]]] = {
         # Example: this model is more creative — lower temperature for narrative.
         # Add real overrides here as the model is tuned.
     },
+    # Altworld Hemmingway's chat template injects reasoning-effort xhigh when
+    # thinking is on; at ~20 t/s that burns minutes per call before the JSON
+    # even starts. The 2026-09-24 bakeoff ran with thinking off — prose won
+    # 4:0 pairwise and schema 96.7 vs 63.3 — so the thinking use cases are
+    # pinned to the benchmarked mode.
+    "bartowski/Altworld_Hemmingway-1": {
+        "combined_outcome": _use_case(
+            LLMParams(temperature=0.7, max_tokens=262144, enable_thinking=False),
+            LLMParams(temperature=0.7, max_tokens=262144, enable_thinking=False),
+        ),
+        "game_over_outcome": _use_case(
+            LLMParams(temperature=0.7, max_tokens=8192, enable_thinking=False),
+            LLMParams(temperature=0.7, max_tokens=8192, enable_thinking=False),
+        ),
+    },
     # Muse-Glimmer emits reasoning (<think>) baked into its jinja chat template,
     # which llama.cpp honors regardless of the server-side --reasoning flag.
     # Reasoning consumes ~500-700 completion tokens before the model starts the

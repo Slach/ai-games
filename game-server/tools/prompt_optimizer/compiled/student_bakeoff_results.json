@@ -1,25 +1,25 @@
 {
   "ornith-ai/Ornith-1.5-35B": {
     "combined_outcome": {
-      "score": 93.3,
-      "seconds": 49.6,
+      "score": 63.3,
+      "seconds": 75.7,
       "n": 6
     },
     "npc_choice": {
-      "score": 89.5,
-      "seconds": 102.4,
+      "score": 80.8,
+      "seconds": 85.4,
       "n": 20
     }
   },
-  "Jackrong/Qwopus3.8-27B-Flash": {
+  "bartowski/Altworld_Hemmingway-1": {
     "combined_outcome": {
-      "score": 100.0,
-      "seconds": 110.8,
+      "score": 96.7,
+      "seconds": 187.9,
       "n": 6
     },
     "npc_choice": {
-      "score": 52.2,
-      "seconds": 112.2,
+      "score": 90.3,
+      "seconds": 138.0,
       "n": 20
     }
   }

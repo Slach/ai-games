@@ -240,6 +240,25 @@ class SceneVLJudge(dspy.Signature):
     feedback: str = dspy.OutputField(desc="One short sentence explaining the score")
 
 
+class NarrativePairJudge(dspy.Signature):
+    """You are a strict judge of game-master prose for a turn-based sci-fi
+    starship RPG. Given the turn context (setting, conflict, decided actions)
+    and two anonymous candidate narratives, decide which text is better for
+    the players to read: (a) COHERENCE — clear cause and effect, the events
+    follow from the decided actions, no self-contradictions; (b) PROSE —
+    vivid, specific, well-paced; not purple, not repetitive, no cliche
+    stacking; (c) LANGUAGE — grammatical, natural Russian; (d) DISCIPLINE —
+    no invented facts beyond the context, no system-jargon leakage. Ignore
+    length itself: a longer text wins only if the extra length adds value.
+    Output verdict 1 (first narrative wins), 2 (second wins) or 0 (tie)."""
+
+    turn_context: str = dspy.InputField(desc="Setting, conflict and the decided actions of the turn")
+    narrative_a: str = dspy.InputField(desc="Candidate narrative, version 1")
+    narrative_b: str = dspy.InputField(desc="Candidate narrative, version 2")
+    verdict: str = dspy.OutputField(desc="1 if version 1 is better, 2 if version 2 is better, 0 if tie")
+    feedback: str = dspy.OutputField(desc="One short sentence explaining the verdict")
+
+
 # ── Instruction seeding: the runtime prompts are the single source of truth ──
 # Every student signature gets its instructions from prompts.py below, so the
 # optimizer always measures the prompt the game actually sends. Only the
