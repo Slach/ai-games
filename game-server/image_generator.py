@@ -2032,58 +2032,44 @@ class ImageGenerator:
         logger.info(f"[IMAGE] Generated {len(urls)}/{count} loading images")
         return urls
 
-    async def generate_bridge_image(
+    async def generate_multi_reference_image(
         self,
         prompt: str,
-        crew_descriptions: list[dict[str, str]],
         avatar_urls: list[str | None] | None,
         filename_prefix: str,
         *,
         game_id: str,
+        kind: str,
         width: int,
         height: int,
     ) -> str | None:
-        """Generate a bridge scene image with the crew, avatar-consistent.
+        """Generate a scene composed from crew avatar references in ONE call.
 
-        Qwen-Image-2.1 composes the whole scene in ONE call from up to 10
-        avatar reference images (``images.image_1..N`` on
-        TextEncodeQwenImage21): the prompt refers to each crew member as
-        "the character from Picture N", so their looks match the avatars the
-        players already know from /team. No sequential Qwen-Image-Edit
-        compositing — the unified 2.1 checkpoint handles multi-reference
-        generation natively.
+        Qwen-Image-2.1 composes the scene from up to 10 avatar reference
+        images (``images.image_1..N`` on TextEncodeQwenImage21): the prompt
+        refers to each crew member as "the character from Picture N", so their
+        looks match the avatars the players already know. No sequential
+        Qwen-Image-Edit compositing — the unified 2.1 checkpoint handles
+        multi-reference generation natively.
 
-        Falls back to plain txt2img (:meth:`generate_scene_image`) when no
-        usable avatar references exist or the multi-reference generation
-        fails — the bridge is then crew-agnostic (prompt-only).
+        Falls back to plain txt2img (:meth:`generate_scene_image`) with the
+        same ``kind`` when no usable references exist or the multi-reference
+        generation fails.
 
         Args:
-            prompt: Bridge scene prompt from the LLM, referring to the
-                references as "Picture N".
-            crew_descriptions: Where each crew member is positioned; appended
-                to the prompt as conditioning detail.
+            prompt: Scene prompt from the LLM, referring to the references as
+                "Picture N".
             avatar_urls: Avatar image URLs in Picture order (Picture 1 first).
                 Entries may be None/unparseable and are skipped.
             filename_prefix: Prefix for output file.
             game_id: Game to scope the image to.
+            kind: Call type descriptor for log file naming and model routing.
             width: Image width.
             height: Image height.
 
         Returns:
             URL of the generated image, or None on failure
         """
-        logger.info("[BRIDGE] Generating bridge scene image")
-        # Crew positions are appended ONLY on the prompt-only txt2img fallback.
-        # With avatar references the bridge_prompt already stages every
-        # character, and re-describing them in an unbound trailing block makes
-        # the model render extra/duplicated figures (the enrichment text has
-        # no Picture binding, so the model reuses the last-reinforced
-        # reference for it — e.g. the science officer twice).
-        fallback_prompt = prompt
-        if crew_descriptions:
-            positions = "; ".join([f"{d.get('role', '?')}: {d.get('position_description', '')}" for d in crew_descriptions])
-            fallback_prompt = f"{prompt}. Crew positions: {positions}"
-
         ref_filenames = []
         for url in avatar_urls or []:
             if not url:
@@ -2092,19 +2078,19 @@ class ImageGenerator:
             if filename:
                 ref_filenames.append(filename)
             else:
-                logger.warning("[BRIDGE] Could not parse avatar filename from %s, skipping reference", url)
+                logger.warning("[%s] Could not parse avatar filename from %s, skipping reference", kind, url)
 
         if not ref_filenames:
-            logger.info("[BRIDGE] No avatar references, generating crew-agnostic txt2img")
+            logger.info("[%s] No avatar references, generating prompt-only txt2img", kind)
             return await self.generate_scene_image(
-                prompt=fallback_prompt,
+                prompt=prompt,
                 filename_prefix=filename_prefix,
                 width=width,
                 height=height,
                 game_id=game_id,
                 player_id=None,
                 turn=None,
-                kind="bridge",
+                kind=kind,
             )
 
         workflow = _build_qwen_image_21_multiref_workflow(
@@ -2134,13 +2120,13 @@ class ImageGenerator:
                     game_id=game_id,
                     player_id="",
                     turn="0",
-                    kind="bridge",
+                    kind=kind,
                     log_type="request",
                     content=comfyui_req,
                 )
                 async with _image_semaphore:
                     prompt_id = await self._queue_prompt(
-                        workflow, kind="bridge", ctx_game=game_id, ctx_player="", ctx_turn="0"
+                        workflow, kind=kind, ctx_game=game_id, ctx_player="", ctx_turn="0"
                     )
                     outputs = await self._wait_for_completion(prompt_id, timeout=600)
                     image_url = self._extract_image_url(outputs)
@@ -2149,34 +2135,90 @@ class ImageGenerator:
                         game_id=game_id,
                         player_id="",
                         turn="0",
-                        kind="bridge",
+                        kind=kind,
                         log_type="response",
                         content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
                     )
-                    logger.info("[BRIDGE] Generated with %d references: %s", len(ref_filenames), image_url)
+                    logger.info("[%s] Generated with %d references: %s", kind, len(ref_filenames), image_url)
                     return image_url
-                logger.warning("[BRIDGE] No output (attempt %d/%d)", attempt, max_attempts)
+                logger.warning("[%s] No output (attempt %d/%d)", kind, attempt, max_attempts)
             except Exception:
                 if attempt < max_attempts:
                     logger.warning(
-                        "[BRIDGE] multi-reference attempt %d/%d failed, retrying before txt2img fallback",
+                        "[%s] multi-reference attempt %d/%d failed, retrying before txt2img fallback",
+                        kind,
                         attempt,
                         max_attempts,
                         exc_info=True,
                     )
                     await asyncio.sleep(5)
                     continue
-                logger.warning("[BRIDGE] multi-reference generation failed, falling back to txt2img", exc_info=True)
+                logger.warning("[%s] multi-reference generation failed, falling back to txt2img", kind, exc_info=True)
 
         return await self.generate_scene_image(
-            prompt=fallback_prompt,
+            prompt=prompt,
             filename_prefix=filename_prefix,
             width=width,
             height=height,
             game_id=game_id,
             player_id=None,
             turn=None,
+            kind=kind,
+        )
+
+    async def generate_bridge_image(
+        self,
+        prompt: str,
+        crew_descriptions: list[dict[str, str]],
+        avatar_urls: list[str | None] | None,
+        filename_prefix: str,
+        *,
+        game_id: str,
+        width: int,
+        height: int,
+    ) -> str | None:
+        """Generate a bridge scene image with the crew, avatar-consistent.
+
+        Delegates to :meth:`generate_multi_reference_image`. Crew positions
+        are appended to the prompt ONLY on the prompt-only txt2img fallback:
+        with avatar references the bridge_prompt already stages every
+        character, and re-describing them in an unbound trailing block makes
+        the model render extra/duplicated figures (the enrichment text has
+        no Picture binding, so the model reuses the last-reinforced
+        reference for it — e.g. the science officer twice).
+
+        Args:
+            prompt: Bridge scene prompt from the LLM, referring to the
+                references as "Picture N".
+            crew_descriptions: Where each crew member is positioned; appended
+                to the prompt as conditioning detail on the fallback path.
+            avatar_urls: Avatar image URLs in Picture order (Picture 1 first).
+                Entries may be None/unparseable and are skipped.
+            filename_prefix: Prefix for output file.
+            game_id: Game to scope the image to.
+            width: Image width.
+            height: Image height.
+
+        Returns:
+            URL of the generated image, or None on failure
+        """
+        logger.info("[BRIDGE] Generating bridge scene image")
+        if crew_descriptions:
+            positions = "; ".join([f"{d.get('role', '?')}: {d.get('position_description', '')}" for d in crew_descriptions])
+            # Pre-built fallback prompt: only used when no references resolve.
+            fallback_prompt = f"{prompt}. Crew positions: {positions}"
+            ref_count = len([u for u in (avatar_urls or []) if u])
+            if ref_count == 0:
+                prompt = fallback_prompt
+
+        return await self.generate_multi_reference_image(
+            prompt=prompt,
+            avatar_urls=avatar_urls,
+            filename_prefix=filename_prefix,
+            game_id=game_id,
             kind="bridge",
+            width=width,
+            height=height,
         )
 
     async def generate_splash_images(

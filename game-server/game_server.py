@@ -40,6 +40,7 @@ from prompts import (
     DELAY_KIND_RULE_RU,
     NPC_AVATAR_PROMPT_SYSTEM,
     NPC_AVATAR_SPECIES_RULES,
+    OUTCOME_IMAGE_PROMPT_SYSTEM,
     build_avatar_prompt_system,
     build_auto_choice_prompts,
     build_character_flavour_prompts,
@@ -578,6 +579,25 @@ BRIDGE_IMAGE_SCHEMA = {
     },
 }
 
+
+OUTCOME_IMAGE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "outcome_image_prompt",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "image_prompt": {
+                    "type": "string",
+                    "description": "A detailed English image prompt for the key moment of the turn outcome, staging the involved crew members",
+                },
+            },
+            "required": ["image_prompt"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 TURN_BACKGROUND_PROMPT_SCHEMA = {
     "type": "json_schema",
@@ -2928,6 +2948,8 @@ class GameServer:
                 "  pre-assigned numbers above — every picture must appear in the scene exactly once.\n"
                 "- The scene must contain EXACTLY these N characters and NO ONE else: no extra\n"
                 "  people, no background crew, no duplicate of any character.\n"
+                "- Every character must be clearly visible (foreground or midground) —\n"
+                "  never a tiny background speck.\n"
                 "- For EACH member repeat their key visual traits right after the Picture reference,\n"
                 "  in the form \"render this character EXACTLY as in Picture N: same <2-4 distinctive\n"
                 "  traits from the description above>\" — without this reinforcement the model quietly\n"
@@ -3001,6 +3023,79 @@ class GameServer:
                     for p in all_participants
                 ],
             }
+
+    async def generate_outcome_image_prompt(
+        self,
+        outcome_narrative: str,
+        ship_status: str,
+        crew_morale: str,
+        crew_refs: list[dict[str, Any]] | None,
+        *,
+        game_id: str | None,
+        player_id: str | None,
+        turn: int | str | None,
+        kind: str | None,
+    ) -> dict[str, Any]:
+        """Generate an English image prompt for the turn-outcome scene.
+
+        With ``crew_refs`` (crew members that have avatar images) the outcome
+        scene is rendered from avatar references: the LLM writes the prompt
+        against pre-assigned "Picture N" slots so the image model stages the
+        involved characters with their canonical avatar looks. Without
+        references the prompt is a standalone scene description (plain txt2img).
+        """
+        logger.info("[OUTCOME_IMAGE] Generating outcome image prompt")
+
+        mission_name = ""
+        if crew_refs:
+            picture_lines = "\n".join(
+                f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}" for i, r in enumerate(crew_refs, start=1)
+            )
+            crew_section = (
+                "The image model will receive the crew's avatar reference pictures:\n"
+                f"{picture_lines}\n\n"
+                "The image_prompt MUST be a composition instruction for these references:\n"
+                "- Stage ONLY the characters the narrative actually shows, each referred to as\n"
+                "  \"the character from Picture N\" with the exact pre-assigned number above.\n"
+                "- The scene must contain no other people and no duplicate of any character.\n"
+                "- For each staged character repeat their key visual traits right after the\n"
+                "  Picture reference, in the form \"render this character EXACTLY as in Picture N:\n"
+                "  same <2-4 distinctive traits from the description above>\".\n"
+                "- Every staged character must be clearly visible (foreground or midground).\n"
+                "- Pick the single most dramatic moment of the narrative as the scene; describe\n"
+                "  the environment, lighting and atmosphere yourself.\n"
+            )
+        else:
+            crew_section = (
+                "No reference pictures are available: describe the involved characters visually\n"
+                "in the prompt yourself, consistently from their narrative roles.\n"
+            )
+
+        system = OUTCOME_IMAGE_PROMPT_SYSTEM
+        user = (
+            f"Outcome narrative (may be in Russian):\n{outcome_narrative}\n\n"
+            f"Ship status: {ship_status}\n\n"
+            f"Crew morale: {crew_morale}\n\n"
+            f"{crew_section}\n"
+            "Write the image_prompt in English."
+        )
+
+        try:
+            result = await self._call_llm(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=OUTCOME_IMAGE_SCHEMA,
+                use_case='outcome_image_prompt',
+                game_id=game_id,
+                player_id=player_id,
+                turn=turn,
+                kind=kind,
+            )
+            logger.info(f"[OUTCOME_IMAGE] Prompt generated: {str(result.get('image_prompt', ''))[:100]}...")
+            return result
+        except Exception as e:
+            logger.error(f"[OUTCOME_IMAGE] Generation failed: {e}", exc_info=True)
+            return {}
 
     # ============== Background Library Prompts ==============
 

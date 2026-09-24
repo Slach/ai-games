@@ -122,6 +122,10 @@ DEFAULT_USE_CASES: dict[str, dict[str, LLMParams]] = {
         LLMParams(temperature=0.8, max_tokens=8192),
         LLMParams(temperature=0.8, max_tokens=4096),
     ),
+    "outcome_image_prompt": _use_case(
+        LLMParams(temperature=0.8, max_tokens=8192),
+        LLMParams(temperature=0.8, max_tokens=4096),
+    ),
     "background_prompts": _use_case(
         LLMParams(temperature=0.8, max_tokens=8192),
         LLMParams(temperature=0.8, max_tokens=8192),

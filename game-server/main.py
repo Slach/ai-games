@@ -3457,24 +3457,51 @@ async def _analyze_turn_outcome(
                 outcome_narrative = outcome.get("outcome_narrative", "")
                 ship_status_str = outcome.get("ship_status_change", "")
                 crew_morale_str = outcome.get("crew_morale_change", "")
-                # Build a prompt from the outcome narrative
-                outcome_prompt = (
-                    f"Sci-fi cinematic scene illustrating the aftermath of events. "
-                    f"{outcome_narrative} "
-                    f"Ship status: {ship_status_str}. "
-                    f"Crew morale: {crew_morale_str}. "
-                    f"Dramatic lighting, starship interior or exterior, "
-                    f"Star Trek aesthetic, 4K quality, cinematic composition."
-                )
+                # Include deactivated NPCs: a character that died this turn
+                # can still be the subject of the outcome scene.
+                crew_refs = _collect_crew_avatar_refs(game_id, include_inactive_npcs=True)
+                image_prompt = ""
+                try:
+                    prompt_result = await gm.generate_outcome_image_prompt(
+                        outcome_narrative,
+                        ship_status_str,
+                        crew_morale_str,
+                        crew_refs,
+                        game_id=game_id,
+                        player_id=None,
+                        turn=turn,
+                        kind="outcome_image_prompt",
+                    )
+                    image_prompt = prompt_result.get("image_prompt", "")
+                except Exception:
+                    logger.warning("[OUTCOME] Image prompt generation failed", exc_info=True)
+                if not image_prompt:
+                    # Fallback: legacy raw-narrative prompt (plain txt2img).
+                    image_prompt = (
+                        f"Sci-fi cinematic scene illustrating the aftermath of events. "
+                        f"{outcome_narrative} "
+                        f"Ship status: {ship_status_str}. "
+                        f"Crew morale: {crew_morale_str}. "
+                        f"Dramatic lighting, starship interior or exterior, "
+                        f"Star Trek aesthetic, 4K quality, cinematic composition."
+                    )
                 image_gen = create_image_generator()
-                outcome_image_url = await image_gen.generate_scene_image(prompt=outcome_prompt, filename_prefix=f"{game_id}/outcome_turn{turn}", width=1024, height=1024, game_id=game_id, player_id=None, turn=turn, kind="outcome")
+                outcome_image_url = await image_gen.generate_multi_reference_image(
+                    prompt=image_prompt,
+                    avatar_urls=[r["avatar_url"] for r in crew_refs],
+                    filename_prefix=f"{game_id}/outcome_turn{turn}",
+                    game_id=game_id,
+                    kind="outcome",
+                    width=1024,
+                    height=1024,
+                )
                 if outcome_image_url:
                     save_game_image(
                         type="outcome",
                         image_url=outcome_image_url,
                         game_id=game_id,
                         turn=turn,
-                        prompt=outcome_prompt,
+                        prompt=image_prompt,
                     )
                     logger.info(f"[OUTCOME] Outcome image generated for turn {turn}: {outcome_image_url}")
                 else:
@@ -4410,18 +4437,53 @@ def _extract_avatar_url(avatar_description: str) -> str | None:
     return None
 
 
-def _collect_crew_avatar_refs(game_id: str, all_participants: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _collect_crew_avatar_refs(
+    game_id: str,
+    all_participants: list[dict[str, Any]] | None = None,
+    *,
+    include_inactive_npcs: bool = False,
+) -> list[dict[str, str]]:
     """Ordered crew members that have avatars, for reference-based images.
 
-    Mirrors the all_participants order (players first, then NPCs). NPC avatar
-    URLs are written into npc_profiles.avatar_description by a LATER step than
+    Mirrors the roster order (players first, then NPCs). NPC avatar URLs are
+    written into npc_profiles.avatar_description by a LATER step than
     all_participants is built (NPC avatars are generated after game start), so
     NPCs are re-read from the DB here to pick the URLs up. Capped at 10 —
     Qwen-Image-2.1 multi-reference composition supports at most 10 pictures.
+
+    When ``all_participants`` is omitted the roster is read from the DB
+    directly. ``include_inactive_npcs`` adds deactivated NPCs — needed for
+    outcome images where a character that died this turn is still the subject
+    of the scene.
     """
+    if all_participants is None:
+        all_participants = []
+        for pid in get_players_in_game(game_id):
+            p = get_player_profile(pid)
+            if p:
+                all_participants.append(
+                    {
+                        "type": "player",
+                        "player_id": pid,
+                        "player_name": p.get("player_name", "") or "",
+                        "role": p["role"],
+                        "avatar_description": _extract_avatar_prompt(p.get("avatar_description", "") or ""),
+                    }
+                )
+        for npc in get_all_npcs(game_id) if include_inactive_npcs else get_all_active_npcs(game_id):
+            all_participants.append(
+                {
+                    "type": "npc",
+                    "npc_key": npc["npc_key"],
+                    "npc_name": npc.get("npc_name", npc.get("role", "NPC")),
+                    "role": npc["role"],
+                    "avatar_description": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
+                }
+            )
+    npc_fetch = get_all_npcs(game_id) if include_inactive_npcs else get_all_active_npcs(game_id)
     npc_urls = {
         npc["npc_key"]: _extract_avatar_url(npc.get("avatar_description", "") or "")
-        for npc in get_all_active_npcs(game_id)
+        for npc in npc_fetch
     }
     refs: list[dict[str, str]] = []
     for p in all_participants:
