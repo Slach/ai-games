@@ -1,4 +1,5 @@
-"""Tests for push_server.py: onboarding-ready delivery, helpers, HTTP handler.
+"""Tests for push_server.py: onboarding-ready delivery, helpers, HTTP handler,
+and the push-queue startup retry of terminal content (database.py).
 
 The delivery function under test (_deliver_onboarding_ready) talks to three
 async boundaries — game-server HTTP (splash lookup + image downloads), the
@@ -9,6 +10,7 @@ character-card text is validated against the real language templates.
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import unittest
 from unittest import mock
@@ -21,7 +23,14 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup  # noqa: E402
 from aiohttp import web  # noqa: E402
 
 import push_server  # noqa: E402
-from database import DB_PATH, get_pending_push_messages, init_db  # noqa: E402
+from database import (  # noqa: E402
+    DB_PATH,
+    get_pending_push_messages,
+    init_db,
+    insert_push_message,
+    mark_push_failed,
+    reset_failed_terminal_push_messages,
+)
 from language import LANGUAGE_EN, get_onboarding  # noqa: E402
 
 PLAYER_ID = 123
@@ -311,6 +320,72 @@ class DeliverOnboardingReadyTests(unittest.IsolatedAsyncioTestCase):
             kick.assert_awaited_once_with(PLAYER_ID)
         self.assertEqual(self.bot.photos, [])
         self.assertEqual(self.bot.messages, [])
+
+
+class ResetFailedTerminalPushMessagesTests(unittest.TestCase):
+    """Startup retry of one-shot content must not depend on a current turn.
+
+    Regression for game jkzoi8: outcome/game-over pushes failed while the
+    Telegram proxy was down, the game then ended, and
+    reset_failed_for_current_turn never retried them because finished
+    games have no current turn.
+    """
+
+    PLAYER_ID = 987201
+
+    @classmethod
+    def setUpClass(cls):
+        init_db(DB_PATH)
+
+    def _insert_failed(self, push_type: str, turn: int | None, game_id: str = GAME_ID) -> int:
+        row_id = insert_push_message(self.PLAYER_ID, push_type, "{}", turn, game_id, DB_PATH)
+        mark_push_failed(row_id, "proxy down", DB_PATH)
+        return row_id
+
+    def _row(self, row_id: int) -> tuple[str, str | None]:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT status, error FROM push_queue WHERE id = ?", (row_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0], row[1]
+
+    def test_failed_content_reset_even_without_current_turn(self):
+        outcome = self._insert_failed("outcome", turn=9, game_id="finished_game")
+        game_over = self._insert_failed("game_over", turn=None, game_id="finished_game")
+        death = self._insert_failed("player_death", turn=1, game_id="finished_game")
+
+        reset = reset_failed_terminal_push_messages(DB_PATH)
+
+        self.assertGreaterEqual(reset, 3)
+        for row_id in (outcome, game_over, death):
+            status, error = self._row(row_id)
+            self.assertEqual(status, "pending")
+            self.assertIsNone(error)
+
+    def test_turn_bound_and_transient_types_stay_failed(self):
+        briefing = self._insert_failed("briefing", turn=5)
+        action = self._insert_failed("action", turn=5)
+        reminder = self._insert_failed("turn_reminder", turn=5)
+        language = self._insert_failed("language_changed", turn=None)
+
+        reset_failed_terminal_push_messages(DB_PATH)
+
+        for row_id in (briefing, action, reminder, language):
+            status, error = self._row(row_id)
+            self.assertEqual(status, "failed")
+            self.assertEqual(error, "proxy down")
+
+    def test_reset_rows_show_up_in_pending_queue(self):
+        row_id = self._insert_failed("gm_notification", turn=12, game_id="finished_game")
+
+        reset_failed_terminal_push_messages(DB_PATH)
+
+        rows = [r for r in get_pending_push_messages(DB_PATH) if r["id"] == row_id]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["push_type"], "gm_notification")
 
 
 class EscapeMarkdownTests(unittest.TestCase):

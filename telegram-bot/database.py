@@ -254,6 +254,40 @@ def reset_failed_for_current_turn(game_id: str, turn: int, db_path: str) -> int:
     return count
 
 
+# Push types that carry one-shot content the player must receive even
+# after the turn has moved on or the game has ended. Turn-bound types
+# (briefing, action, turn_reminder) are excluded: delivering them late
+# is noise, not content.
+TERMINAL_PUSH_TYPES = ("outcome", "player_death", "game_over", "game_summary", "gm_notification")
+
+
+def reset_failed_terminal_push_messages(db_path: str) -> int:
+    """Reset failed one-shot content messages to pending, regardless of game or turn.
+
+    reset_failed_for_current_turn only retries a game's current turn, so
+    failed messages of finished games (no current turn) and of turns
+    already passed would stay failed forever — permanently losing content
+    the player must still receive (e.g. outcomes generated while the
+    Telegram proxy was down). Terminal content has no meaningful
+    staleness, so every failed row of these types is retried; turn-bound
+    types (briefing, action, turn_reminder) keep the current-turn rule.
+
+    Returns number of rows reset.
+    """
+    placeholders = ", ".join("?" for _ in TERMINAL_PUSH_TYPES)
+    conn = get_db_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        f"UPDATE push_queue SET status = 'pending', error = NULL "
+        f"WHERE status = 'failed' AND push_type IN ({placeholders})",
+        TERMINAL_PUSH_TYPES,
+    )
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return count
+
+
 def expire_game_push_messages(game_id: str, db_path: str) -> int:
     """Mark all not-yet-sent push_queue rows for *game_id* as expired.
 

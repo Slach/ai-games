@@ -30,6 +30,7 @@ from database import (
     mark_push_failed,
     mark_push_sent,
     reset_failed_for_current_turn,
+    reset_failed_terminal_push_messages,
 )
 from language import (
     LANGUAGE_RU,
@@ -1722,6 +1723,13 @@ async def _startup_flush(
             )
     if retried_total:
         logger.info("[PUSH_STARTUP] Total %d failed message(s) reset for retry", retried_total)
+
+    # One-shot content (outcomes, death notice, finale, summary, GM
+    # notifications) must reach players even when its turn is long past
+    # or the game has ended.
+    retried = reset_failed_terminal_push_messages(DB_PATH)
+    if retried:
+        logger.info("[PUSH_STARTUP] Reset %d failed content message(s) to pending", retried)
 
     pending = get_pending_push_messages(DB_PATH)
     if not pending:
