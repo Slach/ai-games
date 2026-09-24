@@ -271,3 +271,11 @@ gets imported:
 ```bash
 cd telegram-bot && ../.venv/bin/python -m unittest discover -s tests -t .
 ```
+
+`game-scheduler/` has the same layout and also requires `-t .`: its
+`tests/__init__.py` redirects `FileHandler` paths (the `logs/` dir is
+owned by the container) before `main.py` gets imported:
+
+```bash
+cd game-scheduler && ../.venv/bin/python -m unittest discover -s tests -t .
+```

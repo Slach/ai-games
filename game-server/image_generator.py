@@ -836,6 +836,122 @@ def _build_qwen_image_21_workflow(
     }
 
 
+def _build_qwen_image_21_multiref_workflow(
+    prompt: str,
+    reference_filenames: list[str],
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a Qwen-Image-2.1 multi-reference workflow (up to 10 pictures).
+
+    One generation call composes a scene from the crew's avatar references:
+    TextEncodeQwenImage21 receives each avatar as an ``images.image_N`` slot
+    (the text encoder sees them as "Picture N" vision tokens AND the VAE
+    latents are appended to the conditioning), so the model renders each crew
+    member with their canonical look instead of hallucinating generic humans.
+    Mirrors :func:`_build_qwen_edit_21_workflow` (same unified t2i+edit
+    checkpoint and node set), but with N reference slots and the output latent
+    at the requested size. RGBA references are supported natively: the VAE
+    keeps all four channels.
+
+    Args:
+        prompt: Generation instruction referring to the references as
+            "Picture 1" .. "Picture N" (which picture is which crew member).
+        reference_filenames: LoadImage filenames (``subfolder/file.png``) of
+            the avatars, in Picture order. Hard-capped at 10 — the model was
+            trained with up to 10 reference images.
+        width, height: Output dimensions.
+        seed: Random seed (0 = randomize).
+        filename_prefix: Output filename prefix.
+
+    Returns:
+        ComfyUI API workflow dict.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    refs = reference_filenames[:10]
+    workflow: dict[str, Any] = {
+        # Unified t2i+edit checkpoint (int8_convrot repack, safetensors)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "qwen_image_2.1_int8_convrot.safetensors", "weight_dtype": "default"},
+        },
+        # Qwen3-VL-8B text encoder (sees image_1..image_N as vision slots)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE (encodes references, decodes the result)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"},
+        },
+        # KV-cache device/precision tuning between UNET and sampler
+        "45": {
+            "class_type": "QwenImage21Cache",
+            "inputs": {"model": ["10", 0], "device": "auto", "dtype": "default"},
+        },
+        # Conditioning: instruction + reference avatars. resolution=0 keeps each
+        # reference at its own size (rounded to a multiple of 32).
+        "70": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": prompt,
+                "negative_prompt": "",
+                "resolution": 0,
+                "vae": ["29", 0],
+            },
+        },
+        # Latent canvas at the requested output size
+        "90": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        "100": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 25,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["45", 0],
+                "positive": ["70", 0],
+                "negative": ["70", 1],
+                "latent_image": ["90", 0],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["100", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    for i, ref in enumerate(refs, start=1):
+        # 200..209: must not collide with the fixed node IDs above (the
+        # QwenImage21Cache node is "45" — a LoadImage range crossing it
+        # silently overwrites the cache node and breaks validation).
+        node_id = str(200 + i)
+        workflow[node_id] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": ref},
+        }
+        workflow["70"]["inputs"][f"images.image_{i}"] = [node_id, 0]
+    return workflow
+
+
 def _build_llada_turbo_workflow(
     prompt: str,
     width: int,
@@ -1175,12 +1291,22 @@ class ImageGenerator:
         turn: int | None,
         kind: str | None,
     ) -> str | None:
-        """Generate a character avatar image via ComfyUI.
+        """Generate a character avatar as an RGBA cutout on a transparent background.
 
-        Alias for generate_image with portrait-oriented defaults.
+        Qwen-Image-2.1 only activates its native alpha channel when the prompt
+        follows the official transparent-image template, so the template is
+        wrapped around the character description here (deterministically —
+        the LLM-authored part describes the character only). Avatars are then
+        clean reference cutouts for multi-reference scene composition, with no
+        baked-in environment.
         """
+        wrapped_prompt = (
+            "This is an RGBA image with transparency.\n"
+            f"{prompt}\n"
+            "The image has alpha channel."
+        )
         return await self.generate_image(
-            prompt=prompt,
+            prompt=wrapped_prompt,
             filename_prefix=filename_prefix,
             width=width,
             height=height,
@@ -1917,40 +2043,130 @@ class ImageGenerator:
         width: int,
         height: int,
     ) -> str | None:
-        """Generate a bridge scene image with the crew.
+        """Generate a bridge scene image with the crew, avatar-consistent.
 
-        Currently uses the standard Z-Image Turbo workflow with a detailed prompt.
-        When ComfyUI supports reference image features (ControlNet / IP-Adapter),
-        this will use avatar_urls as reference images for consistent crew appearance.
+        Qwen-Image-2.1 composes the whole scene in ONE call from up to 10
+        avatar reference images (``images.image_1..N`` on
+        TextEncodeQwenImage21): the prompt refers to each crew member as
+        "the character from Picture N", so their looks match the avatars the
+        players already know from /team. No sequential Qwen-Image-Edit
+        compositing — the unified 2.1 checkpoint handles multi-reference
+        generation natively.
+
+        Falls back to plain txt2img (:meth:`generate_scene_image`) when no
+        usable avatar references exist or the multi-reference generation
+        fails — the bridge is then crew-agnostic (prompt-only).
 
         Args:
-            prompt: Detailed bridge scene prompt from LLM
-            crew_descriptions: Where each crew member is positioned
-            avatar_urls: Optional list of avatar image URLs for reference (future IP-Adapter)
-            filename_prefix: Prefix for output file
-            game_id: Game to scope the image to
-            width: Image width
-            height: Image height
+            prompt: Bridge scene prompt from the LLM, referring to the
+                references as "Picture N".
+            crew_descriptions: Where each crew member is positioned; appended
+                to the prompt as conditioning detail.
+            avatar_urls: Avatar image URLs in Picture order (Picture 1 first).
+                Entries may be None/unparseable and are skipped.
+            filename_prefix: Prefix for output file.
+            game_id: Game to scope the image to.
+            width: Image width.
+            height: Image height.
 
         Returns:
-            URL of the generated bridge image
+            URL of the generated image, or None on failure
         """
         logger.info("[BRIDGE] Generating bridge scene image")
-        if avatar_urls:
-            logger.info(f"[BRIDGE] {len([u for u in avatar_urls if u])} avatar references available")
-
-        # Enhanced prompt with crew positioning details
         enriched_prompt = prompt
         if crew_descriptions:
             positions = "; ".join([f"{d.get('role', '?')}: {d.get('position_description', '')}" for d in crew_descriptions])
             enriched_prompt = f"{prompt}. Crew positions: {positions}"
 
-        return await self.generate_image(
+        ref_filenames = []
+        for url in avatar_urls or []:
+            if not url:
+                continue
+            filename = self._extract_filename_from_url(url)
+            if filename:
+                ref_filenames.append(filename)
+            else:
+                logger.warning("[BRIDGE] Could not parse avatar filename from %s, skipping reference", url)
+
+        if not ref_filenames:
+            logger.info("[BRIDGE] No avatar references, generating crew-agnostic txt2img")
+            return await self.generate_scene_image(
+                prompt=enriched_prompt,
+                filename_prefix=filename_prefix,
+                width=width,
+                height=height,
+                game_id=game_id,
+                player_id=None,
+                turn=None,
+                kind="bridge",
+            )
+
+        workflow = _build_qwen_image_21_multiref_workflow(
             prompt=enriched_prompt,
-            filename_prefix=f"{game_id}/{filename_prefix}",
+            reference_filenames=ref_filenames,
             width=width,
             height=height,
-            max_retries=3,
+            seed=0,
+            filename_prefix=filename_prefix,
+        )
+
+        # Multi-reference conditioning is heavier than plain txt2img (10 vision
+        # slots + reference latents); allow the queue to drain before retrying.
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                comfyui_req = (
+                    f"Model: Qwen-Image-2.1 multi-reference ({len(ref_filenames)} pictures)\n"
+                    f"Size: {width}x{height}\n"
+                    f"Filename prefix: {filename_prefix}\n"
+                    f"Attempt: {attempt}/{max_attempts}\n\n"
+                    f"--- PROMPT ---\n{enriched_prompt}\n\n"
+                    f"--- REFERENCE AVATARS ---\n" + "\n".join(f"Picture {i}: {fn}" for i, fn in enumerate(ref_filenames, start=1)) + "\n\n"
+                    f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
+                )
+                write_comfyui_log(
+                    game_id=game_id,
+                    player_id="",
+                    turn="0",
+                    kind="bridge",
+                    log_type="request",
+                    content=comfyui_req,
+                )
+                async with _image_semaphore:
+                    prompt_id = await self._queue_prompt(
+                        workflow, kind="bridge", ctx_game=game_id, ctx_player="", ctx_turn="0"
+                    )
+                    outputs = await self._wait_for_completion(prompt_id, timeout=600)
+                    image_url = self._extract_image_url(outputs)
+                if image_url:
+                    write_comfyui_log(
+                        game_id=game_id,
+                        player_id="",
+                        turn="0",
+                        kind="bridge",
+                        log_type="response",
+                        content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
+                    )
+                    logger.info("[BRIDGE] Generated with %d references: %s", len(ref_filenames), image_url)
+                    return image_url
+                logger.warning("[BRIDGE] No output (attempt %d/%d)", attempt, max_attempts)
+            except Exception:
+                if attempt < max_attempts:
+                    logger.warning(
+                        "[BRIDGE] multi-reference attempt %d/%d failed, retrying before txt2img fallback",
+                        attempt,
+                        max_attempts,
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(5)
+                    continue
+                logger.warning("[BRIDGE] multi-reference generation failed, falling back to txt2img", exc_info=True)
+
+        return await self.generate_scene_image(
+            prompt=enriched_prompt,
+            filename_prefix=filename_prefix,
+            width=width,
+            height=height,
             game_id=game_id,
             player_id=None,
             turn=None,

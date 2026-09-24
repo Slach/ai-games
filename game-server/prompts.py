@@ -2117,8 +2117,8 @@ Return only the generated prompt string. Do not include explanations or markdown
 # uniformed human. Shared with tools/prompt_optimizer so the optimizer measures
 # the same contract the runtime enforces.
 NPC_AVATAR_SPECIES_RULES = {
-    "human": "The character is human. Describe face, expression, uniform details. Portrait style, upper body.",
-    "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Portrait style, upper body.",
+    "human": "The character is human. Describe face, expression, uniform details. Full body view, isolated character cutout.",
+    "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Full body view, isolated character cutout.",
     "non_humanoid": (
         "The creature is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline "
         "structure, multiple limbs, amorphous form, hive cluster, etc.). "
@@ -2150,7 +2150,12 @@ BRIDGE_IMAGE_PROMPT_SYSTEM = (
     "showing recognizable crew members in action. The image must depict the "
     "crew — their faces, bodies, and poses — never a floor plan, schematic, "
     "or architectural diagram. Focus on composition, lighting, the crew, "
-    "and a space opera aesthetic."
+    "and a space opera aesthetic. "
+    "When reference pictures of the crew are provided, the prompt is a "
+    "composition instruction for a multi-reference image model: stage the "
+    "characters BY their picture numbers (\"the character from Picture N\") "
+    "and reinforce each one's key visual traits (\"EXACTLY as in Picture N: "
+    "same <traits>\") — restaging detail, not a fresh description."
 )
 
 BRIDGE_IMAGE_VIEWPOINT_RULE = (

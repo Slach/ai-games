@@ -1514,13 +1514,13 @@ class GameServer:
             "human": {
                 "intro": "character avatar",
                 "appearance": "- Character appearance (face, expression, uniform details)",
-                "framing": "- Portrait style, upper body",
+                "framing": "- Full body view, isolated character cutout",
                 "genre": "Star Trek space opera",
             },
             "humanoid": {
                 "intro": "humanoid alien character avatar",
                 "appearance": "- Character appearance: humanoid anatomy with subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.)",
-                "framing": "- Portrait style, upper body",
+                "framing": "- Full body view, isolated character cutout",
                 "genre": "Star Trek space opera",
             },
             "non_humanoid": {
@@ -1544,7 +1544,7 @@ class GameServer:
                     "- Must NOT resemble a human: NO solid body, NO face, NO limbs, NO two arms/two legs\n"
                     "- The being does not wear a uniform or clothing"
                 ),
-                "framing": "- Full body showing the energy form in its environment",
+                "framing": "- Full body view showing the energy form, isolated cutout",
                 "genre": "abstract energy-being concept art, NOT a Star Trek uniformed officer",
             },
             "cybernetic": {
@@ -1614,7 +1614,8 @@ class GameServer:
             f"Character description (flavour ONLY; subject to the anatomy contract above): {avatar_description}\n\n"
             "The prompt should describe:\n"
             f"{instr['appearance']}\n"
-            "- Environment setting (ship interior, lab, planet surface, etc.)\n"
+            "- A character cutout isolated on a fully transparent background: NO environment, "
+            "NO scenery, NO backdrop, NO floor — the character and nothing else\n"
             "- Cinematic lighting and composition appropriate to the character\n"
             f"- {instr['genre']} aesthetic\n"
             "- High quality, 4K, detailed\n"
@@ -1631,8 +1632,8 @@ class GameServer:
                     "Vary across these axes:\n"
                     "- Age and build (young/lean, middle-aged/sturdy, older/weathered)\n"
                     "- Expression (calm, intense, weary, cheerful)\n"
-                    "- Camera angle (portrait, 3/4, full body, dynamic pose)\n"
-                    "- Environment (ship interior, lab, planet surface, void)\n"
+                    "- Camera angle (3/4, full body, dynamic pose)\n"
+                    "- Pose and props (at attention, mid-motion, holding a tool)\n"
                     "CRITICAL: ALL options MUST be human/humanoid (two arms, two legs, a human face). "
                     "No non-humanoid forms, no alien body plans."
                 )
@@ -2896,6 +2897,7 @@ class GameServer:
         mission: dict[str, Any],
         all_participants: list[dict[str, Any]],
         *,
+        crew_refs: list[dict[str, Any]] | None = None,
         game_id: str | None,
         player_id: str | None,
         turn: int | str | None,
@@ -2903,21 +2905,47 @@ class GameServer:
     ) -> dict[str, Any]:
         """Generate a detailed prompt for the bridge scene image and crew positioning.
 
-        Uses crew roles, species/gender descriptions, and mission context
-        to create a cinematic scene with the full crew on the bridge.
+        With ``crew_refs`` (crew members that have avatar images) the bridge
+        is rendered from avatar references: the LLM writes the prompt against
+        pre-assigned "Picture N" slots so the image model composes each member
+        with their canonical avatar look. Without references the crew is
+        described textually from species/traits only.
         """
         logger.info(f"[BRIDGE] Generating bridge image prompt for {len(all_participants)} crew")
 
-        crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, traits={', '.join(p.get('personality_traits', []))}" for p in all_participants])
-
         mission_name = mission.get("name", "Unknown mission")
         mission_desc = mission.get("description", "")
+
+        if crew_refs:
+            picture_lines = "\n".join(
+                f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}" for i, r in enumerate(crew_refs, start=1)
+            )
+            crew_section = (
+                "The image model will receive the crew's avatar reference pictures:\n"
+                f"{picture_lines}\n\n"
+                "The bridge_prompt MUST be a composition instruction for these references:\n"
+                "- Refer to every crew member as \"the character from Picture N\" using the exact\n"
+                "  pre-assigned numbers above — every picture must appear in the scene exactly once.\n"
+                "- For EACH member repeat their key visual traits right after the Picture reference,\n"
+                "  in the form \"render this character EXACTLY as in Picture N: same <2-4 distinctive\n"
+                "  traits from the description above>\" — without this reinforcement the model quietly\n"
+                "  substitutes generic humans for some references.\n"
+                "- Describe pose, station, action, position on the bridge, and the bridge\n"
+                "  environment, lighting and atmosphere yourself.\n"
+            )
+        else:
+            crew_desc = "\n".join([f"  - {p.get('role', '?')} ({p.get('type', '?')}): species={p.get('species') or '?'}, traits={', '.join(p.get('personality_traits', []))}" for p in all_participants])
+            crew_section = (
+                "Crew on the bridge (describe them visually in the prompt — no reference\n"
+                "pictures are available, so invent a consistent look for each from species/traits):\n"
+                f"{crew_desc}\n"
+            )
 
         system = BRIDGE_IMAGE_PROMPT_SYSTEM
         user = (
             f"Mission: {mission_name}\n"
             f"Mission description: {mission_desc}\n\n"
-            f"Crew on the bridge:\n{crew_desc}\n\n"
+            f"{crew_section}\n"
             "Create:\n"
             "1. A detailed English image prompt for the bridge scene — a cinematic, "
             "eye-level or low-angle hero shot of the crew at their stations, Star Trek "
@@ -3275,6 +3303,8 @@ class GameServer:
                 if sp_key in species_rules:
                     prompt += f"  - {sp_key}: {species_rules[sp_key]}\n"
             prompt += (
+                "\nCRITICAL: Every avatar is a character cutout isolated on a fully transparent background (PNG alpha):\n"
+                "no environment, no scenery, no backdrop, no floor — the character and nothing else.\n"
                 f'\n~50 words per prompt. Cinematic lighting. 4K quality. Output as JSON array: [{{"role_key": ..., "prompt": ...}}]\n\n'
                 f"CRITICAL COVERAGE RULE: You MUST output a prompt for EVERY ONE of the {len(roles)} roles listed above. "
                 "Each response/option MUST contain exactly that many entries — one per role_key, none missing, none duplicated. "

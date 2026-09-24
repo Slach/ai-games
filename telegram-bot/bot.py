@@ -1254,13 +1254,15 @@ def _validate_schedule_format(raw: str) -> bool:
     """Boundary validation of a player-entered schedule string.
 
     Mirrors the formats accepted by game-scheduler's parse_schedule
-    (Nh/Nm/Ns, HH:MM[,HH:MM], day-HH:MM,...). The scheduler remains the
-    authority; this only gives the player instant feedback and avoids
-    creating orphan games on invalid input.
+    (Nh/Nm/Ns, HH:MM[,HH:MM], HH:MM-HH:MM/Nh, day-HH:MM,...). The scheduler
+    remains the authority; this only gives the player instant feedback and
+    avoids creating orphan games on invalid input.
     """
     s = (raw or "").strip().lower()
     if re.match(r"^[a-z]{3}-\d{1,2}:\d{2}(,[a-z]{3}-\d{1,2}:\d{2})*$", s):
         return all(p.split("-", 1)[0] in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"} for p in s.split(","))
+    if re.match(r"^\d{1,2}:\d{2}-\d{1,2}:\d{2}/\d+[hm]$", s):
+        return True
     if re.match(r"^\d{1,2}:\d{2}(,\d{1,2}:\d{2})*$", s):
         return True
     return bool(re.match(r"^\d+[hms]$", s))

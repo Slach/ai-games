@@ -71,6 +71,8 @@ def parse_schedule(schedule: str) -> tuple[str, str]:
     - Ns (e.g., "30s") — every N seconds (testing)
     - HH:MM (e.g., "08:00") — daily at that time
     - HH:MM,HH:MM,... (e.g., "08:00,12:00,14:00") — daily at multiple times
+    - HH:MM-HH:MM/Nh (e.g., "06:00-18:00/1h") — every N hours (or minutes
+      with /Nm) from start to end inclusive, expanded to a daily time list
     - DAY-HH:MM,... (e.g., "mon-08:00,wed-12:00") — multi-daily by weekday
 
     Returns:
@@ -87,6 +89,24 @@ def parse_schedule(schedule: str) -> tuple[str, str]:
             if day not in _DAYS:
                 raise ValueError(f"Invalid day '{day}' in schedule: {schedule}. Use mon/tue/wed/thu/fri/sat/sun")
         return ("multi_daily", s)
+
+    # Range: HH:MM-HH:MM/Nh (e.g., "06:00-18:00/1h") — expand to a daily
+    # time list covering start..end inclusive with the given step.
+    m = re.match(r"^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})/(\d+)([hm])$", s)
+    if m:
+        sh, sm, eh, em = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        step, unit = int(m.group(5)), m.group(6)
+        if sh > 23 or eh > 23 or sm > 59 or em > 59:
+            raise ValueError(f"Invalid time in schedule: {schedule}")
+        start_minutes = sh * 60 + sm
+        end_minutes = eh * 60 + em
+        if end_minutes < start_minutes:
+            raise ValueError(f"Range end before start in schedule: {schedule}. Start must be <= end")
+        step_minutes = step * (60 if unit == "h" else 1)
+        times = []
+        for t in range(start_minutes, end_minutes + 1, step_minutes):
+            times.append(f"{t // 60:02d}:{t % 60:02d}")
+        return ("daily", ",".join(times))
 
     # Daily: single or multiple HH:MM times
     if re.match(r"^\d{1,2}:\d{2}(,\d{1,2}:\d{2})*$", s):

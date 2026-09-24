@@ -23,6 +23,7 @@ from image_generator import (
     ImageGenerator,
     _build_flux2_klein_workflow,
     _build_qwen_edit_workflow,
+    _build_qwen_image_21_multiref_workflow,
     _build_qwen_image_2512_workflow,
     _build_zimage_turbo_workflow,
     create_image_generator,
@@ -688,6 +689,148 @@ class TestImageGeneratorUnit(unittest.TestCase):
         gen = ImageGenerator()
         url = gen._extract_image_url({})
         self.assertIsNone(url)
+
+
+class TestQwenImage21MultirefWorkflow(unittest.TestCase):
+    """Test the Qwen-Image-2.1 multi-reference workflow JSON structure."""
+
+    REFS = [
+        "6c9kxv/avatar_281412419_00001_.png",
+        "6c9kxv/avatar_captain_00001_.png",
+        "6c9kxv/avatar_pilot_00001_.png",
+    ]
+
+    def _build(self, refs=None):
+        return _build_qwen_image_21_multiref_workflow(
+            prompt="Place the character from Picture 1 at the command throne.",
+            reference_filenames=self.REFS if refs is None else refs,
+            width=1024,
+            height=1024,
+            seed=0,
+            filename_prefix="test/bridge",
+        )
+
+    def test_basic_workflow_structure(self):
+        wf = self._build()
+        for node_id in ["10", "30", "29", "45", "70", "90", "100", "110", "120"]:
+            self.assertIn(node_id, wf, f"Missing node {node_id}")
+
+    def test_reference_load_image_nodes(self):
+        wf = self._build()
+        for i in range(1, 4):
+            node_id = str(200 + i)
+            self.assertEqual(wf[node_id]["class_type"], "LoadImage")
+            self.assertEqual(wf[node_id]["inputs"]["image"], self.REFS[i - 1])
+
+    def test_text_encode_reference_slots(self):
+        wf = self._build()
+        encode = wf["70"]
+        self.assertEqual(encode["class_type"], "TextEncodeQwenImage21")
+        for i in range(1, 4):
+            self.assertEqual(encode["inputs"][f"images.image_{i}"], [str(200 + i), 0])
+        # No 4th slot when only 3 references are passed
+        self.assertNotIn("images.image_4", encode["inputs"])
+        self.assertEqual(encode["inputs"]["resolution"], 0)
+        self.assertEqual(encode["inputs"]["vae"], ["29", 0])
+
+    def test_reference_nodes_do_not_collide_with_cache_node(self):
+        """LoadImage IDs must not overwrite the QwenImage21Cache node (45)."""
+        refs = [f"game/avatar_{i}_00001_.png" for i in range(6)]
+        wf = self._build(refs=refs)
+        self.assertEqual(wf["45"]["class_type"], "QwenImage21Cache")
+        for i in range(1, 7):
+            self.assertEqual(wf[str(200 + i)]["class_type"], "LoadImage")
+
+    def test_references_capped_at_ten(self):
+        refs = [f"game/avatar_{i}_00001_.png" for i in range(15)]
+        wf = self._build(refs=refs)
+        encode = wf["70"]
+        for i in range(1, 11):
+            self.assertIn(f"images.image_{i}", encode["inputs"])
+        for i in range(11, 16):
+            self.assertNotIn(f"images.image_{i}", encode["inputs"])
+
+    def test_ksampler_settings(self):
+        wf = self._build()
+        sampler = wf["100"]
+        self.assertEqual(sampler["inputs"]["steps"], 25)
+        self.assertEqual(sampler["inputs"]["cfg"], 1.0)
+        self.assertEqual(sampler["class_type"], "KSampler")
+        # Model flows through QwenImage21Cache
+        self.assertEqual(sampler["inputs"]["model"], ["45", 0])
+        self.assertEqual(sampler["inputs"]["positive"], ["70", 0])
+        self.assertEqual(sampler["inputs"]["negative"], ["70", 1])
+
+    def test_output_size_and_prefix(self):
+        wf = self._build()
+        self.assertEqual(wf["90"]["inputs"]["width"], 1024)
+        self.assertEqual(wf["90"]["inputs"]["height"], 1024)
+        self.assertEqual(wf["120"]["inputs"]["filename_prefix"], "test/bridge")
+
+    def test_no_references_still_builds_txt2img_shape(self):
+        wf = self._build(refs=[])
+        encode = wf["70"]
+        self.assertNotIn("images.image_1", encode["inputs"])
+        # Workflow remains serializable JSON
+        json.dumps(wf)
+
+
+class TestAvatarRgbaTemplate(unittest.TestCase):
+    """generate_avatar_image must wrap the prompt in the RGBA transparency template."""
+
+    def test_prompt_wrapped_in_rgba_template(self):
+        gen = ImageGenerator()
+        captured = {}
+
+        async def fake_generate_image(**kwargs):
+            captured.update(kwargs)
+            return "http://comfyui:8188/view?filename=x.png&type=output"
+
+        with patch.object(ImageGenerator, "generate_image", new=lambda self, **kw: fake_generate_image(**kw)):
+            url = asyncio.get_event_loop().run_until_complete(
+                gen.generate_avatar_image(
+                    prompt="Chief Engineer in futuristic uniform",
+                    filename_prefix="g/avatar_1",
+                    width=768,
+                    height=1024,
+                    game_id="g",
+                    player_id="1",
+                    turn=None,
+                    kind="avatar",
+                )
+            )
+        self.assertIsNotNone(url)
+        self.assertIn("This is an RGBA image with transparency.", captured["prompt"])
+        self.assertIn("The image has alpha channel", captured["prompt"])
+        self.assertIn("Chief Engineer in futuristic uniform", captured["prompt"])
+
+
+class TestBridgeImageFallbacks(unittest.TestCase):
+    """generate_bridge_image falls back to plain txt2img without references."""
+
+    def test_no_references_routes_to_scene_image(self):
+        gen = ImageGenerator()
+        captured = {}
+
+        async def fake_scene(**kwargs):
+            captured.update(kwargs)
+            return "http://comfyui:8188/view?filename=bridge.png&type=output"
+
+        with patch.object(ImageGenerator, "generate_scene_image", new=lambda self, **kw: fake_scene(**kw)):
+            url = asyncio.get_event_loop().run_until_complete(
+                gen.generate_bridge_image(
+                    prompt="Starship bridge, crew at stations",
+                    crew_descriptions=[{"role": "Капитан", "position_description": "At the throne"}],
+                    avatar_urls=[None, None],
+                    filename_prefix="g/bridge",
+                    width=1024,
+                    height=1024,
+                    game_id="g",
+                )
+            )
+        self.assertIsNotNone(url)
+        self.assertEqual(captured["kind"], "bridge")
+        self.assertIn("Crew positions: Капитан: At the throne", captured["prompt"])
 
 
 class TestImageGeneratorIntegration(unittest.TestCase):

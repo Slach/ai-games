@@ -315,12 +315,12 @@ _FALLBACK_AVATAR_TEMPLATES = {
     "human": (
         "Sci-fi character portrait of a {role} in Star Trek style. Personality traits: {traits}. "
         "{desc} Futuristic uniform, cinematic lighting, detailed face, 4K quality. "
-        "Portrait, upper body, space opera aesthetic."
+        "Full body view, isolated character cutout, space opera aesthetic."
     ),
     "humanoid": (
         "Sci-fi character portrait of a humanoid {role} in Star Trek style. Personality traits: {traits}. "
         "{desc} Humanoid with subtle alien features, futuristic uniform, cinematic lighting, "
-        "detailed face, 4K quality. Portrait, upper body, space opera aesthetic."
+        "detailed face, 4K quality. Full body view, isolated character cutout, space opera aesthetic."
     ),
     "non_humanoid": (
         "Alien creature concept art of a non-humanoid {role}. Personality traits: {traits}. {desc} "
@@ -1094,11 +1094,20 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
             # Bridge image (needs the mission for crew positioning context)
             if not get_random_game_image(type="bridge", game_id=game_id, turn=None):
                 try:
-                    bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
+                    crew_refs = _collect_crew_avatar_refs(game_id, all_participants)
+                    bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, crew_refs=crew_refs, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
                     bridge_prompt = bridge_result.get("bridge_prompt", "")
                     if bridge_prompt:
                         image_gen = create_image_generator()
-                        bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge", width=1024, height=1024, game_id=game_id, player_id=None, turn=None, kind="bridge")
+                        bridge_url = await image_gen.generate_bridge_image(
+                            prompt=bridge_prompt,
+                            crew_descriptions=bridge_result.get("crew_descriptions", []),
+                            avatar_urls=[r["avatar_url"] for r in crew_refs],
+                            filename_prefix=f"{game_id}/bridge",
+                            width=1024,
+                            height=1024,
+                            game_id=game_id,
+                        )
                         if bridge_url:
                             save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt, game_id=game_id, turn=None)
                             logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
@@ -4099,19 +4108,19 @@ async def _run_language_change(game_id: str, language: str) -> None:
         # Bridge image is crew-aware: only regenerate once participants exist.
         if all_participants:
             try:
-                bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
+                crew_refs = _collect_crew_avatar_refs(game_id, all_participants)
+                bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, crew_refs=crew_refs, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
                 bridge_prompt = bridge_result.get("bridge_prompt", "")
                 if bridge_prompt:
                     image_gen = create_image_generator()
-                    bridge_url = await image_gen.generate_scene_image(
+                    bridge_url = await image_gen.generate_bridge_image(
                         prompt=bridge_prompt,
+                        crew_descriptions=bridge_result.get("crew_descriptions", []),
+                        avatar_urls=[r["avatar_url"] for r in crew_refs],
                         filename_prefix=f"{game_id}/bridge",
                         width=1024,
                         height=1024,
                         game_id=game_id,
-                        player_id=None,
-                        turn=None,
-                        kind="bridge",
                     )
                     if bridge_url:
                         save_game_image(
@@ -4399,6 +4408,38 @@ def _extract_avatar_url(avatar_description: str) -> str | None:
         parts = avatar_description.split(";", 1)
         return parts[0].replace("avatar_url=", "", 1)
     return None
+
+
+def _collect_crew_avatar_refs(game_id: str, all_participants: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Ordered crew members that have avatars, for reference-based images.
+
+    Mirrors the all_participants order (players first, then NPCs). NPC avatar
+    URLs are written into npc_profiles.avatar_description by a LATER step than
+    all_participants is built (NPC avatars are generated after game start), so
+    NPCs are re-read from the DB here to pick the URLs up. Capped at 10 —
+    Qwen-Image-2.1 multi-reference composition supports at most 10 pictures.
+    """
+    npc_urls = {
+        npc["npc_key"]: _extract_avatar_url(npc.get("avatar_description", "") or "")
+        for npc in get_all_active_npcs(game_id)
+    }
+    refs: list[dict[str, str]] = []
+    for p in all_participants:
+        if p.get("type") == "player":
+            profile = get_player_profile(p["player_id"])
+            url = (profile or {}).get("avatar_url")
+        else:
+            url = npc_urls.get(p.get("npc_key"))
+        if url:
+            refs.append(
+                {
+                    "name": p.get("player_name") or p.get("npc_name") or p.get("role", "?"),
+                    "role": p.get("role", "?"),
+                    "appearance": p.get("avatar_description", "") or "",
+                    "avatar_url": url,
+                }
+            )
+    return refs[:10]
 
 
 def _get_crew_members(game_id: str) -> list[dict[str, Any]]:
@@ -4820,11 +4861,20 @@ async def _original_start_game(request: StartGameRequest):
         if get_random_game_image(type="bridge", game_id=game_id, turn=None):
             logger.info("[BRIDGE] Resume: bridge image already exists, skipping")
         else:
-            bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, game_id=game_id, player_id=None, turn=_npc_turn, kind="bridge_image_prompt")
+            crew_refs = _collect_crew_avatar_refs(game_id, all_participants)
+            bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, crew_refs=crew_refs, game_id=game_id, player_id=None, turn=_npc_turn, kind="bridge_image_prompt")
             bridge_prompt = bridge_result.get("bridge_prompt", "")
             if bridge_prompt:
                 image_gen = create_image_generator()
-                bridge_url = await image_gen.generate_scene_image(prompt=bridge_prompt, filename_prefix=f"{game_id}/bridge", width=1024, height=1024, game_id=game_id, player_id=None, turn=None, kind="bridge")
+                bridge_url = await image_gen.generate_bridge_image(
+                    prompt=bridge_prompt,
+                    crew_descriptions=bridge_result.get("crew_descriptions", []),
+                    avatar_urls=[r["avatar_url"] for r in crew_refs],
+                    filename_prefix=f"{game_id}/bridge",
+                    width=1024,
+                    height=1024,
+                    game_id=game_id,
+                )
                 if bridge_url:
                     save_game_image(
                         type="bridge",

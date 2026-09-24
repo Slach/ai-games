@@ -162,12 +162,12 @@ DIVERSITY_HINTS: dict[str, str] = {
     "avatar": (
         "Vary across these axes:\n"
         "- Body form (humanoid, alien, energy being, cybernetic, symbiotic)\n"
-        "- Camera angle (portrait, 3/4, full body, dynamic pose)\n"
-        "- Environment (ship interior, lab, planet surface, void)\n"
+        "- Camera angle (3/4, full body, dynamic pose)\n"
+        "- Pose and props (at attention, mid-motion, holding a tool)\n"
         "- Mood (stoic, intense, serene, alien, unsettling)\n"
         "CRITICAL: For non-human species, at least 3 of 5 options MUST be non-humanoid forms.\n"
     ),
-    "npc_avatars": ("Vary across these axes:\n- Body form (humanoid, alien, energy being, cybernetic, symbiotic)\n- Species-to-species visual diversity — no two NPCs look similar\n- Camera angle, environment, mood as above\n"),
+    "npc_avatars": ("Vary across these axes:\n- Body form (humanoid, alien, energy being, cybernetic, symbiotic)\n- Species-to-species visual diversity — no two NPCs look similar\n- Camera angle, pose, mood as above\n"),
     "action_prompt": (
         "Vary across these axes:\n"
         "- Composition (wide shot, close-up, Dutch angle, overhead)\n"
