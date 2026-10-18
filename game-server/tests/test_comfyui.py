@@ -25,6 +25,7 @@ from image_generator import (
     _MULTIREF_BUILDERS,
     _TXT2IMG_BUILDERS,
     _build_flux2_klein_workflow,
+    _build_flux3_klein_nvfp4_workflow,
     _build_flux3_klein_workflow,
     _build_qwen_edit_workflow,
     _build_qwen_image_21_multiref_workflow,
@@ -325,6 +326,21 @@ class TestFlux3KleinWorkflow(unittest.TestCase):
         """Workflow should round-trip through JSON."""
         wf = _build_flux3_klein_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
         self.assertEqual(json.loads(json.dumps(wf)), wf)
+
+
+class TestFlux3KleinNvfp4Workflow(unittest.TestCase):
+    """Test the NVFP4 variant of the FLUX.3 [klein] workflow."""
+
+    def test_only_unet_differs(self):
+        """NVFP4 workflow must equal the int8 one except the UNET filename."""
+        kwargs = dict(prompt="test", width=512, height=512, seed=7, filename_prefix="")
+        wf_int8 = _build_flux3_klein_workflow(**kwargs)
+        wf_nvfp4 = _build_flux3_klein_nvfp4_workflow(**kwargs)
+        self.assertEqual(
+            wf_nvfp4["10"]["inputs"]["unet_name"], "flux3-image-klein-nvfp4.safetensors"
+        )
+        wf_int8["10"]["inputs"]["unet_name"] = wf_nvfp4["10"]["inputs"]["unet_name"]
+        self.assertEqual(wf_nvfp4, wf_int8)
 
 
 class TestFlux3KleinImg2ImgWorkflow(unittest.TestCase):
@@ -681,8 +697,8 @@ class TestComfyUiConfig(unittest.TestCase):
         self.assertEqual(comfyui_config.resolve_txt2img_model("splash"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
     def test_default_is_flux3_klein(self):
-        """Out of the box the default model should be flux3_klein."""
-        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux3_klein")
+        """Out of the box the default model should be flux3_klein_nvfp4."""
+        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux3_klein_nvfp4")
 
     def test_env_override_changes_default(self):
         """COMFYUI_TXT2IMG_MODEL env should override the default model key."""

@@ -40,6 +40,9 @@ https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b
 # is license-gated; ml-resources hosts an ungated byte-identical mirror.
 # Requires ComfyUI >= 0.41 (CLIPLoader type=flux3).
 https://huggingface.co/ml-resources/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3-image-klein-int8-convrot.safetensors -> diffusion_models/flux3-image-klein-int8-convrot.safetensors
+# NVFP4 UNET alternative (5.3 GB, Blackwell-only — GB10 sm_121 OK). Same
+# graph/settings; encoder stays int8-convrot (no nvfp4 encoder exists).
+https://huggingface.co/ml-resources/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3-image-klein-nvfp4.safetensors -> diffusion_models/flux3-image-klein-nvfp4.safetensors
 https://huggingface.co/ml-resources/flux-3-image-klein-comfy/resolve/main/text_encoders/qwen3vl_4b_int8_convrot.safetensors -> text_encoders/qwen3vl_4b_int8_convrot.safetensors
 
 # ============== LLaDA-Image-Turbo (RealRebelAI ComfyUI port) ==============

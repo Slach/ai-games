@@ -891,6 +891,25 @@ def _build_flux3_klein_workflow(
     }
 
 
+def _build_flux3_klein_nvfp4_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build the FLUX.3 [klein] workflow with the NVFP4 UNET quant.
+
+    Same graph and settings as :func:`_build_flux3_klein_workflow`; only the
+    UNET file differs (5.3 GB nvfp4 vs 5.8 GB int8-convrot). Blackwell-only
+    (GB10 sm_121 is fine); the text encoder stays int8-convrot — no nvfp4
+    encoder variant exists.
+    """
+    wf = _build_flux3_klein_workflow(prompt, width, height, seed, filename_prefix)
+    wf["10"]["inputs"]["unet_name"] = "flux3-image-klein-nvfp4.safetensors"
+    return wf
+
+
 def _build_qwen_image_2512_workflow(
     prompt: str,
     width: int,
@@ -1528,6 +1547,7 @@ _TXT2IMG_BUILDERS = {
     "z_image_turbo": _build_zimage_turbo_workflow,
     "flux2_klein_4b": _build_flux2_klein_workflow,
     "flux3_klein": _build_flux3_klein_workflow,
+    "flux3_klein_nvfp4": _build_flux3_klein_nvfp4_workflow,
     "llada_image_turbo": _build_llada_turbo_workflow,
     "qwen_image_2512": _build_qwen_image_2512_workflow,
     "qwen_image_2_1": _build_qwen_image_21_workflow,
@@ -1560,6 +1580,7 @@ _IMG2IMG_BUILDER_METHODS = {
     "z_image_turbo": "_build_img2img_workflow",
     "flux2_klein_4b": "_build_flux2_klein_img2img_workflow",
     "flux3_klein": "_build_flux3_klein_img2img_workflow",
+    "flux3_klein_nvfp4": "_build_flux3_klein_nvfp4_img2img_workflow",
     "llada_image_turbo": "_build_llada_img2img_workflow",
 }
 
@@ -2234,6 +2255,27 @@ class ImageGenerator:
                 },
             },
         }
+
+    def _build_flux3_klein_nvfp4_img2img_workflow(
+        self,
+        prompt: str,
+        reference_filename: str,
+        denoise: float,
+        width: int,
+        height: int,
+        seed: int,
+        filename_prefix: str,
+    ) -> dict[str, Any]:
+        """FLUX.3 [klein] img2img with the NVFP4 UNET quant.
+
+        Same graph as :meth:`_build_flux3_klein_img2img_workflow`; only the
+        UNET file differs (see :func:`_build_flux3_klein_nvfp4_workflow`).
+        """
+        wf = self._build_flux3_klein_img2img_workflow(
+            prompt, reference_filename, denoise, width, height, seed, filename_prefix,
+        )
+        wf["10"]["inputs"]["unet_name"] = "flux3-image-klein-nvfp4.safetensors"
+        return wf
 
     def _build_llada_img2img_workflow(
         self,
