@@ -774,6 +774,123 @@ def _build_flux2_klein_workflow(
     }
 
 
+def _build_flux3_klein_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a FLUX.3 [klein] distilled int8 text-to-image workflow.
+
+    Follows the official template (black-forest-labs/flux-3-image-klein-comfy
+    workflows/flux3_klein_int8_t2i.json, ComfyUI >= 0.41): 5.6B distilled
+    model with native Qwen3-VL-4B prompt understanding.
+
+    Model combination:
+      UNET: flux3-image-klein-int8-convrot.safetensors (~5.8 GB)
+      CLIP: qwen3vl_4b_int8_convrot.safetensors (``CLIPLoader``, type=flux3)
+      VAE:  flux2-vae.safetensors (same VAE as FLUX.2 klein)
+      Sampler: 16 steps, cfg 1.0, euler/simple; shift = ln(alpha) = ln(16)
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+
+    return {
+        # Load UNET (int8 convrot quant, works on pre-FP8 GPUs)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "flux3-image-klein-int8-convrot.safetensors",
+                "weight_dtype": "default",
+            },
+        },
+        # CLIP text encoder: Qwen3-VL-4B, type=flux3
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_4b_int8_convrot.safetensors",
+                "type": "flux3",
+            },
+        },
+        # Load VAE (shared with FLUX.2 klein)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {
+                "vae_name": "flux2-vae.safetensors",
+            },
+        },
+        # Encode prompt
+        "27": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": prompt,
+                "clip": ["30", 0],
+            },
+        },
+        # Empty negative — unused at cfg 1.0 (official template does the same)
+        "28": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": "",
+                "clip": ["30", 0],
+            },
+        },
+        # Empty FLUX2 latent (128 channels)
+        "13": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "batch_size": 1,
+            },
+        },
+        # ModelSamplingFlux — official template: max_shift = base_shift = ln(16)
+        "11": {
+            "class_type": "ModelSamplingFlux",
+            "inputs": {
+                "model": ["10", 0],
+                "max_shift": 2.7726,
+                "base_shift": 2.7726,
+                "width": width,
+                "height": height,
+            },
+        },
+        # KSampler — distilled checkpoint: 16 steps, cfg 1.0, euler/simple
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 16,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["11", 0],
+                "positive": ["27", 0],
+                "negative": ["28", 0],
+                "latent_image": ["13", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {
+                "samples": ["3", 0],
+                "vae": ["29", 0],
+            },
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": filename_prefix,
+                "images": ["8", 0],
+            },
+        },
+    }
+
+
 def _build_qwen_image_2512_workflow(
     prompt: str,
     width: int,
@@ -1410,6 +1527,7 @@ def _build_llada_turbo_workflow(
 _TXT2IMG_BUILDERS = {
     "z_image_turbo": _build_zimage_turbo_workflow,
     "flux2_klein_4b": _build_flux2_klein_workflow,
+    "flux3_klein": _build_flux3_klein_workflow,
     "llada_image_turbo": _build_llada_turbo_workflow,
     "qwen_image_2512": _build_qwen_image_2512_workflow,
     "qwen_image_2_1": _build_qwen_image_21_workflow,
@@ -1441,6 +1559,7 @@ _MULTIREF_BUILDERS = {
 _IMG2IMG_BUILDER_METHODS = {
     "z_image_turbo": "_build_img2img_workflow",
     "flux2_klein_4b": "_build_flux2_klein_img2img_workflow",
+    "flux3_klein": "_build_flux3_klein_img2img_workflow",
     "llada_image_turbo": "_build_llada_img2img_workflow",
 }
 
@@ -1995,6 +2114,111 @@ class ImageGenerator:
             "33": {
                 "class_type": "ConditioningZeroOut",
                 "inputs": {"conditioning": ["27", 0]},
+            },
+            # Decode latent to image
+            "8": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+            },
+            # Save image
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "filename_prefix": filename_prefix,
+                    "images": ["8", 0],
+                },
+            },
+        }
+
+    def _build_flux3_klein_img2img_workflow(
+        self,
+        prompt: str,
+        reference_filename: str,
+        denoise: float,
+        width: int,
+        height: int,
+        seed: int,
+        filename_prefix: str,
+    ) -> dict[str, Any]:
+        """Build a FLUX.3 [klein] distilled int8 img2img workflow.
+
+        Mirrors :meth:`_build_flux3_klein_workflow` but starts from a
+        VAE-encoded reference latent (the avatar) instead of an empty latent,
+        so the action prompt reshapes the scene while retaining character
+        structure.
+        """
+        if seed == 0:
+            seed = secrets.randbelow(2**63 + 1)
+
+        return {
+            # Load reference image (uploaded to ComfyUI input folder)
+            "40": {
+                "class_type": "LoadImage",
+                "inputs": {"image": reference_filename},
+            },
+            # VAE Encode reference image to latent space
+            "41": {
+                "class_type": "VAEEncode",
+                "inputs": {"pixels": ["40", 0], "vae": ["29", 0]},
+            },
+            # Load UNET (int8 convrot quant)
+            "10": {
+                "class_type": "UNETLoader",
+                "inputs": {
+                    "unet_name": "flux3-image-klein-int8-convrot.safetensors",
+                    "weight_dtype": "default",
+                },
+            },
+            # CLIP text encoder: Qwen3-VL-4B, type=flux3
+            "30": {
+                "class_type": "CLIPLoader",
+                "inputs": {
+                    "clip_name": "qwen3vl_4b_int8_convrot.safetensors",
+                    "type": "flux3",
+                },
+            },
+            # Load VAE (shared with FLUX.2 klein)
+            "29": {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": "flux2-vae.safetensors"},
+            },
+            # Encode prompt
+            "27": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": ["30", 0]},
+            },
+            # Empty negative — unused at cfg 1.0
+            "28": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": "", "clip": ["30", 0]},
+            },
+            # ModelSamplingFlux — official template: max_shift = base_shift = ln(16)
+            "11": {
+                "class_type": "ModelSamplingFlux",
+                "inputs": {
+                    "model": ["10", 0],
+                    "max_shift": 2.7726,
+                    "base_shift": 2.7726,
+                    "width": width,
+                    "height": height,
+                },
+            },
+            # KSampler — img2img with partial denoising.
+            # Latent comes from VAEEncode of reference image (node 41).
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": seed,
+                    "steps": 16,
+                    "cfg": 1.0,
+                    "sampler_name": "euler",
+                    "scheduler": "simple",
+                    "denoise": denoise,
+                    "model": ["11", 0],
+                    "positive": ["27", 0],
+                    "negative": ["28", 0],
+                    "latent_image": ["41", 0],
+                },
             },
             # Decode latent to image
             "8": {

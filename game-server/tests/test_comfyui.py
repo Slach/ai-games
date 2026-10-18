@@ -25,6 +25,7 @@ from image_generator import (
     _MULTIREF_BUILDERS,
     _TXT2IMG_BUILDERS,
     _build_flux2_klein_workflow,
+    _build_flux3_klein_workflow,
     _build_qwen_edit_workflow,
     _build_qwen_image_21_multiref_workflow,
     _build_qwen_image_21_viggle_turbo_multiref_workflow,
@@ -242,6 +243,132 @@ class TestFlux2KleinWorkflow(unittest.TestCase):
         """Workflow should round-trip through JSON."""
         wf = _build_flux2_klein_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
         self.assertEqual(json.loads(json.dumps(wf)), wf)
+
+
+class TestFlux3KleinWorkflow(unittest.TestCase):
+    """Test FLUX.3 [klein] distilled int8 workflow JSON structure."""
+
+    def test_basic_workflow_structure(self):
+        """Workflow should have all required nodes for FLUX.3 klein."""
+        wf = _build_flux3_klein_workflow(prompt="test prompt", width=1024, height=1024, seed=0, filename_prefix="")
+        required = ["10", "30", "29", "27", "28", "13", "11", "3", "8", "9"]
+        for node_id in required:
+            self.assertIn(node_id, wf, f"Missing node {node_id}")
+
+    def test_unet_loader(self):
+        """UNETLoader should load the int8 convrot checkpoint."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        unet = wf["10"]
+        self.assertEqual(unet["class_type"], "UNETLoader")
+        self.assertEqual(unet["inputs"]["unet_name"], "flux3-image-klein-int8-convrot.safetensors")
+
+    def test_clip_loader_flux3(self):
+        """CLIPLoader should load qwen3vl_4b with type=flux3."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        clip = wf["30"]
+        self.assertEqual(clip["class_type"], "CLIPLoader")
+        self.assertEqual(clip["inputs"]["clip_name"], "qwen3vl_4b_int8_convrot.safetensors")
+        self.assertEqual(clip["inputs"]["type"], "flux3")
+
+    def test_vae_is_flux2(self):
+        """VAELoader should load flux2-vae.safetensors (shared with FLUX.2)."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        self.assertEqual(wf["29"]["class_type"], "VAELoader")
+        self.assertEqual(wf["29"]["inputs"]["vae_name"], "flux2-vae.safetensors")
+
+    def test_negative_is_empty_clip_encode(self):
+        """Negative should be an empty CLIPTextEncode (official template, cfg 1)."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        self.assertEqual(wf["28"]["class_type"], "CLIPTextEncode")
+        self.assertEqual(wf["28"]["inputs"]["text"], "")
+        self.assertEqual(wf["3"]["inputs"]["negative"], ["28", 0])
+
+    def test_empty_flux2_latent(self):
+        """Latent node should be EmptyFlux2LatentImage (128 channels)."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=768, height=1024, seed=0, filename_prefix="")
+        latent = wf["13"]
+        self.assertEqual(latent["class_type"], "EmptyFlux2LatentImage")
+        self.assertEqual(latent["inputs"]["width"], 768)
+        self.assertEqual(latent["inputs"]["height"], 1024)
+
+    def test_model_sampling_flux_ln16(self):
+        """ModelSamplingFlux should use max_shift = base_shift = ln(16) ≈ 2.7726."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        ms = wf["11"]
+        self.assertEqual(ms["class_type"], "ModelSamplingFlux")
+        self.assertAlmostEqual(ms["inputs"]["max_shift"], 2.7726, places=3)
+        self.assertAlmostEqual(ms["inputs"]["base_shift"], 2.7726, places=3)
+
+    def test_ksampler_16_steps(self):
+        """KSampler should use 16 steps (distilled model), cfg 1.0, euler/simple."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        ks = wf["3"]
+        self.assertEqual(ks["class_type"], "KSampler")
+        self.assertEqual(ks["inputs"]["steps"], 16)
+        self.assertEqual(ks["inputs"]["cfg"], 1.0)
+        self.assertEqual(ks["inputs"]["sampler_name"], "euler")
+        self.assertEqual(ks["inputs"]["scheduler"], "simple")
+
+    def test_filename_prefix_passed(self):
+        """filename_prefix should propagate to SaveImage node."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="avatar_123")
+        self.assertEqual(wf["9"]["inputs"]["filename_prefix"], "avatar_123")
+
+    def test_seed_zero_randomized(self):
+        """seed=0 should be replaced with a random positive integer."""
+        wf1 = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        wf2 = _build_flux3_klein_workflow(prompt="test", width=512, height=512, seed=0, filename_prefix="")
+        self.assertNotEqual(wf1["3"]["inputs"]["seed"], wf2["3"]["inputs"]["seed"])
+        self.assertGreater(wf1["3"]["inputs"]["seed"], 0)
+
+    def test_serializable_json(self):
+        """Workflow should round-trip through JSON."""
+        wf = _build_flux3_klein_workflow(prompt="test", width=1024, height=1024, seed=0, filename_prefix="")
+        self.assertEqual(json.loads(json.dumps(wf)), wf)
+
+
+class TestFlux3KleinImg2ImgWorkflow(unittest.TestCase):
+    """Test FLUX.3 [klein] distilled int8 img2img workflow."""
+
+    def setUp(self):
+        self.gen = ImageGenerator()
+
+    def _build(self, **overrides):
+        kwargs = dict(
+            prompt="test", reference_filename="avatar.png", denoise=0.75,
+            width=1024, height=1024, seed=0, filename_prefix="",
+        )
+        kwargs.update(overrides)
+        return self.gen._build_flux3_klein_img2img_workflow(**kwargs)
+
+    def test_basic_workflow_structure(self):
+        """Workflow should have all required nodes including LoadImage/VAEEncode."""
+        wf = self._build()
+        required = ["40", "41", "10", "30", "29", "27", "28", "11", "3", "8", "9"]
+        for node_id in required:
+            self.assertIn(node_id, wf, f"Missing node {node_id}")
+
+    def test_unet_is_flux3_klein(self):
+        """UNETLoader should load the int8 convrot checkpoint."""
+        wf = self._build()
+        self.assertEqual(wf["10"]["inputs"]["unet_name"], "flux3-image-klein-int8-convrot.safetensors")
+
+    def test_clip_is_flux3(self):
+        """CLIPLoader should use qwen3vl_4b_int8_convrot with type=flux3."""
+        wf = self._build()
+        self.assertEqual(wf["30"]["class_type"], "CLIPLoader")
+        self.assertEqual(wf["30"]["inputs"]["type"], "flux3")
+
+    def test_vae_encode_feeds_latent(self):
+        """KSampler should sample from the VAEEncode latent (node 41), not an empty latent."""
+        wf = self._build()
+        self.assertEqual(wf["41"]["class_type"], "VAEEncode")
+        self.assertEqual(wf["3"]["inputs"]["latent_image"], ["41", 0])
+
+    def test_denoise_passed_through(self):
+        """denoise parameter should propagate to the KSampler."""
+        wf = self._build(denoise=0.6)
+        self.assertEqual(wf["3"]["inputs"]["denoise"], 0.6)
 
 
 class TestFlux2KleinImg2ImgWorkflow(unittest.TestCase):
@@ -553,9 +680,9 @@ class TestComfyUiConfig(unittest.TestCase):
         """An unlisted kind should resolve to the default model."""
         self.assertEqual(comfyui_config.resolve_txt2img_model("splash"), comfyui_config.DEFAULT_TXT2IMG_MODEL)
 
-    def test_default_is_flux2_klein(self):
-        """Out of the box the default model should be flux2_klein_4b_gguf_q4."""
-        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux2_klein_4b_gguf_q4")
+    def test_default_is_flux3_klein(self):
+        """Out of the box the default model should be flux3_klein."""
+        self.assertEqual(comfyui_config.DEFAULT_TXT2IMG_MODEL, "flux3_klein")
 
     def test_env_override_changes_default(self):
         """COMFYUI_TXT2IMG_MODEL env should override the default model key."""

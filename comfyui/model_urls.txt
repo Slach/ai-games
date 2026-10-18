@@ -27,11 +27,20 @@ https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image
 # Lightning LoRA for Qwen-Image-Edit-2511 — enables 4-step generation
 https://huggingface.co/alibaba-pai/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors -> loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
 
-# ============== FLUX.2 [klein] 4B distilled (global default) ==============
+# ============== FLUX.2 [klein] 4B distilled ==============
 # 4-step distilled model. 2.5 GB UNET, Apache 2.0 license. Uses Qwen3-4B text
-# encoder (same as Z-Image Turbo) and flux2-vae. Selected as
-# DEFAULT_TXT2IMG_MODEL for all txt2img kinds.
+# encoder (same as Z-Image Turbo) and flux2-vae. Previous global default,
+# kept as the Apache-2.0 fallback via COMFYUI_TXT2IMG_MODEL.
 https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_K_S.gguf -> unet/flux-2-klein-4b-Q4_K_S.gguf
+
+# ============== FLUX.3 [klein] distilled 5.6B (int8 convrot) ==============
+# Global txt2img/img2img default (DEFAULT_TXT2IMG_MODEL): native Qwen3-VL-4B
+# prompt understanding, 16-step distilled sampling. VAE is the shared
+# flux2-vae above. The official repo (black-forest-labs/flux-3-image-klein-comfy)
+# is license-gated; ml-resources hosts an ungated byte-identical mirror.
+# Requires ComfyUI >= 0.41 (CLIPLoader type=flux3).
+https://huggingface.co/ml-resources/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3-image-klein-int8-convrot.safetensors -> diffusion_models/flux3-image-klein-int8-convrot.safetensors
+https://huggingface.co/ml-resources/flux-3-image-klein-comfy/resolve/main/text_encoders/qwen3vl_4b_int8_convrot.safetensors -> text_encoders/qwen3vl_4b_int8_convrot.safetensors
 
 # ============== LLaDA-Image-Turbo (RealRebelAI ComfyUI port) ==============
 # Masked-diffusion model with native text-to-image and instruction editing.

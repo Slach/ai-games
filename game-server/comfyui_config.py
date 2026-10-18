@@ -80,6 +80,10 @@ MODELS: dict[str, ModelConfig] = {
         label="FLUX.2 [klein] 4B distilled GGUF Q4_K_S",
         builder="flux2_klein_4b",
     ),
+    "flux3_klein": ModelConfig(
+        label="FLUX.3 [klein] distilled int8 convrot (16 steps, Qwen3-VL-4B)",
+        builder="flux3_klein",
+    ),
     "llada_image_turbo": ModelConfig(
         label="LLaDA-Image-Turbo (INT8 transformer + Q4_K_M GGUF encoder)",
         builder="llada_image_turbo",
@@ -104,8 +108,12 @@ MODELS: dict[str, ModelConfig] = {
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
-# FLUX.2 [klein] 4B distilled: 4-step generation, 2.5 GB UNET, Apache 2.0.
-DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "flux2_klein_4b_gguf_q4")
+# FLUX.3 [klein] distilled int8: 16 steps, native Qwen3-VL-4B prompt following.
+# Won the 2026-10-18 bake-off (avg 9.13 vs 8.89 for FLUX.2 klein), with no
+# weak prompt class (multi-figure crew scenes 8.5 vs 6.5) at the same speed.
+# NOTE: FLUX Kommunity License (non-commercial; commercial-output exception
+# under US$5M revenue) — unlike the Apache 2.0 FLUX.2 klein.
+DEFAULT_TXT2IMG_MODEL = os.getenv("COMFYUI_TXT2IMG_MODEL", "flux3_klein")
 
 # Per-kind overrides for txt2img AND img2img. Kinds not listed fall back
 # to DEFAULT_TXT2IMG_MODEL. A key here also acts as a prefix: "npc_avatar"
