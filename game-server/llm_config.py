@@ -143,8 +143,8 @@ DEFAULT_USE_CASES: dict[str, dict[str, LLMParams]] = {
         LLMParams(temperature=0.8, max_tokens=512),
     ),
     "npc_name": _use_case(
-        LLMParams(temperature=0.95, max_tokens=256),
-        LLMParams(temperature=0.95, max_tokens=256),
+        LLMParams(temperature=0.95, max_tokens=512),
+        LLMParams(temperature=0.95, max_tokens=512),
     ),
     "npc_avatar_prompts": _use_case(
         LLMParams(temperature=0.9, max_tokens=8192),

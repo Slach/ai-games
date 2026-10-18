@@ -1698,6 +1698,8 @@ def build_npc_name_system(language: str) -> str:
             "- НЕ используй транслит английских имён — создай оригинальное имя.\n"
             "- НИКОГДА не используй подчёркивание (_) в именах. Разделяй слова пробелами или дефисами.\n"
             "- Учитывай роль персонажа при выборе имени\n"
+            "- Имя — максимум 4 слова, как в примерах ('Роль Имя Фамилия')\n"
+            "- В поле name — ТОЛЬКО имя: никаких описаний, эпитетов и прозвищ-предложений. Все пояснения — в поле explanation\n"
             "- Будь КРЕАТИВНЫМ, избегай шаблонов"
         )
     return (
@@ -1712,6 +1714,8 @@ def build_npc_name_system(language: str) -> str:
         "- For symbiotic: compound names\n"
         "- Consider the character's role when choosing a name\n"
         "- NEVER use underscore (_) in names. Separate words with spaces or hyphens.\n"
+        "- Name is at most 4 words, like the examples ('Role First Last')\n"
+        "- The name field contains ONLY the name: no descriptions, epithets, or title-sentences. All commentary goes in the explanation field\n"
         "- Be CREATIVE, avoid templates"
     )
 
@@ -1736,7 +1740,7 @@ def build_npc_name_user(
             f"Вид: {species}\n"
             f"Пол: {gender}\n"
             f"Описание внешности: {avatar_description}\n"
-            f"Черты характера: {', '.join(personality_traits)}\n\n" + avoid_text + "Придумай уникальное, креативное имя для этого персонажа. "
+            f"Черты характера: {', '.join(personality_traits)}\n\n" + avoid_text + "Придумай уникальное, креативное имя для этого персонажа — максимум 4 слова. "
             "Имя должно быть на русском языке и соответствовать описанию.\n"
             "ПРИМЕРЫ (для русской локализации):\n"
             "  - Инженер-человек: 'Инженер Дмитрий Волков'\n"
@@ -1754,7 +1758,7 @@ def build_npc_name_user(
             f"Species: {species}\n"
             f"Gender: {gender}\n"
             f"Appearance: {avatar_description}\n"
-            f"Traits: {', '.join(personality_traits)}\n\n" + avoid_text + "Create a unique, creative name for this character. "
+            f"Traits: {', '.join(personality_traits)}\n\n" + avoid_text + "Create a unique, creative name for this character — at most 4 words. "
             "The name should be in English and match the description.\n"
             "EXAMPLES (for English localization):\n"
             "  - Human engineer: 'Chief Engineer Marcus Chen'\n"

@@ -109,7 +109,7 @@ class LLMConfigTests(unittest.TestCase):
         self.assertAlmostEqual(params.presence_penalty, 1.5)
         self.assertAlmostEqual(params.repetition_penalty, 1.0)
         # max_tokens / enable_thinking keep their use-case values
-        self.assertEqual(params.max_tokens, 256)
+        self.assertEqual(params.max_tokens, 512)
         self.assertFalse(params.enable_thinking)
 
     def test_qwen38_thinking_mode_sampling_overrides(self):
