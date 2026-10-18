@@ -56,3 +56,16 @@ https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning/resolve/main/Qwen-Imag
 https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors -> diffusion_models/qwen_image_2.1_int8_convrot.safetensors
 https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors -> text_encoders/qwen3vl_8b_int8_convrot.safetensors
 https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors -> vae/qwen_image_2.1_vae_bf16.safetensors
+
+# ============== Qwen-Image-2.1 Viggle Turbo (DMD-distilled 6-step LoRA) ==============
+# Few-step student of Qwen-Image-2.1 by Viggle: t2i AND instruction editing
+# with 1-3 reference images in 6 steps, no CFG. Only the LoRA is new — the
+# base UNET / qwen3vl_8b encoder / 2.1 VAE above are shared (loaded unmerged
+# at runtime via the ViggleTurboLora custom node, comfyui/custom_nodes/).
+# v0.2.1 is the current adapter: r256 is the released checkpoint, r128 the
+# exact SVD truncation the shipped ComfyUI workflows default to (LPIPS 0.024
+# apart ≈ float noise floor). The repo's v0.1/v0.2 checkpoints, peft*/ dirs
+# and the 14 GB v0.1 fine-tuned transformer are legacy reference artifacts
+# the model README says there is no reason to prefer — not downloaded.
+https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo/resolve/main/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors -> loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors
+https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo/resolve/main/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors -> loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors

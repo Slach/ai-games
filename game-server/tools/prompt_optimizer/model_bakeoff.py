@@ -51,15 +51,21 @@ def parse_score(raw) -> float | None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(description="Txt2img bake-off across comfyui_config.MODELS")
+    parser.add_argument("--models", default="", help="comma-separated model keys to compare (default: all of comfyui_config.MODELS)")
     parser.add_argument("--out", default="", help="save results JSON here")
     args = parser.parse_args()
+
+    model_keys = [k.strip() for k in args.models.split(",") if k.strip()] or list(comfyui_config.MODELS)
+    unknown = [k for k in model_keys if k not in comfyui_config.MODELS]
+    if unknown:
+        parser.error(f"unknown model keys: {', '.join(unknown)} (known: {', '.join(comfyui_config.MODELS)})")
 
     judge_lm = make_judge_lm()
     judge = dspy.Predict(ImageBakeoffJudge)
     generator = ImageGenerator()
 
     results = {}
-    for model_key in comfyui_config.MODELS:
+    for model_key in model_keys:
         # resolve_txt2img_model falls back to the module global when the kind
         # has no override — point it at the candidate.
         comfyui_config.DEFAULT_TXT2IMG_MODEL = model_key

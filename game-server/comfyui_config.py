@@ -92,6 +92,15 @@ MODELS: dict[str, ModelConfig] = {
         label="Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
         builder="qwen_image_2_1",
     ),
+    # ── Viggle Turbo: DMD-distilled student of Qwen-Image-2.1 ──────────────
+    # Same base files as qwen_image_2_1 (UNET/encoder/VAE shared) + the v0.2.1
+    # 6-step LoRA applied unmerged via the ViggleTurboLora custom node and the
+    # ViggleTurboSigmas 6-step schedule: 6 transformer passes instead of 25,
+    # no CFG. Quality is on par with the base model on t2i and most edits.
+    "qwen_image_2_1_viggle_turbo": ModelConfig(
+        label="Qwen-Image-2.1 Viggle Turbo (v0.2.1 LoRA, 6-step DMD, no CFG)",
+        builder="qwen_image_2_1_viggle_turbo",
+    ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
@@ -192,6 +201,20 @@ EDIT_MODELS: dict[str, EditModelConfig] = {
         clip="qwen3vl_8b_int8_convrot.safetensors",
         vae="qwen_image_2.1_vae_bf16.safetensors",
         lora="",  # 2.1 has no Lightning LoRA; single 25-step path for all species
+    ),
+    # ── Viggle Turbo edit: the same DMD student on the edit path ───────────
+    # Identical base files to qwen_image_edit_2_1; the turbo LoRA replaces the
+    # 25-step euler/simple KSampler with 6 custom-sigma steps (no CFG) via
+    # ViggleTurboLora + ViggleTurboSigmas custom nodes.
+    "qwen_image_edit_2_1_viggle_turbo": EditModelConfig(
+        label="Qwen-Image-2.1 Viggle Turbo edit (v0.2.1 LoRA, 6-step DMD)",
+        builder="qwen_image_edit_21_viggle_turbo",
+        unet="qwen_image_2.1_int8_convrot.safetensors",
+        clip="qwen3vl_8b_int8_convrot.safetensors",
+        vae="qwen_image_2.1_vae_bf16.safetensors",
+        # r128 is the rank the shipped ComfyUI workflows default to; the r256
+        # file is a drop-in swap (LPIPS 0.024 apart ≈ float noise floor).
+        lora="Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors",
     ),
 }
 

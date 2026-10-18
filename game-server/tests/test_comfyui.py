@@ -21,10 +21,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from image_generator import (
     ImageGenerator,
+    _EDIT_BUILDERS,
+    _MULTIREF_BUILDERS,
+    _TXT2IMG_BUILDERS,
     _build_flux2_klein_workflow,
     _build_qwen_edit_workflow,
     _build_qwen_image_21_multiref_workflow,
+    _build_qwen_image_21_viggle_turbo_multiref_workflow,
+    _build_qwen_image_21_viggle_turbo_workflow,
     _build_qwen_image_2512_workflow,
+    _build_qwen_edit_21_viggle_turbo_workflow,
     _build_zimage_turbo_workflow,
     create_image_generator,
 )
@@ -773,6 +779,210 @@ class TestQwenImage21MultirefWorkflow(unittest.TestCase):
         self.assertNotIn("images.image_1", encode["inputs"])
         # Workflow remains serializable JSON
         json.dumps(wf)
+
+
+VIGGLE_TURBO_SIGMA_NODES = "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25"
+
+
+class TestQwenImage21ViggleTurboWorkflow(unittest.TestCase):
+    """Test the Qwen-Image-2.1 Viggle Turbo txt2img workflow JSON structure."""
+
+    def _build(self, seed=0):
+        return _build_qwen_image_21_viggle_turbo_workflow(
+            prompt="capybara under a banana leaf",
+            width=1248,
+            height=832,
+            seed=seed,
+            filename_prefix="test/viggle",
+        )
+
+    def test_basic_workflow_structure(self):
+        wf = self._build()
+        for node_id in ["10", "30", "29", "15", "27", "13", "20", "21", "22", "19", "23", "8", "9"]:
+            self.assertIn(node_id, wf, f"Missing node {node_id}")
+
+    def test_no_ksampler_cfg_free_path(self):
+        """Turbo samples via BasicGuider/SamplerCustomAdvanced, never a KSampler."""
+        wf = self._build()
+        for node in wf.values():
+            self.assertNotEqual(node["class_type"], "KSampler")
+
+    def test_lora_applied_unmerged_on_model_path(self):
+        wf = self._build()
+        lora = wf["15"]
+        self.assertEqual(lora["class_type"], "ViggleTurboLora")
+        self.assertEqual(lora["inputs"]["model"], ["10", 0])
+        self.assertEqual(lora["inputs"]["strength"], 1.0)
+        self.assertEqual(
+            lora["inputs"]["lora_name"],
+            "Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors",
+        )
+        # BasicGuider consumes the LoRA'd model; no CFG, no negative used
+        guider = wf["19"]
+        self.assertEqual(guider["class_type"], "BasicGuider")
+        self.assertEqual(guider["inputs"]["model"], ["15", 0])
+        self.assertEqual(guider["inputs"]["conditioning"], ["27", 0])
+
+    def test_sigma_schedule(self):
+        wf = self._build()
+        sigmas = wf["22"]
+        self.assertEqual(sigmas["class_type"], "ViggleTurboSigmas")
+        self.assertEqual(sigmas["inputs"]["nodes"], VIGGLE_TURBO_SIGMA_NODES)
+        # The shift is computed from the same latent that gets sampled
+        self.assertEqual(sigmas["inputs"]["latent"], ["13", 0])
+
+    def test_sampler_custom_advanced_wiring(self):
+        wf = self._build()
+        sampler = wf["23"]
+        self.assertEqual(sampler["class_type"], "SamplerCustomAdvanced")
+        self.assertEqual(sampler["inputs"]["noise"], ["20", 0])
+        self.assertEqual(sampler["inputs"]["guider"], ["19", 0])
+        self.assertEqual(sampler["inputs"]["sampler"], ["21", 0])
+        self.assertEqual(sampler["inputs"]["sigmas"], ["22", 0])
+        self.assertEqual(sampler["inputs"]["latent_image"], ["13", 0])
+        self.assertEqual(wf["21"]["inputs"]["sampler_name"], "euler")
+        self.assertEqual(wf["8"]["inputs"]["samples"], ["23", 0])
+
+    def test_prompt_size_prefix(self):
+        wf = self._build()
+        self.assertEqual(wf["27"]["inputs"]["prompt"], "capybara under a banana leaf")
+        self.assertEqual(wf["27"]["inputs"]["negative_prompt"], "")
+        self.assertEqual(wf["13"]["inputs"]["width"], 1248)
+        self.assertEqual(wf["13"]["inputs"]["height"], 832)
+        self.assertEqual(wf["9"]["inputs"]["filename_prefix"], "test/viggle")
+
+    def test_seed_zero_randomizes_fixed_seed_kept(self):
+        self.assertNotEqual(self._build(seed=0)["20"]["inputs"]["noise_seed"], 0)
+        self.assertEqual(self._build(seed=42)["20"]["inputs"]["noise_seed"], 42)
+
+    def test_workflow_is_valid_json(self):
+        json.dumps(self._build())
+
+
+class TestQwenImage21ViggleTurboMultirefWorkflow(unittest.TestCase):
+    """Test the Viggle Turbo multi-reference workflow JSON structure."""
+
+    REFS = [
+        "6c9kxv/avatar_281412419_00001_.png",
+        "6c9kxv/avatar_captain_00001_.png",
+    ]
+
+    def _build(self, refs=None):
+        return _build_qwen_image_21_viggle_turbo_multiref_workflow(
+            prompt="Bridge crew from Picture 1 and Picture 2 at their stations.",
+            reference_filenames=self.REFS if refs is None else refs,
+            width=1024,
+            height=1024,
+            seed=7,
+            filename_prefix="test/viggle_bridge",
+        )
+
+    def test_model_chain_lora_then_cache(self):
+        """UNET → ViggleTurboLora → QwenImage21Cache → BasicGuider (shipped edit graph)."""
+        wf = self._build()
+        self.assertEqual(wf["15"]["class_type"], "ViggleTurboLora")
+        self.assertEqual(wf["15"]["inputs"]["model"], ["10", 0])
+        self.assertEqual(wf["45"]["class_type"], "QwenImage21Cache")
+        self.assertEqual(wf["45"]["inputs"]["model"], ["15", 0])
+        self.assertEqual(wf["19"]["inputs"]["model"], ["45", 0])
+        self.assertEqual(wf["22"]["inputs"]["nodes"], VIGGLE_TURBO_SIGMA_NODES)
+        self.assertEqual(wf["22"]["inputs"]["latent"], ["90", 0])
+        self.assertEqual(wf["23"]["inputs"]["latent_image"], ["90", 0])
+
+    def test_reference_slots_and_resolution(self):
+        wf = self._build()
+        encode = wf["70"]
+        for i in (1, 2):
+            self.assertEqual(encode["inputs"][f"images.image_{i}"], [str(200 + i), 0])
+        self.assertNotIn("images.image_3", encode["inputs"])
+        self.assertEqual(encode["inputs"]["resolution"], 0)
+
+    def test_references_capped_at_ten(self):
+        refs = [f"game/avatar_{i}_00001_.png" for i in range(15)]
+        wf = self._build(refs=refs)
+        encode = wf["70"]
+        for i in range(1, 11):
+            self.assertIn(f"images.image_{i}", encode["inputs"])
+        for i in range(11, 16):
+            self.assertNotIn(f"images.image_{i}", encode["inputs"])
+
+    def test_reference_nodes_do_not_collide_with_cache_node(self):
+        refs = [f"game/avatar_{i}_00001_.png" for i in range(6)]
+        wf = self._build(refs=refs)
+        self.assertEqual(wf["45"]["class_type"], "QwenImage21Cache")
+        for i in range(1, 7):
+            self.assertEqual(wf[str(200 + i)]["class_type"], "LoadImage")
+
+
+class TestQwenEdit21ViggleTurboWorkflow(unittest.TestCase):
+    """Test the Viggle Turbo instruction-edit workflow JSON structure."""
+
+    def _build(self, background="bg.png"):
+        cfg = get_edit_model_config("qwen_image_edit_2_1_viggle_turbo")
+        return _build_qwen_edit_21_viggle_turbo_workflow(
+            instruction="Place the character on the bridge",
+            character_filename="game/avatar_1_00001_.png",
+            background_filename=background,
+            width=1024,
+            height=1024,
+            seed=5,
+            filename_prefix="test/viggle_edit",
+            cfg=cfg,
+        )
+
+    def test_cfg_lora_used_unmerged(self):
+        """The LoRA filename must come from EditModelConfig and sit before the cache."""
+        wf = self._build()
+        cfg = get_edit_model_config("qwen_image_edit_2_1_viggle_turbo")
+        lora = wf["15"]
+        self.assertEqual(lora["class_type"], "ViggleTurboLora")
+        self.assertEqual(lora["inputs"]["lora_name"], cfg.lora)
+        self.assertEqual(lora["inputs"]["strength"], 1.0)
+        self.assertEqual(wf["45"]["inputs"]["model"], ["15", 0])
+        self.assertEqual(wf["19"]["inputs"]["model"], ["45", 0])
+
+    def test_reference_images(self):
+        wf = self._build()
+        encode = wf["70"]["inputs"]
+        self.assertEqual(encode["images.image_1"], ["41", 0])
+        self.assertEqual(encode["images.image_2"], ["42", 0])
+        self.assertEqual(wf["42"]["inputs"]["image"], "bg.png")
+        self.assertEqual(encode["resolution"], 0)
+
+    def test_no_background_leaves_image_2_absent(self):
+        wf = self._build(background=None)
+        self.assertNotIn("42", wf)
+        self.assertNotIn("images.image_2", wf["70"]["inputs"])
+
+    def test_sigma_schedule_and_output(self):
+        wf = self._build()
+        self.assertEqual(wf["22"]["inputs"]["nodes"], VIGGLE_TURBO_SIGMA_NODES)
+        self.assertEqual(wf["20"]["inputs"]["noise_seed"], 5)
+        self.assertEqual(wf["90"]["inputs"]["width"], 1024)
+        self.assertEqual(wf["120"]["inputs"]["filename_prefix"], "test/viggle_edit")
+
+
+class TestViggleTurboModelWiring(unittest.TestCase):
+    """Config entries for Viggle Turbo must map to registered builders."""
+
+    def test_txt2img_entry_registered(self):
+        cfg = comfyui_config.get_model_config("qwen_image_2_1_viggle_turbo")
+        self.assertIn(cfg.builder, _TXT2IMG_BUILDERS)
+
+    def test_edit_entry_registered(self):
+        cfg = get_edit_model_config("qwen_image_edit_2_1_viggle_turbo")
+        self.assertIn(cfg.builder, _EDIT_BUILDERS)
+        self.assertTrue(cfg.lora.endswith(".safetensors"))
+
+    def test_multiref_registry_has_viggle(self):
+        # _MULTIREF_BUILDERS is keyed by model key, not builder name
+        self.assertIn("qwen_image_2_1_viggle_turbo", _MULTIREF_BUILDERS)
+
+    def test_every_registered_model_has_builder(self):
+        for cfg in comfyui_config.MODELS.values():
+            self.assertIn(cfg.builder, _TXT2IMG_BUILDERS)
+        for cfg in comfyui_config.EDIT_MODELS.values():
+            self.assertIn(cfg.builder, _EDIT_BUILDERS)
 
 
 class TestAvatarRgbaTemplate(unittest.TestCase):

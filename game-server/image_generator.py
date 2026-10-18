@@ -408,6 +408,148 @@ def _build_qwen_edit_21_workflow(
     return workflow
 
 
+def _build_qwen_edit_21_viggle_turbo_workflow(
+    instruction: str,
+    character_filename: str,
+    background_filename: str | None,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    cfg: EditModelConfig,
+    *,
+    species_category: str = "",
+) -> dict[str, Any]:
+    """Build a Viggle Turbo instruction-edit workflow (6-step DMD student).
+
+    :func:`_build_qwen_edit_21_workflow` with the turbo sampling chain from
+    :func:`_build_qwen_image_21_viggle_turbo_workflow`, matching the edit
+    workflow shipped in the model repo's comfyui/ folder: the LoRA from
+    ``cfg.lora`` is applied unmerged between the UNET loader and
+    QwenImage21Cache, and the 6-step ViggleTurboSigmas schedule with
+    BasicGuider (no CFG) replaces the 25-step KSampler.
+
+    The model README warns that complicated edits (multi-reference
+    composition, face swaps, several simultaneous constraints) can still fall
+    short of the 25-step base model — identity drift is rarer than in v0.1
+    but not gone.
+
+    Args mirror :func:`_build_qwen_edit_workflow`; ``species_category`` is
+    accepted for builder-signature parity and unused.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+
+    workflow: dict[str, Any] = {
+        # Unified t2i+edit checkpoint (int8_convrot repack, safetensors)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": cfg.unet, "weight_dtype": "default"},
+        },
+        # Qwen3-VL-8B text encoder (sees image_1/image_2 as vision slots)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": cfg.clip,
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE (encodes references, decodes the result)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": cfg.vae},
+        },
+        # Load character avatar
+        "41": {
+            "class_type": "LoadImage",
+            "inputs": {"image": character_filename},
+        },
+        # Turbo LoRA, applied at runtime (unmerged) on top of the base UNET
+        "15": {
+            "class_type": "ViggleTurboLora",
+            "inputs": {
+                "model": ["10", 0],
+                "lora_name": cfg.lora,
+                "strength": 1.0,
+            },
+        },
+        # KV-cache device/precision tuning between LoRA'd UNET and sampler
+        "45": {
+            "class_type": "QwenImage21Cache",
+            "inputs": {"model": ["15", 0], "device": "auto", "dtype": "default"},
+        },
+        # Conditioning: instruction + reference images. resolution=0 keeps each
+        # reference at its own size (rounded to a multiple of 32). Autogrow
+        # inputs are addressed by their dotted API keys ("images.image_1");
+        # ComfyUI's build_nested_inputs regroups them into the node's
+        # ``images`` dict at execution time.
+        "70": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": instruction,
+                "negative_prompt": "",
+                "resolution": 0,
+                "vae": ["29", 0],
+                "images.image_1": ["41", 0],
+            },
+        },
+        # Latent canvas at the requested output size (template custom_size mode)
+        "90": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # Random noise at the requested seed
+        "20": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": seed},
+        },
+        "21": {
+            "class_type": "KSamplerSelect",
+            "inputs": {"sampler_name": "euler"},
+        },
+        # The 6-step v0.2.1 schedule, shifted for this latent's resolution
+        "22": {
+            "class_type": "ViggleTurboSigmas",
+            "inputs": {
+                "latent": ["90", 0],
+                "nodes": "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25",
+            },
+        },
+        # No CFG: the guider samples the positive conditioning as-is
+        "19": {
+            "class_type": "BasicGuider",
+            "inputs": {"model": ["45", 0], "conditioning": ["70", 0]},
+        },
+        "23": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["20", 0],
+                "guider": ["19", 0],
+                "sampler": ["21", 0],
+                "sigmas": ["22", 0],
+                "latent_image": ["90", 0],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["23", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    if background_filename:
+        workflow["42"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": background_filename},
+        }
+        workflow["70"]["inputs"]["images.image_2"] = ["42", 0]
+    return workflow
+
+
 def _build_zimage_turbo_workflow(
     prompt: str,
     width: int,
@@ -836,6 +978,132 @@ def _build_qwen_image_21_workflow(
     }
 
 
+def _build_qwen_image_21_viggle_turbo_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a Qwen-Image-2.1 Viggle Turbo text-to-image workflow.
+
+    Viggle's DMD-distilled student of Qwen-Image-2.1 (v0.2.1 LoRA): same base
+    files as :func:`_build_qwen_image_21_workflow`, but 6 transformer passes
+    instead of 25 and no CFG. Follows the t2i workflow shipped in the model
+    repo's comfyui/ folder:
+
+    * ``ViggleTurboLora`` applies the LoRA unmerged (``y = Wx + BAx``) — the
+      stock LoRA loader merges it into the weights, which is lossy on this
+      adapter (bf16 keeps ~70% of the update, int8 adds requant noise).
+    * ``ViggleTurboSigmas`` replaces the KSampler scheduler: the raw 6-step
+      schedule ``[1, 0.9375, 0.875, 0.75, 0.5, 0.25]`` with the pipeline's
+      resolution-dependent shift and no terminal shift. Uniform linspace
+      schedules make every image visibly softer (model README).
+    * ``BasicGuider`` + ``SamplerCustomAdvanced`` sample without CFG, so each
+      step is a single model call (no negative prompt is encoded).
+
+    Model combination:
+      UNET: qwen_image_2.1_int8_convrot.safetensors (``UNETLoader``)
+      CLIP: qwen3vl_8b_int8_convrot.safetensors (``CLIPLoader``, type=qwen_image)
+      VAE:  qwen_image_2.1_vae_bf16.safetensors
+      LoRA: Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    return {
+        # int8_convrot UNET (GB10-optimized repack, safetensors — not GGUF)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+                "weight_dtype": "default",
+            },
+        },
+        # Qwen3-VL-8B text encoder (CLIPLoader type stays qwen_image)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"},
+        },
+        # Turbo LoRA, applied at runtime (unmerged) on top of the base UNET
+        "15": {
+            "class_type": "ViggleTurboLora",
+            "inputs": {
+                "model": ["10", 0],
+                "lora_name": "Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors",
+                "strength": 1.0,
+            },
+        },
+        # Encode prompt (cfg is off — the empty negative is never sampled)
+        "27": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "prompt": prompt,
+                "negative_prompt": "",
+                "resolution": 1024,
+                "clip": ["30", 0],
+                "vae": ["29", 0],
+            },
+        },
+        # Empty latent — sampling resizes it to the model's own format
+        "13": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # Random noise at the requested seed
+        "20": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": seed},
+        },
+        "21": {
+            "class_type": "KSamplerSelect",
+            "inputs": {"sampler_name": "euler"},
+        },
+        # The 6-step v0.2.1 schedule, shifted for this latent's resolution
+        "22": {
+            "class_type": "ViggleTurboSigmas",
+            "inputs": {
+                "latent": ["13", 0],
+                "nodes": "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25",
+            },
+        },
+        # No CFG: the guider samples the positive conditioning as-is
+        "19": {
+            "class_type": "BasicGuider",
+            "inputs": {"model": ["15", 0], "conditioning": ["27", 0]},
+        },
+        "23": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["20", 0],
+                "guider": ["19", 0],
+                "sampler": ["21", 0],
+                "sigmas": ["22", 0],
+                "latent_image": ["13", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["23", 0], "vae": ["29", 0]},
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+
 def _build_qwen_image_21_multiref_workflow(
     prompt: str,
     reference_filenames: list[str],
@@ -952,6 +1220,129 @@ def _build_qwen_image_21_multiref_workflow(
     return workflow
 
 
+def _build_qwen_image_21_viggle_turbo_multiref_workflow(
+    prompt: str,
+    reference_filenames: list[str],
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a Viggle Turbo multi-reference workflow (up to 10 pictures).
+
+    :func:`_build_qwen_image_21_multiref_workflow` with the turbo sampling
+    chain from :func:`_build_qwen_image_21_viggle_turbo_workflow`: the
+    ViggleTurboLora node sits between the UNET loader and QwenImage21Cache
+    (matching the edit workflow shipped in the model repo), and the 6-step
+    ViggleTurboSigmas schedule with BasicGuider replaces the 25-step KSampler.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    refs = reference_filenames[:10]
+    workflow: dict[str, Any] = {
+        # Unified t2i+edit checkpoint (int8_convrot repack, safetensors)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "qwen_image_2.1_int8_convrot.safetensors", "weight_dtype": "default"},
+        },
+        # Qwen3-VL-8B text encoder (sees image_1..image_N as vision slots)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE (encodes references, decodes the result)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"},
+        },
+        # Turbo LoRA, applied at runtime (unmerged) on top of the base UNET
+        "15": {
+            "class_type": "ViggleTurboLora",
+            "inputs": {
+                "model": ["10", 0],
+                "lora_name": "Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors",
+                "strength": 1.0,
+            },
+        },
+        # KV-cache device/precision tuning between LoRA'd UNET and sampler
+        "45": {
+            "class_type": "QwenImage21Cache",
+            "inputs": {"model": ["15", 0], "device": "auto", "dtype": "default"},
+        },
+        # Conditioning: instruction + reference avatars. resolution=0 keeps each
+        # reference at its own size (rounded to a multiple of 32).
+        "70": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": prompt,
+                "negative_prompt": "",
+                "resolution": 0,
+                "vae": ["29", 0],
+            },
+        },
+        # Latent canvas at the requested output size
+        "90": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # Random noise at the requested seed
+        "20": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": seed},
+        },
+        "21": {
+            "class_type": "KSamplerSelect",
+            "inputs": {"sampler_name": "euler"},
+        },
+        # The 6-step v0.2.1 schedule, shifted for this latent's resolution
+        "22": {
+            "class_type": "ViggleTurboSigmas",
+            "inputs": {
+                "latent": ["90", 0],
+                "nodes": "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25",
+            },
+        },
+        # No CFG: the guider samples the positive conditioning as-is
+        "19": {
+            "class_type": "BasicGuider",
+            "inputs": {"model": ["45", 0], "conditioning": ["70", 0]},
+        },
+        "23": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["20", 0],
+                "guider": ["19", 0],
+                "sampler": ["21", 0],
+                "sigmas": ["22", 0],
+                "latent_image": ["90", 0],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["23", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    for i, ref in enumerate(refs, start=1):
+        # 200..209: must not collide with the fixed node IDs above.
+        node_id = str(200 + i)
+        workflow[node_id] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": ref},
+        }
+        workflow["70"]["inputs"][f"images.image_{i}"] = [node_id, 0]
+    return workflow
+
+
 def _build_llada_turbo_workflow(
     prompt: str,
     width: int,
@@ -1022,6 +1413,7 @@ _TXT2IMG_BUILDERS = {
     "llada_image_turbo": _build_llada_turbo_workflow,
     "qwen_image_2512": _build_qwen_image_2512_workflow,
     "qwen_image_2_1": _build_qwen_image_21_workflow,
+    "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_workflow,
 }
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
@@ -1031,6 +1423,16 @@ _TXT2IMG_BUILDERS = {
 _EDIT_BUILDERS = {
     "qwen_image_edit": _build_qwen_edit_workflow,
     "qwen_image_edit_21": _build_qwen_edit_21_workflow,
+    "qwen_image_edit_21_viggle_turbo": _build_qwen_edit_21_viggle_turbo_workflow,
+}
+
+# Multi-reference (crew-bridge/outcome) scenes are Qwen-Image-2.1-family only
+# (TextEncodeQwenImage21 reference slots); the txt2img kind resolves to one of
+# these keys when that family is selected, any other key falls back to the
+# 25-step base 2.1 workflow.
+_MULTIREF_BUILDERS = {
+    "qwen_image_2_1": _build_qwen_image_21_multiref_workflow,
+    "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_multiref_workflow,
 }
 
 # img2img builders are instance methods (they live on ImageGenerator because
@@ -1718,55 +2120,64 @@ class ImageGenerator:
                 if ref_filename:
                     model_key = resolve_img2img_model(kind)
                     model_cfg = get_model_config(model_key)
-                    builder_method = _IMG2IMG_BUILDER_METHODS[model_cfg.builder]
-                    workflow = getattr(self, builder_method)(
-                        prompt=prompt,
-                        reference_filename=ref_filename,
-                        width=width,
-                        height=height,
-                        seed=0,
-                        denoise=denoise,
-                        filename_prefix=filename_prefix,
-                    )
+                    builder_method = _IMG2IMG_BUILDER_METHODS.get(model_cfg.builder)
+                    if builder_method is None:
+                        # Qwen/Viggle families edit via reference-image
+                        # conditioning instead of a latent img2img denoise;
+                        # fall through to the text-to-image path below.
+                        logger.info(
+                            "[ACTION_IMAGE] %s has no img2img builder, using text-to-image",
+                            model_cfg.label,
+                        )
+                    else:
+                        workflow = getattr(self, builder_method)(
+                            prompt=prompt,
+                            reference_filename=ref_filename,
+                            width=width,
+                            height=height,
+                            seed=0,
+                            denoise=denoise,
+                            filename_prefix=filename_prefix,
+                        )
 
-                    ctx_game = game_id or "none"
-                    ctx_player = str(player_id) if player_id else ""
-                    ctx_turn = str(turn) if turn is not None else "0"
-                    log_kind = kind or "img2img"
-                    comfyui_req = (
-                        f"Model: {model_cfg.label} (img2img, denoise={denoise})\n"
-                        f"Size: {width}x{height}\n"
-                        f"Filename prefix: {filename_prefix}\n\n"
-                        f"--- PROMPT ---\n{prompt}\n\n"
-                        f"--- REFERENCE IMAGE ---\n{ref_filename}\n\n"
-                        f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
-                    )
-                    write_comfyui_log(
-                        game_id=ctx_game,
-                        player_id=ctx_player,
-                        turn=ctx_turn,
-                        kind=log_kind,
-                        log_type="request",
-                        content=comfyui_req,
-                    )
-                    async with _image_semaphore:
-                        prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
-                        outputs = await self._wait_for_completion(prompt_id, timeout=300)
-                        image_url = self._extract_image_url(outputs)
-
-                    if image_url:
+                        ctx_game = game_id or "none"
+                        ctx_player = str(player_id) if player_id else ""
+                        ctx_turn = str(turn) if turn is not None else "0"
+                        log_kind = kind or "img2img"
+                        comfyui_req = (
+                            f"Model: {model_cfg.label} (img2img, denoise={denoise})\n"
+                            f"Size: {width}x{height}\n"
+                            f"Filename prefix: {filename_prefix}\n\n"
+                            f"--- PROMPT ---\n{prompt}\n\n"
+                            f"--- REFERENCE IMAGE ---\n{ref_filename}\n\n"
+                            f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
+                        )
                         write_comfyui_log(
                             game_id=ctx_game,
                             player_id=ctx_player,
                             turn=ctx_turn,
                             kind=log_kind,
-                            log_type="response",
-                            content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
+                            log_type="request",
+                            content=comfyui_req,
                         )
-                        logger.info(f"[ACTION_IMAGE] Generated via img2img: {image_url}")
-                        return image_url
-                    else:
-                        logger.warning("[ACTION_IMAGE] img2img produced no output, falling back to text-to-image")
+                        async with _image_semaphore:
+                            prompt_id = await self._queue_prompt(workflow, kind=kind, ctx_game=ctx_game, ctx_player=ctx_player, ctx_turn=ctx_turn)
+                            outputs = await self._wait_for_completion(prompt_id, timeout=300)
+                            image_url = self._extract_image_url(outputs)
+
+                        if image_url:
+                            write_comfyui_log(
+                                game_id=ctx_game,
+                                player_id=ctx_player,
+                                turn=ctx_turn,
+                                kind=log_kind,
+                                log_type="response",
+                                content=f"URL: {image_url}\nPrompt ID: {prompt_id}",
+                            )
+                            logger.info(f"[ACTION_IMAGE] Generated via img2img: {image_url}")
+                            return image_url
+                        else:
+                            logger.warning("[ACTION_IMAGE] img2img produced no output, falling back to text-to-image")
                 else:
                     logger.warning(f"[ACTION_IMAGE] Could not parse filename from reference URL {reference_image_url}, falling back to text-to-image")
             except Exception as e:
@@ -2093,7 +2504,9 @@ class ImageGenerator:
                 kind=kind,
             )
 
-        workflow = _build_qwen_image_21_multiref_workflow(
+        model_key = resolve_txt2img_model(kind)
+        multiref_builder = _MULTIREF_BUILDERS.get(model_key, _build_qwen_image_21_multiref_workflow)
+        workflow = multiref_builder(
             prompt=prompt,
             reference_filenames=ref_filenames,
             width=width,

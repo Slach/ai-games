@@ -70,6 +70,15 @@ RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/
 RUN git clone --depth 1 https://github.com/RealRebelAI/LLaDa-Image_ComfyUI.git /opt/ComfyUI/custom_nodes/LLaDa-Image_ComfyUI && \
     /opt/ComfyUI/.venv/bin/pip install diffusers accelerate
 
+# Viggle Turbo nodes for Qwen-Image-2.1 (ViggleTurboSigmas + ViggleTurboLora,
+# from Viggle/Qwen-Image-2.1-viggle-turbo comfyui/). ViggleTurboSigmas builds
+# the 6-step sigma schedule with the resolution-dependent shift (no stock node
+# takes raw sigma nodes); ViggleTurboLora applies the LoRA unmerged
+# (y = Wx + BAx) — ComfyUI's stock loader merges it into the weights, which is
+# lossy on this adapter (bf16 keeps ~70% of the update, int8 adds requant
+# noise ~4x its size). Single file, no requirements.
+COPY comfyui/custom_nodes/viggle_turbo.py /opt/ComfyUI/custom_nodes/viggle_turbo.py
+
 # Fix outdated channel URLs (ltdrdata -> Comfy-Org) in Manager source
 RUN sed -i 's|https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main|https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main|g' \
     /opt/ComfyUI/custom_nodes/ComfyUI-Manager/channels.list.template && \
