@@ -46,7 +46,10 @@ DATASETS_DIR = os.path.join(TOOL_DIR, "datasets")
 STUDENT_PARAMS = {
     "npc_choice": {"temperature": 0.8, "max_tokens": 1024},
     "scene_instruction": {"temperature": 0.7, "max_tokens": 1024},
-    "combined_outcome": {"temperature": 0.7, "max_tokens": 6144},
+    # 16384, не 6144: модели без отключаемого thinking (flint) сжигают
+    # несколько тысяч токенов на reasoning_content до начала ответа —
+    # runtime даёт combined_outcome max_tokens=262144 по той же причине.
+    "combined_outcome": {"temperature": 0.7, "max_tokens": 16384},
     "avatar_prompt": {"temperature": 0.7, "max_tokens": 1024},
     "npc_avatar": {"temperature": 0.7, "max_tokens": 1024},
     "bridge_image": {"temperature": 0.7, "max_tokens": 1536},
