@@ -219,27 +219,32 @@ MODEL_USE_CASES: dict[str, dict[str, dict[str, LLMParams]]] = {
 # entry overrides the sampling fields — temperature included — while
 # ``max_tokens`` and ``enable_thinking`` keep their use-case values. Models
 # absent here send only temperature and rely on server-side defaults.
-MODEL_SAMPLING_MODES: dict[str, dict[bool, dict[str, float | int]]] = {
-    "unsloth/Qwen3.8-27B-MTP": {
-        # Thinking mode
-        True: {
-            "temperature": 1.0,
-            "top_p": 0.95,
-            "top_k": 20,
-            "min_p": 0.0,
-            "presence_penalty": 0.0,
-            "repetition_penalty": 1.0,
-        },
-        # Instruct (non-thinking) mode
-        False: {
-            "temperature": 0.7,
-            "top_p": 0.80,
-            "top_k": 20,
-            "min_p": 0.0,
-            "presence_penalty": 1.5,
-            "repetition_penalty": 1.0,
-        },
+# Qwen3.8-27B vendor-recommended sampling. Shared by the MTP and NVFP4
+# variants — same base model, different serving format/quantization.
+_QWEN3_8_27B_SAMPLING: dict[bool, dict[str, float | int]] = {
+    # Thinking mode
+    True: {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repetition_penalty": 1.0,
     },
+    # Instruct (non-thinking) mode
+    False: {
+        "temperature": 0.7,
+        "top_p": 0.80,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0,
+    },
+}
+
+MODEL_SAMPLING_MODES: dict[str, dict[bool, dict[str, float | int]]] = {
+    "unsloth/Qwen3.8-27B-MTP": _QWEN3_8_27B_SAMPLING,
+    "unsloth/Qwen3.8-27B-NVFP4": _QWEN3_8_27B_SAMPLING,
 }
 
 
