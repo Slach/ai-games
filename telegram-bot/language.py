@@ -326,12 +326,14 @@ ERRORS = {
         "session_not_found": "Сессия не найдена. Пожалуйста, начните заново с /start",
         "onboarding_error": "Произошла ошибка при запуске: {error}",
         "onboarding_in_progress": "Предыдущий ответ ещё обрабатывается. Пожалуйста, подождите.",
+        "stale_turn": "⌛ Этот ход уже завершён — кнопка из прошлого хода. Текущий ход открой через меню",
     },
     LANGUAGE_EN: {
         "invalid_format": "Invalid answer format",
         "session_not_found": "Session not found. Please start again with /start",
         "onboarding_error": "An error occurred during startup: {error}",
         "onboarding_in_progress": "Your previous answer is still being processed. Please wait.",
+        "stale_turn": "⌛ This turn is already over — that button belongs to a previous turn. Open the current turn from the menu",
     },
 }
 

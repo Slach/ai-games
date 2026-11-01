@@ -1748,6 +1748,16 @@ async def submit_player_action(request: PlayerActionRequest):
                 chosen_action_text = c.get("text", "")
                 break
 
+        # Re-submitting the same choice must be a no-op: without this guard
+        # every repeat press inserts another player_actions row and spawns
+        # another chosen-action image generation + push for the same turn.
+        if briefing.get("selected_action_id") == request.action_id:
+            logger.info(
+                f"[ACTION] Player {request.player_id} already chose {request.action_id} "
+                f"for turn {request.turn} (game {game_id}), skipping re-submit"
+            )
+            return {"status": "already_chosen", "action": {"player_id": request.player_id, "turn": request.turn, "action_id": request.action_id}}
+
         # Update the briefing with the player's choice
         update_briefing_choice(
             briefing_id=briefing["id"],

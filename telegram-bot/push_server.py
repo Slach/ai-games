@@ -467,7 +467,7 @@ async def _deliver_briefing(
                     if deadline_str:
                         current_msgs = get_current_turn(language)
                         text += "\n\n" + current_msgs.get("deadline", "⏳ {deadline}").format(deadline=deadline_str)
-                    keyboard = create_keyboard_fn(choices, None)
+                    keyboard = create_keyboard_fn(choices, None, turn)
                     await call_with_retry(
                         lambda: bot.send_message(
                             chat_id=player_id,
@@ -2166,7 +2166,7 @@ async def start_push_server(
     mark_outcome_sent_fn: Callable[[int, str, int], None] | None,
     last_sent_game_over_turn: dict[tuple[int, str], str] | None,
     mark_game_over_sent_fn: Callable[[int, str], None] | None,
-    create_keyboard_fn: (Callable[[list[dict[str, Any]]], InlineKeyboardMarkup] | None),
+    create_keyboard_fn: (Callable[[list[dict[str, Any]], str | None, int], InlineKeyboardMarkup] | None),
 ) -> web.AppRunner:
     """Start the push HTTP server with persistent delivery queue.
 
@@ -2197,7 +2197,7 @@ async def start_push_server(
         mark_sent_fn = _noop_mark_sent
     if create_keyboard_fn is None:
 
-        def _noop_keyboard(choices: list) -> InlineKeyboardMarkup:
+        def _noop_keyboard(choices: list, selected_action_id: str | None, turn: int) -> InlineKeyboardMarkup:
             return InlineKeyboardMarkup(inline_keyboard=[[]])
 
         create_keyboard_fn = _noop_keyboard

@@ -1186,12 +1186,16 @@ def create_main_menu_keyboard(language: str) -> ReplyKeyboardMarkup:
     )
 
 
-def create_action_keyboard(actions: list, selected_action_id: str | None) -> InlineKeyboardMarkup:
+def create_action_keyboard(actions: list, selected_action_id: str | None, turn: int) -> InlineKeyboardMarkup:
     """Create inline keyboard for game actions
 
     Buttons show numbers [1] [2] [3] etc. instead of full action text.
     Full action text is displayed in the message as a numbered list.
     Arranged in a single row for maximum compactness.
+
+    The turn is encoded in callback_data so presses on keyboards from
+    finished turns can be rejected instead of silently submitting the
+    choice into whatever turn is current.
 
     If selected_action_id is provided, that button gets a ✅ prefix
     to visually indicate the player's choice.
@@ -1202,7 +1206,7 @@ def create_action_keyboard(actions: list, selected_action_id: str | None) -> Inl
             text = f"✅ [{idx}]"
         else:
             text = f"[{idx}]"
-        builder.add(InlineKeyboardButton(text=text, callback_data=f"action:{action['id']}"))
+        builder.add(InlineKeyboardButton(text=text, callback_data=f"action:{turn}:{action['id']}"))
     # All actions in a single row for maximum compactness
     builder.adjust(len(actions))
     return builder.as_markup()
@@ -2165,7 +2169,7 @@ async def cmd_turn(message: types.Message):
         if briefing and briefing.get("choices"):
             # New system: show personal briefing
             choices = briefing.get("choices", [])
-            keyboard = create_action_keyboard(choices, selected_action_id=briefing.get("selected_action_id")) if choices else None
+            keyboard = create_action_keyboard(choices, selected_action_id=briefing.get("selected_action_id"), turn=current_turn_num) if choices else None
 
             actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(choices)])
 
@@ -2328,7 +2332,7 @@ async def cmd_turn(message: types.Message):
             # Part 3: Actions + keyboard (or selected action if already chosen)
             player_actions = turn_data.get("player_actions", [])
             if player_actions:
-                keyboard = create_action_keyboard(player_actions, None)
+                keyboard = create_action_keyboard(player_actions, None, turn=turn_number)
                 actions_text = "\n\n".join([f"{i + 1} - {a['text']}" for i, a in enumerate(player_actions)])
                 await message.answer(
                     msgs["actions"].format(actions=actions_text) + "\n\n" + msgs["select_action"],
@@ -4043,14 +4047,18 @@ async def action_selection(callback: types.CallbackQuery):
         return
     parts = callback.data.split(":")
 
-    if len(parts) != 2:
-        await callback.answer(lang.get_errors(player_lang)["invalid_format"])
+    # Callbacks without a turn ("action:{action_id}") predate turn encoding:
+    # action ids repeat every turn, so such presses can't be routed safely.
+    if len(parts) != 3:
+        await callback.answer(lang.get_errors(player_lang)["stale_turn"])
         return
 
-    action_id = parts[1]
-
-    # Acknowledge callback immediately to prevent query ID expiration
-    await callback.answer()
+    try:
+        action_turn = int(parts[1])
+    except ValueError:
+        await callback.answer(lang.get_errors(player_lang)["invalid_format"])
+        return
+    action_id = parts[2]
 
     game_id = None
     try:
@@ -4064,6 +4072,19 @@ async def action_selection(callback: types.CallbackQuery):
         turn_data = await api_request("GET", "/game/current-turn", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=())
         if turn_data is None:
             raise Exception("No current turn data from API")
+
+        # Reject presses on keyboards from a finished turn — otherwise the
+        # choice silently lands in the current turn
+        if action_turn != turn_data["turn"]:
+            logger.info(
+                f"[ACTION] Stale turn button for player {player_id}: "
+                f"button turn {action_turn}, current turn {turn_data['turn']} (game {game_id})"
+            )
+            await callback.answer(lang.get_errors(player_lang)["stale_turn"])
+            return
+
+        # Acknowledge callback to prevent query ID expiration
+        await callback.answer()
 
         # Submit action
         await api_request(
@@ -4084,7 +4105,7 @@ async def action_selection(callback: types.CallbackQuery):
         actions_list = turn_data.get("player_actions", [])
         if actions_list and isinstance(callback.message, types.Message):
             try:
-                updated_keyboard = create_action_keyboard(actions_list, selected_action_id=action_id)
+                updated_keyboard = create_action_keyboard(actions_list, selected_action_id=action_id, turn=turn_data["turn"])
                 await callback.message.edit_reply_markup(reply_markup=updated_keyboard)
             except Exception as kb_err:
                 logger.warning(f"Failed to update action keyboard for player {player_id}: {kb_err}")
@@ -4096,6 +4117,11 @@ async def action_selection(callback: types.CallbackQuery):
             await callback.message.answer(msgs["recorded"], reply_markup=create_main_menu_keyboard(DEFAULT_LANGUAGE))
 
     except Exception as e:
+        # Stop the callback spinner if we never got to answer it above
+        try:
+            await callback.answer()
+        except Exception:
+            logger.warning(f"Failed to answer callback for player {player_id} after action error", exc_info=True)
         logger.error(f"Failed to record action for player {player_id}: {e}", exc_info=True)
         action_lang = player_lang
         if game_id:
@@ -4153,7 +4179,7 @@ async def refresh_game(callback: types.CallbackQuery):
             await callback.message.edit_text(
                 main_text,
                 parse_mode="Markdown",
-                reply_markup=create_action_keyboard(turn_data.get("player_actions", []), None),
+                reply_markup=create_action_keyboard(turn_data.get("player_actions", []), None, turn=turn_data["turn"]),
             )
             # Crew dialogues as a separate message (avoids 4096 limit)
             if crew_dialogues_text:
