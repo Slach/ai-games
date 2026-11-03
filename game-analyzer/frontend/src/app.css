@@ -1,0 +1,47 @@
+/* Global dark tweaks for SvelteFlow defaults. */
+.svelte-flow__edge-path {
+  stroke: #4a505e;
+}
+.svelte-flow__edge.animated .svelte-flow__edge-path {
+  stroke: #4a9eff;
+}
+.svelte-flow__controls {
+  box-shadow: none;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.svelte-flow__controls-button {
+  background: #1c2028;
+  border-bottom: 1px solid #2a2f3a;
+}
+.svelte-flow__minimap {
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  margin: 0 0 44px 8px;
+}
+.svelte-flow__handle {
+  opacity: 0.5;
+}
+
+/* Shared spinner for long operations (graph load, search, import). */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #3a3f4b;
+  border-top-color: #7db4ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+.spinner.sm {
+  width: 11px;
+  height: 11px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

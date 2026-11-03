@@ -279,3 +279,26 @@ owned by the container) before `main.py` gets imported:
 ```bash
 cd game-scheduler && ../.venv/bin/python -m unittest discover -s tests -t .
 ```
+
+`game-analyzer/backend` (same layout, also needs `-t .`):
+
+```bash
+cd game-analyzer/backend && ../../.venv/bin/python -m unittest discover -s tests -t .
+```
+
+## game-analyzer
+
+Web UI (FastAPI + Svelte/SvelteFlow, http://127.0.0.1:8002) that renders a
+game's full generation pipeline as an expandable node graph. Read-only over
+`game-server/game_server.db`, `telegram-bot/player_states.db` and
+`comfyui/files/` (mounted ro in docker-compose).
+
+Its data source is the `generation_events` table (migration 25) — a structured
+mirror of the detailed file logs, written from `logging_utils.write_llm_log` /
+`write_comfyui_log` right next to the file itself, plus an FTS5 index
+(`generation_events_fts`). File logs remain unchanged and authoritative.
+
+Legacy files (everything generated before the table existed) are imported
+once via `POST /admin/import-log-events` on game-server (the analyzer's
+"Import legacy logs" button calls it through `/api/import-logs`). The
+importer is idempotent — it skips files whose stem already has an event row.

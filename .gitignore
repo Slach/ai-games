@@ -25,3 +25,6 @@ __pycache__/
 *.db-shm
 *.log
 .zcode/
+
+# game-analyzer
+game-analyzer/frontend/dist/

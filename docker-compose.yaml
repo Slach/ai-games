@@ -168,6 +168,41 @@ services:
       - ./game-scheduler/:/app/
       - ./logs/:/app/logs/
 
+  # Game Analyzer - read-only web UI over game generation internals
+  # (node graph: prompts, images, delivery facts). http://127.0.0.1:8002
+  game-analyzer:
+    image: game-analyzer:spark-full
+    build:
+      dockerfile: Dockerfile
+      context: game-analyzer/
+    ports:
+      - "127.0.0.1:8002:8002"
+    depends_on:
+      game-server:
+        condition: service_healthy
+    environment:
+      - GAME_SERVER_URL=http://game-server:8000
+      - GAME_SERVER_DB=/mnt/game-server/game_server.db
+      - BOT_DB=/mnt/telegram-bot/player_states.db
+      - COMFYUI_FILES=/mnt/comfyui-output
+      - PYTHONDONTWRITEBYTECODE=1
+    networks:
+      - spark-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - ./game-analyzer/:/app/
+      # Not :ro — a read-only SQLite connection to a WAL database still needs
+      # write access to the -shm file. The analyzer itself only runs SELECTs.
+      - ./game-server/:/mnt/game-server
+      - ./telegram-bot/:/mnt/telegram-bot
+      - ./comfyui/files/:/mnt/comfyui-output:ro
+
 networks:
   spark-network:
     external: true

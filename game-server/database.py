@@ -7,7 +7,7 @@ from json import JSONDecodeError
 import logging
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +215,43 @@ MIGRATIONS: list[tuple[int, str]] = [
         # buttons. current_question now counts rejections ("no" presses).
         "ALTER TABLE onboarding_sessions ADD COLUMN proposal TEXT DEFAULT NULL;",
     ),
+    (
+        25,
+        # Structured mirror of the detailed LLM/ComfyUI file logs, written
+        # from logging_utils right next to the file itself. The game-analyzer
+        # service reads this table (read-only) to build its node graph and
+        # full-text search. Unique key = log filename stem without the
+        # request/response suffix, so a retry overwrites the previous attempt
+        # (attempts counter increments), mirroring file-log semantics.
+        """
+        CREATE TABLE IF NOT EXISTS generation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            log_file TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            player_id TEXT NOT NULL DEFAULT '',
+            turn INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT '',
+            backend TEXT NOT NULL,
+            request_at TEXT DEFAULT NULL,
+            response_at TEXT DEFAULT NULL,
+            request_text TEXT DEFAULT '',
+            response_text TEXT DEFAULT '',
+            model TEXT DEFAULT '',
+            params TEXT DEFAULT '',
+            finish_reason TEXT DEFAULT '',
+            usage TEXT DEFAULT '',
+            image_url TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_events_log_file
+            ON generation_events(log_file);
+        CREATE INDEX IF NOT EXISTS idx_generation_events_game
+            ON generation_events(game_id, turn);
+        CREATE VIRTUAL TABLE IF NOT EXISTS generation_events_fts USING fts5(content);
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -407,6 +444,32 @@ def init_db():
         ON player_action_stats(game_id, turn);
     CREATE INDEX IF NOT EXISTS idx_player_action_stats_player
         ON player_action_stats(player_id, game_id);
+    CREATE TABLE IF NOT EXISTS generation_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        log_file TEXT NOT NULL,
+        game_id TEXT NOT NULL,
+        player_id TEXT NOT NULL DEFAULT '',
+        turn INTEGER NOT NULL DEFAULT 0,
+        kind TEXT NOT NULL,
+        stage TEXT NOT NULL DEFAULT '',
+        backend TEXT NOT NULL,
+        request_at TEXT DEFAULT NULL,
+        response_at TEXT DEFAULT NULL,
+        request_text TEXT DEFAULT '',
+        response_text TEXT DEFAULT '',
+        model TEXT DEFAULT '',
+        params TEXT DEFAULT '',
+        finish_reason TEXT DEFAULT '',
+        usage TEXT DEFAULT '',
+        image_url TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_events_log_file
+        ON generation_events(log_file);
+    CREATE INDEX IF NOT EXISTS idx_generation_events_game
+        ON generation_events(game_id, turn);
+    CREATE VIRTUAL TABLE IF NOT EXISTS generation_events_fts USING fts5(content);
     """
     )
     cursor.execute("SELECT MAX(version) FROM migrations")
@@ -2777,3 +2840,283 @@ def get_in_progress_generation_jobs() -> list[dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
     return [_generation_job_row_to_dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Generation events — structured mirror of the detailed LLM/ComfyUI file logs
+# (see migration 25). Written by logging_utils, read by game-analyzer.
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _fts_sync(conn: sqlite3.Connection, event_id: int) -> None:
+    """Re-index one event row: FTS content = request + response text."""
+    row = conn.execute(
+        "SELECT request_text, response_text FROM generation_events WHERE id = ?",
+        (event_id,),
+    ).fetchone()
+    if row is None:
+        return
+    conn.execute("DELETE FROM generation_events_fts WHERE rowid = ?", (event_id,))
+    text = "\n".join(part for part in (row["request_text"], row["response_text"]) if part)
+    if text:
+        conn.execute(
+            "INSERT INTO generation_events_fts(rowid, content) VALUES (?, ?)",
+            (event_id, text),
+        )
+
+
+def record_generation_request(
+    *,
+    log_file: str,
+    game_id: str,
+    player_id: str,
+    turn: int,
+    kind: str,
+    stage: str,
+    backend: str,
+    content: str,
+    model: str = "",
+    params: str = "",
+    ts: str | None = None,
+) -> None:
+    """Insert or refresh the request half of a generation event.
+
+    Keyed by log_file (the filename stem shared by the request/response file
+    pair), so a retry overwrites the previous attempt and bumps ``attempts`` —
+    the same semantics the file logs have. ``ts`` overrides the timestamp
+    (used by the backfill importer, which takes it from file mtime).
+    """
+    now = ts or _utc_now_iso()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO generation_events
+                (log_file, game_id, player_id, turn, kind, stage, backend,
+                 request_at, request_text, model, params, status, attempts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1)
+            ON CONFLICT(log_file) DO UPDATE SET
+                request_at = excluded.request_at,
+                request_text = excluded.request_text,
+                model = excluded.model,
+                params = excluded.params,
+                stage = excluded.stage,
+                status = 'pending',
+                response_at = NULL,
+                response_text = '',
+                finish_reason = '',
+                usage = '',
+                image_url = '',
+                attempts = generation_events.attempts + 1
+            """,
+            (log_file, game_id, player_id, turn, kind, stage, backend, now, content, model, params),
+        )
+        event_id = cursor.execute(
+            "SELECT id FROM generation_events WHERE log_file = ?", (log_file,)
+        ).fetchone()[0]
+        _fts_sync(conn, event_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_generation_response(
+    *,
+    log_file: str,
+    game_id: str,
+    player_id: str,
+    turn: int,
+    kind: str,
+    stage: str,
+    backend: str,
+    content: str,
+    model: str = "",
+    params: str = "",
+    finish_reason: str = "",
+    usage: str = "",
+    image_url: str = "",
+    status: str = "ok",
+    ts: str | None = None,
+) -> None:
+    """Fill in the response half of a generation event (matches by log_file).
+
+    If the matching request row is missing (should not happen, but the file
+    logs allow the same), a minimal row is created. ``ts`` overrides the
+    timestamp (used by the backfill importer).
+    """
+    now = ts or _utc_now_iso()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE generation_events SET
+                response_at = ?, response_text = ?, finish_reason = ?,
+                usage = ?, image_url = ?, status = ?,
+                model = CASE WHEN ? != '' THEN ? ELSE model END,
+                params = CASE WHEN ? != '' THEN ? ELSE params END
+            WHERE log_file = ?
+            """,
+            (now, content, finish_reason, usage, image_url, status,
+             model, model, params, params, log_file),
+        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """
+                INSERT INTO generation_events
+                    (log_file, game_id, player_id, turn, kind, stage, backend,
+                     response_at, response_text, model, params, finish_reason,
+                     usage, image_url, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (log_file, game_id, player_id, turn, kind, stage, backend, now,
+                 content, model, params, finish_reason, usage, image_url, status),
+            )
+        event_id = cursor.execute(
+            "SELECT id FROM generation_events WHERE log_file = ?", (log_file,)
+        ).fetchone()[0]
+        _fts_sync(conn, event_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _generation_event_row_to_dict(row) -> dict[str, Any]:
+    return dict(row)
+
+
+def generation_event_exists(log_file: str) -> bool:
+    """True if an event row already exists for this log filename stem."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM generation_events WHERE log_file = ?", (log_file,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def generation_event_has_response(log_file: str) -> bool:
+    """True if the event for this stem already has its response half."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM generation_events WHERE log_file = ? AND response_at IS NOT NULL",
+            (log_file,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def list_generation_events(
+    *,
+    game_id: str,
+    player_id: str | None = None,
+    turn: int | None = None,
+    kinds: list[str] | None = None,
+    backend: str | None = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    """List generation events for a game, optionally filtered."""
+    sql = "SELECT * FROM generation_events WHERE game_id = ?"
+    args: list[Any] = [game_id]
+    if player_id is not None:
+        sql += " AND player_id = ?"
+        args.append(player_id)
+    if turn is not None:
+        sql += " AND turn = ?"
+        args.append(turn)
+    if kinds is not None:
+        sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+        args.extend(kinds)
+    if backend is not None:
+        sql += " AND backend = ?"
+        args.append(backend)
+    sql += " ORDER BY id ASC LIMIT ?"
+    args.append(limit)
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(sql, args).fetchall()
+    finally:
+        conn.close()
+    return [_generation_event_row_to_dict(row) for row in rows]
+
+
+def get_generation_events_by_ids(ids: list[int]) -> list[dict[str, Any]]:
+    """Fetch events by id (used for the node detail chain)."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM generation_events WHERE id IN ({placeholders}) ORDER BY id ASC",
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_generation_event_row_to_dict(row) for row in rows]
+
+
+def search_generation_events(
+    query: str,
+    *,
+    game_id: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Full-text search over event request/response text.
+
+    Uses the FTS5 index with prefix matching; falls back to a LIKE substring
+    scan when FTS finds nothing (e.g. the query is a mid-word fragment).
+    """
+    tokens = [t for t in query.replace('"', " ").split() if t]
+    results: list[dict[str, Any]] = []
+    conn = get_db_connection()
+    try:
+        if tokens:
+            match_expr = " ".join(f'"{t}"*' for t in tokens)
+            sql = """
+                SELECT e.id, e.game_id, e.player_id, e.turn, e.kind, e.stage,
+                       e.backend, e.status, e.request_at, e.response_at,
+                       snippet(generation_events_fts, 0, '[', ']', '…', 14) AS snippet
+                FROM generation_events_fts f
+                JOIN generation_events e ON e.id = f.rowid
+                WHERE generation_events_fts MATCH ?
+            """
+            args: list[Any] = [match_expr]
+            if game_id:
+                sql += " AND e.game_id = ?"
+                args.append(game_id)
+            sql += " ORDER BY e.id DESC LIMIT ?"
+            args.append(limit)
+            results = [dict(r) for r in conn.execute(sql, args).fetchall()]
+        if not results:
+            sql = """
+                SELECT e.id, e.game_id, e.player_id, e.turn, e.kind, e.stage,
+                       e.backend, e.status, e.request_at, e.response_at,
+                       substr(CASE WHEN instr(e.request_text, ?) > 0
+                              THEN e.request_text ELSE e.response_text END,
+                              max(1, instr(CASE WHEN instr(e.request_text, ?) > 0
+                              THEN e.request_text ELSE e.response_text END, ?) - 120),
+                              320) AS snippet
+                FROM generation_events e
+                WHERE (e.request_text LIKE ? OR e.response_text LIKE ?)
+            """
+            like = f"%{query}%"
+            args = [query, query, query, like, like]
+            if game_id:
+                sql += " AND e.game_id = ?"
+                args.append(game_id)
+            sql += " ORDER BY e.id DESC LIMIT ?"
+            args.append(limit)
+            results = [dict(r) for r in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
+    return results

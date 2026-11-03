@@ -15,6 +15,7 @@ from typing import Any
 
 import aiohttp
 import uvicorn
+import backfill_events
 from database import (
     GAME_START_MIN_PLAYERS,
     GAME_START_MAX_PLAYERS,
@@ -5796,6 +5797,16 @@ async def admin_list_games(include_ended: bool):
             }
         )
     return {"games": result}
+
+
+@app.post("/admin/import-log-events")
+def admin_import_log_events():
+    """One-shot import of legacy detailed log files into generation_events.
+
+    Sync handler (threadpool): parses every file under logs/, skipping stems
+    that already have an event row. Used by game-analyzer to see old games.
+    """
+    return backfill_events.import_logs_dir(backfill_events.default_logs_dir())
 
 
 @app.get("/admin/win-rate")
