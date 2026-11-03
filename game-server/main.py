@@ -563,6 +563,13 @@ async def _finalize_onboarding_session(session: dict[str, Any], proposal: dict[s
 
     profile = get_player_profile(player_id)
     if not profile:
+        # A pending proposal can outlive its game (invite accepted after the
+        # game ended). Never create a profile for an ended game — the player
+        # must start a new game instead.
+        game = get_game(game_id)
+        if game and game.get("status") == "ended":
+            logger.info(f"[ONBOARDING] Refusing to complete session {session_id}: game {game_id} already ended")
+            raise HTTPException(status_code=409, detail="Game ended")
         profile_data = _profile_from_proposal(proposal, player_id, player_name, game_id, language)
         create_player_profile(profile_data)
         profile = get_player_profile(player_id)
@@ -914,6 +921,13 @@ async def start_onboarding(request: StartOnboardingRequest):
         else:
             logger.warning(f"Player {request.player_id} already has an active profile in game {old_game_id}")
             raise HTTPException(status_code=400, detail="Player already has a profile")
+
+    # Invites and deep links can outlive their game — never start onboarding
+    # (and burn LLM/ComfyUI generations) for a game that already ended.
+    game = get_game(request.game_id)
+    if game and game.get("status") == "ended":
+        logger.info(f"Onboarding into ended game {request.game_id} blocked for player {request.player_id}")
+        raise HTTPException(status_code=400, detail="Game ended")
 
     # Check if the game is already full
     current_count = get_player_count_in_game(request.game_id)
@@ -1419,9 +1433,14 @@ async def get_onboarding_status(session_id: str):
     if not session_game_id:
         raise HTTPException(status_code=400, detail="Session has no game_id")
 
+    game = get_game(session_game_id)
+
     return {
         "session_id": session["session_id"],
         "game_id": session_game_id,
+        # Lets the bot drop sessions whose game ended while the proposal
+        # was pending, instead of restoring a card that can no longer be accepted.
+        "game_status": game.get("status", "") if game else "",
         "rejections": session["current_question"],
         "completed": session["completed"],
         "proposal": session.get("proposal"),

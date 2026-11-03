@@ -755,10 +755,24 @@ async def _finalize_onboarding(player_id: int, session_id: str, bot: Bot):
             data=None,
             params=None,
             timeout_total=300,
-            ignore_codes=(),
+            # 409 = the session's game ended while the proposal card was
+            # pending; handled below instead of surfacing a raw API error.
+            ignore_codes=(409,),
         )
         if result is None:
-            logger.error(f"Onboarding completion returned no result for player {player_id}", stack_info=True)
+            logger.info(f"Onboarding session {session_id} rejected: game already ended for player {player_id}")
+            update_player_state(player_id, onboarding_session_id=None)
+            msgs = lang.get_onboarding(get_player_language(player_id))
+            await bot.send_message(
+                chat_id=player_id,
+                text=msgs["onboarding_game_ended"],
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=msgs["onboarding_game_ended_button"], callback_data="select_game:new")],
+                    ]
+                ),
+            )
             return
         await _send_onboarding_completion(bot, player_id, result)
     except Exception as e:
@@ -1487,6 +1501,22 @@ async def start_onboarding_flow(
             spectator_msgs = lang.get_spectator(effective_language)
             await message.answer(spectator_msgs["already_played"], parse_mode="Markdown")
             return
+        # Server refuses onboarding into a game that already ended (stale
+        # invite link). Show the finale of that game and offer a new one.
+        if "Game ended" in error_str:
+            logger.info(f"Onboarding into ended game {game_id} blocked for player {player_id}")
+            try:
+                game_state = await api_request(
+                    "GET", "/game/state", data=None, params={"game_id": game_id}, timeout_total=600, ignore_codes=()
+                )
+            except Exception:
+                logger.error(f"Failed to fetch game state for ended game {game_id}", exc_info=True)
+                game_state = None
+            await _send_game_over_finale(
+                message, game_id, (game_state or {}).get("status", "game_over"), player_id, effective_language
+            )
+            await show_game_selection(message, state, effective_language)
+            return
         logger.error(f"Failed to start onboarding for player {player_id}: {type(e).__name__} - {error_str}", exc_info=True)
         error_msgs = lang.get_errors(effective_language)
         await message.answer(error_msgs["onboarding_error"].format(error=error_str))
@@ -1814,6 +1844,27 @@ async def cmd_start(message: types.Message, command: CommandObject, state: FSMCo
         except Exception as e:
             logger.error(f"Failed to fetch onboarding session {session_id}: {e}", exc_info=True)
             session_data = None
+
+        # The invited game ended while the proposal was pending — the card
+        # can no longer be accepted. Show the finale and offer a new game
+        # instead of restoring the stale proposal.
+        if session_data and session_data.get("game_status") == "ended":
+            ended_game_id = session_data["game_id"]
+            logger.info(f"Onboarding session {session_id} points to ended game {ended_game_id}; clearing for player {player_id}")
+            update_player_state(player_id, onboarding_session_id=None)
+            await state.clear()
+            try:
+                game_state = await api_request(
+                    "GET", "/game/state", data=None, params={"game_id": ended_game_id}, timeout_total=600, ignore_codes=()
+                )
+            except Exception:
+                logger.error(f"Failed to fetch game state for ended game {ended_game_id}", exc_info=True)
+                game_state = None
+            await _send_game_over_finale(
+                message, ended_game_id, (game_state or {}).get("status", "game_over"), player_id, player_lang
+            )
+            await show_game_selection(message, state, player_lang)
+            return
 
         if session_data and session_data.get("completed"):
             # Session already completed but player never got completion flow.
