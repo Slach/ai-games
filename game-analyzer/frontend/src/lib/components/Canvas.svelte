@@ -29,10 +29,10 @@
     void store.fitRequest;
     if (store.fitRequest > 0) {
       setTimeout(() => {
-        // Zoom clamps keep text readable: a big expanded tree is not
-        // squeezed below legible size (the user pans instead), and a
-        // single collapsed node is not blown up to full screen.
-        void fitView({ padding: 0.15, duration: 400, minZoom: 0.75, maxZoom: 1.1 });
+        // No minZoom clamp: the whole graph must fit the screen, however
+        // wide it gets. maxZoom keeps a single collapsed node from being
+        // blown up to full screen.
+        void fitView({ padding: 0.15, duration: 400, maxZoom: 1.1 });
       }, 0);
     }
   });
@@ -67,6 +67,7 @@
     {nodeTypes}
     colorMode="dark"
     fitView
+    minZoom={0.1}
     nodesDraggable={false}
     nodesConnectable={false}
   >
@@ -114,7 +115,7 @@
     gap: 10px;
     background: rgba(16, 18, 22, 0.55);
     color: #9aa2b1;
-    font-size: 13px;
+    font-size: 14px;
   }
   .legend-anchor :global(.svelte-flow__minimap) {
     margin-bottom: 40px;

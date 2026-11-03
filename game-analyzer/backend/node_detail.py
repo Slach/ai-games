@@ -13,6 +13,7 @@ For a graph node this assembles:
 import json
 import logging
 import re
+from datetime import datetime, timezone
 
 import db
 import graph_builder
@@ -390,6 +391,132 @@ def _upstream(node: dict, graph: dict) -> list[dict]:
     return result
 
 
+def _parse_dt(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp; aware values are normalized to naive UTC so
+    that deadline (tz-aware from the scheduler) and player_actions.created_at
+    (naive local UTC from game-server) stay comparable."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _action_timing(brief: dict, action: dict | None, deadline: str | None) -> str:
+    """Classify a briefing choice: submitted before the deadline or not."""
+    if brief["is_npc"]:
+        return "npc"
+    if not brief["selected_action_id"]:
+        return "pending"
+    if action is None:
+        return "chosen"
+    if action["choice"] == "auto_selected":
+        return "auto"
+    submitted = _parse_dt(action["created_at"])
+    due = _parse_dt(deadline)
+    if submitted is not None and due is not None and submitted > due:
+        return "late"
+    return "on-time"
+
+
+def _turn_actions(node: dict, gid: str, graph: dict) -> dict | None:
+    """Per-participant action summary for a turn node: proposed variants,
+    the chosen action and whether it was submitted before the deadline."""
+    if node["type"] != "turn":
+        return None
+    turn = node["meta"].get("turn")
+    if turn is None:
+        return None
+    rows = db.query_game_server(
+        "SELECT deadline FROM game_turns WHERE game_id = ? AND turn = ?",
+        (gid, turn),
+    )
+    deadline = rows[0]["deadline"] if rows else None
+    briefs = db.query_game_server(
+        "SELECT id, player_id, npc_key, is_npc, choices, selected_action_id "
+        "FROM player_briefings WHERE game_id = ? AND turn = ? "
+        "ORDER BY is_npc, player_id, npc_key",
+        (gid, turn),
+    )
+    # player_actions has no game_id column — scope it via the briefing roster.
+    player_ids = sorted({b["player_id"] for b in briefs if b["player_id"] is not None})
+    action_by_pid = {}
+    if player_ids:
+        placeholders = ",".join("?" * len(player_ids))
+        action_by_pid = {
+            r["player_id"]: r
+            for r in db.query_game_server(
+                f"SELECT player_id, action_id, choice, created_at FROM player_actions "
+                f"WHERE turn = ? AND player_id IN ({placeholders})",
+                (turn, *player_ids),
+            )
+        }
+    names = {}
+    brief_nodes = {}
+    for n in graph["nodes"]:
+        if n["type"] == "player" and n["meta"].get("player_id") is not None:
+            names[("player", n["meta"]["player_id"])] = n["label"]
+        elif n["type"] == "npc":
+            names[("npc", n["meta"]["npc_key"])] = n["label"]
+        elif n["type"] == "brief" and n["meta"].get("briefing_row_id") is not None:
+            brief_nodes[n["meta"]["briefing_row_id"]] = n
+    outcome_node_id = next(
+        (n["id"] for n in graph["nodes"]
+         if n["type"] == "outcome" and n["meta"].get("turn") == turn),
+        None,
+    )
+    actions = []
+    for brief in briefs:
+        is_npc = bool(brief["is_npc"])
+        variants = [
+            {
+                "id": c.get("id"),
+                "text": c.get("text", ""),
+                "consequence_kind": c.get("consequence_kind", ""),
+            }
+            for c in _j(brief["choices"], [])
+        ]
+        chosen = next(
+            (v for v in variants if v["id"] == brief["selected_action_id"]), None
+        )
+        brief_node = brief_nodes.get(brief["id"])
+        brief_node_id = brief_node["id"] if brief_node else None
+        choice_node_id = None
+        if brief_node and brief["selected_action_id"]:
+            choice_node_id = (
+                f"choice:{gid}:{turn}:{brief_node['meta'].get('participant', '')}"
+            )
+            if choice_node_id not in {n["id"] for n in graph["nodes"]}:
+                choice_node_id = None
+        if is_npc:
+            participant = names.get(("npc", brief["npc_key"]), brief["npc_key"])
+            action = None
+        else:
+            participant = names.get(("player", brief["player_id"]),
+                                    f"player {brief['player_id']}")
+            action = action_by_pid.get(brief["player_id"])
+        actions.append({
+            "participant": participant,
+            "is_npc": is_npc,
+            "brief_node_id": brief_node_id,
+            "choice_node_id": choice_node_id,
+            "variants": variants,
+            "chosen": chosen,
+            "chosen_kind": action["choice"] if action else None,
+            "submitted_at": action["created_at"] if action else None,
+            "timing": _action_timing(brief, action, deadline),
+        })
+    return {
+        "deadline": deadline,
+        "outcome_node_id": outcome_node_id,
+        "actions": actions,
+    }
+
+
 def get_node_detail(game_id: str, node_id: str) -> dict | None:
     node = graph_builder.get_graph_node(game_id, node_id)
     if node is None:
@@ -399,6 +526,7 @@ def get_node_detail(game_id: str, node_id: str) -> dict | None:
         "node": node,
         "chain": _event_steps(node.get("event_ids", [])),
         "player_view": _player_view(node, game_id),
+        "actions": _turn_actions(node, game_id, graph),
         "delivery": _delivery(node, game_id),
         "upstream": _upstream(node, graph),
     }

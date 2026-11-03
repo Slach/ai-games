@@ -112,7 +112,7 @@
     border: 1px solid #3a3f4b;
     border-radius: 8px;
     padding: 6px 10px;
-    font-size: 13px;
+    font-size: 14px;
     min-width: 340px;
   }
   .btn {
@@ -121,17 +121,17 @@
     border: 1px solid #3a3f4b;
     border-radius: 8px;
     padding: 6px 12px;
-    font-size: 12px;
+    font-size: 13.5px;
     cursor: pointer;
   }
   .btn:hover:not(:disabled) { background: #303745; }
   .btn:disabled { opacity: 0.5; cursor: default; }
   .btn .spinner { margin-right: 4px; vertical-align: -2px; }
-  .check { font-size: 12px; color: #9aa2b1; display: flex; gap: 4px; align-items: center; }
-  .import-result { font-size: 11px; color: #8b93a1; }
+  .check { font-size: 13.5px; color: #9aa2b1; display: flex; gap: 4px; align-items: center; }
+  .import-result { font-size: 12.5px; color: #8b93a1; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip {
-    font-size: 11px;
+    font-size: 12.5px;
     background: #1c2028;
     border: 1px solid #2a2f3a;
     border-radius: 10px;
@@ -140,5 +140,5 @@
   }
   .chip-job { color: #ffd66b; border-color: #665a24; }
   .chip-dim { color: #77808f; }
-  .error { color: #ff8f8f; font-size: 12px; }
+  .error { color: #ff8f8f; font-size: 13.5px; }
 </style>

@@ -101,15 +101,15 @@
     border: 1px solid #3a3f4b;
     border-radius: 8px;
     color: #e4e7ec;
-    font-size: 13px;
+    font-size: 14px;
     padding: 6px 10px;
   }
   input[type='text']:focus { outline: none; border-color: #6ea8fe; }
   .scope {
     position: absolute;
     right: 8px;
-    top: 6px;
-    font-size: 11px;
+    top: 7px;
+    font-size: 12.5px;
     color: #8b93a1;
     display: flex;
     gap: 3px;
@@ -140,18 +140,18 @@
     color: #c7ccd6;
     padding: 8px 10px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13.5px;
   }
   .hit:hover:not(.disabled) { background: #1e2430; }
   .hit.disabled { cursor: default; opacity: 0.6; }
-  .hit-meta { color: #7d8695; font-size: 11px; margin-bottom: 3px; }
+  .hit-meta { color: #7d8695; font-size: 12px; margin-bottom: 3px; }
   .no-node { color: #d6a445; }
   .hit-snippet {
-    font-size: 11px;
+    font-size: 12.5px;
     line-height: 1.35;
     max-height: 52px;
     overflow: hidden;
   }
   .hit-snippet :global(mark) { background: #665a24; color: #ffe9a8; border-radius: 2px; }
-  .no-hits { padding: 10px; color: #8b93a1; font-size: 12px; }
+  .no-hits { padding: 10px; color: #8b93a1; font-size: 13.5px; }
 </style>

@@ -60,7 +60,12 @@ class GraphStore {
       this.expanded = Object.fromEntries(
         Object.entries(this.expanded).filter(([id]) => ids.has(id)),
       );
-      if (fit) this.expanded[graph.root] = true;
+      if (fit) {
+        // Default view: the whole spine mission → game → players → turns →
+        // finale, with roster/turn cards collapsed inside their groups.
+        this.expanded[graph.root] = true;
+        this.expanded[`game:${graph.game_id}`] = true;
+      }
       this.relayout();
       if (fit) this.fitRequest++;
       this.error = '';
@@ -74,6 +79,8 @@ class GraphStore {
   toggleNode(id: string) {
     this.expanded[id] = !this.expanded[id];
     this.relayout();
+    // Refit so the expanded content stays on screen.
+    this.fitRequest++;
   }
 
   expandTo(id: string) {
@@ -165,7 +172,7 @@ class GraphStore {
             style: 'stroke: #7a7a8c; stroke-dasharray: 2 5; stroke-width: 1;',
           };
         }
-        if (edge.etype === 'flow') {
+        if (edge.etype === 'flow' || edge.etype === 'chain') {
           return {
             id: edge.id,
             source: edge.source,

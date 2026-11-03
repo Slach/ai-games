@@ -72,7 +72,8 @@ def _seed(conn: sqlite3.Connection):
     )
     c.execute(
         "INSERT INTO game_state VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (GID, 2, "active", 80, 60, 30, "", "", "", "2026-11-01T12:00:00"),
+        (GID, 2, "active", 80, 60, 30, "mission_complete", "The convoy made it.", "",
+         "2026-11-01T12:00:00"),
     )
     c.execute(
         "INSERT INTO game_missions VALUES (?,?,?,?,?,?,?,?)",
@@ -102,12 +103,13 @@ def _seed(conn: sqlite3.Connection):
     })
     c.execute(
         "INSERT INTO game_turns VALUES (?,?,?,?,?,?,?,?,?)",
-        (1, GID, "2026-11-01T11:00:00", "2026-11-01T19:00:00", outcome,
+        (1, GID, "2026-11-01T11:00:00", "2026-11-01T19:00:00+00:00", outcome,
          "story", "teaser", json.dumps({"narrative": "SOS repeats", "setting": "asteroids"}), "[]"),
     )
     c.execute(
         "INSERT INTO game_turns VALUES (?,?,?,?,?,?,?,?,?)",
-        (2, GID, "2026-11-01T18:00:00", None, None, "story2", "teaser2", "{}", "[]"),
+        (2, GID, "2026-11-01T18:00:00", "2026-11-01T23:00:00+00:00", None,
+         "story2", "teaser2", "{}", "[]"),
     )
     choices = json.dumps([
         {"id": "scan", "text": "Scan the wreck", "consequence": "reveal", "consequence_kind": "progress"},
@@ -126,6 +128,25 @@ def _seed(conn: sqlite3.Connection):
         "VALUES (1, NULL, ?, 1, 'npc briefing', ?, 'run', ?, '', '2026-11-01T11:05:00', ?)",
         (f"npc_engineer_{GID}", "[]", COMFY.format(name="action_turn1_npc_engineer_00001_.png", gid=GID), GID),
     )
+    c.execute(
+        "INSERT INTO player_briefings (turn, player_id, npc_key, is_npc, briefing, choices, "
+        "selected_action_id, chosen_action_url, personal_title, created_at, game_id) "
+        "VALUES (1, 222, NULL, 0, 'anton briefing', ?, 'run', NULL, 'Turn 1 — Anton', "
+        "'2026-11-01T11:06:00', ?)",
+        (choices, GID),
+    )
+    c.execute("INSERT INTO player_actions (player_id, turn, action_id, choice, created_at) "
+              "VALUES (222, 1, 'run', 'auto_selected', '2026-11-01T19:00:30')")
+    # Turn 2: manual choice submitted after the deadline → "late".
+    c.execute(
+        "INSERT INTO player_briefings (turn, player_id, npc_key, is_npc, briefing, choices, "
+        "selected_action_id, chosen_action_url, personal_title, created_at, game_id) "
+        "VALUES (2, 111, NULL, 0, 'turn 2 briefing', ?, 'scan', NULL, 'Turn 2 — Slach', "
+        "'2026-11-01T18:30:00', ?)",
+        (choices, GID),
+    )
+    c.execute("INSERT INTO player_actions (player_id, turn, action_id, choice, created_at) "
+              "VALUES (111, 2, 'scan', 'selected', '2026-11-01T23:30:00')")
     c.execute(
         "INSERT INTO game_images (type, turn, image_url, prompt, created_at, game_id) VALUES "
         "('bridge', 0, ?, '', '2026-11-01T10:55:00', ?)",
@@ -243,12 +264,28 @@ class TestGraphBuilder(unittest.TestCase):
     def test_graph_structure(self):
         graph = self.graph_builder.build_game_graph(GID)
         self.assertIsNotNone(graph)
-        self.assertEqual(graph["root"], f"game:{GID}")
-        for ntype in ("game", "concept", "player", "npc", "turn", "scene",
-                      "dialogue", "brief", "choice", "actionimg", "outcome", "death"):
+        # Mission is the root; the spine is mission → game → players group →
+        # turns group → finale.
+        self.assertEqual(graph["root"], f"concept:{GID}")
+        for ntype in ("game", "concept", "players", "turns", "player", "npc", "turn",
+                      "scene", "dialogue", "brief", "choice", "actionimg", "outcome",
+                      "death", "finale"):
             self.assertTrue(self._nodes_by_type(graph, ntype), f"missing nodes of type {ntype}")
-        game_node = next(n for n in graph["nodes"] if n["type"] == "game")
-        self.assertTrue(game_node["children_count"] >= 5)
+        nodes = {n["id"]: n for n in graph["nodes"]}
+        self.assertEqual(nodes[f"game:{GID}"]["parent"], f"concept:{GID}")
+        self.assertEqual(nodes[f"player:{GID}:111"]["parent"], f"players:{GID}")
+        self.assertEqual(nodes[f"npc:{GID}:engineer"]["parent"], f"players:{GID}")
+        self.assertEqual(nodes[f"turn:{GID}:1"]["parent"], f"turns:{GID}")
+        self.assertEqual(nodes[f"finale:{GID}"]["parent"], f"game:{GID}")
+        game_node = nodes[f"game:{GID}"]
+        self.assertEqual(game_node["children_count"], 3)  # players group, turns group, finale
+        # Chain edges rank the spine top-down.
+        chain_pairs = {(e["source"], e["target"]) for e in graph["edges"] if e["etype"] == "chain"}
+        self.assertIn((f"players:{GID}", f"turns:{GID}"), chain_pairs)
+        self.assertIn((f"turns:{GID}", f"finale:{GID}"), chain_pairs)
+        self.assertIn((f"turn:{GID}:2", f"finale:{GID}"), chain_pairs)
+        # Turn 1 had an auto-selected action → badge on the turn node.
+        self.assertIn("auto", nodes[f"turn:{GID}:1"]["badges"])
         # Dead player badge + invite edge
         dead = next(n for n in graph["nodes"] if n["type"] == "player" and n["meta"]["player_id"] == 222)
         self.assertIn("dead", dead["badges"])
@@ -323,6 +360,37 @@ class TestGraphBuilder(unittest.TestCase):
         self.assertEqual(detail["delivery"][0]["push_type"], "briefing")
         upstream_ids = [u["node_id"] for u in detail["upstream"]]
         self.assertIn(f"scene:{GID}:1", upstream_ids)
+
+    def test_turn_actions_detail(self):
+        import node_detail
+
+        detail = node_detail.get_node_detail(GID, f"turn:{GID}:1")
+        self.assertIsNotNone(detail)
+        actions = detail["actions"]
+        self.assertEqual(actions["deadline"], "2026-11-01T19:00:00+00:00")
+        self.assertEqual(actions["outcome_node_id"], f"outcome:{GID}:1")
+        by_participant = {a["participant"]: a for a in actions["actions"]}
+        slach = by_participant["Slach"]
+        self.assertEqual(slach["timing"], "on-time")
+        self.assertEqual(slach["chosen_kind"], "selected")
+        self.assertEqual(slach["chosen"]["id"], "scan")
+        self.assertEqual(len(slach["variants"]), 2)
+        self.assertEqual(slach["brief_node_id"], f"brief:{GID}:1:p111")
+        self.assertEqual(slach["choice_node_id"], f"choice:{GID}:1:p111")
+        anton = by_participant["Anton"]
+        self.assertEqual(anton["timing"], "auto")
+        self.assertEqual(anton["chosen_kind"], "auto_selected")
+        self.assertEqual(anton["chosen"]["id"], "run")
+        npc = next(a for a in actions["actions"] if a["is_npc"])
+        self.assertEqual(npc["timing"], "npc")
+        self.assertEqual(npc["participant"], "Mika")
+        # Non-turn nodes carry no actions payload.
+        brief_detail = node_detail.get_node_detail(GID, f"brief:{GID}:1:p111")
+        self.assertIsNone(brief_detail["actions"])
+        # Manual submission after the deadline → "late" (naive created_at vs
+        # tz-aware deadline).
+        turn2 = node_detail.get_node_detail(GID, f"turn:{GID}:2")
+        self.assertEqual(turn2["actions"]["actions"][0]["timing"], "late")
 
     def test_list_games(self):
         games = self.graph_builder.list_games()

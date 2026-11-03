@@ -5,7 +5,7 @@
 
   let detail = $state<NodeDetail | null>(null);
   let error = $state('');
-  let tab = $state<'player' | 'chain' | 'delivery' | 'upstream'>('player');
+  let tab = $state<'player' | 'actions' | 'chain' | 'delivery' | 'upstream'>('player');
 
   $effect(() => {
     const nodeId = store.openNodeId;
@@ -17,12 +17,21 @@
     error = '';
     tab = 'player';
     fetchNodeDetail(store.selectedGameId, nodeId)
-      .then((data) => (detail = data))
+      .then((data) => {
+        detail = data;
+        tab = data.actions ? 'actions' : 'player';
+      })
       .catch((err) => (error = String(err)));
   });
 
   function copyText(text: string) {
     navigator.clipboard.writeText(text);
+  }
+
+  function gotoNode(nodeId: string | null) {
+    if (!nodeId) return;
+    store.focusNode(nodeId);
+    store.openDetail(nodeId);
   }
 
   const playerView = $derived((detail?.player_view ?? null) as Record<string, unknown> | null);
@@ -54,6 +63,11 @@
     {#if detail}
       <div class="tabs">
         <button class:active={tab === 'player'} onclick={() => (tab = 'player')}>Player view</button>
+        {#if detail.actions}
+          <button class:active={tab === 'actions'} onclick={() => (tab = 'actions')}>
+            Actions ({detail.actions.actions.length})
+          </button>
+        {/if}
         <button class:active={tab === 'chain'} onclick={() => (tab = 'chain')}>
           Chain ({detail.chain.length})
         </button>
@@ -92,6 +106,47 @@
             {/if}
           {:else}
             <div class="empty">Internal node — nothing was sent to players directly</div>
+          {/if}
+        {:else if tab === 'actions'}
+          {#if detail.actions}
+            {@const acts = detail.actions}
+            <div class="ta-deadline">
+              <span>deadline: {acts.deadline ?? '—'}</span>
+              {#if acts.outcome_node_id}
+                <button class="ta-link" onclick={() => gotoNode(acts.outcome_node_id)}>turn outcome →</button>
+              {/if}
+            </div>
+            {#each acts.actions as action (action.participant)}
+              <div class="ta-card">
+                <div class="ta-head">
+                  <span class="ta-name">{action.participant}</span>
+                  <span class="ta-timing timing-{action.timing}">{action.timing}</span>
+                </div>
+                <div class="ta-times">
+                  submitted: {action.submitted_at ?? '—'}
+                  {#if action.chosen_kind}· {action.chosen_kind}{/if}
+                </div>
+                {#if action.variants.length}
+                  <div class="pv-choices">
+                    {#each action.variants as variant (variant.id)}
+                      <div class="pv-choice" class:chosen={action.chosen?.id === variant.id}>
+                        <span class="pv-choice-id">{variant.id}</span>{variant.text}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="ta-links">
+                  {#if action.brief_node_id}
+                    <button class="ta-link" onclick={() => gotoNode(action.brief_node_id)}>briefing →</button>
+                  {/if}
+                  {#if action.choice_node_id}
+                    <button class="ta-link" onclick={() => gotoNode(action.choice_node_id)}>choice →</button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          {:else}
+            <div class="empty">No actions data</div>
           {/if}
         {:else if tab === 'chain'}
           {#if detail.chain.length === 0}
@@ -211,11 +266,11 @@
     padding: 12px 14px 8px;
     border-bottom: 1px solid #2a2f3a;
   }
-  .head-label { font-weight: 600; font-size: 15px; color: #e8ebf0; }
+  .head-label { font-weight: 600; font-size: 16px; color: #e8ebf0; }
   .loading-row { display: flex; align-items: center; gap: 8px; color: #9aa2b1; }
-  .head-sub { font-size: 11px; color: #8b93a1; margin-top: 3px; }
+  .head-sub { font-size: 13px; color: #8b93a1; margin-top: 3px; }
   .badge {
-    font-size: 9px;
+    font-size: 11px;
     background: #2a2f3a;
     border-radius: 8px;
     padding: 1px 6px;
@@ -238,20 +293,20 @@
     border: none;
     border-bottom: 2px solid transparent;
     color: #9aa2b1;
-    font-size: 12px;
+    font-size: 13.5px;
     padding: 8px 4px;
     cursor: pointer;
   }
   .tabs button.active { color: #7db4ff; border-bottom-color: #7db4ff; }
   .drawer-body { overflow-y: auto; padding: 12px 14px; flex: 1; }
-  .error { color: #ff8f8f; padding: 10px 14px; font-size: 12px; }
-  .empty { color: #77808f; font-size: 12px; padding: 16px 0; }
+  .error { color: #ff8f8f; padding: 10px 14px; font-size: 13.5px; }
+  .empty { color: #77808f; font-size: 13.5px; padding: 16px 0; }
   .pv-image { max-width: 100%; border-radius: 8px; margin-bottom: 10px; }
-  .pv-title { font-weight: 600; color: #ffd66b; font-size: 13px; margin-bottom: 8px; }
+  .pv-title { font-weight: 600; color: #ffd66b; font-size: 14.5px; margin-bottom: 8px; }
   .pv-text {
     white-space: pre-wrap;
     font-family: 'Segoe UI', system-ui, sans-serif;
-    font-size: 12.5px;
+    font-size: 14px;
     line-height: 1.5;
     color: #cdd2dc;
     background: none;
@@ -259,7 +314,7 @@
   }
   .pv-choices { display: flex; flex-direction: column; gap: 6px; }
   .pv-choice {
-    font-size: 12px;
+    font-size: 13.5px;
     color: #b9c0cc;
     background: #1c2028;
     border: 1px solid #2a2f3a;
@@ -267,8 +322,8 @@
     padding: 6px 10px;
   }
   .pv-choice.chosen { border-color: #2e9e5b; }
-  .pv-choice-id { color: #7d8695; margin-right: 6px; font-size: 11px; }
-  .pv-events { padding-left: 18px; font-size: 12px; color: #9aa2b1; }
+  .pv-choice-id { color: #7d8695; margin-right: 6px; font-size: 12px; }
+  .pv-events { padding-left: 18px; font-size: 13px; color: #9aa2b1; }
   .step {
     border: 1px solid #2a2f3a;
     border-radius: 8px;
@@ -276,30 +331,30 @@
     margin-bottom: 12px;
     background: #171b22;
   }
-  .step-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }
+  .step-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12.5px; }
   .step-backend {
     border-radius: 6px;
     padding: 1px 7px;
     text-transform: uppercase;
     font-weight: 600;
-    font-size: 10px;
+    font-size: 11px;
   }
   .backend-llm { background: #1d2f45; color: #7db4ff; }
   .backend-comfyui { background: #2b1f3d; color: #c39bff; }
   .step-kind { color: #e4e7ec; font-weight: 600; }
   .step-model { color: #7d8695; }
-  .step-status { text-transform: uppercase; font-size: 10px; }
+  .step-status { text-transform: uppercase; font-size: 11px; }
   .status-ok { color: #56d581; }
   .status-fallback { color: #ffd66b; }
   .status-pending { color: #7ab3d6; }
   .status-error { color: #ff8f8f; }
-  .step-meta { color: #77808f; font-size: 10px; }
-  .step-times { color: #5d6673; font-size: 10px; margin: 4px 0; }
+  .step-meta { color: #77808f; font-size: 11px; }
+  .step-times { color: #5d6673; font-size: 11px; margin: 4px 0; }
   .step-image { max-width: 100%; border-radius: 6px; margin: 6px 0; }
   details { margin: 6px 0; }
   summary {
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12.5px;
     color: #9fb6d8;
     display: flex;
     align-items: center;
@@ -312,17 +367,17 @@
     border: 1px solid #3a3f4b;
     border-radius: 5px;
     color: #9aa2b1;
-    font-size: 10px;
+    font-size: 11px;
     padding: 0 6px;
     cursor: pointer;
   }
-  .sec-imgs { color: #c39bff; font-size: 10px; }
+  .sec-imgs { color: #c39bff; font-size: 11px; }
   .sec-image-row { display: flex; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
   .sec-image-row img { width: 120px; border-radius: 6px; }
   .sec-text {
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 11.5px;
+    font-size: 13px;
     line-height: 1.45;
     color: #b9c0cc;
     background: #10131a;
@@ -332,8 +387,50 @@
     overflow-y: auto;
   }
   .delivery { border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
-  .delivery-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; color: #9aa2b1; }
-  .delivery-error { color: #ff8f8f; font-size: 11px; margin-top: 4px; }
+  .delivery-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: #9aa2b1; }
+  .delivery-error { color: #ff8f8f; font-size: 12.5px; margin-top: 4px; }
+  .ta-deadline {
+    color: #9aa2b1;
+    font-size: 13px;
+    margin-bottom: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .ta-card {
+    border: 1px solid #2a2f3a;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: #171b22;
+  }
+  .ta-head { display: flex; gap: 8px; align-items: center; }
+  .ta-name { font-weight: 600; color: #e4e7ec; font-size: 14px; }
+  .ta-timing {
+    text-transform: uppercase;
+    font-size: 11px;
+    border-radius: 8px;
+    padding: 1px 8px;
+  }
+  .timing-on-time { background: #14341f; color: #56d581; }
+  .timing-late { background: #3d2a1a; color: #ffb26b; }
+  .timing-auto { background: #3d331a; color: #ffd66b; }
+  .timing-pending { background: #22303d; color: #7ab3d6; }
+  .timing-npc { background: #2b1f3d; color: #c39bff; }
+  .timing-chosen { background: #2a2f3a; color: #a6adbc; }
+  .ta-times { color: #77808f; font-size: 12px; margin: 4px 0 8px; }
+  .ta-links { display: flex; gap: 8px; margin-top: 8px; }
+  .ta-link {
+    background: #262b34;
+    border: 1px solid #3a3f4b;
+    border-radius: 6px;
+    color: #9fc1ff;
+    font-size: 12.5px;
+    padding: 2px 10px;
+    cursor: pointer;
+  }
+  .ta-link:hover { background: #303745; }
   .upstream-btn {
     display: flex;
     gap: 8px;
@@ -344,12 +441,12 @@
     border: 1px solid #2a2f3a;
     border-radius: 8px;
     color: #cdd2dc;
-    font-size: 12px;
+    font-size: 13.5px;
     padding: 8px 10px;
     margin-bottom: 6px;
     cursor: pointer;
   }
   .upstream-btn:hover { border-color: #6ea8fe; }
-  .upstream-type { color: #7db4ff; font-size: 11px; }
-  .upstream-relation { color: #77808f; font-size: 11px; margin-left: auto; }
+  .upstream-type { color: #7db4ff; font-size: 12.5px; }
+  .upstream-relation { color: #77808f; font-size: 12.5px; margin-left: auto; }
 </style>

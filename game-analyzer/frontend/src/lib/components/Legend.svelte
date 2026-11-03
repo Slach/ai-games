@@ -11,10 +11,11 @@
       <div class="row"><span class="swatch sw-pending"></span> not delivered yet</div>
       <div class="row"><span class="swatch sw-error"></span> failed / no response</div>
       <div class="row"><span class="swatch sw-warn"></span> fallback / retry</div>
-      <div class="row"><span class="line line-flow"></span> turn flow</div>
+      <div class="row"><span class="line line-flow"></span> pipeline chain / turn flow</div>
       <div class="row"><span class="line line-invite"></span> invite link</div>
       <div class="row"><span class="line line-ref"></span> image reference (toggle "image refs")</div>
       <div class="hint">click node → details · number button → expand/collapse</div>
+      <div class="hint">mission → game → players → turns → finale</div>
     </div>
   {/if}
 </div>
@@ -39,12 +40,12 @@
     border: 1px solid #3a3f4b;
     border-radius: 8px;
     padding: 10px 12px;
-    font-size: 11px;
+    font-size: 13px;
     color: #b9c0cc;
     display: flex;
     flex-direction: column;
     gap: 5px;
-    width: 250px;
+    width: 280px;
   }
   .row { display: flex; align-items: center; gap: 8px; }
   .swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }

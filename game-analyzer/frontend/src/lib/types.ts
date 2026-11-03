@@ -36,7 +36,7 @@ export interface GraphEdge {
   id: string;
   source: string;
   target: string;
-  etype: 'tree' | 'invite' | 'ref' | 'flow';
+  etype: 'tree' | 'invite' | 'ref' | 'flow' | 'chain';
 }
 
 export interface Graph {
@@ -89,10 +89,35 @@ export interface UpstreamRef {
   relation: string;
 }
 
+export interface TurnActionVariant {
+  id: string;
+  text: string;
+  consequence_kind: string;
+}
+
+export interface TurnAction {
+  participant: string;
+  is_npc: boolean;
+  brief_node_id: string | null;
+  choice_node_id: string | null;
+  variants: TurnActionVariant[];
+  chosen: TurnActionVariant | null;
+  chosen_kind: 'selected' | 'auto_selected' | null;
+  submitted_at: string | null;
+  timing: 'on-time' | 'late' | 'auto' | 'pending' | 'npc' | 'chosen';
+}
+
+export interface TurnActions {
+  deadline: string | null;
+  outcome_node_id: string | null;
+  actions: TurnAction[];
+}
+
 export interface NodeDetail {
   node: GraphNode;
   chain: ChainStep[];
   player_view: Record<string, unknown> | null;
+  actions: TurnActions | null;
   delivery: DeliveryRow[];
   upstream: UpstreamRef[];
 }

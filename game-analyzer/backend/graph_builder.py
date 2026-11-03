@@ -1,9 +1,12 @@
 """Builds the analyzer node graph for one game from the read-only databases.
 
-The graph is a tree: a single root `game` node that progressively expands
-top-down (concept → roster → turns → turn contents → briefing → choice →
-action image). Extra non-tree edges: invite links (references table) and
-dotted reference-image edges (avatar/background inputs of ComfyUI calls).
+The graph is a top-down pipeline: `concept` (mission, root) → `game` →
+`players` group (roster + NPCs) → `turns` group (one node per turn, each
+expanding into scene / dialogue / briefings → choice → action image /
+outcome → deaths) → `finale`. The pipeline ranks are enforced with `chain`
+edges; turn→turn `flow` arrows are visual-only. Extra non-tree edges:
+invite links (references table) and dotted reference-image edges
+(avatar/background inputs of ComfyUI calls).
 
 Every node carries light metadata only (labels, thumbnails, badges, event
 ids) — full prompts/responses are fetched by node_detail on demand.
@@ -362,14 +365,30 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             return "delivery-failed"
         return "queued"
 
-    # --- root: game ---------------------------------------------------------
+    # --- root: mission (concept) → game ---------------------------------------
     bridge = next((i for i in images if i["type"] == "bridge"), None)
     active_job = next((j for j in jobs if j["status"] == "in_progress"), None)
     game_node_id = f"game:{gid}"
+    concept_node_id = f"concept:{gid}"
+    if mission:
+        add({
+            "id": concept_node_id,
+            "type": "concept",
+            "parent": None,
+            "label": mission["name"],
+            "subtitle": f'Mission · {mission["archetype"]} · stage '
+                        f'{mission["current_stage"]}/{mission["total_stages"]}',
+            "summary": mission.get("short_description") or (mission["description"] or "")[:160],
+            "thumb": None,
+            "badges": ["completed" if mission["completed"] else "internal"],
+            "event_ids": [],
+            "meta": {"turn": 0, "participant": ""},
+            "children_count": 0,
+        })
     add({
         "id": game_node_id,
         "type": "game",
-        "parent": None,
+        "parent": concept_node_id if mission else None,
         "label": game["name"] or gid,
         "subtitle": f'{gid} · {game["status"]}',
         "summary": " · ".join(filter(None, [
@@ -392,22 +411,23 @@ def _build_graph_uncached(game_id: str) -> dict | None:
         "children_count": 0,
     })
 
-    # --- concept ------------------------------------------------------------
-    if mission:
-        add({
-            "id": f"concept:{gid}",
-            "type": "concept",
-            "parent": game_node_id,
-            "label": mission["name"],
-            "subtitle": f'Mission · {mission["archetype"]} · stage '
-                        f'{mission["current_stage"]}/{mission["total_stages"]}',
-            "summary": mission.get("short_description") or (mission["description"] or "")[:160],
-            "thumb": None,
-            "badges": ["completed" if mission["completed"] else "internal"],
-            "event_ids": [],
-            "meta": {"turn": 0, "participant": ""},
-            "children_count": 0,
-        })
+    # --- players group (roster + NPCs) ---------------------------------------
+    players_group_id = f"players:{gid}"
+    add({
+        "id": players_group_id,
+        "type": "players",
+        "parent": game_node_id,
+        "label": "Players",
+        "subtitle": f"{len(players)} players · {len(npcs)} NPCs",
+        "summary": " · ".join(
+            (p["player_name"] or f'player {p["player_id"]}') for p in players
+        ),
+        "thumb": None,
+        "badges": [],
+        "event_ids": [],
+        "meta": {},
+        "children_count": 0,
+    })
 
     # --- players ------------------------------------------------------------
     onboard_by_pid = {o["player_id"]: o for o in onboarding}
@@ -425,7 +445,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
         add({
             "id": f"player:{gid}:{pid}",
             "type": "player",
-            "parent": game_node_id,
+            "parent": players_group_id,
             "label": player["player_name"] or f"player {pid}",
             "subtitle": f'{pid} · {player["role"]}',
             "summary": " · ".join(filter(None, [
@@ -462,7 +482,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
         add({
             "id": f"npc:{gid}:{npc['role_key']}",
             "type": "npc",
-            "parent": game_node_id,
+            "parent": players_group_id,
             "label": npc["npc_name"],
             "subtitle": f'NPC · {npc["role_key"]} · {npc["role"]}',
             "summary": " · ".join(filter(None, [
@@ -481,6 +501,22 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             },
             "children_count": 0,
         })
+
+    # --- turns group ------------------------------------------------------------
+    turns_group_id = f"turns:{gid}"
+    add({
+        "id": turns_group_id,
+        "type": "turns",
+        "parent": game_node_id,
+        "label": "Turns",
+        "subtitle": f"{len(turns)} turns",
+        "summary": (turns[-1]["teaser"] or turns[-1]["story"] or "")[:140] if turns else "",
+        "thumb": None,
+        "badges": [],
+        "event_ids": [],
+        "meta": {},
+        "children_count": 0,
+    })
 
     # --- turns and their contents --------------------------------------------
     images_by_turn: dict[int, list[dict]] = {}
@@ -524,15 +560,20 @@ def _build_graph_uncached(game_id: str) -> dict | None:
         turn_id = f"turn:{gid}:{turn}"
         has_outcome = bool(_j(turn_row["combined_outcome"], None))
         scene_img = turn_image(turn, "scene") or turn_image(turn, "turn_background")
+        turn_badges = [
+            "done" if has_outcome else "active" if turn == (state.get("turn") or 0) else "pending"
+        ]
+        if any(a["turn"] == turn and a["choice"] == "auto_selected" for a in actions):
+            turn_badges.append("auto")
         add({
             "id": turn_id,
             "type": "turn",
-            "parent": game_node_id,
+            "parent": turns_group_id,
             "label": f"Turn {turn}",
             "subtitle": (turn_row["deadline"] or "")[:16].replace("T", " ") or "no deadline",
             "summary": (turn_row["teaser"] or turn_row["story"] or "")[:140],
             "thumb": _img(scene_img["image_url"]) if scene_img else None,
-            "badges": ["done" if has_outcome else "active" if turn == (state.get("turn") or 0) else "pending"],
+            "badges": turn_badges,
             "event_ids": [],
             "meta": {"turn": turn, "created_at": turn_row["created_at"]},
             "children_count": 0,
@@ -748,6 +789,25 @@ def _build_graph_uncached(game_id: str) -> dict | None:
                 "etype": "flow",
             })
 
+    # --- pipeline chain edges ----------------------------------------------------
+    # They participate in layout, ranking the spine top-down:
+    # game → players group → turns group → finale (below the last turn).
+    chain_pairs = [(players_group_id, turns_group_id)]
+    finale_node_id = f"finale:{gid}"
+    if finale_node_id in nodes:
+        chain_pairs.append((turns_group_id, finale_node_id))
+        if turns:
+            last_turn_id = f"turn:{gid}:{turns[-1]['turn']}"
+            if last_turn_id in nodes:
+                chain_pairs.append((last_turn_id, finale_node_id))
+    for source, target in chain_pairs:
+        extra_edges.append({
+            "id": f"chain:{source}->{target}",
+            "source": source,
+            "target": target,
+            "etype": "chain",
+        })
+
     # --- attach generation events to nodes ---------------------------------------
     def event_node(event: dict) -> str | None:
         kind = event["kind"]
@@ -867,7 +927,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
 
     return {
         "game_id": gid,
-        "root": game_node_id,
+        "root": concept_node_id if mission else game_node_id,
         "nodes": list(nodes.values()),
         "edges": tree_edges + extra_edges,
     }

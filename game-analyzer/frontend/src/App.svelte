@@ -33,6 +33,7 @@
     background: #101216;
     color: #d7dae0;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
   }
   .app {
     display: flex;

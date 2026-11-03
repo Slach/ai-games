@@ -71,7 +71,7 @@
 </div>
 <Handle type="source" position={Position.Bottom} class="handle-dot" />
 
-{#snippet iconFor(type: string)}{#if type === 'game'}🚀{:else if type === 'concept'}🧭{:else if type === 'player'}🧑{:else if type === 'npc'}🤖{:else if type === 'turn'}⏳{:else if type === 'scene'}🌌{:else if type === 'dialogue'}💬{:else if type === 'brief'}📜{:else if type === 'choice'}⚡{:else if type === 'actionimg'}🖼{:else if type === 'outcome'}⚔{:else if type === 'death'}💀{:else if type === 'finale'}🏁{:else}📄{/if}{/snippet}
+{#snippet iconFor(type: string)}{#if type === 'game'}🚀{:else if type === 'concept'}🧭{:else if type === 'players'}👥{:else if type === 'turns'}🎞{:else if type === 'player'}🧑{:else if type === 'npc'}🤖{:else if type === 'turn'}⏳{:else if type === 'scene'}🌌{:else if type === 'dialogue'}💬{:else if type === 'brief'}📜{:else if type === 'choice'}⚡{:else if type === 'actionimg'}🖼{:else if type === 'outcome'}⚔{:else if type === 'death'}💀{:else if type === 'finale'}🏁{:else}📄{/if}{/snippet}
 
 <style>
   .anode {
@@ -79,7 +79,7 @@
     border: 2px solid #3a3f4b;
     border-radius: 10px;
     padding: 8px 11px;
-    font-size: 13px;
+    font-size: 14px;
     color: #d7dae0;
     display: flex;
     flex-direction: column;
@@ -116,13 +116,13 @@
   .anode-titles { min-width: 0; flex: 1; }
   .anode-label {
     font-weight: 600;
-    font-size: 15px;
+    font-size: 16px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .anode-subtitle {
-    font-size: 12.5px;
+    font-size: 13.5px;
     color: #8b93a1;
     white-space: nowrap;
     overflow: hidden;
@@ -133,7 +133,7 @@
     border: 1px solid #3a3f4b;
     border-radius: 12px;
     color: #9fc1ff;
-    font-size: 12.5px;
+    font-size: 13.5px;
     padding: 2px 9px;
     cursor: pointer;
     display: flex;
@@ -145,7 +145,7 @@
   .anode-toggle .chev { display: inline-block; transition: transform 0.15s; }
   .anode-toggle.open .chev { transform: rotate(90deg); }
   .anode-summary {
-    font-size: 12.5px;
+    font-size: 13.5px;
     color: #9aa2b1;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -155,7 +155,7 @@
   }
   .anode-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
   .badge {
-    font-size: 10.5px;
+    font-size: 11.5px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
     padding: 1px 7px;
@@ -189,6 +189,8 @@
     50% { box-shadow: 0 0 0 8px rgba(255, 207, 74, 0.45); }
   }
   .node-game { background: linear-gradient(160deg, #1e2634, #171b22); }
+  .node-players { background: linear-gradient(160deg, #1e2634, #171b22); }
+  .node-turns { background: linear-gradient(160deg, #1f2430, #181c24); }
   .node-turn { background: linear-gradient(160deg, #1f2430, #181c24); }
   .node-actionimg { align-items: center; }
   .node-actionimg :global(.anode-thumb) { width: 100%; height: 150px; }
