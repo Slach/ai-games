@@ -179,6 +179,24 @@ MODEL_USE_CASES: dict[str, dict[str, dict[str, LLMParams]]] = {
             LLMParams(temperature=0.7, max_tokens=8192, enable_thinking=False),
         ),
     },
+    # Hemmingway-1.5 shares Hemmingway-1's chat template (reasoning-effort
+    # xhigh injected when thinking is on), so the thinking use cases are pinned
+    # the same way. Schema discipline is weaker than Hemmingway-1 without
+    # enforcement (2026-11-03 bakeoff, dspy path: 80.0 vs 98.3), but on the
+    # prod path with response_format=json_schema it scores 12/12 = 1.000 at
+    # temperature 0.7. The vendor card recommends temperature 1.0, but at 1.0
+    # the prod path drops to 0.975 (personal_outcomes missed for a decider) —
+    # contract discipline wins, so 0.7 stays.
+    "bartowski/HemmingwayAI_Hemmingway-1.5": {
+        "combined_outcome": _use_case(
+            LLMParams(temperature=0.7, max_tokens=262144, enable_thinking=False),
+            LLMParams(temperature=0.7, max_tokens=262144, enable_thinking=False),
+        ),
+        "game_over_outcome": _use_case(
+            LLMParams(temperature=0.7, max_tokens=8192, enable_thinking=False),
+            LLMParams(temperature=0.7, max_tokens=8192, enable_thinking=False),
+        ),
+    },
     # Muse-Glimmer emits reasoning (<think>) baked into its jinja chat template,
     # which llama.cpp honors regardless of the server-side --reasoning flag.
     # Reasoning consumes ~500-700 completion tokens before the model starts the
