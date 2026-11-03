@@ -51,7 +51,8 @@ class TestPlayerActionStats(unittest.TestCase):
             cols,
             {
                 "id", "game_id", "player_id", "turn", "action_id",
-                "action_text", "consequence_kind", "hull_integrity", "created_at",
+                "action_text", "consequence_kind", "hull_integrity", "is_auto",
+                "created_at",
             },
         )
 
@@ -80,6 +81,33 @@ class TestPlayerActionStats(unittest.TestCase):
         self.assertEqual(row["consequence_kind"], "injury")
         self.assertEqual(row["hull_integrity"], 84)
         self.assertTrue(row["created_at"])
+
+    def test_auto_flag_round_trips(self):
+        """Manual saves default to is_auto=0; the auto-action path writes 1."""
+        manual = db.save_player_action_stats(
+            game_id="g1",
+            player_id=111,
+            turn=1,
+            action_id="action_1",
+            action_text="a",
+            consequence_kind="progress",
+            hull_integrity=90,
+        )
+        auto = db.save_player_action_stats(
+            game_id="g1",
+            player_id=111,
+            turn=2,
+            action_id="action_2",
+            action_text="b",
+            consequence_kind="injury",
+            hull_integrity=85,
+            is_auto=True,
+        )
+        self.assertFalse(manual["is_auto"])
+        self.assertTrue(auto["is_auto"])
+
+        rows = _query_all()
+        self.assertEqual([r["is_auto"] for r in rows], [0, 1])
 
     def test_same_player_in_two_games_does_not_mix(self):
         """Stats for one game must not show up under another game's player history."""

@@ -443,7 +443,8 @@ def format_game_summary(
     """Build the compact post-finale mission summary (Telegram Markdown).
 
     player_stats: [{name, actions, auto_actions}] — one line per player,
-    auto_actions being the code-assigned 'delay' (hesitation) count.
+    auto_actions being the count of actions the auto-action system chose
+    on the player's behalf (LLM auto-choice or 'delay' hesitation fallback).
     """
     msgs = get_game_strings(language)["game_over"]
     reason = msgs["summary_reasons"].get(end_status, end_status)

@@ -1957,6 +1957,7 @@ async def auto_select_action(
             action_text=chosen_action_text,
             consequence_kind=chosen_consequence_kind,
             hull_integrity=stats_hull,
+            is_auto=True,
         )
     except Exception:
         logger.warning("player_action_stats save failed (auto)", exc_info=True)
@@ -5834,7 +5835,7 @@ async def admin_win_rate():
 
     win_share = (triumph + victory + pyrrhic) / ended games. avg_auto_ratio is
     the mean of per-game auto/total action ratios from player_action_stats
-    (auto = the code-assigned 'delay' hesitation kind).
+    (auto = actions the auto-action system chose on the player's behalf).
     """
     counts = {"triumph": 0, "victory": 0, "pyrrhic": 0, "stalemate": 0, "defeat": 0}
     turns_list: list[int] = []

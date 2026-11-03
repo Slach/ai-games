@@ -13,9 +13,11 @@
   import { store } from '../graph.svelte';
   import { nodeSize } from '../layout';
   import FlowNode from '../nodes/FlowNode.svelte';
+  import InviteEdge from '../edges/InviteEdge.svelte';
   import Legend from './Legend.svelte';
 
   const nodeTypes = { anode: FlowNode };
+  const edgeTypes = { invite: InviteEdge };
   const { fitView, setCenter } = useSvelteFlow();
 
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
@@ -65,6 +67,7 @@
     bind:nodes={store.flowNodes}
     bind:edges={store.flowEdges}
     {nodeTypes}
+    {edgeTypes}
     colorMode="dark"
     fitView
     minZoom={0.1}

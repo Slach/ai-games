@@ -252,6 +252,28 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE VIRTUAL TABLE IF NOT EXISTS generation_events_fts USING fts5(content);
         """.strip(),
     ),
+    (
+        26,
+        # The mission summary's "промедления" must count every action chosen
+        # by the system on the player's behalf, not just the synthetic
+        # 'delay' fallback (which only fires when the auto-choice LLM call
+        # itself fails — a successful LLM auto-choice used to be recorded
+        # like a manual one). is_auto=1 marks rows written by the auto-action
+        # endpoint. Existing rows are backfilled from generation_events
+        # (kind='player_auto_choice'), which is game-scoped — unlike
+        # player_actions.choice='auto_selected'.
+        """
+        ALTER TABLE player_action_stats ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0;
+        UPDATE player_action_stats SET is_auto = 1
+        WHERE EXISTS (
+            SELECT 1 FROM generation_events ge
+            WHERE ge.kind = 'player_auto_choice'
+              AND ge.game_id = player_action_stats.game_id
+              AND ge.turn = player_action_stats.turn
+              AND CAST(ge.player_id AS INTEGER) = player_action_stats.player_id
+        );
+        """.strip(),
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -1946,23 +1968,26 @@ def save_player_action_stats(
     action_text: str,
     consequence_kind: str,
     hull_integrity: int,
+    is_auto: bool = False,
 ) -> dict[str, Any]:
     """Record one player action choice for analytics.
 
     Append-only log of every submitted action with its pre-authored kind and the
     hull integrity snapshot at the moment of choice. Lets us reconstruct a player's
     choice history across ended games (which player_profiles.game_id loses).
+    is_auto=True marks actions the auto-action endpoint chose on the player's
+    behalf (LLM auto-choice and the synthetic delay fallback alike).
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO player_action_stats
              (game_id, player_id, turn, action_id, action_text,
-              consequence_kind, hull_integrity, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+              consequence_kind, hull_integrity, is_auto, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             game_id, player_id, turn, action_id, action_text,
-            consequence_kind, hull_integrity, datetime.now().isoformat(),
+            consequence_kind, hull_integrity, int(is_auto), datetime.now().isoformat(),
         ),
     )
     stat_id = cursor.lastrowid
@@ -1977,25 +2002,26 @@ def save_player_action_stats(
         "action_text": action_text,
         "consequence_kind": consequence_kind,
         "hull_integrity": hull_integrity,
+        "is_auto": is_auto,
     }
 
 
 def get_game_action_stats(*, game_id: str) -> dict[str, Any]:
     """Aggregate per-player action counts for a game from player_action_stats.
 
-    Auto actions are rows with consequence_kind='delay': 'delay' is the
-    code-assigned hesitation fallback (the LLM is forbidden to author it),
-    so it is the only reliable game-scoped auto marker in this table.
-    player_actions.choice='auto_selected' cannot be used — that table has no
-    game_id, so its rows can only be scoped via the players' CURRENT game,
-    which breaks for ended games whose players have moved on.
+    Auto actions are rows the system chose on the player's behalf:
+    is_auto=1 (written by the auto-action endpoint) or the code-assigned
+    'delay' hesitation fallback. player_actions.choice='auto_selected'
+    cannot be used — that table has no game_id, so its rows can only be
+    scoped via the players' CURRENT game, which breaks for ended games
+    whose players have moved on.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """SELECT player_id,
                   COUNT(*) AS actions,
-                  SUM(CASE WHEN consequence_kind = 'delay' THEN 1 ELSE 0 END) AS auto_actions
+                  SUM(CASE WHEN is_auto = 1 OR consequence_kind = 'delay' THEN 1 ELSE 0 END) AS auto_actions
            FROM player_action_stats
            WHERE game_id = ?
            GROUP BY player_id

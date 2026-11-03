@@ -58,7 +58,8 @@ export function layout(
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setGraph({
     rankdir: 'TB',
-    ranksep: 70,
+    // Roomy vertical gap: invite edges route below the roster row inside it.
+    ranksep: 110,
     nodesep: 24,
     edgesep: 10,
     marginx: 16,

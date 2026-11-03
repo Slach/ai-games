@@ -28,7 +28,7 @@ class TestGetGameActionStats(unittest.TestCase):
         except (FileNotFoundError, PermissionError):
             logger.error("Failed to remove temp DB: %s", self._tmp.name, exc_info=True)
 
-    def _save(self, game_id: str, player_id: int, turn: int, kind: str) -> None:
+    def _save(self, game_id: str, player_id: int, turn: int, kind: str, *, is_auto: bool = False) -> None:
         db.save_player_action_stats(
             game_id=game_id,
             player_id=player_id,
@@ -37,17 +37,19 @@ class TestGetGameActionStats(unittest.TestCase):
             action_text="a",
             consequence_kind=kind,
             hull_integrity=90,
+            is_auto=is_auto,
         )
 
     def test_empty_game_returns_zeroes(self):
         stats = db.get_game_action_stats(game_id="g_empty")
         self.assertEqual(stats, {"players": [], "total_actions": 0, "auto_actions": 0})
 
-    def test_roundtrip_two_players_delay_counts_as_auto(self):
-        # player 111: two manual actions + one delay (auto hesitation)
+    def test_roundtrip_two_players_auto_actions_counted(self):
+        # player 111: manual action, successful LLM auto-choice (is_auto),
+        # and a delay fallback — two of the three are auto-selected
         self._save("g1", 111, 1, "progress")
-        self._save("g1", 111, 2, "delay")
-        self._save("g1", 111, 3, "injury")
+        self._save("g1", 111, 2, "progress", is_auto=True)
+        self._save("g1", 111, 3, "delay")
         # player 222: one manual action
         self._save("g1", 222, 1, "fatal")
         stats = db.get_game_action_stats(game_id="g1")
@@ -55,11 +57,11 @@ class TestGetGameActionStats(unittest.TestCase):
             stats,
             {
                 "players": [
-                    {"player_id": 111, "actions": 3, "auto_actions": 1},
+                    {"player_id": 111, "actions": 3, "auto_actions": 2},
                     {"player_id": 222, "actions": 1, "auto_actions": 0},
                 ],
                 "total_actions": 4,
-                "auto_actions": 1,
+                "auto_actions": 2,
             },
         )
 

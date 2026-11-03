@@ -158,9 +158,7 @@ class GraphStore {
             id: edge.id,
             source: edge.source,
             target: edge.target,
-            type: 'straight',
-            label: 'invite',
-            style: 'stroke: #e0b040; stroke-dasharray: 6 4;',
+            type: 'invite',
           };
         }
         if (edge.etype === 'ref') {

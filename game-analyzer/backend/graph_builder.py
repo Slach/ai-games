@@ -451,7 +451,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             "summary": " · ".join(filter(None, [
                 player["species"],
                 player["gender"],
-                f'rerolls {session["current_question"]}' if session else "",
+                f'character rerolls {session["current_question"]}' if session else "",
                 f'wound {player["wound_severity"]}' if player["wound_severity"] else "",
             ])),
             "thumb": _img(player["avatar_url"]),
