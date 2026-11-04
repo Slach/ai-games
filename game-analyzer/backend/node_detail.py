@@ -406,17 +406,18 @@ def _parse_dt(value: str | None) -> datetime | None:
     return parsed
 
 
-def _action_timing(brief: dict, action: dict | None, deadline: str | None) -> str:
+def _action_timing(brief: dict, auto: bool, submitted_at: str | None,
+                   deadline: str | None) -> str:
     """Classify a briefing choice: submitted before the deadline or not."""
     if brief["is_npc"]:
         return "npc"
     if not brief["selected_action_id"]:
         return "pending"
-    if action is None:
-        return "chosen"
-    if action["choice"] == "auto_selected":
+    if auto:
         return "auto"
-    submitted = _parse_dt(action["created_at"])
+    if submitted_at is None:
+        return "chosen"
+    submitted = _parse_dt(submitted_at)
     due = _parse_dt(deadline)
     if submitted is not None and due is not None and submitted > due:
         return "late"
@@ -442,7 +443,17 @@ def _turn_actions(node: dict, gid: str, graph: dict) -> dict | None:
         "ORDER BY is_npc, player_id, npc_key",
         (gid, turn),
     )
-    # player_actions has no game_id column — scope it via the briefing roster.
+    # player_action_stats is game-scoped and carries the authoritative
+    # is_auto marker; player_actions is a legacy fallback (no game_id, so it
+    # is scoped via the briefing roster).
+    stat_by_pid = {
+        r["player_id"]: r
+        for r in db.query_game_server(
+            "SELECT player_id, action_id, is_auto, created_at FROM player_action_stats "
+            "WHERE game_id = ? AND turn = ?",
+            (gid, turn),
+        )
+    }
     player_ids = sorted({b["player_id"] for b in briefs if b["player_id"] is not None})
     action_by_pid = {}
     if player_ids:
@@ -494,11 +505,19 @@ def _turn_actions(node: dict, gid: str, graph: dict) -> dict | None:
                 choice_node_id = None
         if is_npc:
             participant = names.get(("npc", brief["npc_key"]), brief["npc_key"])
+            stat = None
             action = None
         else:
             participant = names.get(("player", brief["player_id"]),
                                     f"player {brief['player_id']}")
+            stat = stat_by_pid.get(brief["player_id"])
             action = action_by_pid.get(brief["player_id"])
+        auto = bool(stat and stat["is_auto"]) or bool(
+            action and action["choice"] == "auto_selected"
+        )
+        submitted_at = (stat["created_at"] if stat else None) or (
+            action["created_at"] if action else None
+        )
         actions.append({
             "participant": participant,
             "is_npc": is_npc,
@@ -506,9 +525,10 @@ def _turn_actions(node: dict, gid: str, graph: dict) -> dict | None:
             "choice_node_id": choice_node_id,
             "variants": variants,
             "chosen": chosen,
-            "chosen_kind": action["choice"] if action else None,
-            "submitted_at": action["created_at"] if action else None,
-            "timing": _action_timing(brief, action, deadline),
+            "chosen_kind": ("auto_selected" if auto else "selected")
+            if (stat or action) else None,
+            "submitted_at": submitted_at,
+            "timing": _action_timing(brief, auto, submitted_at, deadline),
         })
     return {
         "deadline": deadline,

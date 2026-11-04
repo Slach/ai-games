@@ -2719,6 +2719,8 @@ class ImageGenerator:
         kind: str,
         width: int,
         height: int,
+        player_id: str | None = None,
+        turn: int | None = None,
     ) -> str | None:
         """Generate a scene composed from crew avatar references in ONE call.
 
@@ -2765,13 +2767,15 @@ class ImageGenerator:
                 width=width,
                 height=height,
                 game_id=game_id,
-                player_id=None,
-                turn=None,
+                player_id=player_id,
+                turn=turn,
                 kind=kind,
             )
 
         model_key = resolve_txt2img_model(kind)
         multiref_builder = _MULTIREF_BUILDERS.get(model_key, _build_qwen_image_21_multiref_workflow)
+        ctx_player = str(player_id) if player_id else ""
+        ctx_turn = str(turn) if turn is not None else "0"
         workflow = multiref_builder(
             prompt=prompt,
             reference_filenames=ref_filenames,
@@ -2797,23 +2801,23 @@ class ImageGenerator:
                 )
                 write_comfyui_log(
                     game_id=game_id,
-                    player_id="",
-                    turn="0",
+                    player_id=ctx_player,
+                    turn=ctx_turn,
                     kind=kind,
                     log_type="request",
                     content=comfyui_req,
                 )
                 async with _image_semaphore:
                     prompt_id = await self._queue_prompt(
-                        workflow, kind=kind, ctx_game=game_id, ctx_player="", ctx_turn="0"
+                        workflow, kind=kind, ctx_game=game_id, ctx_player=ctx_player, ctx_turn=ctx_turn
                     )
                     outputs = await self._wait_for_completion(prompt_id, timeout=600)
                     image_url = self._extract_image_url(outputs)
                 if image_url:
                     write_comfyui_log(
                         game_id=game_id,
-                        player_id="",
-                        turn="0",
+                        player_id=ctx_player,
+                        turn=ctx_turn,
                         kind=kind,
                         log_type="response",
                         content=f"URL: {image_url}\nPrompt ID: {prompt_id}",

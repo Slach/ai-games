@@ -58,6 +58,18 @@ def _npc_avatar_url(description: str | None) -> str | None:
     return description[len("avatar_url="):].split(";", 1)[0]
 
 
+def _entity_player_id(entity_id: Any) -> int | None:
+    """Player id from a stable outcome entity_id — mirrors game-server's
+    _parse_entity_id: "p<player_id>" (current) or a bare id (legacy)."""
+    if not isinstance(entity_id, str):
+        return None
+    if entity_id.startswith("p") and entity_id[1:].isdigit():
+        return int(entity_id[1:])
+    if entity_id.isdigit():
+        return int(entity_id)
+    return None
+
+
 def _best_push_status(rows: list[dict]) -> str | None:
     best = None
     for row in rows:
@@ -227,9 +239,9 @@ def _build_graph_uncached(game_id: str) -> dict | None:
     for turn_row in turns:
         outcome = _j(turn_row.get("combined_outcome"), {})
         for death in outcome.get("dead_crew_members") or []:
-            entity = str((death or {}).get("entity_id", ""))
-            if entity.isdigit():
-                dead_ids.add(int(entity))
+            dead_pid = _entity_player_id(str((death or {}).get("entity_id", "")))
+            if dead_pid is not None:
+                dead_ids.add(dead_pid)
     known_ids = {p["player_id"] for p in players}
     title_re = re.compile(r"^[^—]*—\s*(.+?)\s*—\s*(.+?)\s*—")
     for pid in sorted({b["player_id"] for b in briefs if b["player_id"]}
@@ -289,6 +301,14 @@ def _build_graph_uncached(game_id: str) -> dict | None:
         f"SELECT player_id, turn, action_id, choice, created_at FROM player_actions "
         f"WHERE player_id IN ({game_player_ids}) ORDER BY id"
     )
+    # Game-scoped auto-action marker (player_action_stats.is_auto, migration
+    # 26) — reliable for ended games, unlike player_actions.choice which has
+    # no game_id column.
+    action_stats = db.query_game_server(
+        "SELECT player_id, turn, is_auto FROM player_action_stats WHERE game_id = ?",
+        (game_id,),
+    )
+    auto_stats = {(a["player_id"], a["turn"]): bool(a["is_auto"]) for a in action_stats}
     messages = db.query_game_server(
         f"SELECT id, player_id, message, message_type, timestamp FROM game_messages "
         f"WHERE player_id IN ({game_player_ids}) ORDER BY id"
@@ -563,7 +583,10 @@ def _build_graph_uncached(game_id: str) -> dict | None:
         turn_badges = [
             "done" if has_outcome else "active" if turn == (state.get("turn") or 0) else "pending"
         ]
-        if any(a["turn"] == turn and a["choice"] == "auto_selected" for a in actions):
+        turn_has_auto = any(is_auto and t == turn for (_, t), is_auto in auto_stats.items()) or any(
+            a["turn"] == turn and a["choice"] == "auto_selected" for a in actions
+        )
+        if turn_has_auto:
             turn_badges.append("auto")
         add({
             "id": turn_id,
@@ -655,7 +678,10 @@ def _build_graph_uncached(game_id: str) -> dict | None:
                 auto = False
                 if not is_npc and brief["player_id"] is not None:
                     action_row = actions_index.get((brief["player_id"], turn))
-                    auto = bool(action_row and action_row["choice"] == "auto_selected")
+                    auto = (
+                        auto_stats.get((brief["player_id"], turn), False)
+                        or bool(action_row and action_row["choice"] == "auto_selected")
+                    )
                 choice_badges = ["npc" if is_npc else "player"]
                 if auto:
                     choice_badges.append("auto")
@@ -666,7 +692,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
                     "type": "choice",
                     "parent": brief_id,
                     "label": (chosen.get("text") if chosen else brief["selected_action_id"]) or brief["selected_action_id"],
-                    "subtitle": f'choice · {brief["selected_action_id"]}',
+                    "subtitle": f'choice · {brief["selected_action_id"]}' + (" · auto-selected" if auto else ""),
                     "summary": (chosen or {}).get("consequence", "")[:160],
                     "thumb": None,
                     "badges": choice_badges,
@@ -727,9 +753,9 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             if isinstance(deaths, list):
                 for death in deaths:
                     entity_id = death.get("entity_id") if isinstance(death, dict) else None
-                    if entity_id is None or not str(entity_id).isdigit():
+                    dead_pid = _entity_player_id(entity_id)
+                    if dead_pid is None:
                         continue
-                    dead_pid = int(entity_id)
                     add({
                         "id": f"death:{gid}:{turn}:{dead_pid}",
                         "type": "death",
@@ -871,7 +897,16 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             return None
         if stage == "outcome":
             if kind in ("combined_outcome", "outcome_image_prompt", "outcome"):
-                return f"outcome:{gid}:{turn}" if f"outcome:{gid}:{turn}" in nodes else None
+                outcome_id = f"outcome:{gid}:{turn}"
+                if outcome_id in nodes:
+                    return outcome_id
+                if kind == "outcome" and event["image_url"]:
+                    # Legacy multi-reference outcome images were logged with a
+                    # hardcoded turn=0; the real turn survives in the filename.
+                    match = re.search(r"_turn(\d+)_", event["image_url"])
+                    if match and f"outcome:{gid}:{match.group(1)}" in nodes:
+                        return f"outcome:{gid}:{match.group(1)}"
+                return None
             if kind in ("death_notice", "player_death") and participant and participant[0] == "player":
                 return f"death:{gid}:{turn}:{participant[1]}" if f"death:{gid}:{turn}:{participant[1]}" in nodes else None
             return None
@@ -898,8 +933,31 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             return scene_id if scene_id in nodes else None
         return None
 
+    def orphan_comfyui_node(event: dict) -> str | None:
+        """ComfyUI action panels log with player_id='none' — the subject is
+        only identifiable via the CHARACTER AVATAR reference inside the
+        request. Attach such orphans to that participant's action image."""
+        if not event["request_text"]:
+            return None
+        match = _REF_AVATAR_RE.search(event["request_text"])
+        if not match:
+            return None
+        source_id = ref_target(match.group(1))
+        if not source_id:
+            return None
+        turn = event["turn"] or 0
+        if source_id.startswith(f"player:{gid}:"):
+            candidate = f"actionimg:{gid}:{turn}:p{source_id.rsplit(':', 1)[1]}"
+        elif source_id.startswith(f"npc:{gid}:"):
+            candidate = f"actionimg:{gid}:{turn}:n:{source_id.rsplit(':', 1)[1]}"
+        else:
+            return None
+        return candidate if candidate in nodes else None
+
     for event in events:
         node_id = event_node(event)
+        if node_id is None and event["backend"] == "comfyui":
+            node_id = orphan_comfyui_node(event)
         if node_id:
             nodes[node_id]["event_ids"].append(event["id"])
             if event["status"] == "fallback" and "fallback" not in nodes[node_id]["badges"]:

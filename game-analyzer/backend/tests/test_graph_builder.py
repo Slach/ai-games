@@ -41,6 +41,9 @@ CREATE TABLE onboarding_sessions (session_id TEXT PRIMARY KEY, player_id INTEGER
     proposal TEXT, answers TEXT);
 CREATE TABLE player_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, player_id INTEGER,
     turn INTEGER, action_id TEXT, choice TEXT, created_at TEXT);
+CREATE TABLE player_action_stats (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT,
+    player_id INTEGER, turn INTEGER, action_id TEXT, action_text TEXT,
+    consequence_kind TEXT, hull_integrity INTEGER, is_auto INTEGER DEFAULT 0, created_at TEXT);
 CREATE TABLE game_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, player_id INTEGER,
     message TEXT, message_type TEXT, timestamp TEXT);
 CREATE TABLE generation_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT, turn INTEGER,
@@ -99,7 +102,7 @@ def _seed(conn: sqlite3.Connection):
     )
     outcome = json.dumps({
         "outcome_narrative": "The convoy held.",
-        "dead_crew_members": [{"entity_id": "222", "cause": "hull breach"}],
+        "dead_crew_members": [{"entity_id": "p222", "cause": "hull breach"}],
     })
     c.execute(
         "INSERT INTO game_turns VALUES (?,?,?,?,?,?,?,?,?)",
@@ -135,8 +138,8 @@ def _seed(conn: sqlite3.Connection):
         "'2026-11-01T11:06:00', ?)",
         (choices, GID),
     )
-    c.execute("INSERT INTO player_actions (player_id, turn, action_id, choice, created_at) "
-              "VALUES (222, 1, 'run', 'auto_selected', '2026-11-01T19:00:30')")
+    # 222/turn1 (auto) and 111/turn2 (late) submit ONLY via player_action_stats
+    # below — proves the game-scoped is_auto / created_at path.
     # Turn 2: manual choice submitted after the deadline → "late".
     c.execute(
         "INSERT INTO player_briefings (turn, player_id, npc_key, is_npc, briefing, choices, "
@@ -145,8 +148,18 @@ def _seed(conn: sqlite3.Connection):
         "'2026-11-01T18:30:00', ?)",
         (choices, GID),
     )
-    c.execute("INSERT INTO player_actions (player_id, turn, action_id, choice, created_at) "
-              "VALUES (111, 2, 'scan', 'selected', '2026-11-01T23:30:00')")
+    # player_action_stats mirrors the above plus the is_auto marker; the
+    # game-scoped source the analyzer prefers.
+    stats = [
+        (GID, 111, 1, "scan", "Scan the wreck", "progress", 80, 0, "2026-11-01T12:00:00"),
+        (GID, 222, 1, "run", "Run away", "fatal", 80, 1, "2026-11-01T19:00:30"),
+        (GID, 111, 2, "scan", "Scan the wreck", "progress", 80, 0, "2026-11-01T23:30:00"),
+    ]
+    c.executemany(
+        "INSERT INTO player_action_stats (game_id, player_id, turn, action_id, action_text, "
+        "consequence_kind, hull_integrity, is_auto, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        stats,
+    )
     c.execute(
         "INSERT INTO game_images (type, turn, image_url, prompt, created_at, game_id) VALUES "
         "('bridge', 0, ?, '', '2026-11-01T10:55:00', ?)",
@@ -201,6 +214,20 @@ def _seed(conn: sqlite3.Connection):
          COMFY.format(name="action_turn1_p111_00001_.png", gid=GID), "ok"),
         ("game_%s_player_none_turn1_combined_outcome_llm" % GID, "", 1, "combined_outcome", "outcome", "llm",
          "2026-11-01T16:00:00", "2026-11-01T16:01:00", "--- SYSTEM PROMPT ---\noutcome", "--- RESPONSE CONTENT ---\n{}", None, "ok"),
+        # NPC action panel logged with player_id='none' — the subject NPC is
+        # only identifiable from the CHARACTER AVATAR reference.
+        ("game_%s_player_none_turn1_npc_action_comfyui" % GID, "none", 1, "npc_action", "player_action", "comfyui",
+         "2026-11-01T11:07:00", "2026-11-01T11:08:00",
+         "Model: qwen edit\n--- INSTRUCTION ---\nengineer acts\n"
+         "--- CHARACTER AVATAR ---\n%s/avatar_engineer_00001_.png\n--- WORKFLOW JSON ---\n{}" % GID,
+         "URL: %s\nPrompt ID: p3" % COMFY.format(name="action_turn1_npc_engineer_00001_.png", gid=GID),
+         COMFY.format(name="action_turn1_npc_engineer_00001_.png", gid=GID), "ok"),
+        # Legacy outcome image logged with a hardcoded turn=0; the real turn
+        # survives in the outcome_turn{N} filename.
+        ("game_%s_player_none_turn0_outcome_comfyui" % GID, "", 0, "outcome", "outcome", "comfyui",
+         "2026-11-01T17:01:00", "2026-11-01T17:02:00", "--- PROMPT ---\naftermath scene",
+         "URL: %s\nPrompt ID: p4" % COMFY.format(name="outcome_turn1_00002_.png", gid=GID),
+         COMFY.format(name="outcome_turn1_00002_.png", gid=GID), "ok"),
     ]
     for row in events:
         c.execute(
@@ -303,7 +330,13 @@ class TestGraphBuilder(unittest.TestCase):
         player = next(n for n in graph["nodes"] if n["type"] == "player" and n["meta"]["player_id"] == 111)
         self.assertEqual(len(player["event_ids"]), 2)  # avatar_prompt + avatar comfyui
         outcome = next(n for n in graph["nodes"] if n["type"] == "outcome")
-        self.assertTrue(outcome["event_ids"])
+        # combined_outcome LLM + the legacy outcome image that recovered its
+        # turn from the outcome_turn{N} filename.
+        self.assertEqual(len(outcome["event_ids"]), 2)
+        # Orphan NPC comfyui action panel (player_id='none') attaches via the
+        # CHARACTER AVATAR reference → the engineer's action image node.
+        npc_actionimg = nodes[f"actionimg:{GID}:1:n:engineer"]
+        self.assertTrue(npc_actionimg["event_ids"], "orphan npc comfyui event not attached")
         # Death node from dead_crew_members
         death = next(n for n in graph["nodes"] if n["type"] == "death")
         self.assertEqual(death["meta"]["player_id"], 222)
@@ -311,6 +344,11 @@ class TestGraphBuilder(unittest.TestCase):
         # Choice badge carries consequence kind
         choice = next(n for n in graph["nodes"] if n["type"] == "choice" and n["meta"]["participant"] == "p111")
         self.assertIn("progress", choice["badges"])
+        # Auto marker from player_action_stats.is_auto (222 has no
+        # player_actions row in this fixture).
+        choice222 = nodes[f"choice:{GID}:1:p222"]
+        self.assertIn("auto", choice222["badges"])
+        self.assertIn("auto-selected", choice222["subtitle"])
 
     def test_reference_edges_from_comfyui_request(self):
         graph = self.graph_builder.build_game_graph(GID)
@@ -400,7 +438,7 @@ class TestGraphBuilder(unittest.TestCase):
         self.assertEqual(game["players"]["total"], 2)
         self.assertEqual(game["players"]["dead"], 1)
         self.assertEqual(game["npcs"], 1)
-        self.assertEqual(game["event_count"], 9)
+        self.assertEqual(game["event_count"], 11)
         self.assertEqual(game["mission"]["archetype"], "escort")
 
 

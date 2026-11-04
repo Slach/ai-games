@@ -3525,6 +3525,7 @@ async def _analyze_turn_outcome(
                     kind="outcome",
                     width=1024,
                     height=1024,
+                    turn=turn,
                 )
                 if outcome_image_url:
                     save_game_image(
