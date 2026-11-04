@@ -1540,6 +1540,140 @@ def _build_llada_turbo_workflow(
     }
 
 
+def _build_p_h3_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    *,
+    unet_loader: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a P-H3-Image (MiniMax-H3 33B) text-to-image workflow.
+
+    Follows the official PrunaAI template: 8-step ManualSigmas grid, euler,
+    no CFG / negative prompt, ModelSamplingMiniMaxH3 at 1.0/1.0. The latent
+    comes from PH3ImageConditioning (second output) instead of an
+    EmptyLatent node. Needs ComfyUI >= 0.44.
+
+    ``unet_loader`` is the loader node dict — UNETLoader for the native
+    w4a8 quant, UnetLoaderGGUF for the GGUF quants; the rest of the graph
+    is identical.
+
+    Model combination:
+      UNET: p-h3-image_w4a8.safetensors (13.4 GB) or p-h3-image-Q4_K_M.gguf
+      CLIP: p-h3-image_text_encoder_int8_convrot.safetensors (type=minimax)
+      VAE:  p-h3-image_vae_int8_convrot.safetensors
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+    # PH3ImageConditioning requires canvas multiples of 32.
+    width -= width % 32
+    height -= height % 32
+
+    return {
+        # Diffusion model (native w4a8 or GGUF — passed by the wrapper).
+        "10": unet_loader,
+        # Video/audio flow shifts at 1.0/1.0 (the image model's fixed point).
+        "11": {
+            "class_type": "MiniMaxH3SigmaShift",
+            "inputs": {"model": ["10", 0], "shift_video": 1.0, "shift_audio": 1.0},
+        },
+        # Qwen3-VL-4B text connector (CLIPLoader type=minimax).
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "p-h3-image_text_encoder_int8_convrot.safetensors",
+                "type": "minimax",
+                "device": "default",
+            },
+        },
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "p-h3-image_vae_int8_convrot.safetensors"},
+        },
+        # Prompt + image latent in one node (defaults to 2912x2912 without
+        # width/height; game sizes are passed explicitly).
+        "5": {
+            "class_type": "PH3ImageConditioning",
+            "inputs": {"clip": ["30", 0], "prompt": prompt, "width": width, "height": height},
+        },
+        # Official 8-step sigma grid.
+        "6": {
+            "class_type": "ManualSigmas",
+            "inputs": {
+                "sigmas": "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
+            },
+        },
+        # No CFG: the negative conditioning input stays unconnected.
+        "7": {
+            "class_type": "BasicGuider",
+            "inputs": {"model": ["11", 0], "conditioning": ["5", 0]},
+        },
+        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "9": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": seed, "control": "fixed"},
+        },
+        "20": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["9", 0],
+                "guider": ["7", 0],
+                "sampler": ["8", 0],
+                "sigmas": ["6", 0],
+                "latent_image": ["5", 1],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["20", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+
+
+def _build_p_h3_w4a8_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """P-H3-Image with the native ComfyUI w4a8 quant (comfy-kitchen kernels)."""
+    return _build_p_h3_workflow(
+        prompt, width, height, seed, filename_prefix,
+        unet_loader={
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "p-h3-image_w4a8.safetensors", "weight_dtype": "default"},
+        },
+    )
+
+
+def _build_p_h3_gguf_q4_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """P-H3-Image GGUF Q4_K_M via ComfyUI-GGUF (no comfy-kitchen kernels).
+
+    Same ~19 GB peak as w4a8 but ~1.5x slower (on-the-fly dequant); the
+    fallback when int8/w4a8 kernels are unavailable.
+    """
+    return _build_p_h3_workflow(
+        prompt, width, height, seed, filename_prefix,
+        unet_loader={
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": "p-h3-image-Q4_K_M.gguf"},
+        },
+    )
+
+
 # Registry mapping comfyui_config.ModelConfig.builder -> workflow builder fn.
 # Each builder has the signature (prompt, width, height, seed, filename_prefix)
 # and returns a ComfyUI API workflow dict.
@@ -1552,6 +1686,8 @@ _TXT2IMG_BUILDERS = {
     "qwen_image_2512": _build_qwen_image_2512_workflow,
     "qwen_image_2_1": _build_qwen_image_21_workflow,
     "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_workflow,
+    "p_h3_w4a8": _build_p_h3_w4a8_workflow,
+    "p_h3_gguf_q4": _build_p_h3_gguf_q4_workflow,
 }
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow

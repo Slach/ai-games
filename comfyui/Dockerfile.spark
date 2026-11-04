@@ -5,7 +5,10 @@ ARG CUDA_VERSION=13.3.1
 # ComfyUI commit pin: bump to pull a newer master (new model nodes usually
 # need it — template notes say "update ComfyUI first"). The pin also busts
 # the clone layer cache; a plain --depth 1 clone would stay cached forever.
-ARG COMFYUI_COMMIT=98cc0bf84b7cb1383654c5b402e7612d875d6d22
+# 2026-11-04: bumped for native P-H3-Image support (576b642 "PH3Image
+# support" Nov 3, in v0.44.0; also brings the Oct MiniMax-H3 nodes it
+# depends on — ModelSamplingMiniMaxH3, CLIPLoader type=minimax).
+ARG COMFYUI_COMMIT=70bcb4e9fc70f19b7cdb340966351ed6479f2188
 
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS base
 

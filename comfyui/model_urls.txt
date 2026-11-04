@@ -69,6 +69,24 @@ https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qw
 https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors -> text_encoders/qwen3vl_8b_int8_convrot.safetensors
 https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors -> vae/qwen_image_2.1_vae_bf16.safetensors
 
+# ============== P-H3-Image (MiniMax-H3 33B, PrunaAI quants) ==============
+# 8-step, no CFG, native 8MP txt2img + editing with up to 8 reference
+# images. Needs ComfyUI >= v0.44 (PH3ImageConditioning node,
+# ModelSamplingMiniMaxH3 at 1.0/1.0, CLIPLoader type=minimax). Quant sets
+# (diffusion + text encoder + VAE) peak at: w4a8 21 GB / int8 31 GB /
+# bf16 56 GB VRAM @ 8MP. GGUF Q4_K_M is the UnetLoaderGGUF alternative
+# to w4a8 (same size class, no comfy-kitchen kernels needed). Text
+# encoder int8: w4a8 alters quality more, encoder is small so take int8.
+# Prompt upsampler int8: ~12 GB peak / 13 s per prompt on L40S (bf16
+# needs ~21 GB alone); model card recommends keeping it in the graph.
+# License: MiniMax H3 Community License (EU/UK/KR/US excluded, requires
+# "Powered by MiniMax H3" attribution).
+https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/diffusion_models/p-h3-image_w4a8.safetensors -> diffusion_models/p-h3-image_w4a8.safetensors
+https://huggingface.co/vantagewithai/P-H3-Image-ComfyUI-GGUF/resolve/main/p-h3-image-Q4_K_M.gguf -> unet/p-h3-image-Q4_K_M.gguf
+https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors -> text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors
+https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors -> vae/p-h3-image_vae_int8_convrot.safetensors
+https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors -> text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors
+
 # ============== Qwen-Image-2.1 Viggle Turbo (DMD-distilled 6-step LoRA) ==============
 # Few-step student of Qwen-Image-2.1 by Viggle: t2i AND instruction editing
 # with 1-3 reference images in 6 steps, no CFG. Only the LoRA is new — the

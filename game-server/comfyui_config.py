@@ -109,6 +109,20 @@ MODELS: dict[str, ModelConfig] = {
         label="Qwen-Image-2.1 Viggle Turbo (v0.2.1 LoRA, 6-step DMD, no CFG)",
         builder="qwen_image_2_1_viggle_turbo",
     ),
+    # ── P-H3-Image: MiniMax-H3 33B txt2img/edit, 8 steps, no CFG ────────────
+    # Native 8MP model (game sizes work too — memory is weights-bound:
+    # ~19 GB peak @ 1MP, ~22 GB @ 8MP on GB10). Needs ComfyUI >= 0.44
+    # (PH3ImageConditioning / MiniMaxH3SigmaShift / CLIPLoader type=minimax).
+    # License: MiniMax H3 Community (excludes EU/UK/KR/US, requires
+    # "Powered by MiniMax H3" attribution for derived products).
+    "p_h3_w4a8": ModelConfig(
+        label="P-H3-Image w4a8 (MiniMax-H3 33B, 8-step, no CFG)",
+        builder="p_h3_w4a8",
+    ),
+    "p_h3_gguf_q4": ModelConfig(
+        label="P-H3-Image GGUF Q4_K_M (MiniMax-H3 33B, 8-step, no CFG)",
+        builder="p_h3_gguf_q4",
+    ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
