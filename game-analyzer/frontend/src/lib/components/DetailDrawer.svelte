@@ -28,6 +28,31 @@
     navigator.clipboard.writeText(text);
   }
 
+  /** Pretty-print the section body when it is pure JSON (LLM responses). */
+  function prettyJson(text: string): string | null {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return null;
+    }
+  }
+
+  function highlightJson(json: string): string {
+    const escaped = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped.replace(
+      /("(?:[^"\\]|\\.)*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+      (match: string, str?: string, colon?: string, kw?: string) => {
+        if (str) {
+          return colon ? `<span class="j-key">${str}</span>${colon}` : `<span class="j-str">${str}</span>`;
+        }
+        if (kw) return `<span class="j-kw">${match}</span>`;
+        return `<span class="j-num">${match}</span>`;
+      },
+    );
+  }
+
   function gotoNode(nodeId: string | null) {
     if (!nodeId) return;
     store.focusNode(nodeId);
@@ -39,7 +64,9 @@
   const pvTitle = $derived(playerView ? String(playerView['title'] ?? '') : '');
   const pvImage = $derived(playerView ? (playerView['image'] as string | null) ?? null : null);
   const pvChoices = $derived(
-    playerView && Array.isArray(playerView['choices']) ? (playerView['choices'] as { id: string; text: string }[]) : [],
+    playerView && Array.isArray(playerView['choices'])
+      ? (playerView['choices'] as { id: string; text: string; consequence?: string; consequence_kind?: string }[])
+      : [],
   );
 </script>
 
@@ -89,6 +116,14 @@
                 {#each pvChoices as choice (choice.id)}
                   <div class="pv-choice" class:chosen={detail.node.type === 'choice' && detail.node.meta['action_id'] === choice.id}>
                     <span class="pv-choice-id">{choice.id}</span> {choice.text}
+                    {#if choice.consequence}
+                      <div class="pv-consequence">
+                        {#if choice.consequence_kind}
+                          <span class="pv-ck ck-{choice.consequence_kind}">{choice.consequence_kind}</span>
+                        {/if}
+                        {choice.consequence}
+                      </div>
+                    {/if}
                   </div>
                 {/each}
               </div>
@@ -131,6 +166,14 @@
                     {#each action.variants as variant (variant.id)}
                       <div class="pv-choice" class:chosen={action.chosen?.id === variant.id}>
                         <span class="pv-choice-id">{variant.id}</span>{variant.text}
+                        {#if variant.consequence}
+                          <div class="pv-consequence">
+                            {#if variant.consequence_kind}
+                              <span class="pv-ck ck-{variant.consequence_kind}">{variant.consequence_kind}</span>
+                            {/if}
+                            {variant.consequence}
+                          </div>
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -236,7 +279,12 @@
       </div>
     {/if}
     {#if section.text && section.name !== 'WORKFLOW JSON' && section.text.length < 6000}
-      <pre class="sec-text">{section.text}</pre>
+      {@const json = prettyJson(section.text)}
+      {#if json}
+        <pre class="sec-text json">{@html highlightJson(json)}</pre>
+      {:else}
+        <pre class="sec-text">{section.text}</pre>
+      {/if}
     {:else if section.text}
       <pre class="sec-text">{section.text.slice(0, 6000)}…
         <button class="copy" onclick={() => copyText(section.text)}>copy full</button>
@@ -323,6 +371,25 @@
   }
   .pv-choice.chosen { border-color: #2e9e5b; }
   .pv-choice-id { color: #7d8695; margin-right: 6px; font-size: 12px; }
+  .pv-consequence {
+    margin-top: 5px;
+    padding: 4px 8px;
+    border-left: 2px solid #3a3f4b;
+    color: #8f97a6;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+  .pv-ck {
+    border-radius: 6px;
+    padding: 0 6px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .ck-progress { background: #14341f; color: #56d581; }
+  .ck-fatal { background: #3d1a1a; color: #ff8f8f; }
+  .ck-injury { background: #3d2a1a; color: #ffb26b; }
+  .ck-delay { background: #2a2f3a; color: #a6adbc; }
   .pv-events { padding-left: 18px; font-size: 13px; color: #9aa2b1; }
   .step {
     border: 1px solid #2a2f3a;
@@ -386,6 +453,16 @@
     max-height: 340px;
     overflow-y: auto;
   }
+  .sec-text.json {
+    font-family: 'Cascadia Code', Consolas, Menlo, monospace;
+    font-size: 12.5px;
+    white-space: pre;
+    word-break: normal;
+  }
+  .j-key { color: #7db4ff; }
+  .j-str { color: #9ad19a; }
+  .j-num { color: #ffd66b; }
+  .j-kw { color: #c39bff; }
   .delivery { border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
   .delivery-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: #9aa2b1; }
   .delivery-error { color: #ff8f8f; font-size: 12.5px; margin-top: 4px; }

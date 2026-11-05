@@ -92,6 +92,7 @@ export interface UpstreamRef {
 export interface TurnActionVariant {
   id: string;
   text: string;
+  consequence: string;
   consequence_kind: string;
 }
 

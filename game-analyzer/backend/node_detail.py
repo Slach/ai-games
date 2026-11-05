@@ -160,7 +160,13 @@ def _player_view(node: dict, gid: str) -> dict | None:
             "text": brief["briefing"] or "",
             "image": image,
             "choices": [
-                {"id": c.get("id"), "text": c.get("text", "")} for c in choices
+                {
+                    "id": c.get("id"),
+                    "text": c.get("text", ""),
+                    "consequence": c.get("consequence", ""),
+                    "consequence_kind": c.get("consequence_kind", ""),
+                }
+                for c in choices
             ],
         }
     if ntype == "choice":
@@ -489,6 +495,7 @@ def _turn_actions(node: dict, gid: str, graph: dict) -> dict | None:
             {
                 "id": c.get("id"),
                 "text": c.get("text", ""),
+                "consequence": c.get("consequence", ""),
                 "consequence_kind": c.get("consequence_kind", ""),
             }
             for c in _j(brief["choices"], [])

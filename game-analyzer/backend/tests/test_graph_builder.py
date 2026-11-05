@@ -394,6 +394,8 @@ class TestGraphBuilder(unittest.TestCase):
 
         detail = node_detail.get_node_detail(GID, f"brief:{GID}:1:p111")
         self.assertEqual(len(detail["player_view"]["choices"]), 2)
+        self.assertEqual(detail["player_view"]["choices"][0]["consequence"], "reveal")
+        self.assertEqual(detail["player_view"]["choices"][0]["consequence_kind"], "progress")
         self.assertIn("zebra", detail["player_view"]["text"])
         self.assertEqual(detail["delivery"][0]["push_type"], "briefing")
         upstream_ids = [u["node_id"] for u in detail["upstream"]]
@@ -412,7 +414,10 @@ class TestGraphBuilder(unittest.TestCase):
         self.assertEqual(slach["timing"], "on-time")
         self.assertEqual(slach["chosen_kind"], "selected")
         self.assertEqual(slach["chosen"]["id"], "scan")
+        self.assertEqual(slach["chosen"]["consequence"], "reveal")
         self.assertEqual(len(slach["variants"]), 2)
+        self.assertEqual(slach["variants"][1]["consequence"], "boom")
+        self.assertEqual(slach["variants"][1]["consequence_kind"], "fatal")
         self.assertEqual(slach["brief_node_id"], f"brief:{GID}:1:p111")
         self.assertEqual(slach["choice_node_id"], f"choice:{GID}:1:p111")
         anton = by_participant["Anton"]
