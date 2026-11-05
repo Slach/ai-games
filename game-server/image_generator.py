@@ -1540,14 +1540,16 @@ def _build_llada_turbo_workflow(
     }
 
 
+# Official P-H3-Image 8-step sigma grid (from the PrunaAI workflows).
+_PH3_SIGMAS = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
+
+
 def _build_p_h3_workflow(
     prompt: str,
     width: int,
     height: int,
     seed: int,
     filename_prefix: str,
-    *,
-    unet_loader: dict[str, Any],
 ) -> dict[str, Any]:
     """Build a P-H3-Image (MiniMax-H3 33B) text-to-image workflow.
 
@@ -1556,12 +1558,8 @@ def _build_p_h3_workflow(
     comes from PH3ImageConditioning (second output) instead of an
     EmptyLatent node. Needs ComfyUI >= 0.44.
 
-    ``unet_loader`` is the loader node dict — UNETLoader for the native
-    w4a8 quant, UnetLoaderGGUF for the GGUF quants; the rest of the graph
-    is identical.
-
     Model combination:
-      UNET: p-h3-image_w4a8.safetensors (13.4 GB) or p-h3-image-Q4_K_M.gguf
+      UNET: p-h3-image_w4a8.safetensors (13.4 GB, comfy-kitchen kernels)
       CLIP: p-h3-image_text_encoder_int8_convrot.safetensors (type=minimax)
       VAE:  p-h3-image_vae_int8_convrot.safetensors
     """
@@ -1572,8 +1570,10 @@ def _build_p_h3_workflow(
     height -= height % 32
 
     return {
-        # Diffusion model (native w4a8 or GGUF — passed by the wrapper).
-        "10": unet_loader,
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "p-h3-image_w4a8.safetensors", "weight_dtype": "default"},
+        },
         # Video/audio flow shifts at 1.0/1.0 (the image model's fixed point).
         "11": {
             "class_type": "MiniMaxH3SigmaShift",
@@ -1601,9 +1601,7 @@ def _build_p_h3_workflow(
         # Official 8-step sigma grid.
         "6": {
             "class_type": "ManualSigmas",
-            "inputs": {
-                "sigmas": "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"
-            },
+            "inputs": {"sigmas": _PH3_SIGMAS},
         },
         # No CFG: the negative conditioning input stays unconnected.
         "7": {
@@ -1644,34 +1642,7 @@ def _build_p_h3_w4a8_workflow(
     filename_prefix: str,
 ) -> dict[str, Any]:
     """P-H3-Image with the native ComfyUI w4a8 quant (comfy-kitchen kernels)."""
-    return _build_p_h3_workflow(
-        prompt, width, height, seed, filename_prefix,
-        unet_loader={
-            "class_type": "UNETLoader",
-            "inputs": {"unet_name": "p-h3-image_w4a8.safetensors", "weight_dtype": "default"},
-        },
-    )
-
-
-def _build_p_h3_gguf_q4_workflow(
-    prompt: str,
-    width: int,
-    height: int,
-    seed: int,
-    filename_prefix: str,
-) -> dict[str, Any]:
-    """P-H3-Image GGUF Q4_K_M via ComfyUI-GGUF (no comfy-kitchen kernels).
-
-    Same ~19 GB peak as w4a8 but ~1.5x slower (on-the-fly dequant); the
-    fallback when int8/w4a8 kernels are unavailable.
-    """
-    return _build_p_h3_workflow(
-        prompt, width, height, seed, filename_prefix,
-        unet_loader={
-            "class_type": "UnetLoaderGGUF",
-            "inputs": {"unet_name": "p-h3-image-Q4_K_M.gguf"},
-        },
-    )
+    return _build_p_h3_workflow(prompt, width, height, seed, filename_prefix)
 
 
 # Registry mapping comfyui_config.ModelConfig.builder -> workflow builder fn.
@@ -1687,8 +1658,125 @@ _TXT2IMG_BUILDERS = {
     "qwen_image_2_1": _build_qwen_image_21_workflow,
     "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_workflow,
     "p_h3_w4a8": _build_p_h3_w4a8_workflow,
-    "p_h3_gguf_q4": _build_p_h3_gguf_q4_workflow,
 }
+
+def _build_p_h3_edit_workflow(
+    instruction: str,
+    character_filename: str,
+    background_filename: str | None,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    cfg: EditModelConfig,
+    *,
+    species_category: str = "",
+) -> dict[str, Any]:
+    """Build a P-H3-Image instruction-edit workflow (character in scene).
+
+    Same contract as :func:`_build_qwen_edit_workflow` on the MiniMax-H3
+    33B backbone: 8-step sigma grid, euler, no CFG. PH3ImageConditioning
+    edits image_1 and treats later images as references, so the background
+    (the canvas the character is composed into) is image_1 and the avatar
+    is image_2. Runtime instructions follow the Qwen-Image-Edit convention
+    ("Picture 1" = character, "Picture 2" = background), so the picture
+    numbers are swapped here; the node prefixes "Edit <Picture 1>. "
+    itself. Without a background the avatar alone is image_1 and the
+    numbers already line up.
+
+    ``species_category`` is accepted for builder-signature parity and unused.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+    # PH3ImageConditioning requires canvas multiples of 32; with width/height
+    # set, the latent is exactly that size (refs are scaled to fit).
+    width -= width % 32
+    height -= height % 32
+
+    if background_filename:
+        # character "Picture 1" -> <Picture 2>, background "Picture 2" -> <Picture 1>
+        prompt = (
+            instruction.replace("Picture 2", "\x00P2\x00")
+            .replace("Picture 1", "<Picture 2>")
+            .replace("\x00P2\x00", "<Picture 1>")
+        )
+        cond_images = {"images.image_1": ["41", 0], "images.image_2": ["42", 0]}
+    else:
+        prompt = instruction.replace("Picture 1", "<Picture 1>")
+        cond_images = {"images.image_1": ["42", 0]}
+
+    workflow: dict[str, Any] = {
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": cfg.unet, "weight_dtype": "default"},
+        },
+        "11": {
+            "class_type": "MiniMaxH3SigmaShift",
+            "inputs": {"model": ["10", 0], "shift_video": 1.0, "shift_audio": 1.0},
+        },
+        # Qwen3-VL-4B text connector (sees the refs through vision slots).
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": cfg.clip, "type": "minimax", "device": "default"},
+        },
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": cfg.vae},
+        },
+        # Background: the image being edited (absent without a background).
+        "41": {
+            "class_type": "LoadImage",
+            "inputs": {"image": background_filename},
+        },
+        # Character avatar: identity reference.
+        "42": {
+            "class_type": "LoadImage",
+            "inputs": {"image": character_filename},
+        },
+        "5": {
+            "class_type": "PH3ImageConditioning",
+            "inputs": {
+                "clip": ["30", 0],
+                "vae": ["29", 0],
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                **cond_images,
+            },
+        },
+        "6": {"class_type": "ManualSigmas", "inputs": {"sigmas": _PH3_SIGMAS}},
+        "7": {
+            "class_type": "BasicGuider",
+            "inputs": {"model": ["11", 0], "conditioning": ["5", 0]},
+        },
+        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "9": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": seed, "control": "fixed"},
+        },
+        "20": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["9", 0],
+                "guider": ["7", 0],
+                "sampler": ["8", 0],
+                "sigmas": ["6", 0],
+                "latent_image": ["5", 1],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["20", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    if not background_filename:
+        del workflow["41"]
+    return workflow
+
 
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
 # builder fn. Each builder takes (instruction, character_filename,
@@ -1698,6 +1786,7 @@ _EDIT_BUILDERS = {
     "qwen_image_edit": _build_qwen_edit_workflow,
     "qwen_image_edit_21": _build_qwen_edit_21_workflow,
     "qwen_image_edit_21_viggle_turbo": _build_qwen_edit_21_viggle_turbo_workflow,
+    "p_h3_edit": _build_p_h3_edit_workflow,
 }
 
 # Multi-reference (crew-bridge/outcome) scenes are Qwen-Image-2.1-family only

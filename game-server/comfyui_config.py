@@ -113,15 +113,14 @@ MODELS: dict[str, ModelConfig] = {
     # Native 8MP model (game sizes work too — memory is weights-bound:
     # ~19 GB peak @ 1MP, ~22 GB @ 8MP on GB10). Needs ComfyUI >= 0.44
     # (PH3ImageConditioning / MiniMaxH3SigmaShift / CLIPLoader type=minimax).
+    # 2026-11-04 bake-off: 9.01 vs flux3's 9.13 — kept off the default path,
+    # use for kinds that profit from 33B photorealism. The GGUF quant lost
+    # to w4a8 (8.56, 61s) and was removed.
     # License: MiniMax H3 Community (excludes EU/UK/KR/US, requires
     # "Powered by MiniMax H3" attribution for derived products).
     "p_h3_w4a8": ModelConfig(
         label="P-H3-Image w4a8 (MiniMax-H3 33B, 8-step, no CFG)",
         builder="p_h3_w4a8",
-    ),
-    "p_h3_gguf_q4": ModelConfig(
-        label="P-H3-Image GGUF Q4_K_M (MiniMax-H3 33B, 8-step, no CFG)",
-        builder="p_h3_gguf_q4",
     ),
 }
 
@@ -243,6 +242,17 @@ EDIT_MODELS: dict[str, EditModelConfig] = {
         # r128 is the rank the shipped ComfyUI workflows default to; the r256
         # file is a drop-in swap (LPIPS 0.024 apart ≈ float noise floor).
         lora="Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors",
+    ),
+    # P-H3-Image edit: background = image_1 (edited canvas), avatar = image_2;
+    # the builder swaps the Qwen "Picture N" numbering. Same w4a8 files as
+    # the txt2img p_h3_w4a8 entry — needs ComfyUI >= 0.44.
+    "p_h3_w4a8": EditModelConfig(
+        label="P-H3-Image w4a8 edit (MiniMax-H3 33B, 8-step, no CFG)",
+        builder="p_h3_edit",
+        unet="p-h3-image_w4a8.safetensors",
+        clip="p-h3-image_text_encoder_int8_convrot.safetensors",
+        vae="p-h3-image_vae_int8_convrot.safetensors",
+        lora="",
     ),
 }
 

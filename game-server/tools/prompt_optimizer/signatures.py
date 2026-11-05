@@ -204,6 +204,24 @@ class ImageBakeoffJudge(dspy.Signature):
     feedback: str = dspy.OutputField(desc="One short sentence naming the main flaw or strength")
 
 
+class ImageEditJudge(dspy.Signature):
+    """You are a strict judge of AI image edits that place a character into a
+    scene, in a cinematic sci-fi / space-opera context. Given the character's
+    reference avatar, the edit instruction, and the generated scene, score
+    0-100: (a) identity preservation, 40 points — the being in the scene must
+    be the same species/creature as the avatar (anatomy, materials, colors,
+    distinctive features), not a generic humanoid stand-in; (b) instruction
+    following, 40 points — the pose, action, placement in the described scene
+    and lighting match the instruction; (c) technical quality, 20 points — no
+    deformed anatomy, smears or compositional breaks. 100 = flawless edit."""
+
+    avatar: dspy.Image = dspy.InputField(desc="The character's reference avatar")
+    instruction: str = dspy.InputField(desc="The edit instruction the image was generated from")
+    image: dspy.Image = dspy.InputField(desc="The generated scene with the character")
+    score: float = dspy.OutputField(desc="Overall score from 0 to 100")
+    feedback: str = dspy.OutputField(desc="One short sentence naming the main flaw or strength")
+
+
 # ── Judge signatures (English rubric; content under judge may be RU or EN) ──
 
 

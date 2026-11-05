@@ -74,15 +74,15 @@ https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_
 # images. Needs ComfyUI >= v0.44 (PH3ImageConditioning node,
 # ModelSamplingMiniMaxH3 at 1.0/1.0, CLIPLoader type=minimax). Quant sets
 # (diffusion + text encoder + VAE) peak at: w4a8 21 GB / int8 31 GB /
-# bf16 56 GB VRAM @ 8MP. GGUF Q4_K_M is the UnetLoaderGGUF alternative
-# to w4a8 (same size class, no comfy-kitchen kernels needed). Text
-# encoder int8: w4a8 alters quality more, encoder is small so take int8.
-# Prompt upsampler int8: ~12 GB peak / 13 s per prompt on L40S (bf16
-# needs ~21 GB alone); model card recommends keeping it in the graph.
+# bf16 56 GB VRAM @ 8MP. The vantagewithai GGUF quants lost the
+# 2026-11-04 bake-off to w4a8 (8.56 vs 9.01, 61s vs 16s per image) —
+# not downloaded. Text encoder int8: w4a8 alters quality more, encoder
+# is small so take int8. Prompt upsampler int8: ~12 GB peak / 13 s per
+# prompt on L40S (bf16 needs ~21 GB alone); model card recommends keeping
+# it in the graph.
 # License: MiniMax H3 Community License (EU/UK/KR/US excluded, requires
 # "Powered by MiniMax H3" attribution).
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/diffusion_models/p-h3-image_w4a8.safetensors -> diffusion_models/p-h3-image_w4a8.safetensors
-https://huggingface.co/vantagewithai/P-H3-Image-ComfyUI-GGUF/resolve/main/p-h3-image-Q4_K_M.gguf -> unet/p-h3-image-Q4_K_M.gguf
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors -> text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors -> vae/p-h3-image_vae_int8_convrot.safetensors
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors -> text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors
