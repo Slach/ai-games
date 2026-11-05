@@ -231,19 +231,21 @@ def _player_view(node: dict, gid: str) -> dict | None:
         return {"dialogues": dialogues}
     if ntype == "player":
         rows = db.query_game_server(
-            "SELECT * FROM player_profiles WHERE player_id = ?",
-            (meta["player_id"],),
+            "SELECT * FROM player_profiles WHERE game_id = ? AND player_id = ?",
+            (gid, meta["player_id"]),
         )
-        if not rows:
-            return None
-        profile = rows[0]
-        return {
-            "image": image_endpoint_path(_comfyui_path(profile["avatar_url"])),
-            "text": "\n".join(filter(None, [
-                profile["role_description"],
-                profile["species_description"],
-            ])),
-        }
+        if rows:
+            profile = rows[0]
+            return {
+                "image": image_endpoint_path(_comfyui_path(profile["avatar_url"])),
+                "text": "\n".join(filter(None, [
+                    profile["role_description"],
+                    profile["species_description"],
+                ])),
+            }
+        # Ended games lose their player_profiles row; the roster card was
+        # rebuilt from this game's briefings/events — reuse its avatar.
+        return {"image": node.get("thumb"), "text": ""}
     if ntype == "npc":
         rows = db.query_game_server(
             "SELECT * FROM npc_profiles WHERE npc_key = ?", (meta["npc_key"],)

@@ -23,7 +23,7 @@ CREATE TABLE game_missions (game_id TEXT, name TEXT, description TEXT, archetype
 CREATE TABLE player_profiles (player_id INTEGER PRIMARY KEY, player_name TEXT, role TEXT,
     role_description TEXT, species TEXT, gender TEXT, avatar_url TEXT, avatar_description TEXT,
     is_dead INTEGER DEFAULT 0, is_spectator INTEGER DEFAULT 0, wound_severity TEXT,
-    created_at TEXT, game_id TEXT);
+    created_at TEXT, game_id TEXT, species_description TEXT);
 CREATE TABLE npc_profiles (npc_key TEXT PRIMARY KEY, role_key TEXT, npc_name TEXT, role TEXT,
     species TEXT, gender TEXT, avatar_description TEXT, is_active INTEGER DEFAULT 1,
     replaces_player_id INTEGER, loyalty INTEGER, wound_severity TEXT, created_at TEXT, game_id TEXT);
@@ -83,16 +83,16 @@ def _seed(conn: sqlite3.Connection):
         (GID, "Escort the convoy", "desc", "escort", 1, 3, 0, "short"),
     )
     c.execute(
-        "INSERT INTO player_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO player_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (111, "Slach", "security", "role desc", "reptiloid", "male",
          COMFY.format(name="avatar_111_00001_.png", gid=GID), "", 0, 0, None,
-         "2026-11-01T10:05:00", GID),
+         "2026-11-01T10:05:00", GID, None),
     )
     c.execute(
-        "INSERT INTO player_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO player_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (222, "Anton", "pilot", "role desc 2", "human", "male",
          COMFY.format(name="avatar_222_00001_.png", gid=GID), "", 1, 0, None,
-         "2026-11-01T10:30:00", GID),
+         "2026-11-01T10:30:00", GID, None),
     )
     c.execute(
         "INSERT INTO npc_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -429,6 +429,42 @@ class TestGraphBuilder(unittest.TestCase):
         # tz-aware deadline).
         turn2 = node_detail.get_node_detail(GID, f"turn:{GID}:2")
         self.assertEqual(turn2["actions"]["actions"][0]["timing"], "late")
+
+    def test_player_view_avatar_scoped_to_game(self):
+        import node_detail
+
+        # Ghost-roster player: no player_profiles row in this game (the only
+        # row left lives in another game), card rebuilt from this game's
+        # events. The drawer avatar must come from this game, not the stale
+        # profile row.
+        conn = sqlite3.connect(config.GAME_SERVER_DB)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO player_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (333, "Ghost", "pilot", "", "human", "male",
+             COMFY.format(name="avatar_333_00001_.png", gid="othrgme"), "", 0, 0, None,
+             "2026-10-01T10:00:00", "othrgme", None),
+        )
+        c.execute(
+            "INSERT INTO generation_events (log_file, game_id, player_id, turn, kind, stage, backend, "
+            "request_at, response_at, request_text, response_text, image_url, status, attempts) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            (f"game_{GID}_player_333_turn0_avatar_comfyui", GID, "333", 0, "avatar", "onboarding", "comfyui",
+             "2026-11-01T10:07:30", "2026-11-01T10:08:00", "--- PROMPT ---\navatar",
+             "URL: %s" % COMFY.format(name="avatar_333_00001_.png", gid=GID),
+             COMFY.format(name="avatar_333_00001_.png", gid=GID), "ok"),
+        )
+        conn.commit()
+        conn.close()
+        self.graph_builder._graph_cache.clear()
+
+        detail = node_detail.get_node_detail(GID, f"player:{GID}:333")
+        image = detail["player_view"]["image"]
+        self.assertIn(f"path={GID}/avatar_333_00001_.png", image)
+        self.assertNotIn("othrgme", image)
+        # A player with a profile row in this game still resolves normally.
+        with_profile = node_detail.get_node_detail(GID, f"player:{GID}:111")
+        self.assertIn(f"path={GID}/avatar_111_00001_.png", with_profile["player_view"]["image"])
 
     def test_list_games(self):
         games = self.graph_builder.list_games()

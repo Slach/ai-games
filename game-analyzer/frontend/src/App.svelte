@@ -1,14 +1,35 @@
 <script lang="ts">
   import { SvelteFlowProvider } from '@xyflow/svelte';
   import { store } from './lib/graph.svelte';
+  import { parseUrlState, type UrlState } from './lib/url';
   import Canvas from './lib/components/Canvas.svelte';
   import GameBar from './lib/components/GameBar.svelte';
   import SearchBar from './lib/components/SearchBar.svelte';
   import DetailDrawer from './lib/components/DetailDrawer.svelte';
 
+  function urlHasState(url: UrlState) {
+    return url.expanded.length > 0 || url.node !== null;
+  }
+
   store.loadGames().then(() => {
-    const active = store.games[0];
-    if (active) store.selectGame(active.game_id);
+    const url = parseUrlState();
+    const fromUrl = url.game && urlHasState(url) ? url : null;
+    const target = (fromUrl && store.games.some((g) => g.game_id === url.game))
+      ? url.game
+      : store.games[0]?.game_id;
+    if (target) store.selectGame(target, fromUrl ?? undefined);
+  });
+
+  // Manual hash edits / pasted links in the same tab (our own writes use
+  // replaceState and never fire this).
+  window.addEventListener('hashchange', () => {
+    const url = parseUrlState();
+    if (!url.game || !store.games.some((g) => g.game_id === url.game)) return;
+    if (url.game !== store.selectedGameId) {
+      store.selectGame(url.game, urlHasState(url) ? url : undefined);
+    } else if (urlHasState(url)) {
+      store.applyRestore(url.expanded, url.node);
+    }
   });
 </script>
 

@@ -2,6 +2,7 @@ import type { Edge, Node } from '@xyflow/svelte';
 import * as api from './api';
 import { computeVisible, layout } from './layout';
 import type { GameSummary, Graph, GraphNode } from './types';
+import { writeUrlState, type UrlState } from './url';
 
 export interface FlowNodeData extends Record<string, unknown> {
   graphNode: GraphNode;
@@ -26,6 +27,8 @@ class GraphStore {
   error = $state('');
   layoutTick = $state(0);
   private fetchSeq = 0;
+  private pendingRestore: UrlState | null = null;
+  private restoredFromUrl = false;
 
   async loadGames() {
     try {
@@ -37,11 +40,13 @@ class GraphStore {
     }
   }
 
-  async selectGame(gameId: string) {
+  async selectGame(gameId: string, restore?: UrlState) {
     this.selectedGameId = gameId;
     this.summary = this.games.find((g) => g.game_id === gameId) ?? null;
     this.openNodeId = null;
     this.expanded = {};
+    this.pendingRestore = restore ?? null;
+    this.syncHash();
     await this.refreshGraph(true);
   }
 
@@ -60,14 +65,21 @@ class GraphStore {
       this.expanded = Object.fromEntries(
         Object.entries(this.expanded).filter(([id]) => ids.has(id)),
       );
-      if (fit) {
+      if (fit && this.pendingRestore) {
+        const restore = this.pendingRestore;
+        this.pendingRestore = null;
+        this.applyRestore(restore.expanded, restore.node);
+      }
+      if (fit && !this.restoredFromUrl) {
         // Default view: the whole spine mission → game → players → turns →
         // finale, with roster/turn cards collapsed inside their groups.
         this.expanded[graph.root] = true;
         this.expanded[`game:${graph.game_id}`] = true;
       }
+      this.restoredFromUrl = false;
       this.relayout();
       if (fit) this.fitRequest++;
+      this.syncHash();
       this.error = '';
     } catch (err) {
       if (seq === this.fetchSeq) this.error = String(err);
@@ -76,11 +88,38 @@ class GraphStore {
     }
   }
 
+  /** Rebuild expansion + open drawer from a parsed URL state. */
+  applyRestore(expandedIds: string[], nodeId: string | null) {
+    const graph = this.graph;
+    if (!graph) return;
+    const ids = new Set(graph.nodes.map((n) => n.id));
+    this.expanded = {};
+    for (const id of expandedIds) {
+      if (ids.has(id)) this.expanded[id] = true;
+    }
+    this.restoredFromUrl = true;
+    this.openNodeId = nodeId && ids.has(nodeId) ? nodeId : null;
+    if (this.openNodeId) {
+      // Make the viewed node visible even if the URL omitted ancestors.
+      this.expandTo(this.openNodeId);
+    } else {
+      this.relayout();
+    }
+    this.syncHash();
+  }
+
+  private syncHash() {
+    if (!this.selectedGameId) return;
+    const expandedIds = Object.keys(this.expanded).filter((id) => this.expanded[id]);
+    writeUrlState(this.selectedGameId, expandedIds, this.openNodeId);
+  }
+
   toggleNode(id: string) {
     this.expanded[id] = !this.expanded[id];
     this.relayout();
     // Refit so the expanded content stays on screen.
     this.fitRequest++;
+    this.syncHash();
   }
 
   expandTo(id: string) {
@@ -96,6 +135,7 @@ class GraphStore {
       current = parents.get(current);
     }
     this.relayout();
+    this.syncHash();
   }
 
   focusNode(id: string) {
@@ -111,10 +151,12 @@ class GraphStore {
 
   openDetail(id: string) {
     this.openNodeId = id;
+    this.syncHash();
   }
 
   closeDetail() {
     this.openNodeId = null;
+    this.syncHash();
   }
 
   relayout() {

@@ -3,22 +3,30 @@
   import { store } from '../graph.svelte';
   import { nodeSize } from '../layout';
 
-  let { id, source, target, sourceX, sourceY, targetX, targetY }: EdgeProps = $props();
+  let { id, source, target }: EdgeProps = $props();
 
-  // Invite edges dock on the BOTTOM face of both cards and fan out below
-  // the roster row at staggered depths, so each referral stays traceable
-  // (arrow points referrer → invited) instead of merging into one
-  // horizontal line.
+  // Roster cards sit in a vertical column left of the players group, so
+  // invites route around that column: out of the referrer's left face, down
+  // a dedicated lane per invite, into the invited card's left face. Lanes
+  // are staggered so each referral stays individually traceable (arrow
+  // points referrer → invited) instead of merging into one vertical line.
   const route = $derived.by(() => {
-    const graphNode = store.graph?.nodes.find((n) => n.id === target);
-    const height = graphNode ? nodeSize(graphNode).height : 150;
-    const tx = targetX;
-    const ty = targetY + height; // bottom face of the target card
-    const siblings = store.flowEdges.filter((e) => e.type === 'invite' && e.source === source);
-    const index = Math.max(0, siblings.findIndex((e) => e.id === id));
-    const depth = sourceY + 38 + index * 24;
-    const d = `M ${sourceX} ${sourceY} L ${sourceX} ${depth} L ${tx} ${depth} L ${tx} ${ty}`;
-    return { d, labelX: (sourceX + tx) / 2, labelY: depth };
+    const sourceNode = store.graph?.nodes.find((n) => n.id === source);
+    const targetNode = store.graph?.nodes.find((n) => n.id === target);
+    const sourcePos = store.flowNodes.find((n) => n.id === source)?.position;
+    const targetPos = store.flowNodes.find((n) => n.id === target)?.position;
+    if (!sourceNode || !targetNode || !sourcePos || !targetPos) {
+      return { d: '', labelX: 0, labelY: 0 };
+    }
+    const sy = sourcePos.y + nodeSize(sourceNode).height / 2;
+    const ty = targetPos.y + nodeSize(targetNode).height / 2;
+    const sx = sourcePos.x; // left face of the referrer
+    const tx = targetPos.x; // left face of the invited card
+    const invites = store.flowEdges.filter((e) => e.type === 'invite');
+    const index = Math.max(0, invites.findIndex((e) => e.id === id));
+    const lane = Math.min(sx, tx) - 28 - index * 16;
+    const d = `M ${sx} ${sy} L ${lane} ${sy} L ${lane} ${ty} L ${tx} ${ty}`;
+    return { d, labelX: lane, labelY: (sy + ty) / 2 };
   });
 
   const markerId = $derived(`ia-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`);

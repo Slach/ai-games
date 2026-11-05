@@ -1,5 +1,4 @@
-import dagre from '@dagrejs/dagre';
-import type { Graph, GraphEdge, GraphNode } from './types';
+import type { Graph, GraphNode } from './types';
 
 export const NODE_SIZES: Record<string, { width: number; height: number }> = {
   game: { width: 340, height: 160 },
@@ -20,12 +19,16 @@ export const NODE_SIZES: Record<string, { width: number; height: number }> = {
   finale: { width: 310, height: 170 },
 };
 
-/** Layout edges: the tree plus the pipeline chain (mission → game → players
- * group → turns group → finale). Flow turn→turn arrows are sequence hints
- * only — feeding them to dagre cascades the turns diagonally. Ref/invite
- * edges would create cycles and are routed outside of dagre. */
-function isLayoutEdge(edge: GraphEdge) {
-  return edge.etype === 'tree' || edge.etype === 'chain';
+const DEFAULT_SIZE = { width: 260, height: 120 };
+/** Vertical gap between spine blocks (mission → game → players → turns → finale). */
+const SPINE_GAP = 90;
+/** Gap between vertically stacked siblings in a column / subtree. */
+const SIB_GAP = 24;
+/** Horizontal gap between a parent card and its child column. */
+const H_GAP = 80;
+
+export function nodeSize(node: GraphNode) {
+  return NODE_SIZES[node.type] ?? DEFAULT_SIZE;
 }
 
 export function computeVisible(graph: Graph, expanded: Set<string>): Set<string> {
@@ -51,49 +54,93 @@ export function computeVisible(graph: Graph, expanded: Set<string>): Set<string>
   return visible;
 }
 
+/** Deterministic pipeline layout (no dagre):
+ * - the spine (mission → game → players group → turns group → finale) runs
+ *   top-down, centered on x = 0;
+ * - the roster (players + NPCs) expands into a vertical column LEFT of the
+ *   players group;
+ * - turns expand into a vertical column RIGHT of the turns group;
+ * - a turn's own subtree grows further right (children in a vertical stack
+ *   beside their parent, parents centered on their stack) and each turn's
+ *   slot height is its subtree height — expanding a turn pushes the turns
+ *   below it down. */
 export function layout(
   graph: Graph,
   visible: Set<string>,
 ): Map<string, { x: number; y: number }> {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setGraph({
-    rankdir: 'TB',
-    // Roomy vertical gap: invite edges route below the roster row inside it.
-    ranksep: 110,
-    nodesep: 24,
-    edgesep: 10,
-    marginx: 16,
-    marginy: 16,
-  });
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const childrenOf = new Map<string, GraphNode[]>();
   for (const node of graph.nodes) {
-    if (!visible.has(node.id)) continue;
-    const size = NODE_SIZES[node.type] ?? { width: 260, height: 120 };
-    // dagre mutates the object passed to setNode (writes x/y/rank into it):
-    // sharing the NODE_SIZES entry between same-type nodes makes them all
-    // read the last sibling's coordinates and stack on one spot.
-    dagreGraph.setNode(node.id, { ...size });
+    if (!visible.has(node.id) || !node.parent || !visible.has(node.parent)) continue;
+    const list = childrenOf.get(node.parent) ?? [];
+    list.push(node);
+    childrenOf.set(node.parent, list);
   }
-  for (const edge of graph.edges) {
-    if (!isLayoutEdge(edge)) continue;
-    if (visible.has(edge.source) && visible.has(edge.target)) {
-      dagreGraph.setEdge(edge.source, edge.target);
-    }
-  }
-  dagre.layout(dagreGraph);
+
   const positions = new Map<string, { x: number; y: number }>();
-  for (const node of graph.nodes) {
-    if (!visible.has(node.id)) continue;
-    const placed = dagreGraph.node(node.id) as { x: number; y: number };
-    const size = NODE_SIZES[node.type] ?? { width: 260, height: 120 };
-    positions.set(node.id, {
-      x: Math.round(placed.x - size.width / 2),
-      y: Math.round(placed.y - size.height / 2),
-    });
+
+  // Place a subtree whose children sit RIGHT of the parent, stacked
+  // vertically. Returns the subtree height (≥ the parent's own height).
+  const placeLR = (node: GraphNode, x: number, top: number): number => {
+    const size = nodeSize(node);
+    const kids = childrenOf.get(node.id) ?? [];
+    if (!kids.length) {
+      positions.set(node.id, { x, y: top });
+      return size.height;
+    }
+    let y = top;
+    for (const kid of kids) {
+      y += placeLR(kid, x + size.width + H_GAP, y) + SIB_GAP;
+    }
+    const total = Math.max(size.height, y - SIB_GAP - top);
+    positions.set(node.id, { x, y: top + (total - size.height) / 2 });
+    return total;
+  };
+
+  // Mirror of placeLR: children sit LEFT of the parent.
+  const placeRL = (node: GraphNode, right: number, top: number): number => {
+    const size = nodeSize(node);
+    const kids = childrenOf.get(node.id) ?? [];
+    const left = right - size.width;
+    if (!kids.length) {
+      positions.set(node.id, { x: left, y: top });
+      return size.height;
+    }
+    let y = top;
+    for (const kid of kids) {
+      y += placeRL(kid, left - H_GAP, y) + SIB_GAP;
+    }
+    const total = Math.max(size.height, y - SIB_GAP - top);
+    positions.set(node.id, { x: left, y: top + (total - size.height) / 2 });
+    return total;
+  };
+
+  const gid = graph.game_id;
+  let y = 0;
+  for (const kind of ['concept', 'game', 'players', 'turns', 'finale'] as const) {
+    const id = `${kind}:${gid}`;
+    if (!visible.has(id)) continue;
+    const node = nodesById.get(id);
+    if (!node) continue;
+    const size = nodeSize(node);
+    const x = -size.width / 2;
+    positions.set(id, { x, y });
+    let blockHeight = size.height;
+    if (kind === 'players') {
+      let cy = y;
+      for (const kid of childrenOf.get(id) ?? []) {
+        cy += placeRL(kid, x - H_GAP, cy) + SIB_GAP;
+      }
+      blockHeight = Math.max(blockHeight, cy - SIB_GAP - y);
+    }
+    if (kind === 'turns') {
+      let cy = y;
+      for (const kid of childrenOf.get(id) ?? []) {
+        cy += placeLR(kid, x + size.width + H_GAP, cy) + SIB_GAP;
+      }
+      blockHeight = Math.max(blockHeight, cy - SIB_GAP - y);
+    }
+    y += blockHeight + SPINE_GAP;
   }
   return positions;
-}
-
-export function nodeSize(node: GraphNode) {
-  return NODE_SIZES[node.type] ?? { width: 260, height: 120 };
 }
