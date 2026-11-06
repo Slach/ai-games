@@ -93,6 +93,18 @@ async def api_import_logs():
 
 static_dir = Path(config.STATIC_DIR)
 if static_dir.is_dir():
+    # The SPA shell must always revalidate (a stale index.html keeps serving
+    # a deleted hashed bundle after a redeploy); hashed assets never change.
+    @app.middleware("http")
+    async def spa_cache_headers(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif path == "/" or path == "/index.html":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 else:
     logger.warning("Static frontend not found at %s (API-only mode)", static_dir)
