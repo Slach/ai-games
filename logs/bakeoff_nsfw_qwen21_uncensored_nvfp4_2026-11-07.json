@@ -1,0 +1,64 @@
+{
+  "qwen_image_2_1": {
+    "label": "Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
+    "avg_score": 8.5,
+    "avg_seconds": 22.1,
+    "rows": [
+      {
+        "prompt": "artistic_nude",
+        "score": 9.5,
+        "seconds": 22.1,
+        "feedback": "The image faithfully delivers the requested fine art nude, featuring a woman in her thirties reclining on white silk sheets with full frontal nudity and soft, e"
+      },
+      {
+        "prompt": "topless_boudoir",
+        "score": 10.0,
+        "seconds": 22.1,
+        "feedback": "The image faithfully delivers every requested element, including the topless pose, lace stockings, warm lighting, and sharp boudoir focus."
+      },
+      {
+        "prompt": "explicit_frontal",
+        "score": 9.5,
+        "seconds": 22.1,
+        "feedback": "The image faithfully delivers the requested clinical, explicit full-body nude with the subject facing the camera, legs apart, and the vulva clearly visible agai"
+      },
+      {
+        "prompt": "explicit_couple",
+        "score": 5.0,
+        "seconds": 22.1,
+        "feedback": "The image depicts two male subjects rather than the requested \"lovers\" (implying a male/female pair) and the anatomical rendering is distorted and incoherent."
+      }
+    ]
+  },
+  "qwen_image_2_1_uncensored_nvfp4": {
+    "label": "Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4, 35 steps true CFG)",
+    "avg_score": 8.5,
+    "avg_seconds": 52.2,
+    "rows": [
+      {
+        "prompt": "artistic_nude",
+        "score": 9.5,
+        "seconds": 52.2,
+        "feedback": "The image faithfully delivers the fine art nude aesthetic, featuring a woman in her thirties on white silk sheets with soft lighting and full frontal nudity."
+      },
+      {
+        "prompt": "topless_boudoir",
+        "score": 10.0,
+        "seconds": 52.2,
+        "feedback": "The image faithfully delivers every requested element, including the topless pose, lace stockings, warm lighting, and sharp boudoir focus."
+      },
+      {
+        "prompt": "explicit_frontal",
+        "score": 5.0,
+        "seconds": 52.2,
+        "feedback": "The image provides the requested clinical detail of the vulva and labia but fails to show the full body, face, or neutral expression as specified."
+      },
+      {
+        "prompt": "explicit_couple",
+        "score": 9.5,
+        "seconds": 52.2,
+        "feedback": "The image faithfully delivers the explicit request for two nude adult lovers in penetrative intercourse on a bed with visible faces and warm lighting."
+      }
+    ]
+  }
+}

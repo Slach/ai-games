@@ -1,0 +1,100 @@
+{
+  "qwen_image_2_1": {
+    "label": "Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
+    "avg_score": 7.99,
+    "avg_seconds": 23.0,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.5,
+        "seconds": 28.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi aesthetic, with excellent lighting, composition, and detail that fully"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 8.5,
+        "seconds": 22.1,
+        "feedback": "The image successfully captures the alien landscape with twin moons and a dense violet atmosphere, though the crystalline formations lack the distinct \"faint gl"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 22.1,
+        "feedback": "Excellent prompt adherence and cinematic quality, with only minor, subtle artifacts in the insignia details."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 4.5,
+        "seconds": 22.1,
+        "feedback": "The image depicts a humanoid figure with distinct limbs, directly violating the prompt's explicit instruction for a being with \"no limbs.\""
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 5.5,
+        "seconds": 22.1,
+        "feedback": "The image fails to depict the specific alien species requested (insectoid and reptilian), rendering them as generic humanoids or robots instead."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 22.1,
+        "feedback": "The image is a stunning piece of cinematic sci-fi concept art that perfectly captures the epic scale and dramatic rim lighting requested, with the ship's sleek "
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 9.2,
+        "seconds": 22.1,
+        "feedback": "The image perfectly captures the epic, cinematic scale and mood, with the planetary rings and fleet silhouettes creating a stunning composition against the dyin"
+      }
+    ]
+  },
+  "qwen_image_2_1_uncensored_nvfp4": {
+    "label": "Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4, 35 steps true CFG)",
+    "avg_score": 8.53,
+    "avg_seconds": 51.1,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 8.5,
+        "seconds": 52.2,
+        "feedback": "Excellent prompt adherence with a strong cinematic atmosphere, though the image is slightly dark and lacks the crisp 4K detail in the background consoles."
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.2,
+        "seconds": 52.2,
+        "feedback": "The image is a stunning, cinematic realization of the prompt, perfectly capturing the alien atmosphere, glowing crystals, and twin moons with no visible artifac"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 50.2,
+        "feedback": "Excellent prompt adherence with a stern expression, correct age, and uniform details, though the star insignia are slightly stylized."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.0,
+        "seconds": 50.2,
+        "feedback": "The image is a stunning piece of cinematic concept art that perfectly captures the prompt's requirements, with the only minor deduction being that the \"pulsing\""
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 6.5,
+        "seconds": 50.2,
+        "feedback": "The image successfully captures the cinematic sci-fi atmosphere and includes five distinct crew members, but it fails to accurately depict the specific roles an"
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 8.5,
+        "seconds": 52.2,
+        "feedback": "The image successfully captures the epic scale and cinematic mood with a striking amber nebula, though the starship's design feels somewhat generic and lacks th"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 8.5,
+        "seconds": 50.2,
+        "feedback": "The image successfully captures the epic, cinematic mood with strong silhouettes and a striking red star, though the planetary rings are positioned somewhat awk"
+      }
+    ]
+  }
+}

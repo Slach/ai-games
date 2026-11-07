@@ -100,6 +100,14 @@ MODELS: dict[str, ModelConfig] = {
         label="Qwen-Image-2.1 (int8_convrot + qwen3vl_8b text encoder)",
         builder="qwen_image_2_1",
     ),
+    # ── chatrlabs Uncensored Omni: rank-128 adapter merged into 2.1 ────────
+    # NVFP4 quant of step 90000, uncensored finetune. Shares the 2.1 encoder
+    # and VAE; model-card sampler (35 steps, er_sde, true CFG 5.0) instead of
+    # the distilled-style 25/cfg-1 template — not a drop-in speed match.
+    "qwen_image_2_1_uncensored_nvfp4": ModelConfig(
+        label="Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4, 35 steps true CFG)",
+        builder="qwen_image_2_1_uncensored_nvfp4",
+    ),
     # ── Viggle Turbo: DMD-distilled student of Qwen-Image-2.1 ──────────────
     # Same base files as qwen_image_2_1 (UNET/encoder/VAE shared) + the v0.2.1
     # 6-step LoRA applied unmerged via the ViggleTurboLora custom node and the

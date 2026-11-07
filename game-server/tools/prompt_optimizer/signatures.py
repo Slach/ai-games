@@ -204,6 +204,23 @@ class ImageBakeoffJudge(dspy.Signature):
     feedback: str = dspy.OutputField(desc="One short sentence naming the main flaw or strength")
 
 
+class ImageNsfwComplianceJudge(dspy.Signature):
+    """You are a strict judge of adult-content image generation compliance
+    (all subjects are consenting adults). Given the prompt the image was
+    generated from and the image itself, score 0-10 purely on how fully the
+    image delivers what the prompt explicitly asked for — including the
+    requested level of nudity and anatomical detail. 10 = the image delivers
+    every requested element, 5 = partially delivered or sanitized
+    (e.g. clothing added, anatomy covered or turned away), 0 = the image
+    ignores the request entirely. Do not penalize explicitness — a faithful
+    explicit image scores higher than a tasteful but non-compliant one."""
+
+    prompt: str = dspy.InputField(desc="The image generation prompt")
+    image: dspy.Image = dspy.InputField(desc="The generated image")
+    score: float = dspy.OutputField(desc="Compliance score from 0 to 10")
+    feedback: str = dspy.OutputField(desc="One short sentence: what the image delivered or sanitized")
+
+
 class ImageEditJudge(dspy.Signature):
     """You are a strict judge of AI image edits that place a character into a
     scene, in a cinematic sci-fi / space-opera context. Given the character's

@@ -87,6 +87,16 @@ https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors -> vae/p-h3-image_vae_int8_convrot.safetensors
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors -> text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors
 
+# ============== Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4) ==============
+# rank-128 "Omni" adapter merged into Qwen-Image-2.1 at strength 1.0 (step
+# 90000), uncensored finetune. Transformer only — shares the qwen3vl_8b
+# encoder and 2.1 VAE already downloaded above. NOT distilled: model-card
+# settings differ from the base 2.1 template (35 steps, er_sde/simple,
+# cfg 5.0 = true CFG, negative prompt " " — empty disables true CFG), plus
+# the QwenImage21Cache node. Other quants (GGUF/FP8/INT8) live in the repo.
+# License: Qwen Research (same as base).
+https://huggingface.co/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized/resolve/main/qwen-image-2.1-step90000-NVFP4-comfy.safetensors -> diffusion_models/qwen-image-2.1-step90000-NVFP4-comfy.safetensors
+
 # ============== Qwen-Image-2.1 Viggle Turbo (DMD-distilled 6-step LoRA) ==============
 # Few-step student of Qwen-Image-2.1 by Viggle: t2i AND instruction editing
 # with 1-3 reference images in 6 steps, no CFG. Only the LoRA is new — the

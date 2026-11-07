@@ -41,6 +41,12 @@ The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
     and EmptyLatentImage; 25 steps euler/simple at cfg 1 (no Lightning LoRA).
     Needs recent ComfyUI (COMFYUI_COMMIT pin in comfyui/Dockerfile.spark).
 
+  qwen_image_2_1_uncensored_nvfp4 (chatrlabs Uncensored Omni, step 90000):
+    UNET: qwen-image-2.1-step90000-NVFP4-comfy.safetensors (UNETLoader)
+    CLIP/VAE shared with qwen_image_2_1; QwenImage21Cache before KSampler;
+    model-card sampler 35 steps er_sde/simple at true CFG 5.0 (neg " ").
+    Not distilled — ~2.5-3x the base model's generation time.
+
 img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
 (``_build_qwen_edit_workflow``) have their own fixed model combinations
 and are not routed through ``comfyui_config``.
@@ -1114,6 +1120,107 @@ def _build_qwen_image_21_workflow(
     }
 
 
+def _build_qwen_image_21_uncensored_nvfp4_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a txt2img workflow for the chatrlabs Qwen-Image-2.1 Uncensored
+    Omni finetune (NVFP4 quant, step 90000).
+
+    Same graph shape as the 2.1 workflow above, but mirrors the model card's
+    tested configuration (workflow_example.json of
+    chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized):
+
+    * UNET is the NVFP4-comfy repack of the rank-128 Omni adapter merged at
+      strength 1.0 — same UNETLoader, weight_dtype stays default.
+    * QwenImage21Cache sits between UNETLoader and KSampler (model-card KV
+      cache; offsets the cost of true CFG below).
+    * NOT distilled: 35 steps, er_sde/simple, cfg 5.0 (true CFG) instead of
+      the base template's 25 steps / cfg 1 / euler. True CFG needs a
+      non-empty negative prompt — a single space, per the model card; an
+      empty one silently disables it even at cfg > 1.
+
+    Encoder/VAE are shared with the base 2.1 model. cfg 5.0 runs two
+    transformer passes per step, so expect ~2.5-3x the base model's time.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    return {
+        # NVFP4 UNET (Blackwell-only native quant of the uncensored finetune)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "qwen-image-2.1-step90000-NVFP4-comfy.safetensors",
+                "weight_dtype": "default",
+            },
+        },
+        # Model-card KV cache (auto = spare VRAM, then RAM)
+        "31": {
+            "class_type": "QwenImage21Cache",
+            "inputs": {"model": ["10", 0], "device": "auto", "dtype": "default"},
+        },
+        # Qwen3-VL-8B text encoder (same as base 2.1)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                "type": "qwen_image",
+                "device": "default",
+            },
+        },
+        # Qwen-Image-2.1 VAE (shared with base)
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"},
+        },
+        # Encode prompts — negative " " keeps true CFG active at cfg 5.0
+        "27": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "prompt": prompt,
+                "negative_prompt": " ",
+                "resolution": 1024,
+                "clip": ["30", 0],
+            },
+        },
+        # Empty latent — sampling resizes it to the model's own format
+        "13": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # KSampler — model card: 35 steps, cfg 5.0, er_sde/simple
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 35,
+                "cfg": 5.0,
+                "sampler_name": "er_sde",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["31", 0],
+                "positive": ["27", 0],
+                "negative": ["27", 1],
+                "latent_image": ["13", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+
 def _build_qwen_image_21_viggle_turbo_workflow(
     prompt: str,
     width: int,
@@ -1656,6 +1763,7 @@ _TXT2IMG_BUILDERS = {
     "llada_image_turbo": _build_llada_turbo_workflow,
     "qwen_image_2512": _build_qwen_image_2512_workflow,
     "qwen_image_2_1": _build_qwen_image_21_workflow,
+    "qwen_image_2_1_uncensored_nvfp4": _build_qwen_image_21_uncensored_nvfp4_workflow,
     "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_workflow,
     "p_h3_w4a8": _build_p_h3_w4a8_workflow,
 }
