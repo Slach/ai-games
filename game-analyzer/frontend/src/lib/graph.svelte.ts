@@ -20,6 +20,7 @@ class GraphStore {
   flowEdges = $state.raw<Edge[]>([]);
   showRefEdges = $state(false);
   openNodeId = $state<string | null>(null);
+  drawerMaximized = $state(false);
   focusRequest = $state<{ id: string; n: number } | null>(null);
   highlightId = $state<string | null>(null);
   fitRequest = $state(0);

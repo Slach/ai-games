@@ -71,7 +71,7 @@
 </script>
 
 {#if store.openNodeId}
-  <div class="drawer">
+  <div class="drawer" class:maximized={store.drawerMaximized}>
     <div class="drawer-head">
       {#if detail}
         <div class="head-titles">
@@ -84,7 +84,24 @@
       {:else}
         <div class="head-label loading-row"><span class="spinner"></span>Loading…</div>
       {/if}
-      <button class="close" onclick={() => store.closeDetail()}>✕</button>
+      <div class="head-actions">
+        <button
+          class="icon-btn"
+          title={store.drawerMaximized ? 'Restore panel' : 'Maximize panel'}
+          onclick={() => (store.drawerMaximized = !store.drawerMaximized)}
+        >
+          {#if store.drawerMaximized}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 4v5H4" /><path d="M15 20v-5h5" />
+            </svg>
+          {:else}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 9V4h5" /><path d="M20 9V4h-5" /><path d="M4 15v5h5" /><path d="M20 15v5h-5" />
+            </svg>
+          {/if}
+        </button>
+        <button class="close" onclick={() => store.closeDetail()}>✕</button>
+      </div>
     </div>
     {#if error}<div class="error">{error}</div>{/if}
     {#if detail}
@@ -306,7 +323,26 @@
     z-index: 30;
     display: flex;
     flex-direction: column;
+    transition: width 0.18s ease;
   }
+  .drawer.maximized {
+    width: 100%;
+    max-width: none;
+  }
+  .drawer.maximized .sec-text,
+  .drawer.maximized .pv-text {
+    max-height: calc(100vh - 220px);
+  }
+  .head-actions { display: flex; align-items: center; gap: 6px; }
+  .icon-btn {
+    background: none;
+    border: none;
+    color: #8b93a1;
+    cursor: pointer;
+    padding: 3px;
+    display: flex;
+  }
+  .icon-btn:hover { color: #fff; }
   .drawer-head {
     display: flex;
     align-items: flex-start;
@@ -459,10 +495,12 @@
     white-space: pre;
     word-break: normal;
   }
-  .j-key { color: #7db4ff; }
-  .j-str { color: #9ad19a; }
-  .j-num { color: #ffd66b; }
-  .j-kw { color: #c39bff; }
+  /* {@html} content carries no Svelte scoping class — the highlight spans
+   * need :global() to be reachable by these rules. */
+  .sec-text.json :global(.j-key) { color: #7db4ff; }
+  .sec-text.json :global(.j-str) { color: #9ad19a; }
+  .sec-text.json :global(.j-num) { color: #ffd66b; }
+  .sec-text.json :global(.j-kw) { color: #c39bff; }
   .delivery { border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
   .delivery-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: #9aa2b1; }
   .delivery-error { color: #ff8f8f; font-size: 12.5px; margin-top: 4px; }
