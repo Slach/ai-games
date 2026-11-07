@@ -232,10 +232,10 @@
                   <img class="step-image" src={step.image_url} alt="generated" loading="lazy" />
                 </a>
               {/if}
-              {#each step.request_sections as section (step.event_id + ':' + section.name)}
+              {#each step.request_sections as section, i (step.event_id + ':' + i + ':' + section.name)}
                 {@render sectionBlock(section, 'request')}
               {/each}
-              {#each step.response_sections as section (step.event_id + ':r:' + section.name)}
+              {#each step.response_sections as section, i (step.event_id + ':r:' + i + ':' + section.name)}
                 {@render sectionBlock(section, 'response')}
               {/each}
             </div>
@@ -256,7 +256,7 @@
               {#if row.error}<div class="delivery-error">{row.error}</div>{/if}
               <details>
                 <summary>push payload</summary>
-                <pre class="pv-text">{JSON.stringify(row.payload, null, 2)}</pre>
+                <pre class="sec-text json">{@html highlightJson(JSON.stringify(row.payload, null, 2))}</pre>
               </details>
             </div>
           {/each}
@@ -303,9 +303,18 @@
         <pre class="sec-text">{section.text}</pre>
       {/if}
     {:else if section.text}
-      <pre class="sec-text">{section.text.slice(0, 6000)}…
-        <button class="copy" onclick={() => copyText(section.text)}>copy full</button>
-      </pre>
+      {@const bigJson = prettyJson(section.text)}
+      {#if bigJson}
+        {@const shown = bigJson.length > 50000 ? bigJson.slice(0, 50000) + '\n…' : bigJson}
+        <pre class="sec-text json">{@html highlightJson(shown)}</pre>
+        {#if bigJson.length > 50000}
+          <button class="copy" onclick={() => copyText(bigJson)}>copy full JSON</button>
+        {/if}
+      {:else}
+        <pre class="sec-text">{section.text.slice(0, 6000)}…
+          <button class="copy" onclick={() => copyText(section.text)}>copy full</button>
+        </pre>
+      {/if}
     {/if}
   </details>
 {/snippet}
@@ -328,10 +337,6 @@
   .drawer.maximized {
     width: 100%;
     max-width: none;
-  }
-  .drawer.maximized .sec-text,
-  .drawer.maximized .pv-text {
-    max-height: calc(100vh - 220px);
   }
   .head-actions { display: flex; align-items: center; gap: 6px; }
   .icon-btn {
@@ -382,7 +387,13 @@
     cursor: pointer;
   }
   .tabs button.active { color: #7db4ff; border-bottom-color: #7db4ff; }
-  .drawer-body { overflow-y: auto; padding: 12px 14px; flex: 1; }
+  .drawer-body {
+    overflow-y: auto;
+    padding: 12px 14px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
   .error { color: #ff8f8f; padding: 10px 14px; font-size: 13.5px; }
   .empty { color: #77808f; font-size: 13.5px; padding: 16px 0; }
   .pv-image { max-width: 100%; border-radius: 8px; margin-bottom: 10px; }
@@ -477,6 +488,8 @@
   .sec-imgs { color: #c39bff; font-size: 11px; }
   .sec-image-row { display: flex; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
   .sec-image-row img { width: 120px; border-radius: 6px; }
+  /* No per-section max-height/scroll: expanded sections grow fully and the
+   * drawer body is the single scroll context. */
   .sec-text {
     white-space: pre-wrap;
     word-break: break-word;
@@ -486,14 +499,40 @@
     background: #10131a;
     border-radius: 6px;
     padding: 8px;
-    max-height: 340px;
-    overflow-y: auto;
   }
+  /* Same wrapping as plain sections: highlighted JSON must not scroll
+   * horizontally inside the narrow side panel. */
   .sec-text.json {
     font-family: 'Cascadia Code', Consolas, Menlo, monospace;
     font-size: 12.5px;
-    white-space: pre;
-    word-break: normal;
+  }
+  /* An open payload fills all remaining drawer height (no fixed cap, no
+   * dead space below) and scrolls inside. Newer Chromium renders details'
+   * children inside an internal ::details-content box, so the flex chain
+   * has to reach through it; without support the plain details rule
+   * applies instead. */
+  .delivery:has(details[open]) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .delivery details[open] {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .delivery details[open]::details-content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .delivery .sec-text {
+    flex: 1;
+    min-height: 160px;
+    overflow-y: auto;
   }
   /* {@html} content carries no Svelte scoping class — the highlight spans
    * need :global() to be reachable by these rules. */

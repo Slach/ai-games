@@ -118,8 +118,9 @@ class GraphStore {
   toggleNode(id: string) {
     this.expanded[id] = !this.expanded[id];
     this.relayout();
-    // Refit so the expanded content stays on screen.
-    this.fitRequest++;
+    // No refit here: re-fitting on every expand/collapse zooms far out once
+    // the graph grows, making the cards unreadably small. The viewport stays
+    // where the user left it; fitView still runs on game switch / Refresh.
     this.syncHash();
   }
 
