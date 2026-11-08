@@ -789,6 +789,8 @@ async def _send_onboarding_completion(bot: Bot, player_id: int, result: dict[str
         game_started = result.get("game_started", False)
         game_just_started = result.get("game_just_started", False)
         other_player_ids = result.get("other_player_ids", [])
+        player_count = result.get("player_count", 0)
+        min_players = result.get("min_players", 0)
         game_language = result.get("language", DEFAULT_LANGUAGE)
 
         onboarding_msgs = lang.get_onboarding(game_language)
@@ -1014,6 +1016,9 @@ async def _send_onboarding_completion(bot: Bot, player_id: int, result: dict[str
             elif game_started and other_player_ids:
                 # Game already started, but notify other players about new member
                 await _broadcast_new_player(player_id, profile, other_player_ids, bot)
+            elif other_player_ids:
+                # Game still waiting for players — notify others with a waiting footer
+                await _broadcast_new_player(player_id, profile, other_player_ids, bot, player_count, min_players)
         except Exception as e:
             logger.warning(f"Failed to broadcast for player {player_id}: {e}")
 
@@ -1064,8 +1069,19 @@ async def _send_onboarding_completion(bot: Bot, player_id: int, result: dict[str
             logger.error(f"Failed to send fallback message to player {player_id}", exc_info=True)
 
 
-async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_ids: list, bot: Bot):
-    """Notify existing players about a new crew member joining."""
+async def _broadcast_new_player(
+    new_player_id: int,
+    profile: dict,
+    other_player_ids: list,
+    bot: Bot,
+    player_count: int = 0,
+    min_players: int = 0,
+):
+    """Notify existing players about a new crew member joining.
+
+    With player_count/min_players set the game hasn't started yet, so the
+    message gets a waiting-for-players footer with the current count.
+    """
     try:
         player_name = profile.get("player_name", "") or str(new_player_id)
 
@@ -1077,6 +1093,11 @@ async def _broadcast_new_player(new_player_id: int, profile: dict, other_player_
                     role=escape_markdown(profile.get("role", "Crew Member")),
                     role_description=escape_markdown(profile.get("role_description", "")),
                 )
+                if player_count and min_players:
+                    notify_text += "\n\n" + msgs["waiting_player_footer"].format(
+                        player_count=player_count,
+                        min_players=min_players,
+                    )
                 await bot.send_message(
                     chat_id=other_id,
                     text=notify_text,

@@ -626,6 +626,7 @@ async def _finalize_onboarding_session(session: dict[str, Any], proposal: dict[s
         "game_started": game_started,
         "game_just_started": game_was_started,
         "player_count": player_count,
+        "min_players": GAME_START_MIN_PLAYERS,
         "other_player_ids": other_players,
         "game_title": get_game_title(game_id) or "",
         "language": get_game_language(game_id),
