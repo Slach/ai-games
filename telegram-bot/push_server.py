@@ -1046,6 +1046,15 @@ async def _deliver_gm_notification(
             msg = f"✅ *Ход {turn} игры `{game_id}` сгенерирован!*\n\n🎯 Ход: {turn}\n👤 Игроков: {players}\n🤖 NPC: {npcs}\n\nБрифинги разосланы участникам."
         else:
             msg = f"✅ *Turn {turn} for game `{game_id}` generated!*\n\n🎯 Turn: {turn}\n👤 Players: {players}\n🤖 NPCs: {npcs}\n\nBriefings sent to participants."
+        duration_seconds = payload.get("duration_seconds")
+        if duration_seconds is not None:
+            minutes, seconds = divmod(int(round(duration_seconds)), 60)
+            if language == LANGUAGE_RU:
+                duration_txt = f"{minutes}м {seconds:02d}с" if minutes else f"{seconds}с"
+                msg += f"\n⏱ Время генерации: {duration_txt}"
+            else:
+                duration_txt = f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
+                msg += f"\n⏱ Generation time: {duration_txt}"
     elif status == "game_ended":
         if language == "ru":
             msg = f"🏁 *Игра `{game_id}` завершена во время генерации хода {turn}.*\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."

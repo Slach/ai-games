@@ -9,6 +9,7 @@ import os
 import random
 import secrets
 import string
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -4666,7 +4667,9 @@ async def _resume_interrupted_generations() -> None:
 async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
     """Run start-game in background, notify GM on completion."""
     try:
+        started = time.monotonic()
         result = await _run_generation_with_job(request.game_id, turn_num, "start", _original_start_game(request), resume_job_id=None)
+        duration = time.monotonic() - started
         if result and result.get("status") == "success":
             await _notify_scheduler("reset", game_id=request.game_id)
             await push_gm_notification(
@@ -4677,6 +4680,7 @@ async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
                 players=result.get("player_count", 0),
                 npcs=result.get("npc_count", 0),
                 language=request.language,
+                duration_seconds=duration,
             )
     except Exception as e:
         logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}", exc_info=True)
@@ -5909,6 +5913,7 @@ async def _background_continue_wrapper(
 ):
     """Run continue-game in background, notify GM on completion."""
     try:
+        started = time.monotonic()
         result = await _run_generation_with_job(
             game_id,
             turn_num,
@@ -5921,6 +5926,7 @@ async def _background_continue_wrapper(
             ),
             resume_job_id=None,
         )
+        duration = time.monotonic() - started
         if result and result.get("status") == "success":
             await _notify_scheduler("reset", game_id=game_id)
             await push_gm_notification(
@@ -5931,6 +5937,7 @@ async def _background_continue_wrapper(
                 players=result.get("players", 0),
                 npcs=result.get("npcs", 0),
                 language=language,
+                duration_seconds=duration,
             )
         elif result and result.get("status") == "game_ended":
             logger.info(f"[BACKGROUND] Game {game_id} ended during turn {turn_num} generation; not notifying scheduler")
