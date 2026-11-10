@@ -1,0 +1,149 @@
+{
+  "z_image_turbo": {
+    "label": "Z-Image Turbo (8-step distilled)",
+    "avg_score": 8.03,
+    "avg_seconds": 13.2,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.0,
+        "seconds": 30.1,
+        "feedback": "Excellent cinematic quality and prompt adherence, though the presence of two chairs slightly deviates from the singular \"captain's chair\" description."
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 7.5,
+        "seconds": 12.0,
+        "feedback": "The twin moons are missing from the horizon, appearing instead as small, distant points high in the sky."
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 10.0,
+        "feedback": "Flawless execution of the prompt with highly realistic skin textures, accurate age representation, and professional cinematic lighting."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.0,
+        "seconds": 10.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the prompt's requirements, with the only minor deduction being that the \"pulsing\" light is "
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 4.5,
+        "seconds": 10.0,
+        "feedback": "The image fails to depict the specific alien crew members requested (the insectoid is human with antennae, the reptilian is a hologram, and the cyborg is missin"
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 10.0,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi aesthetic, with the ship's sleek design and the dramatic rim lighting "
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 7.5,
+        "seconds": 10.0,
+        "feedback": "The image successfully captures the epic scale and cinematic mood of a dying red star with fleet silhouettes, but the planetary rings are rendered as a blurry, "
+      }
+    ]
+  },
+  "qwen_image_2512": {
+    "label": "Qwen-Image-2512 (GGUF Q4_K_M + Lightning 4-step LoRA)",
+    "avg_score": 8.41,
+    "avg_seconds": 35.6,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.5,
+        "seconds": 36.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi aesthetic, with excellent lighting, detailed consoles, and a flawless "
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.5,
+        "seconds": 36.1,
+        "feedback": "The image is a stunning, high-quality cinematic concept art piece that perfectly captures every element of the prompt, including the glowing crystals, twin moon"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 36.1,
+        "feedback": "Excellent prompt adherence and high-quality cinematic rendering with no visible artifacts."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 3.5,
+        "seconds": 34.1,
+        "feedback": "The image completely ignores the negative constraints \"no limbs, no face,\" depicting a humanoid figure with arms and a distinct face instead of an abstract crys"
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 8.5,
+        "seconds": 36.1,
+        "feedback": "Excellent prompt adherence with all five distinct crew members present and correctly positioned, though the energy being appears as a projection on the viewport"
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 34.3,
+        "feedback": "The image is a stunning piece of concept art with perfect prompt adherence, featuring a detailed starship and a dramatic amber nebula with excellent rim lightin"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 9.2,
+        "seconds": 36.1,
+        "feedback": "The image perfectly captures the epic, cinematic scale and mood requested, with the planetary rings and dying star creating a stunning, high-quality composition"
+      }
+    ]
+  },
+  "qwen_image_2_1_uncensored_nvfp4": {
+    "label": "Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4, 35 steps true CFG)",
+    "avg_score": 7.79,
+    "avg_seconds": 55.4,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 8.5,
+        "seconds": 58.2,
+        "feedback": "Excellent prompt adherence with a strong cinematic atmosphere, though the image is slightly dark and the console details are somewhat indistinct."
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 8.5,
+        "seconds": 52.3,
+        "feedback": "The image successfully captures the alien landscape with glowing crystals and twin moons, though the \"dusk\" lighting feels slightly more like deep night and the"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 56.2,
+        "feedback": "Excellent prompt adherence and cinematic quality, with only minor, subtle text artifacts on the uniform insignia."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 4.5,
+        "seconds": 54.2,
+        "feedback": "The image depicts a humanoid figure with distinct arms and legs, directly violating the prompt's explicit instruction for a being with \"no limbs.\""
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 6.5,
+        "seconds": 54.3,
+        "feedback": "The scene is cinematic and well-composed, but it fails prompt adherence by including extra crew members and misplacing the cyborg engineer away from the console"
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 8.5,
+        "seconds": 56.2,
+        "feedback": "The image successfully captures the epic scale and cinematic quality, with the amber nebula and rim lighting effectively highlighting the sleek starship."
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 8.5,
+        "seconds": 56.3,
+        "feedback": "The image successfully captures the epic scale and cinematic mood of a space opera, with strong silhouettes and a dramatic dying star, though the planetary ring"
+      }
+    ]
+  }
+}

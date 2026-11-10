@@ -130,6 +130,21 @@ MODELS: dict[str, ModelConfig] = {
         label="P-H3-Image w4a8 (MiniMax-H3 33B, 8-step, no CFG)",
         builder="p_h3_w4a8",
     ),
+    # ── MOSS-Image: OpenMOSS 5B single-stream DiT, Apache 2.0 ────────────────
+    # Official t2i template: SLG(single_layers=22, end 0.5), 25 steps, cfg 2.5
+    # (true CFG), er_sde/simple, negative "nsfw, worst quality, ...". Encoder
+    # qwen3.5_9b_w4a8_gptq (CLIPLoader type=moss_image), flux2-vae_small VAE.
+    # NVFP4 quant (BennyDaBall Schur-Replay GPTQ, blocks 0-23 FP4 / 24-41
+    # int8): LPIPS vs bf16 0.143 vs int8's 0.094 — int8 is the accuracy pick,
+    # nvfp4 the speed/VRAM one. Both Blackwell-OK (GB10 sm_121).
+    "moss_image_sft_int8": ModelConfig(
+        label="MOSS-Image SFT int8_convrot (25 steps, SLG, true CFG 2.5)",
+        builder="moss_image",
+    ),
+    "moss_image_sft_nvfp4": ModelConfig(
+        label="MOSS-Image SFT NVFP4 (BennyDaBall GPTQ, same 25-step template)",
+        builder="moss_image_nvfp4",
+    ),
 }
 
 # Global default for txt2img (and img2img). Override via COMFYUI_TXT2IMG_MODEL.
@@ -261,6 +276,19 @@ EDIT_MODELS: dict[str, EditModelConfig] = {
         clip="p-h3-image_text_encoder_int8_convrot.safetensors",
         vae="p-h3-image_vae_int8_convrot.safetensors",
         lora="",
+    ),
+    # MOSS-Image edit: int8 SFT UNET + rank-64 edit LoRA (official template:
+    # TextEncodeMOSSImageEdit, edit_format Moss-Image-Edit, 30 steps, cfg 4,
+    # euler/normal, SLG 0->1). Same w4a8 encoder / flux2-vae_small as the
+    # txt2img entries. int8 UNET only — LoRAs are untested on the NVFP4 file
+    # (ComfyUI requantizes FP4 layers when patching).
+    "moss_image_edit": EditModelConfig(
+        label="MOSS-Image SFT edit (int8 + rank-64 edit LoRA, 30 steps)",
+        builder="moss_edit",
+        unet="moss_image_sft_int8_convrot.safetensors",
+        clip="qwen3.5_9b_w4a8_gptq.safetensors",
+        vae="flux2-vae_small.safetensors",
+        lora="moss_image_edit_lora_rank_64_bf16.safetensors",
     ),
 }
 

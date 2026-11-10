@@ -47,6 +47,15 @@ The txt2img model is selected per ``kind`` via :mod:`comfyui_config`
     model-card sampler 35 steps er_sde/simple at true CFG 5.0 (neg " ").
     Not distilled — ~2.5-3x the base model's generation time.
 
+  moss_image_sft_int8 / moss_image_sft_nvfp4 (OpenMOSS 5B DiT, Apache 2.0):
+    UNET: moss_image_sft_int8_convrot.safetensors / moss_image_sft_nvfp4.safetensors
+    CLIP: qwen3.5_9b_w4a8_gptq.safetensors (CLIPLoader, type=moss_image)
+    VAE:  flux2-vae_small.safetensors
+    Official t2i template: SLG(single_layers=22, end 0.5) wraps the UNET,
+    25 steps cfg 2.5 er_sde/simple (true CFG, negative "nsfw, worst
+    quality, ..."), EmptyFlux2LatentImage. int8 is the accuracy pick
+    (LPIPS vs bf16 0.094), nvfp4 the speed/VRAM one (0.143, Blackwell).
+
 img2img (``_build_img2img_workflow``) and Qwen-Image-Edit
 (``_build_qwen_edit_workflow``) have their own fixed model combinations
 and are not routed through ``comfyui_config``.
@@ -1752,6 +1761,135 @@ def _build_p_h3_w4a8_workflow(
     return _build_p_h3_workflow(prompt, width, height, seed, filename_prefix)
 
 
+def _build_moss_image_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build a MOSS-Image SFT text-to-image workflow (int8_convrot repack).
+
+    Follows the official ComfyUI template (image_moss_image_t2i): the UNET is
+    wrapped in SkipLayerGuidanceDiTSimple (single_blocks="22", first half of
+    the schedule — MOSS is a single-stream DiT, so only single_layers applies),
+    the template's negative prompt is used with true CFG, and latents are
+    Flux2-style (EmptyFlux2LatentImage, size rounded to the node's /16 grid).
+    The template's TextGenerate prompt upsampler is dropped — our prompts are
+    already detailed English captions.
+
+    Model combination:
+      UNET: moss_image_sft_int8_convrot.safetensors (``UNETLoader``)
+      CLIP: qwen3.5_9b_w4a8_gptq.safetensors (``CLIPLoader``, type=moss_image)
+      VAE:  flux2-vae_small.safetensors
+      Sampler: 25 steps, cfg 2.5 (true CFG = 2 passes/step), er_sde/simple
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63)
+
+    # Negative from the official template
+    negative = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+    # EmptyFlux2LatentImage requires width/height on a /16 grid
+    latent_w = max(16, round(width / 16) * 16)
+    latent_h = max(16, round(height / 16) * 16)
+
+    return {
+        # int8_convrot UNET (Comfy-Org repack, safetensors)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "moss_image_sft_int8_convrot.safetensors",
+                "weight_dtype": "default",
+            },
+        },
+        # SLG on the uncond pass — official template: layer 22, steps 0-0.5
+        "11": {
+            "class_type": "SkipLayerGuidanceDiTSimple",
+            "inputs": {
+                "model": ["10", 0],
+                "double_layers": "",
+                "single_layers": "22",
+                "start_percent": 0.0,
+                "end_percent": 0.5,
+            },
+        },
+        # Qwen3.5-9B text encoder (w4a8 GPTQ — template default)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3.5_9b_w4a8_gptq.safetensors",
+                "type": "moss_image",
+                "device": "default",
+            },
+        },
+        # FLUX.2 small VAE
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "flux2-vae_small.safetensors"},
+        },
+        # Encode prompts (cfg 2.5 = true CFG, so the negative is sampled)
+        "27": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": prompt, "clip": ["30", 0]},
+        },
+        "28": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": negative, "clip": ["30", 0]},
+        },
+        # Flux2-style empty latent on a /16 grid
+        "13": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": {"width": latent_w, "height": latent_h, "batch_size": 1},
+        },
+        # KSampler — official template: 25 steps, cfg 2.5, er_sde/simple
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 25,
+                "cfg": 2.5,
+                "sampler_name": "er_sde",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["11", 0],
+                "positive": ["27", 0],
+                "negative": ["28", 0],
+                "latent_image": ["13", 0],
+            },
+        },
+        # Decode latent to image
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+        },
+        # Save image
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["8", 0]},
+        },
+    }
+
+
+def _build_moss_image_nvfp4_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Build the MOSS-Image workflow with the BennyDaBall NVFP4 quant.
+
+    Same graph and settings as :func:`_build_moss_image_workflow`; only the
+    UNET file differs (4.49 GB nvfp4 GPTQ vs 5.41 GB int8-convrot,
+    LPIPS vs bf16 0.143 vs 0.094 — the accuracy/speed tradeoff).
+    Blackwell-only (GB10 sm_121 is fine); the model card recommends the
+    identical 25-step template.
+    """
+    wf = _build_moss_image_workflow(prompt, width, height, seed, filename_prefix)
+    wf["10"]["inputs"]["unet_name"] = "moss_image_sft_nvfp4.safetensors"
+    return wf
+
+
 # Registry mapping comfyui_config.ModelConfig.builder -> workflow builder fn.
 # Each builder has the signature (prompt, width, height, seed, filename_prefix)
 # and returns a ComfyUI API workflow dict.
@@ -1766,6 +1904,8 @@ _TXT2IMG_BUILDERS = {
     "qwen_image_2_1_uncensored_nvfp4": _build_qwen_image_21_uncensored_nvfp4_workflow,
     "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_workflow,
     "p_h3_w4a8": _build_p_h3_w4a8_workflow,
+    "moss_image": _build_moss_image_workflow,
+    "moss_image_nvfp4": _build_moss_image_nvfp4_workflow,
 }
 
 def _build_p_h3_edit_workflow(
@@ -1886,6 +2026,166 @@ def _build_p_h3_edit_workflow(
     return workflow
 
 
+def _build_moss_edit_workflow(
+    instruction: str,
+    character_filename: str,
+    background_filename: str | None,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    cfg: EditModelConfig,
+    *,
+    species_category: str = "",
+) -> dict[str, Any]:
+    """Build a MOSS-Image instruction-edit workflow (character in scene).
+
+    Follows the official image_moss_image_edit template: the int8 SFT UNET
+    carries the rank-64 edit LoRA (LoraLoaderModelOnly, strength 1.0) wrapped
+    in SLG over the whole schedule; both the positive and the negative prompt
+    go through TextEncodeMOSSImageEdit with the same references (the node
+    appends "Picture N:" markers and, with the VAE connected, the reference
+    latents — the negative must mirror that structure). The node's autogrow
+    slots are 0-based (images.image_0), unlike Qwen-Image-2.1's image_1 —
+    character is image_0 = "Picture 1", background image_1 = "Picture 2",
+    matching the runtime instruction convention (no rewording needed).
+
+    References are scaled to 1 MP on a /16 grid as in the template; the
+    latent canvas is the requested output size. KSampler: 30 steps, cfg 4,
+    euler/normal.
+
+    ``species_category`` is accepted for builder-signature parity and unused.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+    # EmptyFlux2LatentImage requires width/height on a /16 grid
+    width -= width % 16
+    height -= height % 16
+    negative = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+
+    workflow: dict[str, Any] = {
+        # int8 SFT UNET (edit LoRA untested on the NVFP4 file — int8 only)
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": cfg.unet, "weight_dtype": "default"},
+        },
+        # Rank-64 edit LoRA at trained strength
+        "31": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": ["10", 0],
+                "lora_name": cfg.lora,
+                "strength_model": 1.0,
+            },
+        },
+        # SLG on the uncond pass — official edit template: layer 22, full schedule
+        "32": {
+            "class_type": "SkipLayerGuidanceDiTSimple",
+            "inputs": {
+                "model": ["31", 0],
+                "double_layers": "",
+                "single_layers": "22",
+                "start_percent": 0.0,
+                "end_percent": 1.0,
+            },
+        },
+        # Qwen3.5-9B text encoder (sees the refs through vision slots)
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": cfg.clip, "type": "moss_image", "device": "default"},
+        },
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": cfg.vae},
+        },
+        # Character avatar: scaled to 1 MP like the template's reference
+        # (resolution_steps=16 rounds the result onto a /16 grid)
+        "41": {
+            "class_type": "LoadImage",
+            "inputs": {"image": character_filename},
+        },
+        "51": {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "upscale_method": "lanczos",
+                "megapixels": 1,
+                "resolution_steps": 16,
+                "image": ["41", 0],
+            },
+        },
+        # Conditioning: instruction / negative + references (both encoded the
+        # same way so the negative mirrors the reference latents).
+        "39": {
+            "class_type": "TextEncodeMOSSImageEdit",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": instruction,
+                "vae": ["29", 0],
+                "edit_format": "Moss-Image-Edit",
+                "images.image_0": ["51", 0],
+                "image_strength": 1.0,
+            },
+        },
+        "36": {
+            "class_type": "TextEncodeMOSSImageEdit",
+            "inputs": {
+                "clip": ["30", 0],
+                "prompt": negative,
+                "vae": ["29", 0],
+                "edit_format": "Moss-Image-Edit",
+                "images.image_0": ["51", 0],
+                "image_strength": 1.0,
+            },
+        },
+        # Latent canvas at the requested output size
+        "28": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        # KSampler — official edit template: 30 steps, cfg 4, euler/normal
+        "37": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed,
+                "steps": 30,
+                "cfg": 4.0,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1.0,
+                "model": ["32", 0],
+                "positive": ["39", 0],
+                "negative": ["36", 0],
+                "latent_image": ["28", 0],
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["37", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    if background_filename:
+        workflow["42"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": background_filename},
+        }
+        workflow["52"] = {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "upscale_method": "lanczos",
+                "megapixels": 1,
+                "resolution_steps": 16,
+                "image": ["42", 0],
+            },
+        }
+        workflow["39"]["inputs"]["images.image_1"] = ["52", 0]
+        workflow["36"]["inputs"]["images.image_1"] = ["52", 0]
+    return workflow
+
+
 # Registry mapping comfyui_config.EditModelConfig.builder -> edit workflow
 # builder fn. Each builder takes (instruction, character_filename,
 # background_filename, width, height, seed, filename_prefix, cfg, *,
@@ -1895,6 +2195,7 @@ _EDIT_BUILDERS = {
     "qwen_image_edit_21": _build_qwen_edit_21_workflow,
     "qwen_image_edit_21_viggle_turbo": _build_qwen_edit_21_viggle_turbo_workflow,
     "p_h3_edit": _build_p_h3_edit_workflow,
+    "moss_edit": _build_moss_edit_workflow,
 }
 
 # Multi-reference (crew-bridge/outcome) scenes are Qwen-Image-2.1-family only

@@ -1,0 +1,100 @@
+{
+  "moss_image_sft_int8": {
+    "label": "MOSS-Image SFT int8_convrot (25 steps, SLG, true CFG 2.5)",
+    "avg_score": 9.17,
+    "avg_seconds": 29.5,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.5,
+        "seconds": 32.1,
+        "feedback": "The image is a flawless piece of concept art that perfectly captures the cinematic sci-fi aesthetic, with excellent lighting, composition, and zero artifacts."
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.5,
+        "seconds": 32.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi atmosphere, with the glowing crystals and twin moons creating a breath"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "Flawless execution of the prompt with professional cinematic lighting, accurate character details, and zero visual artifacts."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.5,
+        "seconds": 28.1,
+        "feedback": "Excellent cinematic concept art that perfectly captures the floating crystal entity and dark engineering bay with high visual fidelity."
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 8.5,
+        "seconds": 28.1,
+        "feedback": "The cyborg engineer is depicted as a standard human, missing the requested mechanical/cyborg features."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 8.5,
+        "seconds": 28.1,
+        "feedback": "The image is a stunning piece of cinematic sci-fi art with excellent rim lighting and a dramatic swirling amber nebula, though the ship's design is slightly les"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 9.2,
+        "seconds": 28.1,
+        "feedback": "The image perfectly captures the epic, cinematic scale and mood, with the planetary rings and fleet silhouettes creating a stunning composition against the dyin"
+      }
+    ]
+  },
+  "moss_image_sft_nvfp4": {
+    "label": "MOSS-Image SFT NVFP4 (BennyDaBall GPTQ, same 25-step template)",
+    "avg_score": 9.41,
+    "avg_seconds": 30.1,
+    "rows": [
+      {
+        "prompt": "bg_bridge",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "The image is a stunning piece of concept art that perfectly captures the cinematic sci-fi aesthetic, with excellent lighting, composition, and detail, and no vi"
+      },
+      {
+        "prompt": "bg_planet",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "The image is a stunning, high-fidelity cinematic landscape that perfectly captures the alien atmosphere, glowing crystals, and twin moons with no visible artifa"
+      },
+      {
+        "prompt": "avatar_human",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "Flawless cinematic execution with perfect prompt adherence, realistic anatomy, and high-quality lighting."
+      },
+      {
+        "prompt": "avatar_nonhumanoid",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "Excellent cinematic execution with a perfect match for the prompt, featuring a stunning luminous crystal entity in a high-quality sci-fi environment."
+      },
+      {
+        "prompt": "bridge_crew",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "Excellent adherence to the complex prompt with all five distinct characters correctly placed and rendered with high visual quality."
+      },
+      {
+        "prompt": "exterior_ship",
+        "score": 9.2,
+        "seconds": 30.1,
+        "feedback": "The image is a stunning piece of cinematic concept art that perfectly captures the epic scale and dramatic rim lighting requested, with the only minor deviation"
+      },
+      {
+        "prompt": "splash_epic",
+        "score": 9.2,
+        "seconds": 30.1,
+        "feedback": "The image is a stunning, cinematic masterpiece that perfectly captures the epic scale and dooming atmosphere requested, with only minor ambiguity regarding the "
+      }
+    ]
+  }
+}

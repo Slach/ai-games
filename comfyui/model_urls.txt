@@ -109,3 +109,20 @@ https://huggingface.co/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized/resolv
 # the model README says there is no reason to prefer — not downloaded.
 https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo/resolve/main/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors -> loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors
 https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo/resolve/main/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors -> loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors
+
+# ============== MOSS-Image (OpenMOSS 5B DiT, Qwen3.5-9B encoder, FLUX.2 VAE) ==============
+# Apache 2.0. Official t2i template: SLG(single_layers=22, end 0.5),
+# 25 steps / cfg 2.5 / er_sde / simple, negative "nsfw, worst quality, bad
+# anatomy, watermark, jpeg artifact", EmptyFlux2LatentImage, CLIPLoader
+# type=moss_image. NVFP4 quant (BennyDaBall Schur-Replay GPTQ, blocks 0-23
+# FP4 / 24-41 int8, LPIPS vs bf16 0.143 vs int8's 0.094, Blackwell-only) and
+# Comfy-Org int8_convrot share the encoder/VAE. LoRAs untested on the NVFP4
+# file — the edit LoRA below runs on the int8 UNET only.
+https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors -> diffusion_models/moss_image_sft_int8_convrot.safetensors
+https://huggingface.co/BennyDaBall/MOSS-Image-SFT-NVFP4/resolve/main/moss_image_sft_nvfp4.safetensors -> diffusion_models/moss_image_sft_nvfp4.safetensors
+# Encoder: w4a8 GPTQ (4-bit weights / int8 activations) is the official
+# template default in both repos; the int8_convrot variant (9.75 GB) is a
+# drop-in swap if it ever matters.
+https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_w4a8_gptq.safetensors -> text_encoders/qwen3.5_9b_w4a8_gptq.safetensors
+https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae_small.safetensors -> vae/flux2-vae_small.safetensors
+https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/loras/moss_image_edit_lora_rank_64_bf16.safetensors -> loras/moss_image_edit_lora_rank_64_bf16.safetensors

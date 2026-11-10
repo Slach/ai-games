@@ -1,0 +1,184 @@
+{
+  "moss_image_edit": {
+    "label": "MOSS-Image SFT edit (int8 + rank-64 edit LoRA, 30 steps)",
+    "avg_score": 30.4,
+    "avg_seconds": 52.5,
+    "rows": [
+      {
+        "case": "crystal_engineer_reactor",
+        "score": 15.0,
+        "seconds": 52.2,
+        "feedback": "The character's identity is completely lost; the abstract crystalline entity from the avatar has been replaced by a generic humanoid figure."
+      },
+      {
+        "case": "crystal_being_bridge",
+        "score": 58.0,
+        "seconds": 52.2,
+        "feedback": "The generated character is a generic, symmetrical crystal starburst that completely loses the avatar's distinctive metallic, organic, and blue-veined anatomy."
+      },
+      {
+        "case": "cyborg_medic_sickbay",
+        "score": 15.0,
+        "seconds": 52.2,
+        "feedback": "The character in the scene is a generic human, completely failing to preserve the cyborg/android identity of the reference avatar."
+      },
+      {
+        "case": "android_science_lab",
+        "score": 25.0,
+        "seconds": 52.2,
+        "feedback": "The character's identity is completely lost, replaced by a generic human scientist instead of the metallic android from the avatar."
+      },
+      {
+        "case": "android_corridor_patrol",
+        "score": 20.0,
+        "seconds": 52.2,
+        "feedback": "The character in the scene is a generic human with hair and a uniform, completely lacking the bald head, white lab coat, and glowing blue cybernetic facial feat"
+      },
+      {
+        "case": "crystal_being_planet",
+        "score": 10.0,
+        "seconds": 52.2,
+        "feedback": "The character in the generated image is a human woman, completely failing to preserve the identity of the metallic, crystal-headed entity from the reference ava"
+      },
+      {
+        "case": "bio_pod_engineering",
+        "score": 65.0,
+        "seconds": 54.2,
+        "feedback": "The character's design is significantly altered from a sleek floating glass pod to a bulky multi-legged robot, failing to preserve the original identity."
+      },
+      {
+        "case": "bio_pod_sickbay",
+        "score": 5.0,
+        "seconds": 52.3,
+        "feedback": "The character was replaced with a generic human instead of the mechanical entity from the avatar."
+      },
+      {
+        "case": "grey_eyes_bridge",
+        "score": 20.0,
+        "seconds": 52.2,
+        "feedback": "The character's identity is completely lost, appearing as a generic human from the back rather than the specific alien from the avatar."
+      },
+      {
+        "case": "grey_eyes_main_screen",
+        "score": 20.0,
+        "seconds": 52.2,
+        "feedback": "The image directly contradicts the instruction to have the character facing the viewer, instead showing them from the back, which also results in a complete los"
+      },
+      {
+        "case": "engineer_corridor_fire",
+        "score": 35.0,
+        "seconds": 52.2,
+        "feedback": "The character in the scene is a generic stand-in and completely lacks the distinctive appearance, hair, and outfit of the reference avatar."
+      },
+      {
+        "case": "medic_sickbay_scan",
+        "score": 88.0,
+        "seconds": 54.2,
+        "feedback": "The character's identity and the specific action of scanning a patient are well-executed, though the scene lacks the distinct \"medical capsule\" structure and \"d"
+      },
+      {
+        "case": "pilot_exterior_eva",
+        "score": 35.0,
+        "seconds": 52.2,
+        "feedback": "The character was not placed on the exterior hull as instructed; she remains inside the cockpit."
+      },
+      {
+        "case": "crystal_exterior_ship",
+        "score": 15.0,
+        "seconds": 52.2,
+        "feedback": "The character in the scene is a mechanical robot, completely failing to preserve the identity of the crystalline entity from the avatar."
+      }
+    ]
+  },
+  "qwen_image_edit_2_1_viggle_turbo": {
+    "label": "Qwen-Image-2.1 Viggle Turbo edit (v0.2.1 LoRA, 6-step DMD)",
+    "avg_score": 74.9,
+    "avg_seconds": 20.7,
+    "rows": [
+      {
+        "case": "crystal_engineer_reactor",
+        "score": 95.0,
+        "seconds": 24.1,
+        "feedback": "Excellent identity preservation and a highly accurate, atmospheric scene that perfectly matches the detailed instruction."
+      },
+      {
+        "case": "crystal_being_bridge",
+        "score": 75.0,
+        "seconds": 20.1,
+        "feedback": "The character is not hovering above the tactical table as instructed, but rather high above a central chair."
+      },
+      {
+        "case": "cyborg_medic_sickbay",
+        "score": 92.0,
+        "seconds": 20.1,
+        "feedback": "Excellent identity preservation and atmospheric lighting, though the hands are interacting with the patient rather than the capsule controls as instructed."
+      },
+      {
+        "case": "android_science_lab",
+        "score": 88.0,
+        "seconds": 20.2,
+        "feedback": "The character's identity is well-preserved and the scene composition matches the instruction, but the hands are slightly obscured by the data streams, making th"
+      },
+      {
+        "case": "android_corridor_patrol",
+        "score": 65.0,
+        "seconds": 20.1,
+        "feedback": "The character's distinctive glowing blue wireframe facial overlay from the avatar is missing, reducing identity preservation."
+      },
+      {
+        "case": "crystal_being_planet",
+        "score": 88.0,
+        "seconds": 20.1,
+        "feedback": "The character's identity is perfectly preserved and the scene composition is excellent, though the alien sun's light is somewhat diffuse rather than casting the"
+      },
+      {
+        "case": "bio_pod_engineering",
+        "score": 88.0,
+        "seconds": 20.1,
+        "feedback": "The character's identity is well-preserved and the scene effectively captures the requested emergency lighting and interaction with the machinery, though the \"s"
+      },
+      {
+        "case": "bio_pod_sickbay",
+        "score": 35.0,
+        "seconds": 20.1,
+        "feedback": "The character is not placed inside a medical capsule as instructed, and the scene composition is confusing with a duplicated character form."
+      },
+      {
+        "case": "grey_eyes_bridge",
+        "score": 65.0,
+        "seconds": 20.1,
+        "feedback": "The character's pose was not updated; the head is still looking down at the console instead of being snapped upward as instructed."
+      },
+      {
+        "case": "grey_eyes_main_screen",
+        "score": 25.0,
+        "seconds": 20.1,
+        "feedback": "The character is shown from behind, directly contradicting the instruction to face the viewer, and lacks the specific identity features of the reference avatar."
+      },
+      {
+        "case": "engineer_corridor_fire",
+        "score": 75.0,
+        "seconds": 20.1,
+        "feedback": "The character is running away from the smoking panel instead of toward it as instructed."
+      },
+      {
+        "case": "medic_sickbay_scan",
+        "score": 88.0,
+        "seconds": 22.1,
+        "feedback": "The character's identity and the scene's atmosphere are excellent, but the instruction to study the scanner's display is not met as the character is looking at "
+      },
+      {
+        "case": "pilot_exterior_eva",
+        "score": 88.0,
+        "seconds": 22.1,
+        "feedback": "The character's identity and the crawling pose on the hull are excellent, but the instruction to be in a spacesuit is not fully met as she is wearing the origin"
+      },
+      {
+        "case": "crystal_exterior_ship",
+        "score": 82.0,
+        "seconds": 20.1,
+        "feedback": "The character's identity is well-preserved and the scene composition is strong, but the instruction to show \"ongoing exterior repair work\" is missing from the g"
+      }
+    ]
+  }
+}

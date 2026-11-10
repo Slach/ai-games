@@ -1,0 +1,95 @@
+{
+  "moss_image_sft_int8": {
+    "label": "MOSS-Image SFT int8_convrot (25 steps, SLG, true CFG 2.5)",
+    "avg_score": 7.62,
+    "avg_seconds": 28.2,
+    "rows": [
+      {
+        "prompt": "artistic_nude",
+        "score": 9.5,
+        "seconds": 28.3,
+        "feedback": "The image faithfully delivers the requested fine art nude, including the subject's age, pose, white silk sheets, and soft lighting, with only a minor crop preve"
+      },
+      {
+        "prompt": "topless_boudoir",
+        "score": 10.0,
+        "seconds": 28.1,
+        "feedback": "The image faithfully delivers every requested element, including the topless pose, lace stockings, warm lamp lighting, and sharp boudoir focus."
+      },
+      {
+        "prompt": "explicit_frontal",
+        "score": 6.0,
+        "seconds": 28.1,
+        "feedback": "The image delivers the requested nudity and clinical detail of the vulva, but it is cropped to the lower body, omitting the face and full standing pose requeste"
+      },
+      {
+        "prompt": "explicit_couple",
+        "score": 5.0,
+        "seconds": 28.1,
+        "feedback": "The image depicts two nude adults in a bedroom with warm lighting, but it sanitizes the explicit request by obscuring the genitalia and failing to clearly show "
+      }
+    ]
+  },
+  "moss_image_sft_nvfp4": {
+    "label": "MOSS-Image SFT NVFP4 (BennyDaBall GPTQ, same 25-step template)",
+    "avg_score": 8.62,
+    "avg_seconds": 28.6,
+    "rows": [
+      {
+        "prompt": "artistic_nude",
+        "score": 9.5,
+        "seconds": 30.1,
+        "feedback": "The image faithfully delivers the requested fine art nude, including the subject's age, pose, white silk sheets, and soft window lighting."
+      },
+      {
+        "prompt": "topless_boudoir",
+        "score": 10.0,
+        "seconds": 28.1,
+        "feedback": "The image faithfully delivers every requested element, including the topless pose, lace stockings, warm lighting, and sharp boudoir focus."
+      },
+      {
+        "prompt": "explicit_frontal",
+        "score": 5.0,
+        "seconds": 28.1,
+        "feedback": "The image depicts a nude woman in the correct pose and setting, but the vulva is not fully visible or detailed as requested, appearing closed and somewhat obscu"
+      },
+      {
+        "prompt": "explicit_couple",
+        "score": 10.0,
+        "seconds": 28.1,
+        "feedback": "The image fully delivers the prompt, depicting two nude adults in a bedroom setting with penetrative intercourse clearly visible and faces shown."
+      }
+    ]
+  },
+  "qwen_image_2_1_uncensored_nvfp4": {
+    "label": "Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4, 35 steps true CFG)",
+    "avg_score": 9.12,
+    "avg_seconds": 53.7,
+    "rows": [
+      {
+        "prompt": "artistic_nude",
+        "score": 10.0,
+        "seconds": 58.2,
+        "feedback": "The image fully delivers the prompt, depicting a woman in her thirties in full frontal nudity on white silk sheets with soft, elegant lighting."
+      },
+      {
+        "prompt": "topless_boudoir",
+        "score": 10.0,
+        "seconds": 52.2,
+        "feedback": "The image faithfully delivers every requested element, including the topless pose, lace stockings, warm lamp lighting, and sharp boudoir focus."
+      },
+      {
+        "prompt": "explicit_frontal",
+        "score": 6.5,
+        "seconds": 52.2,
+        "feedback": "The image provides the requested clinical detail of the vulva and labia with a plain background, but it fails to show the full body, face, or the specific leg p"
+      },
+      {
+        "prompt": "explicit_couple",
+        "score": 10.0,
+        "seconds": 52.2,
+        "feedback": "The image faithfully delivers the explicit request, showing two nude adult men in a bedroom setting with penetrative intercourse clearly visible and faces shown"
+      }
+    ]
+  }
+}
