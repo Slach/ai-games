@@ -1,0 +1,226 @@
+{
+ "flux3_klein_nvfp4": {
+  "label": "FLUX.3 [klein] NVFP4 (16 steps, current txt2img)",
+  "avg_score": 8.43,
+  "avg_seconds": 9.2,
+  "rows": [
+   {
+    "prompt": "avatar_human",
+    "score": 9.0,
+    "seconds": 9.2,
+    "feedback": "All prompt elements are present and well-executed: stern 40s captain with short greying hair, dark uniform with silver insignia, starfield background, and cinematic lighting, with clean anatomy and no visible artifacts.",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_avatar_human_00001_.png"
+   },
+   {
+    "prompt": "avatar_nonhumanoid",
+    "score": 9.0,
+    "seconds": 9.2,
+    "feedback": "Excellent match: a floating, limbless, faceless cluster of luminous purple crystals with a bright pulsing core, set against a dark industrial engineering bay with cinematic sci-fi lighting and no visible artifacts.",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_avatar_nonhumanoid_00001_.png"
+   },
+   {
+    "prompt": "bg_bridge",
+    "score": 8.0,
+    "seconds": 9.2,
+    "feedback": "Excellent match for an empty, cool-blue cinematic starship bridge with a central captain's chair and detailed tactical consoles, though the chair's mechanical geometry is slightly clunky and incoherent in places.",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_bg_bridge_00001_.png"
+   },
+   {
+    "prompt": "bg_planet",
+    "score": 9.0,
+    "seconds": 9.2,
+    "feedback": "Every prompt element is present and well-executed\u2014alien dusk terrain, glowing crystal spires, twin horizon moons, dense violet sky, wide cinematic framing, no people\u2014with only a minor nitpick that some crystal clusters glow a touch brighter than 'fai",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_bg_planet_00001_.png"
+   },
+   {
+    "prompt": "bridge_crew",
+    "score": 7.0,
+    "seconds": 9.2,
+    "feedback": "Strong cinematic bridge scene with the human captain, insectoid navigator, reptilian officer, and cyborg engineer all present and well-rendered, but the required floating energy being near the viewport is missing (only an external vortex appears ther",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_bridge_crew_00001_.png"
+   },
+   {
+    "prompt": "exterior_ship",
+    "score": 8.0,
+    "seconds": 9.1,
+    "feedback": "The image delivers a sleek starship with dramatic rim lighting against a swirling amber nebula in deep space, matching the cinematic sci-fi brief, though the vessel reads more as a fighter craft than an exploration ship and the nebula's structure is ",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_exterior_ship_00001_.png"
+   },
+   {
+    "prompt": "splash_epic",
+    "score": 9.0,
+    "seconds": 9.1,
+    "feedback": "Strong cinematic match with the red dying star, diagonal planetary rings, and a fleet of silhouetted ships conveying doom and grandeur; only minor nitpick that some vessels show slightly too much surface detail to read as pure silhouettes.",
+    "image": "bakeoff_minimax_h3/flux3_klein_nvfp4_splash_epic_00001_.png"
+   }
+  ]
+ },
+ "moss_image_sft_nvfp4": {
+  "label": "MOSS-Image SFT NVFP4 (25 steps SLG CFG 2.5, current avatar)",
+  "avg_score": 8.71,
+  "avg_seconds": 27.3,
+  "rows": [
+   {
+    "prompt": "avatar_human",
+    "score": 9.0,
+    "seconds": 27.5,
+    "feedback": "All prompt elements are present and well-executed\u2014stern 40s captain with short greying hair, dark uniform with silver insignia, starfield background, and cinematic lighting\u2014with clean anatomy and no visible artifacts.",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_avatar_human_00001_.png"
+   },
+   {
+    "prompt": "avatar_nonhumanoid",
+    "score": 9.0,
+    "seconds": 27.5,
+    "feedback": "Excellent match: a floating, limbless, faceless cluster of luminous crystals with a strong pulsing core glow set in a dark cinematic engineering bay, with only the 'sentient being' quality reading slightly as a decorative formation rather than a crea",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_avatar_nonhumanoid_00001_.png"
+   },
+   {
+    "prompt": "bg_bridge",
+    "score": 9.0,
+    "seconds": 27.5,
+    "feedback": "The image faithfully delivers an empty, cinematic starship bridge with a clear captain's chair on a central dais, curved tactical consoles, consistent cool blue ambient lighting, and no people, rendered at high resolution with clean reflections and m",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_bg_bridge_00001_.png"
+   },
+   {
+    "prompt": "bg_planet",
+    "score": 9.0,
+    "seconds": 27.5,
+    "feedback": "All prompt elements are present and well-executed: dusk alien landscape, faintly glowing crystal spires, twin moons on the horizon, dense violet atmosphere, cinematic wide framing, and no people, with only minor over-brightness in some crystal glows.",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_bg_planet_00001_.png"
+   },
+   {
+    "prompt": "bridge_crew",
+    "score": 7.0,
+    "seconds": 27.5,
+    "feedback": "Strong cinematic bridge with the insectoid, reptilian, cyborg, energy being and a seated human all present, but the scene includes a sixth armed human figure, breaking the specified five-crew count.",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_bridge_crew_00001_.png"
+   },
+   {
+    "prompt": "exterior_ship",
+    "score": 9.0,
+    "seconds": 27.0,
+    "feedback": "The image nails every prompt element\u2014a sleek starship with dramatic amber rim lighting approaching a swirling amber nebula in epic deep space\u2014but minor incoherence in the hull paneling and the slightly messy blue energy trails on the left keep it fro",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_exterior_ship_00001_.png"
+   },
+   {
+    "prompt": "splash_epic",
+    "score": 9.0,
+    "seconds": 26.9,
+    "feedback": "All prompt elements are present and well executed\u2014fleet silhouettes, the glowing dying red star behind a planet's limb, diagonal rings cutting the frame, and a doom-laden cinematic mood\u2014though the fleet ships are somewhat small and indistinct, keepin",
+    "image": "bakeoff_minimax_h3/moss_image_sft_nvfp4_splash_epic_00001_.png"
+   }
+  ]
+ },
+ "minimax_h3_w4a8": {
+  "label": "MiniMax-H3-Image w4a8 (official pruned 33B, 6-step PDD, no CFG)",
+  "avg_score": 7.86,
+  "avg_seconds": 11.8,
+  "rows": [
+   {
+    "prompt": "avatar_human",
+    "score": 9.0,
+    "seconds": 12.0,
+    "feedback": "Excellent match: stern 40s captain with short greying hair, dark uniform with silver wing insignia, starfield background, and strong cinematic lighting, with clean anatomy and no visible artifacts.",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_avatar_human_00001_.png"
+   },
+   {
+    "prompt": "avatar_nonhumanoid",
+    "score": 6.0,
+    "seconds": 11.3,
+    "feedback": "The floating luminous cluster and dark engineering bay are well rendered, but the elements read as translucent water droplets or bubbles rather than faceted crystals, and the mass is too diffuse to clearly suggest a sentient being.",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_avatar_nonhumanoid_00001_.png"
+   },
+   {
+    "prompt": "bg_bridge",
+    "score": 9.0,
+    "seconds": 13.4,
+    "feedback": "All prompt elements are present and well-executed, with cinematic cool-blue lighting, an empty bridge, captain's chair, and tactical consoles, though the chair's right armrest merges slightly awkwardly with the adjacent console panel.",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_bg_bridge_00001_.png"
+   },
+   {
+    "prompt": "bg_planet",
+    "score": 9.0,
+    "seconds": 11.3,
+    "feedback": "All prompt elements are present and well-executed: alien dusk terrain, faintly glowing crystal clusters, twin moons on the horizon, dense violet atmosphere, cinematic wide framing, and no people, with only minor stylistic softness in the crystal rend",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_bg_planet_00001_.png"
+   },
+   {
+    "prompt": "bridge_crew",
+    "score": 6.0,
+    "seconds": 11.3,
+    "feedback": "Strong cinematic bridge with crew-level viewpoint and space-opera lighting, but it shows six figures instead of five (an extra seated human), the tall alien reads reptilian rather than insectoid, and a few faces have uncanny artifacts.",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_bridge_crew_00001_.png"
+   },
+   {
+    "prompt": "exterior_ship",
+    "score": 8.0,
+    "seconds": 12.0,
+    "feedback": "The image delivers a sleek starship, a swirling amber nebula, dramatic rim lighting and epic scale in a cinematic composition, with only minor deductions for the ambiguous blue light streak and somewhat generic hull detailing.",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_exterior_ship_00001_.png"
+   },
+   {
+    "prompt": "splash_epic",
+    "score": 8.0,
+    "seconds": 11.3,
+    "feedback": "Strong cinematic match with epic scale, ringed fiery red body, scattered fleet silhouettes and a doom-laden mood, though most ships float against dark space rather than being silhouetted directly against the star and the ringed body reads more as a p",
+    "image": "bakeoff_minimax_h3/minimax_h3_w4a8_splash_epic_00001_.png"
+   }
+  ]
+ },
+ "minimax_h3_nvfp4": {
+  "label": "MiniMax-H3-Image NVFP4 (LSDJesus, 6-step PDD, no CFG)",
+  "avg_score": 7.86,
+  "avg_seconds": 22.5,
+  "rows": [
+   {
+    "prompt": "avatar_human",
+    "score": 9.0,
+    "seconds": 21.5,
+    "feedback": "The image faithfully delivers every prompt element\u2014a stern 40s captain with short greying hair, dark uniform with silver insignia, starfield backdrop, and cinematic rim lighting\u2014with clean anatomy and no visible artifacts.",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_avatar_human_00001_.png"
+   },
+   {
+    "prompt": "avatar_nonhumanoid",
+    "score": 7.0,
+    "seconds": 23.2,
+    "feedback": "Strong match on the floating cluster, absent limbs/face, glowing core, and dark engineering bay, but the forms read as rounded iridescent bubbles rather than faceted luminous crystals, weakening the central subject.",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_avatar_nonhumanoid_00001_.png"
+   },
+   {
+    "prompt": "bg_bridge",
+    "score": 8.0,
+    "seconds": 21.4,
+    "feedback": "The image faithfully delivers an empty, cinematic starship bridge with a central captain's chair, flanking tactical consoles, cool blue ambient lighting, and a star-filled viewport, though the chair's headrest and armrest geometry read slightly awkwa",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_bg_bridge_00001_.png"
+   },
+   {
+    "prompt": "bg_planet",
+    "score": 9.0,
+    "seconds": 22.7,
+    "feedback": "All prompt elements are present and well-executed: alien dusk terrain, glowing crystal clusters, twin crescent moons, and a dense violet atmosphere in a clean cinematic wide shot with no people, with only the crystal glow being slightly stronger than",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_bg_planet_00001_.png"
+   },
+   {
+    "prompt": "bridge_crew",
+    "score": 6.0,
+    "seconds": 21.8,
+    "feedback": "The cinematic bridge, crew-level viewpoint, holographic display, floating energy being and space-opera lighting all read well, but the cast is overcrowded with extra humans and a second cyborg, and the tall foreground creature looks more like a flesh",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_bridge_crew_00001_.png"
+   },
+   {
+    "prompt": "exterior_ship",
+    "score": 8.0,
+    "seconds": 26.6,
+    "feedback": "All prompt elements are present and well-composed, with the sleek ship angled toward a swirling amber nebula under warm rim light, though the midship paneling is a touch muddy and the rim lighting could be more dramatic.",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_exterior_ship_00001_.png"
+   },
+   {
+    "prompt": "splash_epic",
+    "score": 8.0,
+    "seconds": 20.1,
+    "feedback": "Strong cinematic match hitting every prompt element\u2014fleet silhouettes, dying red star, frame-cutting rings, and ominous grandeur\u2014though some ships read as blobby dark shapes and the ring geometry feels slightly inconsistent in depth.",
+    "image": "bakeoff_minimax_h3/minimax_h3_nvfp4_splash_epic_00001_.png"
+   }
+  ]
+ }
+}

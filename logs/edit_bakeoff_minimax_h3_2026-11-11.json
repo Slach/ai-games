@@ -1,0 +1,317 @@
+{
+ "qwen_image_edit_2_1_viggle_turbo": {
+  "label": "Qwen-Image-2.1 Viggle Turbo edit (6-step DMD, current edit)",
+  "avg_score": 86.4,
+  "avg_seconds": 18.9,
+  "rows": [
+   {
+    "prompt": "android_corridor_patrol",
+    "score": 92.0,
+    "seconds": 14.3,
+    "feedback": "Identity is strongly preserved (bald head, white coat, pen, cyan wireframe overlay on the same facial side) and the edit follows the instruction well with the hand reaching an open wall panel under flickering red/amber emergency lighting, though the ",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_android_corridor_patrol_00003_.png"
+   },
+   {
+    "prompt": "android_science_lab",
+    "score": 94.0,
+    "seconds": 14.8,
+    "feedback": "The cyborg's chrome skull, cyan circuit traces, cracked-glass facial overlay, chin camera, fleshy ear, and holographic symbol ring are all faithfully retained, and the edit fully delivers the brief: the character leans over the lab table with hoverin",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_android_science_lab_00003_.png"
+   },
+   {
+    "prompt": "bio_pod_engineering",
+    "score": 91.0,
+    "seconds": 14.2,
+    "feedback": "The pod's silhouette, tentacle cables, pointed tip, sensor eye, and anatomical heart are all faithfully preserved, and the edit convincingly splits the hull open under amber/red emergency lighting with the heart's glow spilling onto exposed circuitry",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_bio_pod_engineering_00003_.png"
+   },
+   {
+    "prompt": "bio_pod_sickbay",
+    "score": 88.0,
+    "seconds": 14.8,
+    "feedback": "The pod-like character with its luminous heart and mechanical housing is faithfully preserved and hovers above the wounded comrade with visible ripple waves of light, though the comrade lies on the floor beside the capsule rather than clearly inside ",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_bio_pod_sickbay_00003_.png"
+   },
+   {
+    "prompt": "crystal_being_bridge",
+    "score": 93.0,
+    "seconds": 14.1,
+    "feedback": "The crystalline avatar's spire, branching clawed arms, blue energy veins, and chrome body are preserved almost perfectly, and it now hovers above a bridge tactical table with a holographic projection casting prismatic refractions across the surface a",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_crystal_being_bridge_00003_.png"
+   },
+   {
+    "prompt": "crystal_being_planet",
+    "score": 68.0,
+    "seconds": 14.2,
+    "feedback": "The character's crystalline form, blue energy veins, pose and identifying details are preserved almost perfectly, but the edit keeps the original lab interior rather than placing it on a crystal planet surface with an alien sun, so the instruction is",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_crystal_being_planet_00003_.png"
+   },
+   {
+    "prompt": "crystal_engineer_reactor",
+    "score": 93.0,
+    "seconds": 14.2,
+    "feedback": "The crystalline character is preserved almost perfectly\u2014spire head, branching crystal arms, and blue energy veins all intact\u2014and it hovers above a red-strobed reactor core with stabilizing blue light at its base, matching the instruction cinematicall",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_crystal_engineer_reactor_00003_.png"
+   },
+   {
+    "prompt": "crystal_exterior_ship",
+    "score": 82.0,
+    "seconds": 19.0,
+    "feedback": "The crystalline humanoid's identity is faithfully preserved with its clear spine, branching crystal-limbed arms, and blue energy veins, and it floats convincingly beside the starlit hull, but the requested ongoing exterior repair work is absent from ",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_crystal_exterior_ship_00003_.png"
+   },
+   {
+    "prompt": "cyborg_medic_sickbay",
+    "score": 86.0,
+    "seconds": 14.2,
+    "feedback": "The cyborg's cracked faceplate, exposed servo interior, dark eye socket, and red-lit mechanical details are faithfully preserved, and the scene delivers the medical bay, injured patient, and flashing red alarm glow, though the hands tend to the patie",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_cyborg_medic_sickbay_00003_.png"
+   },
+   {
+    "prompt": "engineer_corridor_fire",
+    "score": 92.0,
+    "seconds": 19.0,
+    "feedback": "The character's identity is strongly preserved (long wavy hair, laughing expression, dark eye smudges, brown leather overalls, olive jacket with orange-circled shoulder pad), and the instruction is fully followed with the running pose, fire extinguis",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_engineer_corridor_fire_00003_.png"
+   },
+   {
+    "prompt": "grey_eyes_bridge",
+    "score": 90.0,
+    "seconds": 14.1,
+    "feedback": "The character's gray skin, glowing yellow eyes, slicked gray hair, and black uniform with insignia are faithfully preserved, and the pose matches the instruction with the head snapped upward over a cool-lit tactical console showing contacts.",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_grey_eyes_bridge_00003_.png"
+   },
+   {
+    "prompt": "grey_eyes_main_screen",
+    "score": 60.0,
+    "seconds": 18.5,
+    "feedback": "The composition faithfully follows the instruction with a backlit silhouette standing in the open space before the glowing star map, but the figure reads as a generic human rather than Shat, losing the distinctive swept hair, Romulan build, and unifo",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_grey_eyes_main_screen_00003_.png"
+   },
+   {
+    "prompt": "medic_sickbay_scan",
+    "score": 90.0,
+    "seconds": 39.7,
+    "feedback": "The character's face, ponytail, blue uniform with shoulder bars and chest patch are faithfully preserved, and she leans forward with a handheld scanner over the patient under dim cool lighting, though the patient rests on a gurney rather than inside ",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_medic_sickbay_scan_00003_.png"
+   },
+   {
+    "prompt": "pilot_exterior_eva",
+    "score": 90.0,
+    "seconds": 39.7,
+    "feedback": "The character's identity is well preserved (reddish-blonde hair, tan flight suit with flag patch, green headphones) and the crawling pose with magnetic grips on boots and gloves matches the instruction, though the suit reads more as a flight suit tha",
+    "image": "editbakeoff/qwen_image_edit_2_1_viggle_turbo_pilot_exterior_eva_00003_.png"
+   }
+  ]
+ },
+ "minimax_h3_w4a8": {
+  "label": "MiniMax-H3-Image w4a8 (official pruned 33B, 6-step PDD, no CFG)",
+  "avg_score": 82.1,
+  "avg_seconds": 61.9,
+  "rows": [
+   {
+    "prompt": "android_corridor_patrol",
+    "score": 86.0,
+    "seconds": 58.2,
+    "feedback": "The edit faithfully preserves the character's bald head, pale skin, white lab coat over dark sweater, and the signature cyan wireframe overlay on his face, while correctly placing him mid-stride with a hand extended to a wall panel under flickering r",
+    "image": "editbakeoff/minimax_h3_w4a8_android_corridor_patrol_00001_.png"
+   },
+   {
+    "prompt": "android_science_lab",
+    "score": 90.0,
+    "seconds": 60.3,
+    "feedback": "The chrome humanoid with cyan circuitry, dotted head texture, and mechanical neck is faithfully preserved, and the edit convincingly stages the character leaning over the lab table with hands near the glowing artifact under a scanner, complete with d",
+    "image": "editbakeoff/minimax_h3_w4a8_android_science_lab_00001_.png"
+   },
+   {
+    "prompt": "bio_pod_engineering",
+    "score": 88.0,
+    "seconds": 58.7,
+    "feedback": "The character's identity is excellently preserved, with the same dome, heart, greenish hull, cables, and pointed tip, and the amber/red emergency lighting with energy arcs spilling across the machinery follows the instruction well, though the hull pa",
+    "image": "editbakeoff/minimax_h3_w4a8_bio_pod_engineering_00001_.png"
+   },
+   {
+    "prompt": "bio_pod_sickbay",
+    "score": 92.0,
+    "seconds": 59.1,
+    "feedback": "The pod-like character with its glass dome, luminous heart, green frame and cable tendrils is faithfully preserved and correctly hovers above the wounded comrade's medical capsule, with visible concentric light ripples and flickering monitor glows de",
+    "image": "editbakeoff/minimax_h3_w4a8_bio_pod_sickbay_00001_.png"
+   },
+   {
+    "prompt": "crystal_being_bridge",
+    "score": 50.0,
+    "seconds": 58.7,
+    "feedback": "The edit follows the instruction well with the cluster hovering over the tactical table and prismatic light scattering across it, but the character's identity is largely lost: the branching arms with blue nodes, the energy-veined torso, and the clawe",
+    "image": "editbakeoff/minimax_h3_w4a8_crystal_being_bridge_00001_.png"
+   },
+   {
+    "prompt": "crystal_being_planet",
+    "score": 90.0,
+    "seconds": 85.4,
+    "feedback": "The crystalline humanoid's spire head, branching arms, blue energy veins, and smoke-dissolving base are faithfully preserved, and the scene delivers the requested crystal planet surface, hovering pose, alien sun with long shadows, and cinematic glow ",
+    "image": "editbakeoff/minimax_h3_w4a8_crystal_being_planet_00001_.png"
+   },
+   {
+    "prompt": "crystal_engineer_reactor",
+    "score": 92.0,
+    "seconds": 57.4,
+    "feedback": "The crystalline character is preserved almost perfectly\u2014same central spire, branching clawed arms, and blue energy veins\u2014now hovering above a blazing reactor core with red emergency strobes and sparks, faithfully executing the instruction with strong",
+    "image": "editbakeoff/minimax_h3_w4a8_crystal_engineer_reactor_00001_.png"
+   },
+   {
+    "prompt": "crystal_exterior_ship",
+    "score": 84.0,
+    "seconds": 137.8,
+    "feedback": "The crystalline entity's identity survives well\u2014the clear spire head, branching crystal arms, and blue energy veins are all recognizable as it drifts beside the hull with starlight glinting off the plating, though the pose is compressed and no explic",
+    "image": "editbakeoff/minimax_h3_w4a8_crystal_exterior_ship_00001_.png"
+   },
+   {
+    "prompt": "cyborg_medic_sickbay",
+    "score": 60.0,
+    "seconds": 32.6,
+    "feedback": "The scene follows the instruction well with the character leaning over the wounded patient, hands on the capsule controls under flashing red alarm light, but the reference's signature cracked faceplate and exposed servo array were replaced by a plain",
+    "image": "editbakeoff/minimax_h3_w4a8_cyborg_medic_sickbay_00001_.png"
+   },
+   {
+    "prompt": "engineer_corridor_fire",
+    "score": 80.0,
+    "seconds": 54.9,
+    "feedback": "The edit follows the instruction well with a running figure, extinguisher in hand, smoke from the open panel, and dramatic red alarm lighting, and the character's long hair and brown leather vest carry over, though facial details like the eye makeup,",
+    "image": "editbakeoff/minimax_h3_w4a8_engineer_corridor_fire_00001_.png"
+   },
+   {
+    "prompt": "grey_eyes_bridge",
+    "score": 86.0,
+    "seconds": 51.4,
+    "feedback": "The edit faithfully preserves the character's grey skin, slicked-back grey hair, glowing yellow eyes, and black uniform while delivering the requested pose at the bridge console with head snapped upward toward a tactical hologram showing approaching ",
+    "image": "editbakeoff/minimax_h3_w4a8_grey_eyes_bridge_00001_.png"
+   },
+   {
+    "prompt": "grey_eyes_main_screen",
+    "score": 72.0,
+    "seconds": 54.2,
+    "feedback": "The composition, back-to-screen pose, and rim-lit silhouette against the glowing star chart follow the instruction well, but rendering the figure as a pure black silhouette erases the character's grey skin, yellow eyes, and facial features, so identi",
+    "image": "editbakeoff/minimax_h3_w4a8_grey_eyes_main_screen_00001_.png"
+   },
+   {
+    "prompt": "medic_sickbay_scan",
+    "score": 90.0,
+    "seconds": 48.6,
+    "feedback": "The character's reddish-blonde ponytail, dark blue uniform with shoulder stripes and belt are faithfully preserved, and she leans forward over the occupied capsule studying the scanner's display under cool emergency lighting, fully matching the instr",
+    "image": "editbakeoff/minimax_h3_w4a8_medic_sickbay_scan_00001_.png"
+   },
+   {
+    "prompt": "pilot_exterior_eva",
+    "score": 90.0,
+    "seconds": 49.2,
+    "feedback": "The character's identity is strongly preserved (reddish-blonde hair, green-cup headset, tan suit with US flag patch and harness), and the edit faithfully delivers the crawling EVA pose with magnetic boot/glove grips, the damaged antenna, and a cool p",
+    "image": "editbakeoff/minimax_h3_w4a8_pilot_exterior_eva_00001_.png"
+   }
+  ]
+ },
+ "minimax_h3_nvfp4": {
+  "label": "MiniMax-H3-Image NVFP4 (LSDJesus, 6-step PDD, no CFG)",
+  "avg_score": 81.2,
+  "avg_seconds": 44.0,
+  "rows": [
+   {
+    "prompt": "android_corridor_patrol",
+    "score": 90.0,
+    "seconds": 31.0,
+    "feedback": "The character's bald head, white lab coat, dark undershirt, and signature glowing blue wireframe face overlay are all faithfully preserved, and the edit nails the instruction with a mid-stride pose, hand reaching an open wall panel, and flickering re",
+    "image": "editbakeoff/minimax_h3_nvfp4_android_corridor_patrol_00001_.png"
+   },
+   {
+    "prompt": "android_science_lab",
+    "score": 90.0,
+    "seconds": 31.0,
+    "feedback": "The cyborg's chrome body, cyan circuitry, and holographic symbol halo are faithfully preserved, and the scene correctly shows the character leaning over the lab table with a hand hovering near a glowing artifact under a scanner with data streams on t",
+    "image": "editbakeoff/minimax_h3_nvfp4_android_science_lab_00001_.png"
+   },
+   {
+    "prompt": "bio_pod_engineering",
+    "score": 80.0,
+    "seconds": 30.3,
+    "feedback": "The character's identity is excellently preserved (dome, heart, cables, pointed tip, green hull), and the amber/red emergency lighting plus energy-interface arcs match the instruction, but the hull panels never split open to expose the heart, which r",
+    "image": "editbakeoff/minimax_h3_nvfp4_bio_pod_engineering_00001_.png"
+   },
+   {
+    "prompt": "bio_pod_sickbay",
+    "score": 93.0,
+    "seconds": 40.4,
+    "feedback": "The pod-like character with its glass dome, luminous heart, green mechanical chassis and trailing cables is faithfully preserved, and it now hovers above the wounded comrade's medical capsule with visible pulsing light waves and flickering monitor gl",
+    "image": "editbakeoff/minimax_h3_nvfp4_bio_pod_sickbay_00001_.png"
+   },
+   {
+    "prompt": "crystal_being_bridge",
+    "score": 90.0,
+    "seconds": 54.6,
+    "feedback": "The crystalline figure's silhouette, tall central crystal, branching arms, and hovering stance are faithfully preserved over the tactical table, with the holographic star sphere and prismatic refractions on the consoles matching the instruction well,",
+    "image": "editbakeoff/minimax_h3_nvfp4_crystal_being_bridge_00001_.png"
+   },
+   {
+    "prompt": "crystal_being_planet",
+    "score": 90.0,
+    "seconds": 55.1,
+    "feedback": "The crystalline humanoid's identifying features\u2014the central spire, branching clawed arms, blue energy veins, and distinctive lower-body silhouette\u2014are faithfully preserved, and the scene delivers the requested hovering pose among crystal formations w",
+    "image": "editbakeoff/minimax_h3_nvfp4_crystal_being_planet_00001_.png"
+   },
+   {
+    "prompt": "crystal_engineer_reactor",
+    "score": 90.0,
+    "seconds": 53.7,
+    "feedback": "The crystalline character's spire, branching arms, and blue energy veins are faithfully preserved while hovering above a flaming reactor core with red emergency strobes, matching the instruction and delivering a cinematic result.",
+    "image": "editbakeoff/minimax_h3_nvfp4_crystal_engineer_reactor_00001_.png"
+   },
+   {
+    "prompt": "crystal_exterior_ship",
+    "score": 82.0,
+    "seconds": 59.9,
+    "feedback": "The crystalline figure's identity is well preserved with its spire, branching crystal arms, and blue energy veins, and it floats cinematically beside the hull with starlight glinting off its facets, though it overlaps the hull rather than drifting pa",
+    "image": "editbakeoff/minimax_h3_nvfp4_crystal_exterior_ship_00001_.png"
+   },
+   {
+    "prompt": "cyborg_medic_sickbay",
+    "score": 72.0,
+    "seconds": 30.4,
+    "feedback": "The edit follows the instruction excellently with the cyborg leaning over the injured patient, hands adjusting the capsule controls under flashing red alarm light, but the character's identity is only partially preserved: the cracked translucent head",
+    "image": "editbakeoff/minimax_h3_nvfp4_cyborg_medic_sickbay_00001_.png"
+   },
+   {
+    "prompt": "engineer_corridor_fire",
+    "score": 84.0,
+    "seconds": 50.7,
+    "feedback": "The edit faithfully recreates the character's long wavy hair, brown leather vest, and olive shirt while executing the instruction well with the running pose, fire extinguisher, smoke, and dramatic red alarm lighting, though small identifying details ",
+    "image": "editbakeoff/minimax_h3_nvfp4_engineer_corridor_fire_00001_.png"
+   },
+   {
+    "prompt": "grey_eyes_bridge",
+    "score": 60.0,
+    "seconds": 31.7,
+    "feedback": "The pose, glowing yellow eye, and tactical-display lighting follow the instruction well, but the character's gray Romulan skin and slicked-back gray hair are replaced by a tanned human face with brown hair, losing much of the reference identity.",
+    "image": "editbakeoff/minimax_h3_nvfp4_grey_eyes_bridge_00001_.png"
+   },
+   {
+    "prompt": "grey_eyes_main_screen",
+    "score": 35.0,
+    "seconds": 50.9,
+    "feedback": "The glowing star-chart silhouette is cinematic, but the character is shown from behind facing the screen instead of facing the viewer as instructed, and the solid black silhouette erases the alien's gray skin, yellow eyes, and uniform insignia, losin",
+    "image": "editbakeoff/minimax_h3_nvfp4_grey_eyes_main_screen_00001_.png"
+   },
+   {
+    "prompt": "medic_sickbay_scan",
+    "score": 90.0,
+    "seconds": 48.6,
+    "feedback": "The character's identity is well preserved (hair, blue uniform, shoulder stripes, chest patch) and she leans forward with a handheld scanner over the patient, gaze fixed on the display with a tired, focused look under cool medical lighting, closely m",
+    "image": "editbakeoff/minimax_h3_nvfp4_medic_sickbay_scan_00001_.png"
+   },
+   {
+    "prompt": "pilot_exterior_eva",
+    "score": 91.0,
+    "seconds": 47.9,
+    "feedback": "The character's identity is well preserved (tan suit, flag patch, green headphones, hair color and face) and the edit faithfully follows the instruction with the crawling pose, magnetic grips, damaged antenna, and cool planet-lit background.",
+    "image": "editbakeoff/minimax_h3_nvfp4_pilot_exterior_eva_00001_.png"
+   }
+  ]
+ }
+}

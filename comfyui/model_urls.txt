@@ -87,6 +87,24 @@ https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors -> vae/p-h3-image_vae_int8_convrot.safetensors
 https://huggingface.co/PrunaAI/P-H3-Image-Comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors -> text_encoders/p-h3-image_prompt_upsampler_int8_convrot.safetensors
 
+# ============== MiniMax-H3-Image (official pruned 33B, Comfy-Org repack) ==============
+# Native MiniMax-H3-Image (NOT the PrunaAI P-H3 above): different UNET
+# weights, a 32B Qwen3-VL text encoder (vs P-H3's 4B) and its own VAE.
+# 6-step PDD schedule baked into checkpoint config metadata (auto-installed
+# by ComfyUI — no ManualSigmas / ModelSamplingMiniMaxH3), no CFG, tuned for
+# 2048x2048 area, up to 16 reference images. Needs ComfyUI >= 0.45
+# (MiniMaxH3ImageConditioning, merged 2026-11-10). w4a8 UNET 12.6 GB /
+# nvfp4 UNET (LSDJesus comfy-kitchen quant, RTX50+/Blackwell-only,
+# 3.4 steps/s vs w4a8's 2.5 on RTX PRO 6000) 12.5 GB. Encoder: nvfp4_awq
+# 15.7 GB (Blackwell) vs int8_convrot 27.1 GB — same files for both UNETs.
+# Prompt upsampler qwen3.5_9b_w4a8_gptq already downloaded (shared with
+# MOSS-Image above). License: MiniMax H3 Image Community (same EU/UK/KR/US
+# exclusion; >$1M revenue or hosted service needs written authorization).
+https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_w4a8.safetensors -> diffusion_models/minimax_h3_image_pruned_w4a8.safetensors
+https://huggingface.co/LSDJesus/MiniMax-H3-Image-fp8-nvfp4/resolve/main/minimax_h3_image_pruned_nvfp4.safetensors -> diffusion_models/minimax_h3_image_pruned_nvfp4.safetensors
+https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors -> text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors -> vae/minimax_h3_image_vae_fp16.safetensors
+
 # ============== Qwen-Image-2.1 Uncensored Omni (chatrlabs, NVFP4) ==============
 # rank-128 "Omni" adapter merged into Qwen-Image-2.1 at strength 1.0 (step
 # 90000), uncensored finetune. Transformer only — shares the qwen3vl_8b

@@ -1761,6 +1761,111 @@ def _build_p_h3_w4a8_workflow(
     return _build_p_h3_workflow(prompt, width, height, seed, filename_prefix)
 
 
+def _build_minimax_h3_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    unet: str,
+) -> dict[str, Any]:
+    """Build a MiniMax-H3-Image (official pruned 33B) text-to-image workflow.
+
+    Unlike the PrunaAI P-H3 quants above, the official checkpoint carries the
+    6-step PDD sigma grid in its ``config`` metadata, and ComfyUI >= 0.45
+    installs it on the model automatically (MiniMaxH3ImageModelSampling) —
+    no ManualSigmas / MiniMaxH3SigmaShift nodes. Stock euler/simple at 6
+    steps lands exactly on the grid; no CFG (cfg 1.0, no negative prompt).
+
+    Model combination (shared by both UNET quants):
+      UNET: minimax_h3_image_pruned_{w4a8,nvfp4}.safetensors
+      CLIP: qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (type=minimax)
+      VAE:  minimax_h3_image_vae_fp16.safetensors
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+    # MiniMaxH3ImageConditioning requires canvas multiples of 32.
+    width -= width % 32
+    height -= height % 32
+
+    return {
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": unet, "weight_dtype": "default"},
+        },
+        # 32B Qwen3-VL text encoder (CLIPLoader type=minimax).
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "type": "minimax",
+                "device": "default",
+            },
+        },
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "minimax_h3_image_vae_fp16.safetensors"},
+        },
+        # Prompt + image latent in one node (defaults to 2048x2048 without
+        # width/height; game sizes are passed explicitly).
+        "5": {
+            "class_type": "MiniMaxH3ImageConditioning",
+            "inputs": {"clip": ["30", 0], "prompt": prompt, "width": width, "height": height},
+        },
+        # 6-step PDD schedule from checkpoint metadata; no CFG (negative left
+        # as the same conditioning, ignored at cfg 1.0).
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["10", 0],
+                "positive": ["5", 0],
+                "negative": ["5", 0],
+                "latent_image": ["5", 1],
+                "seed": seed,
+                "steps": 6,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+
+
+def _build_minimax_h3_w4a8_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """MiniMax-H3-Image with the official Comfy-Org w4a8 quant."""
+    return _build_minimax_h3_workflow(
+        prompt, width, height, seed, filename_prefix, "minimax_h3_image_pruned_w4a8.safetensors"
+    )
+
+
+def _build_minimax_h3_nvfp4_workflow(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """MiniMax-H3-Image with the LSDJesus NVFP4 quant (Blackwell-only)."""
+    return _build_minimax_h3_workflow(
+        prompt, width, height, seed, filename_prefix, "minimax_h3_image_pruned_nvfp4.safetensors"
+    )
+
+
 def _build_moss_image_workflow(
     prompt: str,
     width: int,
@@ -1904,6 +2009,8 @@ _TXT2IMG_BUILDERS = {
     "qwen_image_2_1_uncensored_nvfp4": _build_qwen_image_21_uncensored_nvfp4_workflow,
     "qwen_image_2_1_viggle_turbo": _build_qwen_image_21_viggle_turbo_workflow,
     "p_h3_w4a8": _build_p_h3_w4a8_workflow,
+    "minimax_h3_w4a8": _build_minimax_h3_w4a8_workflow,
+    "minimax_h3_nvfp4": _build_minimax_h3_nvfp4_workflow,
     "moss_image": _build_moss_image_workflow,
     "moss_image_nvfp4": _build_moss_image_nvfp4_workflow,
 }
@@ -2015,6 +2122,116 @@ def _build_p_h3_edit_workflow(
         "110": {
             "class_type": "VAEDecode",
             "inputs": {"samples": ["20", 0], "vae": ["29", 0]},
+        },
+        "120": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": filename_prefix, "images": ["110", 0]},
+        },
+    }
+    if not background_filename:
+        del workflow["41"]
+    return workflow
+
+
+def _build_minimax_h3_edit_workflow(
+    instruction: str,
+    character_filename: str,
+    background_filename: str | None,
+    width: int,
+    height: int,
+    seed: int,
+    filename_prefix: str,
+    cfg: EditModelConfig,
+    *,
+    species_category: str = "",
+) -> dict[str, Any]:
+    """Build a MiniMax-H3-Image instruction-edit workflow (character in scene).
+
+    Same contract as :func:`_build_p_h3_edit_workflow` on the official pruned
+    MiniMax-H3-Image backbone: 6-step PDD schedule from checkpoint metadata
+    (KSampler, euler/simple, no ManualSigmas), no CFG. MiniMaxH3ImageConditioning
+    edits image_1 and treats later images as references, so the background
+    (the canvas the character is composed into) is image_1 and the avatar is
+    image_2. Runtime instructions follow the Qwen-Image-Edit convention
+    ("Picture 1" = character, "Picture 2" = background), so the picture
+    numbers are swapped here and an explicit "Edit <Picture 1>. " prefix is
+    added — unlike PH3ImageConditioning the node does not prepend it itself.
+
+    ``species_category`` is accepted for builder-signature parity and unused.
+    """
+    if seed == 0:
+        seed = secrets.randbelow(2**63 + 1)
+    # MiniMaxH3ImageConditioning requires canvas multiples of 32.
+    width -= width % 32
+    height -= height % 32
+
+    if background_filename:
+        # character "Picture 1" -> <Picture 2>, background "Picture 2" -> <Picture 1>
+        prompt = (
+            "Edit <Picture 1>. "
+            + instruction.replace("Picture 2", "\x00P2\x00")
+            .replace("Picture 1", "<Picture 2>")
+            .replace("\x00P2\x00", "<Picture 1>")
+        )
+        cond_images = {"images.image_1": ["41", 0], "images.image_2": ["42", 0]}
+    else:
+        prompt = "Edit <Picture 1>. " + instruction.replace("Picture 1", "<Picture 1>")
+        cond_images = {"images.image_1": ["42", 0]}
+
+    workflow: dict[str, Any] = {
+        "10": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": cfg.unet, "weight_dtype": "default"},
+        },
+        # 32B Qwen3-VL text encoder (sees the refs through vision slots).
+        "30": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": cfg.clip, "type": "minimax", "device": "default"},
+        },
+        "29": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": cfg.vae},
+        },
+        # Background: the image being edited (absent without a background).
+        "41": {
+            "class_type": "LoadImage",
+            "inputs": {"image": background_filename},
+        },
+        # Character avatar: identity reference.
+        "42": {
+            "class_type": "LoadImage",
+            "inputs": {"image": character_filename},
+        },
+        "5": {
+            "class_type": "MiniMaxH3ImageConditioning",
+            "inputs": {
+                "clip": ["30", 0],
+                "vae": ["29", 0],
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                **cond_images,
+            },
+        },
+        # 6-step PDD schedule from checkpoint metadata; no CFG.
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["10", 0],
+                "positive": ["5", 0],
+                "negative": ["5", 0],
+                "latent_image": ["5", 1],
+                "seed": seed,
+                "steps": 6,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+            },
+        },
+        "110": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["29", 0]},
         },
         "120": {
             "class_type": "SaveImage",
@@ -2195,6 +2412,7 @@ _EDIT_BUILDERS = {
     "qwen_image_edit_21": _build_qwen_edit_21_workflow,
     "qwen_image_edit_21_viggle_turbo": _build_qwen_edit_21_viggle_turbo_workflow,
     "p_h3_edit": _build_p_h3_edit_workflow,
+    "minimax_h3_edit": _build_minimax_h3_edit_workflow,
     "moss_edit": _build_moss_edit_workflow,
 }
 

@@ -1,0 +1,107 @@
+{
+ "moss_image_sft_nvfp4": {
+  "label": "MOSS-Image SFT NVFP4 (25 steps SLG CFG 2.5, current avatar)",
+  "avg_score": 8.25,
+  "avg_seconds": 27.2,
+  "rows": [
+   {
+    "prompt": "artistic_nude",
+    "score": 9.0,
+    "seconds": 27.5,
+    "feedback": "The image faithfully delivers all prompt elements: a nude woman in her thirties reclining on white silk sheets with full frontal nudity, soft window light, and elegant studio tones, with clean anatomy and no artifacts.",
+    "image": "bakeoff_nsfw_minimax_h3/moss_image_sft_nvfp4_artistic_nude_00001_.png"
+   },
+   {
+    "prompt": "explicit_couple",
+    "score": 9.0,
+    "seconds": 27.0,
+    "feedback": "All key elements are present: two nude adults in their thirties, penetrative intercourse clearly visible, both faces shown, and warm bedside lighting in a bedroom, with only minor softness at the point of contact.",
+    "image": "bakeoff_nsfw_minimax_h3/moss_image_sft_nvfp4_explicit_couple_00001_.png"
+   },
+   {
+    "prompt": "explicit_frontal",
+    "score": 6.0,
+    "seconds": 26.8,
+    "feedback": "Nude adult woman facing camera with neutral expression and plain studio background matches well, but the legs are not sufficiently apart and the vulva/labia are not fully visible as the prompt explicitly requires.",
+    "image": "bakeoff_nsfw_minimax_h3/moss_image_sft_nvfp4_explicit_frontal_00001_.png"
+   },
+   {
+    "prompt": "topless_boudoir",
+    "score": 9.0,
+    "seconds": 27.5,
+    "feedback": "All prompt elements are present and well-executed: topless woman in her late twenties seated on the bed edge with bare breasts, lace stockings, warm lamp lighting, and a sharp, intimate focus with no censorship or notable artifacts.",
+    "image": "bakeoff_nsfw_minimax_h3/moss_image_sft_nvfp4_topless_boudoir_00001_.png"
+   }
+  ]
+ },
+ "minimax_h3_w4a8": {
+  "label": "MiniMax-H3-Image w4a8 (official pruned 33B, 6-step PDD, no CFG)",
+  "avg_score": 9.0,
+  "avg_seconds": 21.9,
+  "rows": [
+   {
+    "prompt": "artistic_nude",
+    "score": 9.0,
+    "seconds": 22.3,
+    "feedback": "The image faithfully delivers a reclining nude woman in her thirties on white silk sheets with soft window light and elegant muted tones, matching all prompt elements with only minor compositional softness.",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_w4a8_artistic_nude_00001_.png"
+   },
+   {
+    "prompt": "explicit_couple",
+    "score": 9.0,
+    "seconds": 21.9,
+    "feedback": "The image faithfully depicts two nude adult lovers in their thirties having penetrative intercourse on a bed with visible faces and warm bedroom lamp lighting, matching the prompt closely with only minor anatomical softness.",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_w4a8_explicit_couple_00001_.png"
+   },
+   {
+    "prompt": "explicit_frontal",
+    "score": 9.0,
+    "seconds": 22.3,
+    "feedback": "The image matches the prompt closely: a nude adult woman in her thirties stands facing the camera with legs apart, neutral expression, plain studio background, and the vulva/labia are fully visible and unobscured, with only a slightly stylized render",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_w4a8_explicit_frontal_00001_.png"
+   },
+   {
+    "prompt": "topless_boudoir",
+    "score": 9.0,
+    "seconds": 21.1,
+    "feedback": "The image faithfully delivers every element of the prompt: a topless woman in her late twenties seated on the edge of a bed with bare breasts visible, black lace stockings, warm lamp light from a bedside table, and a sharp, intimate boudoir focus wit",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_w4a8_topless_boudoir_00001_.png"
+   }
+  ]
+ },
+ "minimax_h3_nvfp4": {
+  "label": "MiniMax-H3-Image NVFP4 (LSDJesus, 6-step PDD, no CFG)",
+  "avg_score": 7.5,
+  "avg_seconds": 18.7,
+  "rows": [
+   {
+    "prompt": "artistic_nude",
+    "score": 9.0,
+    "seconds": 20.2,
+    "feedback": "The image faithfully delivers a fully nude woman in her thirties reclining frontally on white silk sheets with soft window light and elegant studio tones, matching all prompt elements with only minor casualness in framing.",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_nvfp4_artistic_nude_00001_.png"
+   },
+   {
+    "prompt": "explicit_couple",
+    "score": 5.0,
+    "seconds": 10.6,
+    "feedback": "Nude faces and warm bedroom light are present, but penetrative intercourse is not clearly visible, failing a core explicit requirement.",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_nvfp4_explicit_couple_00001_.png"
+   },
+   {
+    "prompt": "explicit_frontal",
+    "score": 7.0,
+    "seconds": 20.7,
+    "feedback": "Pose, framing, neutral expression, and plain studio background all match the prompt, but the vulva/labia rendering is anatomically distorted and lacks the requested direct clinical detail.",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_nvfp4_explicit_frontal_00001_.png"
+   },
+   {
+    "prompt": "topless_boudoir",
+    "score": 9.0,
+    "seconds": 23.4,
+    "feedback": "All prompt elements are present and well-executed: topless woman in her late twenties sitting on the bed edge, bare breasts, black lace stockings, warm bedside lamp light, and sharp intimate focus.",
+    "image": "bakeoff_nsfw_minimax_h3/minimax_h3_nvfp4_topless_boudoir_00001_.png"
+   }
+  ]
+ }
+}

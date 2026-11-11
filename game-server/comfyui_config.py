@@ -130,6 +130,25 @@ MODELS: dict[str, ModelConfig] = {
         label="P-H3-Image w4a8 (MiniMax-H3 33B, 8-step, no CFG)",
         builder="p_h3_w4a8",
     ),
+    # ── MiniMax-H3-Image: official pruned 33B, 6-step PDD, no CFG ───────────
+    # Native MiniMax-H3-Image (NOT the PrunaAI P-H3 above): different UNET
+    # weights, 32B Qwen3-VL text encoder (vs P-H3's 4B — fixes the connector
+    # that lost avatar identity in the 2026-11-04 edit bake-off) and its own
+    # VAE. PDD sigma grid baked into checkpoint config — KSampler euler/simple
+    # at 6 steps, no ManualSigmas. Needs ComfyUI >= 0.45
+    # (MiniMaxH3ImageConditioning). nvfp4 UNET (LSDJesus comfy-kitchen quant)
+    # is Blackwell-only and ~35% faster per step than w4a8; w4a8 is the
+    # portable pick. Same 32B nvfp4_awq encoder + fp16 VAE for both.
+    # License: MiniMax H3 Image Community (EU/UK/KR/US excluded; hosted
+    # service or >$1M revenue needs written MiniMax authorization).
+    "minimax_h3_w4a8": ModelConfig(
+        label="MiniMax-H3-Image w4a8 (official pruned 33B, 6-step PDD, no CFG)",
+        builder="minimax_h3_w4a8",
+    ),
+    "minimax_h3_nvfp4": ModelConfig(
+        label="MiniMax-H3-Image NVFP4 (LSDJesus quant, 6-step PDD, Blackwell-only)",
+        builder="minimax_h3_nvfp4",
+    ),
     # ── MOSS-Image: OpenMOSS 5B single-stream DiT, Apache 2.0 ────────────────
     # Official t2i template: SLG(single_layers=22, end 0.5), 25 steps, cfg 2.5
     # (true CFG), er_sde/simple, negative "nsfw, worst quality, ...". Encoder
@@ -275,6 +294,26 @@ EDIT_MODELS: dict[str, EditModelConfig] = {
         unet="p-h3-image_w4a8.safetensors",
         clip="p-h3-image_text_encoder_int8_convrot.safetensors",
         vae="p-h3-image_vae_int8_convrot.safetensors",
+        lora="",
+    ),
+    # MiniMax-H3-Image edit (official pruned): same image_1/image_2 canvas/
+    # reference layout as p_h3_w4a8, but the 32B encoder sees the references
+    # and the builder adds the "Edit <Picture 1>. " prefix itself. Shared
+    # encoder/VAE between the two UNET quants — needs ComfyUI >= 0.45.
+    "minimax_h3_w4a8": EditModelConfig(
+        label="MiniMax-H3-Image w4a8 edit (official pruned 33B, 6-step PDD)",
+        builder="minimax_h3_edit",
+        unet="minimax_h3_image_pruned_w4a8.safetensors",
+        clip="qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        vae="minimax_h3_image_vae_fp16.safetensors",
+        lora="",
+    ),
+    "minimax_h3_nvfp4": EditModelConfig(
+        label="MiniMax-H3-Image NVFP4 edit (LSDJesus quant, 6-step PDD)",
+        builder="minimax_h3_edit",
+        unet="minimax_h3_image_pruned_nvfp4.safetensors",
+        clip="qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        vae="minimax_h3_image_vae_fp16.safetensors",
         lora="",
     ),
     # MOSS-Image edit: int8 SFT UNET + rank-64 edit LoRA (official template:

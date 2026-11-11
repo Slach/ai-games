@@ -8,7 +8,10 @@ ARG CUDA_VERSION=13.3.1
 # 2026-11-04: bumped for native P-H3-Image support (576b642 "PH3Image
 # support" Nov 3, in v0.44.0; also brings the Oct MiniMax-H3 nodes it
 # depends on — ModelSamplingMiniMaxH3, CLIPLoader type=minimax).
-ARG COMFYUI_COMMIT=70bcb4e9fc70f19b7cdb340966351ed6479f2188
+# 2026-11-11: bumped to v0.45.0 for official MiniMax-H3-Image support
+# (ede4e5fe "Support MiniMax-H3-image": MiniMaxH3ImageConditioning node,
+# pruned-UNET detection, 32B encoder, own VAE).
+ARG COMFYUI_COMMIT=989d93d0d968e704c589ce0146bb18c77f6b50cc
 
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS base
 
