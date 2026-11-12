@@ -66,6 +66,7 @@ from database import (
     get_game_state,
     get_game_title,
     get_game_welcome_text,
+    get_game_splash_scene,
     get_in_progress_generation_jobs,
     get_live_players,
     get_mission,
@@ -85,6 +86,7 @@ from database import (
     get_players_who_need_to_choose,
     get_random_game_image,
     get_turn_background,
+    get_location_background,
     get_role_by_key,
     get_role_key_for_player,
     deactivate_npc,
@@ -126,10 +128,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from game_server import create_game_server
 from game_concept import generate_game_concept, get_game_concept_lock
 from image_generator import (
+    COMFYUI_BASE_URL,
     DEFAULT_LOADING_FALLBACK_URL,
     DEFAULT_SPLASH_FALLBACK_URL,
     create_image_generator,
 )
+import pose_library
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
@@ -820,14 +824,11 @@ async def _background_character_proposal(
 
             # Splash images accompany the FIRST proposal only.
             if needs_splash:
-                title_for_prompt = game_title_data.get("title", "")
-                welcome_for_prompt = game_title_data.get("welcome_text", "")
                 try:
-                    logger.info(f"[ONBOARDING_BG] Generating 3 splash images for {title_for_prompt}...")
+                    logger.info(f"[ONBOARDING_BG] Generating 3 splash images for game {game_id}...")
                     cg = create_image_generator()
                     urls = await cg.generate_splash_images(
-                        game_title=title_for_prompt,
-                        welcome_text=welcome_for_prompt,
+                        scene_description=game_title_data.get("splash_scene", ""),
                         count=3,
                         filename_prefix="splash",
                         game_id=game_id,
@@ -946,6 +947,7 @@ async def start_onboarding(request: StartOnboardingRequest):
     game_title_data = {
         "title": concept["title"],
         "welcome_text": concept["welcome_text"],
+        "splash_scene": concept["splash_scene"],
     }
 
     session = create_onboarding_session(request.player_id, request.language)
@@ -1691,7 +1693,7 @@ async def poll_game_updates(player_id: int, since: str | None):
             elif not briefing.get("selected_action_id"):
                 # Player hasn't chosen yet — return their briefing
                 # Get scene image for this turn
-                scene_url = get_random_game_image(type="scene", game_id=game_id, turn=current_turn_num)
+                scene_url = _scene_image_for_turn(game_id, current_turn_num)
                 # Also fetch NPC dialogues for crew behavior context
                 turn_record = get_game_turn(current_turn_num, game_id)
                 crew_dialogues = turn_record["crew_dialogues"] if turn_record else []
@@ -2208,7 +2210,7 @@ async def get_player_briefing_endpoint(player_id: int, turn: int):
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found")
     # Scene image for this turn
-    briefing_image_url = get_random_game_image(type="scene", game_id=game_id, turn=turn)
+    briefing_image_url = _scene_image_for_turn(game_id, turn)
     return {
         "briefing": briefing["briefing"],
         "choices": briefing["choices"],
@@ -2303,32 +2305,103 @@ async def get_splash_image(game_id: str):
 _turn_bg_locks: dict[tuple[str, int], asyncio.Lock] = {}
 
 
-async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
-    """Return the turn's shared background ({"image_url", "prompt"}), generating it on first use.
+def _pose_catalogue_for(species_category: str) -> str:
+    """Pose catalogue for humanoid characters; empty for exotic species.
 
-    One empty scene per turn, built from the turn's global circumstances
-    (setting + conflict). Every action / character / death image of the turn
-    is composed onto this same Picture 2 so the crew's actions share one
-    coherent environment. Persisted in game_images (type="turn_background"),
-    so a restart reuses it; generation races are serialized per (game, turn).
+    Pose skeletons only make sense for bodies with human-like limbs — for
+    non_humanoid/energy/symbiotic beings the anatomy guard already forbids
+    pose vocabulary, and a skeleton would pull the form back into a humanoid.
+    """
+    if species_category in ("non_humanoid", "energy", "symbiotic"):
+        return ""
+    return pose_library.pose_prompt_block()
+
+
+async def _pose_filename_for(species_category: str, pose_id: str) -> str:
+    """Upload the chosen pose skeleton to ComfyUI; '' when unusable."""
+    if not pose_id or species_category in ("non_humanoid", "energy", "symbiotic"):
+        return ""
+    return await pose_library.ensure_pose_uploaded(COMFYUI_BASE_URL, pose_id) or ""
+
+
+def _previous_turn_location(game_id: str, current_turn: int) -> str:
+    """'id — name — description' of the previous turn's location, or ''.
+
+    Fed back into global-circumstances generation so the LLM reuses the same
+    location.id (and the same cached backdrop) while the crew stays put.
+    """
+    if current_turn <= 1:
+        return ""
+    prev = get_game_turn(current_turn - 1, game_id)
+    if not prev or not prev.get("global_circumstances"):
+        return ""
+    try:
+        gc = json.loads(prev["global_circumstances"])
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    loc = gc.get("location") or {}
+    if not loc.get("id"):
+        return ""
+    return f"{loc['id']} — {loc.get('name', '')} — {loc.get('description', '')}"
+
+
+def _scene_image_for_turn(game_id: str, turn: int) -> str | None:
+    """Briefing header image URL for a turn, or None.
+
+    Since 2026-11-11 the header image is the turn's SHARED background (one per
+    location): the most recent turn_background row at or before this turn.
+    Turns generated before the rework keep serving their legacy type="scene"
+    rows.
+    """
+    legacy = get_random_game_image(type="scene", game_id=game_id, turn=turn)
+    if legacy:
+        return legacy
+    for t in range(turn, 0, -1):
+        bg = get_turn_background(game_id, t)
+        if bg:
+            return bg["image_url"]
+    return None
+
+
+async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
+    """Return the shared background ({"image_url", "prompt"}), generating it on first use.
+
+    One empty stage per LOCATION: the turn's global circumstances carry a
+    stable location.id, and the backdrop is cached per (game, location_id) —
+    while the crew stays in the same place, every turn reuses the same
+    Picture 2, keeping the world consistent. Turns without a location (older
+    games) fall back to a per-turn cache. Every action / character / death
+    image is composed onto this same Picture 2. Persisted in game_images
+    (type="turn_background"); generation races are serialized per cache key.
     Returns None when the background cannot be produced (callers then pass
     no Picture 2 and the edit model imagines the scene from the instruction).
     """
-    existing = get_turn_background(game_id, turn)
+    turn_data = get_game_turn(turn, game_id)
+    try:
+        global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
+    except (json.JSONDecodeError, TypeError):
+        global_circ = {}
+    location = global_circ.get("location") or {}
+    location_id = (location.get("id") or "").strip()
+
+    def _lookup() -> dict | None:
+        if location_id:
+            existing = get_location_background(game_id, location_id)
+            if existing:
+                return existing
+        return get_turn_background(game_id, turn)
+
+    existing = _lookup()
     if existing:
         return existing
 
-    lock = _turn_bg_locks.setdefault((game_id, turn), asyncio.Lock())
+    cache_key = location_id or f"turn{turn}"
+    lock = _turn_bg_locks.setdefault((game_id, cache_key), asyncio.Lock())
     async with lock:
-        existing = get_turn_background(game_id, turn)
+        existing = _lookup()
         if existing:
             return existing
 
-        turn_data = get_game_turn(turn, game_id)
-        try:
-            global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
-        except (json.JSONDecodeError, TypeError):
-            global_circ = {}
         setting = global_circ.get("setting", "") or (turn_data.get("story", "") if turn_data else "")
         conflict = global_circ.get("conflict", "")
 
@@ -2343,20 +2416,26 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
                 player_id=None,
                 turn=turn,
                 kind="turn_background_prompt",
+                location_name=location.get("name", ""),
+                location_description=location.get("description", ""),
             )
         except Exception:
             logger.warning(f"[TURN_BACKGROUND] Prompt LLM call failed for {game_id} turn {turn}", exc_info=True)
             prompt = ""
         if not prompt:
             prompt = (
-                f"Cinematic wide shot of a sci-fi space-opera scene: {setting}. "
-                "Environment and objects only, dramatic lighting, detailed, 4K. No characters, no people."
+                f"Cinematic medium-wide shot of a sci-fi space-opera stage: {setting}. "
+                "Standable deck surface across the lower half of the frame, 3-5 human-scale anchor "
+                "objects (consoles with holographic displays, hatches, handrails), starship-grade "
+                "props only, dramatic lighting with an explicit source, detailed, 4K. "
+                "No characters, no people, no domestic windows."
             )
 
         image_gen = create_image_generator()
+        prefix = f"{game_id}/turn_bg_loc_{location_id}" if location_id else f"{game_id}/turn_bg_turn{turn}"
         url = await image_gen.generate_scene_image(
             prompt=prompt,
-            filename_prefix=f"{game_id}/turn_bg_turn{turn}",
+            filename_prefix=prefix,
             width=1024,
             height=1024,
             game_id=game_id,
@@ -2367,8 +2446,11 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
         if not url:
             logger.warning(f"[TURN_BACKGROUND] Generation failed for {game_id} turn {turn}")
             return None
-        save_game_image(type="turn_background", image_url=url, prompt=prompt, game_id=game_id, turn=turn)
-        logger.info(f"[TURN_BACKGROUND] Generated for {game_id} turn {turn}: {url}")
+        save_game_image(
+            type="turn_background", image_url=url, prompt=prompt, game_id=game_id,
+            turn=turn, location_id=location_id or None,
+        )
+        logger.info(f"[TURN_BACKGROUND] Generated for {game_id} turn {turn} (location={location_id or 'turn-keyed'}): {url}")
         return {"image_url": url, "prompt": prompt}
 
 
@@ -2435,22 +2517,27 @@ async def _generate_chosen_action_image(
         scene_desc = turn_bg["prompt"] if turn_bg else ""
         conflict = global_circ.get("conflict", "")
         scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
+        species_category = profile.get("species_primary_key") or ""
         gm = None
+        pose_filename = ""
         try:
             gm = create_game_server(language=language)
-            instruction = await gm.generate_scene_instruction(
+            scene = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc or species,
                 language=language,
                 scene_description=scene_desc,
                 scene_context=scene_context,
-                species_category=profile.get("species_primary_key") or "",
+                species_category=species_category,
                 game_id=game_id,
                 player_id=str(player_id),
                 turn=turn,
                 kind="player_action",
+                pose_catalogue=_pose_catalogue_for(species_category),
             )
-            logger.info(f"[ACTION_IMAGE] Scene instruction for {role}: {instruction[:120]}...")
+            instruction = scene["instruction"]
+            pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
+            logger.info(f"[ACTION_IMAGE] Scene instruction for {role} (pose={scene.get('pose_id') or '-'}): {instruction[:120]}...")
         except Exception as llm_err:
             logger.warning(f"[ACTION_IMAGE] Scene instruction failed for {role}: {llm_err}, using fallback")
             instruction = ""
@@ -2474,7 +2561,8 @@ async def _generate_chosen_action_image(
             player_id=str(player_id),
             turn=turn,
             kind="player_action",
-            species_category=profile.get("species_primary_key") or "",
+            species_category=species_category,
+            pose_filename=pose_filename or None,
         )
 
         if chosen_action_url:
@@ -2551,19 +2639,24 @@ async def _generate_death_image(
         turn_bg = await _ensure_turn_background(game_id, turn)
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
+        species_category = profile.get("species_primary_key") or ""
+        pose_filename = ""
         try:
-            instruction = await gm.generate_scene_instruction(
+            scene = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc or species,
                 language=language,
                 scene_description=scene_desc,
                 scene_context=scene_context,
-                species_category=profile.get("species_primary_key") or "",
+                species_category=species_category,
                 game_id=game_id,
                 player_id=str(player_id),
                 turn=turn,
                 kind="player_death",
+                pose_catalogue=_pose_catalogue_for(species_category),
             )
+            instruction = scene["instruction"]
+            pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
         except Exception as llm_err:
             logger.warning(f"[DEATH_IMAGE] Scene instruction failed for {player_id}: {llm_err}, using fallback")
             instruction = ""
@@ -2589,7 +2682,8 @@ async def _generate_death_image(
             player_id=str(player_id),
             turn=turn,
             kind="player_death",
-            species_category=profile.get("species_primary_key") or "",
+            species_category=species_category,
+            pose_filename=pose_filename or None,
         )
         if death_image_url:
             logger.info(f"[DEATH_IMAGE] Generated for player {player_id} turn {turn}: {death_image_url}")
@@ -2726,23 +2820,29 @@ async def _generate_npc_chosen_action_image(
         turn_bg = await _ensure_turn_background(game_id, turn)
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
+        species_category = npc_profile.get("species", "") or ""
+        pose_filename = ""
         try:
             game_lang = get_game_language(game_id)
             gm = create_game_server(language=game_lang)
-            instruction = await gm.generate_scene_instruction(
+            scene = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=npc_species,
                 language=game_lang,
                 scene_description=scene_desc,
                 scene_context=scene_context,
-                species_category=npc_profile.get("species", "") or "",
+                species_category=species_category,
                 game_id=game_id,
                 player_id=npc_key,
                 turn=turn,
                 kind="npc_action",
+                pose_catalogue=_pose_catalogue_for(species_category),
             )
+            instruction = scene["instruction"]
+            pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
         except Exception as llm_err:
             logger.warning(f"[NPC_ACTION_IMAGE] Scene instruction failed for {npc_name}: {llm_err}")
+            instruction = ""
 
         if not instruction:
             instruction = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
@@ -2760,7 +2860,8 @@ async def _generate_npc_chosen_action_image(
             player_id=None,
             turn=turn,
             kind="npc_action",
-            species_category=npc_profile.get("species", "") or "",
+            species_category=species_category,
+            pose_filename=pose_filename or None,
         )
 
         if chosen_action_url:
@@ -3492,7 +3593,20 @@ async def _analyze_turn_outcome(
                 crew_morale_str = outcome.get("crew_morale_change", "")
                 # Include deactivated NPCs: a character that died this turn
                 # can still be the subject of the outcome scene.
-                crew_refs = _collect_crew_avatar_refs(game_id, include_inactive_npcs=True)
+                crew_refs = _collect_crew_avatar_refs(game_id)
+                # X = the LIVING crew at generation time (the helper now
+                # skips dead players and inactive NPCs). With the location
+                # backdrop as Picture 1 every avatar is another vision slot
+                # the model must keep apart — a roster-wide list once made it
+                # render the same character twice (GM feedback 2026-11-12).
+                max_staged = len(crew_refs)
+                # The outcome scene unfolds on the SAME location backdrop as
+                # every action image of the turn — previously it invented its
+                # own environment and read as a different place (GM feedback
+                # 2026-11-12).
+                outcome_turn_bg = await _ensure_turn_background(game_id, turn)
+                turn_bg_url = outcome_turn_bg["image_url"] if outcome_turn_bg else None
+                turn_bg_prompt = outcome_turn_bg["prompt"] if outcome_turn_bg else ""
                 image_prompt = ""
                 try:
                     prompt_result = await gm.generate_outcome_image_prompt(
@@ -3504,6 +3618,8 @@ async def _analyze_turn_outcome(
                         player_id=None,
                         turn=turn,
                         kind="outcome_image_prompt",
+                        scene_description=turn_bg_prompt,
+                        max_characters=max_staged,
                     )
                     image_prompt = prompt_result.get("image_prompt", "")
                 except Exception:
@@ -3528,6 +3644,7 @@ async def _analyze_turn_outcome(
                     width=1024,
                     height=1024,
                     turn=turn,
+                    background_url=turn_bg_url,
                 )
                 if outcome_image_url:
                     save_game_image(
@@ -4128,6 +4245,7 @@ async def _run_language_change(game_id: str, language: str) -> None:
         delete_game_images(game_id)
 
         new_welcome = ""
+        new_scene = ""
         mission_data: dict | None = None
         try:
             mission_data = await gm.generate_mission(game_id=game_id, player_id=None, turn=None, kind="mission")
@@ -4139,22 +4257,22 @@ async def _run_language_change(game_id: str, language: str) -> None:
                     title_data = await gm.generate_game_title(game_id=game_id, player_id=None, turn=None, kind="game_title", mission_context=mission_result)
                     new_title = title_data.get("title", "")
                     new_welcome = title_data.get("welcome_text", "")
+                    new_scene = title_data.get("splash_scene", "")
                     if new_title:
-                        save_game_title_and_welcome(game_id, new_title, new_welcome)
+                        save_game_title_and_welcome(game_id, new_title, new_welcome, new_scene)
                         logger.info(f"Regenerated game title in {language}: {new_title}")
                 except Exception:
                     logger.warning("Failed to regenerate game title for %s", game_id, exc_info=True)
         except Exception:
             logger.warning("Failed to regenerate mission for %s", game_id, exc_info=True)
 
-        # Regenerate splash images (deleted above) from the new title/welcome.
+        # Regenerate splash images (deleted above) from the new splash scene.
         if new_title:
             try:
                 logger.info(f"[SPLASH] Regenerating 3 splash images for {game_id} ({language})")
                 image_gen = create_image_generator()
                 urls = await image_gen.generate_splash_images(
-                    game_title=new_title,
-                    welcome_text=new_welcome,
+                    scene_description=new_scene,
                     count=3,
                     filename_prefix="splash",
                     game_id=game_id,
@@ -4244,7 +4362,7 @@ def _build_player_briefings_for_push(
     Also fetches player_name for each real player to include in the payload.
     """
     # Fetch scene image for this turn (if generated and saved)
-    scene_url = get_random_game_image(type="scene", game_id=game_id, turn=turn_num)
+    scene_url = _scene_image_for_turn(game_id, turn_num)
     players_data = []
     for b in all_briefings:
         if b.get("is_npc"):
@@ -4381,21 +4499,21 @@ async def admin_generate_loading_images(count: int, *, game_id: str):
 
 @app.post("/admin/generate-splash-images")
 async def admin_generate_splash_images(game_id: str, language: str):
-    """Generate 3 splash images for the game using current game title.
+    """Generate 3 splash images for the game from its stored splash scene.
 
-    If the game has no title yet, uses a fallback.
+    If the game has no splash scene yet, uses a generic fallback.
     """
     logger.info(f"[ADMIN] Generating splash images for game {game_id}")
 
-    gs = get_game_strings(language)
-    game_title = get_game_title(game_id) or gs["game_title_fallback"]
-    welcome_text = "Космический корабль в глубинах неизведанного космоса."
+    scene_description = (
+        get_game_splash_scene(game_id)
+        or "A starship in the depths of unexplored space, nebula backdrop, cinematic lighting."
+    )
 
     try:
         image_generator = create_image_generator()
         urls = await image_generator.generate_splash_images(
-            game_title=game_title,
-            welcome_text=welcome_text,
+            scene_description=scene_description,
             count=3,
             filename_prefix="splash",
             game_id=game_id,
@@ -4494,7 +4612,10 @@ def _collect_crew_avatar_refs(
         all_participants = []
         for pid in get_players_in_game(game_id):
             p = get_player_profile(pid)
-            if p:
+            # Dead players are not part of reference images: the staged crew
+            # must be the LIVING crew at generation time (GM feedback
+            # 2026-11-12 — "X это живые на момент генерации картинки").
+            if p and not p.get("is_dead"):
                 all_participants.append(
                     {
                         "type": "player",
@@ -4579,13 +4700,24 @@ def _random_npc_species() -> str:
     return secrets.choice(_NPC_SPECIES_OPTIONS)
 
 
-def _random_npc_gender(language: str) -> str:
+def _random_npc_gender(language: str, species: str = "") -> str:
     """Pick a random localized gender display name for NPC.
 
     Returns a display name (e.g. "Мужской" or "Male") rather than a key.
+
+    For human-like species only male/female roll: a "Нейтральный" NPC rolls an
+    androgynous avatar while the LLM name generator still produces a strongly
+    gendered name («Пётр Лавров» + woman on the avatar — GM feedback
+    2026-11-11). Neutral/fluid stay available to players; synthetic is rolled
+    only for cybernetic NPCs whose body is explicitly a machine.
     """
     lang_key = LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN
-    gender_key = secrets.choice(list(_NPC_GENDER_OPTIONS[lang_key].keys()))
+    if species in ("human", "humanoid"):
+        gender_key = secrets.choice(["male", "female"])
+    elif species == "cybernetic":
+        gender_key = secrets.choice(["male", "female", "synthetic"])
+    else:
+        gender_key = secrets.choice(list(_NPC_GENDER_OPTIONS[lang_key].keys()))
     return _NPC_GENDER_OPTIONS[lang_key][gender_key]
 
 
@@ -4802,7 +4934,7 @@ async def _original_start_game(request: StartGameRequest):
 
         # Randomize species and gender for this NPC
         npc_species = _random_npc_species()
-        npc_gender = _random_npc_gender(language)
+        npc_gender = _random_npc_gender(language, npc_species)
 
         # Generate per-character role flavour via LLM (replaces static
         # SHIP_ROLES_I18N). Done before name generation so the name can
@@ -5009,7 +5141,7 @@ async def _original_start_game(request: StartGameRequest):
         except (json.JSONDecodeError, TypeError):
             global_circ = None
     if global_circ is None:
-        global_circ = await gm.generate_global_circumstances(turn=turn_num, previous_summary=previous_summary, player_profiles=all_participants, mission_context=mission_data, game_id=game_id, player_id=None, kind="global_circumstances", threat_level=turn_threat)
+        global_circ = await gm.generate_global_circumstances(turn=turn_num, previous_summary=previous_summary, player_profiles=all_participants, mission_context=mission_data, game_id=game_id, player_id=None, kind="global_circumstances", threat_level=turn_threat, previous_location=_previous_turn_location(game_id, turn_num))
     global_narrative = global_circ.get("narrative", "")
 
     # Save global circumstances
@@ -5019,40 +5151,12 @@ async def _original_start_game(request: StartGameRequest):
         game_id,
     )
 
-    # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
-    scene_url = get_random_game_image(type="scene", game_id=game_id, turn=turn_num)
-    if scene_url:
-        logger.info(f"[SCENE] Resume: scene image already exists for turn {turn_num}, skipping")
-    else:
-        try:
-            # Prefer LLM-generated scene_prompt
-            scene_prompt = global_circ.get("scene_prompt", "")
-            if not scene_prompt:
-                # Fallback: build from setting + narrative
-                scene_prompt = (
-                    f"Sci-fi scene: {global_circ.get('setting', '')}. {global_narrative} Cinematic starship interior, crew interacting with holographic displays, dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
-                )
-            # Remove [avatar: ...] markers before sending to image gen
-            import re
-
-            scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
-            image_gen = create_image_generator()
-            scene_url = await image_gen.generate_scene_image(prompt=scene_prompt_clean, filename_prefix=f"{game_id}/scene_turn{turn_num}", width=1024, height=1024, game_id=game_id, player_id=None, turn=None, kind="scene")
-            if scene_url:
-                save_game_image(
-                    type="scene",
-                    image_url=scene_url,
-                    game_id=game_id,
-                    turn=turn_num,
-                    prompt=scene_prompt_clean,
-                )
-                logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
-        except Exception as e:
-            logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
-
     # Step A3: Generate the turn's SHARED background — every action/character/
     # death image of this turn is composed onto this one scene (Picture 2),
-    # so the crew's actions stay in one coherent environment.
+    # so the crew's actions stay in one coherent environment. It is also the
+    # briefing header image (the separate per-turn "scene" generation was
+    # removed 2026-11-11: one backdrop per location keeps the world
+    # consistent and kills the free-form scene_prompt absurdities).
     try:
         await _ensure_turn_background(game_id, turn_num)
     except Exception as e:
@@ -5310,19 +5414,24 @@ async def _original_start_game(request: StartGameRequest):
         turn_bg = await _ensure_turn_background(game_id, turn_num)
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
+        species_category = profile.get("species_primary_key") or ""
+        pose_filename = ""
         try:
-            instruction = await gm.generate_scene_instruction(
+            scene = await gm.generate_scene_instruction(
                 action_text=char_action,
                 species_desc=species_desc or species_type,
                 language=language,
                 scene_description=scene_desc,
                 scene_context=f"Setting: {setting}",
-                species_category=profile.get("species_primary_key") or "",
+                species_category=species_category,
                 game_id=game_id,
                 player_id=str(pid),
                 turn=turn_num,
                 kind="character_scene",
+                pose_catalogue=_pose_catalogue_for(species_category),
             )
+            instruction = scene["instruction"]
+            pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
             instruction = ""
@@ -5352,7 +5461,8 @@ async def _original_start_game(request: StartGameRequest):
             player_id=str(pid),
             turn=turn_num,
             kind="character_scene",
-            species_category=profile.get("species_primary_key") or "",
+            species_category=species_category,
+            pose_filename=pose_filename or None,
         )
         if url:
             save_game_image(
@@ -5513,7 +5623,7 @@ async def get_scene_image_endpoint(
     turn: int,
 ):
     """Get the scene image for a specific turn of a game."""
-    url = get_random_game_image(type="scene", game_id=game_id, turn=turn)
+    url = _scene_image_for_turn(game_id, turn)
     if not url:
         raise HTTPException(status_code=404, detail=f"No scene image found for turn {turn}")
     return {"image_url": url, "game_id": game_id, "turn": turn, "type": "scene"}
@@ -5949,6 +6059,8 @@ async def _background_continue_wrapper(
                 players=result.get("players", 0),
                 npcs=result.get("npcs", 0),
                 language=language,
+                outcome_type=result.get("outcome_type", ""),
+                end_reason=result.get("end_reason", ""),
             )
     except Exception as e:
         logger.error(f"[BACKGROUND] Continue game failed for {game_id}: {e}", exc_info=True)
@@ -6070,6 +6182,7 @@ async def _original_continue_game(
         post_state = get_game_state(game_id)
         if post_state["status"] != "active" or not post_state["ship_alive"]:
             logger.info(f"[CONTINUE] Game ended after analyzing turn {prev_turn} (status={post_state['status']}); not generating turn {turn_num}")
+            end_status = post_state["status"] if post_state["status"] != "active" else ""
             return {
                 "status": "game_ended",
                 "turn": turn_num,
@@ -6077,6 +6190,8 @@ async def _original_continue_game(
                 "players": 0,
                 "npcs": 0,
                 "crew_dialogues": [],
+                "outcome_type": post_state["finale_outcome_type"],
+                "end_reason": end_status,
             }
 
     # Get all participants (players + NPCs)
@@ -6167,6 +6282,7 @@ async def _original_continue_game(
             player_id=None,
             kind="global_circumstances",
             threat_level=turn_threat,
+            previous_location=_previous_turn_location(game_id, turn_num),
         )
 
     # Save global circumstances
@@ -6208,39 +6324,9 @@ async def _original_continue_game(
         crew_dialogues_list, crew_lines_by_key = [], {}
     logger.info(f"[CREW_DIALOG] {len(crew_dialogues_list)} lines for turn {turn_num}; speakers with lines: {list(crew_lines_by_key)}")
 
-    # Step A2: Generate scene image for this turn's briefing (resume: skip if exists)
-    scene_url = get_random_game_image(type="scene", game_id=game_id, turn=turn_num)
-    if scene_url:
-        logger.info(f"[SCENE] Resume: scene image already exists for turn {turn_num}, skipping")
-    else:
-        try:
-            # Prefer LLM-generated scene_prompt
-            scene_prompt = global_circ.get("scene_prompt", "")
-            if not scene_prompt:
-                # Fallback: build from setting + narrative
-                scene_prompt = (
-                    f"Sci-fi scene: {global_circ.get('setting', '')}. "
-                    f"{global_circ.get('narrative', '')} "
-                    f"Cinematic starship interior, crew interacting with holographic displays, "
-                    f"dramatic lighting from the main viewscreen, Star Trek aesthetic, 4K quality."
-                )
-            # Remove [avatar: ...] markers before sending to image gen
-            import re
-
-            scene_prompt_clean = re.sub(r"\[avatar:\s*\w+\]", "", scene_prompt).strip()
-            image_gen = create_image_generator()
-            scene_url = await image_gen.generate_scene_image(prompt=scene_prompt_clean, filename_prefix=f"{game_id}/scene_turn{turn_num}", width=1024, height=1024, game_id=game_id, player_id=None, turn=None, kind="scene")
-            if scene_url:
-                save_game_image(
-                    type="scene",
-                    image_url=scene_url,
-                    game_id=game_id,
-                    turn=turn_num,
-                    prompt=scene_prompt_clean,
-                )
-                logger.info(f"[SCENE] Turn scene image saved for turn {turn_num}: {scene_url}")
-        except Exception as e:
-            logger.warning(f"[SCENE] Failed to generate turn scene image for turn {turn_num}: {e}")
+    # The briefing header image is the turn's SHARED background (one per
+    # location since 2026-11-11) — generated lazily by _ensure_turn_background
+    # when the first character/action image needs it.
 
     # Create game turn record EARLY to prevent race condition with polling loop.
     # The existing Step E will REPLACE this placeholder via INSERT OR REPLACE.
@@ -6503,19 +6589,24 @@ async def _original_continue_game(
         turn_bg = await _ensure_turn_background(game_id, turn_num)
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
+        species_category = profile.get("species_primary_key") or ""
+        pose_filename = ""
         try:
-            instruction = await gm.generate_scene_instruction(
+            scene = await gm.generate_scene_instruction(
                 action_text=char_action,
                 species_desc=species_desc or species_type,
                 language=language,
                 scene_description=scene_desc,
                 scene_context=f"Setting: {setting}",
-                species_category=profile.get("species_primary_key") or "",
+                species_category=species_category,
                 game_id=game_id,
                 player_id=str(pid),
                 turn=turn_num,
                 kind="character_scene",
+                pose_catalogue=_pose_catalogue_for(species_category),
             )
+            instruction = scene["instruction"]
+            pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
             instruction = ""
@@ -6545,7 +6636,8 @@ async def _original_continue_game(
             player_id=str(pid),
             turn=turn_num,
             kind="character_scene",
-            species_category=profile.get("species_primary_key") or "",
+            species_category=species_category,
+            pose_filename=pose_filename or None,
         )
         if url:
             save_game_image(

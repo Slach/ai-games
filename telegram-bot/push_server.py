@@ -1056,10 +1056,58 @@ async def _deliver_gm_notification(
                 duration_txt = f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
                 msg += f"\n⏱ Generation time: {duration_txt}"
     elif status == "game_ended":
-        if language == "ru":
-            msg = f"🏁 *Игра `{game_id}` завершена во время генерации хода {turn}.*\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."
+        outcome_type = payload.get("outcome_type", "")
+        end_reason = payload.get("end_reason", "")
+        if language == LANGUAGE_RU:
+            outcome_labels = {
+                "triumph": "🏆 Триумф",
+                "victory": "🏆 Победа",
+                "pyrrhic": "🔥 Пиррова победа",
+                "stalemate": "⚖️ Ничья",
+                "defeat": "💀 Поражение",
+            }
+            reason_labels = {
+                "mission_complete": "миссия выполнена",
+                "ship_destroyed": "корабль уничтожен",
+                "crew_wiped": "экипаж погиб",
+                "overwhelmed": "угроза достигла предела",
+                "mutiny": "мятеж экипажа",
+            }
+            verdict = " — ".join(
+                part for part in (
+                    outcome_labels.get(outcome_type, ""),
+                    reason_labels.get(end_reason, ""),
+                ) if part
+            )
+            msg = f"🏁 *Игра `{game_id}` завершена во время генерации хода {turn}.*"
+            if verdict:
+                msg += f"\n\n{verdict}"
+            msg += f"\n\nХод {turn} не отправлен игрокам — игра окончена на предыдущем ходу."
         else:
-            msg = f"🏁 *Game `{game_id}` ended during turn {turn} generation.*\n\nTurn {turn} was not sent to players — the game ended on the previous turn."
+            outcome_labels = {
+                "triumph": "🏆 Triumph",
+                "victory": "🏆 Victory",
+                "pyrrhic": "🔥 Pyrrhic victory",
+                "stalemate": "⚖️ Stalemate",
+                "defeat": "💀 Defeat",
+            }
+            reason_labels = {
+                "mission_complete": "mission complete",
+                "ship_destroyed": "ship destroyed",
+                "crew_wiped": "crew lost",
+                "overwhelmed": "threat reached its peak",
+                "mutiny": "crew mutiny",
+            }
+            verdict = " — ".join(
+                part for part in (
+                    outcome_labels.get(outcome_type, ""),
+                    reason_labels.get(end_reason, ""),
+                ) if part
+            )
+            msg = f"🏁 *Game `{game_id}` ended during turn {turn} generation.*"
+            if verdict:
+                msg += f"\n\n{verdict}"
+            msg += f"\n\nTurn {turn} was not sent to players — the game ended on the previous turn."
     elif status == "language_changed":
         title = _escape_md(payload.get("title", ""))
         mission_name = _escape_md(payload.get("mission_name", ""))

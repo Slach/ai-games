@@ -937,6 +937,10 @@ def build_game_title_prompts(
             "экипаж не пополняется — каждая смерть насовсем. "
             "Сразу после блока добавь строку: "
             "«Как победить: быстро двигайте миссию, чините корабль, лечите раны — действуйте до срока». "
+            "Также придумай splash_scene — короткое (2-3 предложения) описание фоновой сцены "
+            "для картинок игры НА АНГЛИЙСКОМ ЯЗЫКЕ с учётом миссии: что изображено — корабль, "
+            "окружение, освещение, атмосфера. Только визуальные детали: не упоминай в нём "
+            "никакой текст, надписи, названия или буквы на изображении. "
         )
         if mission_hint:
             user += (
@@ -963,6 +967,10 @@ def build_game_title_prompts(
             "the crew is never replenished — every death is permanent. "
             "Right after the block add the line: "
             "'How to win: push the mission fast, repair the ship, treat wounds — act before the clock runs out.' "
+            "Also create a splash_scene field — a short (2-3 sentences) description of the game's "
+            "background scene IN ENGLISH reflecting the mission: what is depicted — ship, environment, "
+            "lighting, atmosphere. Visual details only: do not mention any text, lettering, titles "
+            "or captions in the image. "
         )
         if mission_hint:
             user += (
@@ -1509,9 +1517,31 @@ def build_global_circumstances_prompts(
     use_vs: bool,
     vs_k: int,
     threat_status: str = "",
+    previous_location: str = "",
 ) -> tuple[str, str]:
-    """Build system and user prompts for global circumstances generation."""
+    """Build system and user prompts for global circumstances generation.
+
+    previous_location: "id — name — description" of the previous turn's
+    location, when known. The shared backdrop image is cached per location id,
+    so the LLM is told to REUSE the same id while the crew stays in the same
+    place and mint a new one only when the scene actually moves.
+    """
     threat_block = f"{threat_status}\n" if threat_status else ""
+    location_block_ru = ""
+    location_block_en = ""
+    if previous_location:
+        location_block_ru = (
+            f"Локация предыдущего хода: {previous_location}\n"
+            "Если экипаж всё ещё в том же месте — верни РОВНО тот же location.id "
+            "(задник локации переиспользуется, мир остаётся консистентным). "
+            "Новый id — только когда действие реально переместилось в другое место.\n"
+        )
+        location_block_en = (
+            f"Previous turn's location: {previous_location}\n"
+            "If the crew is still in the same place, return EXACTLY the same location.id "
+            "(the location's backdrop image is reused, keeping the world consistent). "
+            "Mint a new id only when the scene has actually moved elsewhere.\n"
+        )
     if language == LANGUAGE_RU:
         system = (
             "Ты — Game Master космической игры в стиле Star Trek. "
@@ -1531,19 +1561,21 @@ def build_global_circumstances_prompts(
             f"Предыдущие события: {previous_summary or 'Первый день миссии'}\n"
             f"Экипаж:\n{player_descriptions or '  Экипаж формируется'}\n"
             f"{mission_str}\n"
+            f"{location_block_ru}"
             "Создай общие обстоятельства дня:\n"
             "1. Место действия — где находится корабль (звездная система, станция, явление космоса)\n"
             "2. Конфликт — центральная проблема или тайна\n"
             "3. Нарратив — описание ситуации от лица GM (2-3 абзаца). "
             "Упоминай членов экипажа по ИМЕНИ, показывая их местоположение и действия.\n"
             "4. Ключевые события — 3-5 фоновых событий, которые могут заметить все\n"
-            "5. scene_prompt — детальный промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации изображения сцены. "
-            "Кинематографичный, sci-fi/space opera, 4K. Опиши обстановку, экипаж на своих местах, "
-            "освещение и атмосферу.\n"
+            "5. location — локация действия: объект {id, name, description}. "
+            "id — стабильный snake_case-идентификатор на английском (например 'witness_cargo_bay', "
+            "'targus_iv_deep_atmosphere'), name — короткое имя, description — 1-2 предложения "
+            "об окружении локации для генерации задника. Пока экипаж в том же месте — id тот же.\n"
             "6. crew_positions — массив позиций каждого члена экипажа: где они находятся и что делают.\n\n"
             "ВАЖНО: Все обстоятельства дня должны соответствовать контексту миссии.\n"
             "Не выдумывай новый независимый сюжет — развивай события в рамках миссии.\n"
-            "Всё на русском языке."
+            "Всё на русском языке (кроме location.id)."
         )
     else:
         system = (
@@ -1564,18 +1596,21 @@ def build_global_circumstances_prompts(
             f"Previous events: {previous_summary or 'First turn of mission'}\n"
             f"Crew:\n{player_descriptions or '  Crew forming'}\n"
             f"{mission_str}\n"
+            f"{location_block_en}"
             "Create shared circumstances for the turn:\n"
             "1. Setting — where the ship is located\n"
             "2. Conflict — central problem or mystery\n"
             "3. Narrative — GM voice description (2-3 paragraphs). "
             "Refer to crew members by NAME, showing their location and actions.\n"
             "4. Key events — 3-5 background events everyone can perceive\n"
-            "5. scene_prompt — a detailed English image generation prompt for this turn's scene. "
-            "Cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, "
-            "lighting, and atmosphere.\n"
+            "5. location — the scene's location: object {id, name, description}. "
+            "id is a stable snake_case identifier (e.g. 'witness_cargo_bay', "
+            "'targus_iv_deep_atmosphere'), name is a short display name, description is 1-2 "
+            "sentences about the environment for backdrop generation. Keep the same id while "
+            "the crew stays in the same place.\n"
             "6. crew_positions — array of positions for each crew member: where they are and what they're doing.\n\n"
             "IMPORTANT: All circumstances must be consistent with the mission context. "
-            "Do not invent an independent plot — develop events within the mission framework.\n"
+            "Do not invent an independent plot — develop events within the mission framework. "
         )
     if use_vs:
         system, user = verbalize_prompt(system, user, DIVERSITY_HINTS["global_circumstances"], k=vs_k)
@@ -1905,48 +1940,80 @@ def build_turn_background_prompts(
     language: str,
     setting: str,
     conflict: str,
+    location_name: str = "",
+    location_description: str = "",
 ) -> tuple[str, str]:
-    """Build (system, user) prompts for the shared per-turn background LLM call.
+    """Build (system, user) prompts for the shared background LLM call.
 
-    The model returns ONE English txt2img prompt describing the turn's shared
-    scene — the environment where every action of the turn takes place — with
-    no characters present. The prompt is later passed to Qwen-Image-Edit as
-    the scene description so action instructions reference only objects that
-    actually exist in that shared background.
+    The model returns ONE English txt2img prompt describing the shared scene
+    of the current location — the environment where every action takes place —
+    with no characters present. The prompt is later passed to Qwen-Image-Edit
+    as the scene description so action instructions reference only objects
+    that actually exist in that shared background.
+
+    The scene is a STAGE for the whole crew, not an establishing wide shot:
+    it must provide standable surfaces and human-scale anchor objects, or
+    every composed action image ends up with a character floating in space.
     """
+    location_block = ""
+    if location_name:
+        detail = f" — {location_description}" if location_description else ""
+        location_block = f"\nЛокация (Location): {location_name}{detail}\n" if language == LANGUAGE_RU else f"\nLocation: {location_name}{detail}\n"
     if language == LANGUAGE_RU:
         system = (
             "Ты — эксперт по cinematic prompt engineering для AI-генерации изображений. "
-            "Пишешь промпты для пустых сцен (БЕЗ персонажей) в эстетике sci-fi/space opera. "
-            "Промпт всегда на английском: окружение, объекты, освещение, атмосфера, композиция."
+            "Пишешь промпты для пустых сцен-СЦЕНИЧЕСКИХ ПЛОЩАДОК (БЕЗ персонажей) в эстетике "
+            "sci-fi/space opera. Промпт всегда на английском: окружение, объекты, освещение, "
+            "атмосфера, композиция."
         )
         user = (
             f"Обстановка хода (Setting): {setting}\n"
-            f"Ситуация хода (Conflict): {conflict or '—'}\n\n"
-            "Напиши ОДИН промпт на АНГЛИЙСКОМ для генерации общей сцены этого хода — "
-            "место, где происходят все действия экипажа в этом ходу. "
+            f"Ситуация хода (Conflict): {conflict or '—'}\n"
+            f"{location_block}\n"
+            "Напиши ОДИН промпт на АНГЛИЙСКОМ для генерации общей сцены — рабочей площадки, "
+            "где будут действовать все члены экипажа. "
             "Строго БЕЗ персонажей и людей: только окружение, техника, объекты, освещение. "
-            "Сцена должна быть конкретной и узнаваемой (интерьер отсека, поверхность планеты, "
-            "открытый космос с кораблём — что следует из Setting), с 2-4 заметными объектами, "
-            "на которые можно ссылаться при последующей вставке персонажей. "
-            "Кинематографичный широкий кадр, детализация, 4K."
+            "ТРЕБОВАНИЯ К ПЛОЩАДКЕ: "
+            "1) В нижней половине кадра — поверхность, на которой можно стоять "
+            "(палуба, платформа, палубные плиты, трап, грунт) на расстоянии, где персонаж "
+            "полноростово помещается в кадр; "
+            "2) 3-5 якорных объектов В МАСШТАБЕ персонажа: консоли с голографическими экранами, "
+            "люки, поручни, инженерные панели — на них будут опираться позы; "
+            "3) Реквизит ТОЛЬКО корабного класса: сенсорные дисплеи, голографические проекторы, "
+            "шлюзы. ЗАПРЕЩЕНЫ бытовые окна, шторы, книжные полки, мебель квартиры; "
+            "4) Если в конфликте есть внешние события (чужие корабли, планета, объекты) — "
+            "покажи их ЧЁТКО видими (через главный обзорный экран, панорамный купол иллюминатора "
+            "корабля); "
+            "5) Кинематографичный средне-широкий кадр с места, откуда видно всю площадку. "
+            "Свет опиши явно (источник + цвет) — его будет наследовать персонаж. 4K."
         )
         return system, user
     system = (
         "You are an expert cinematic prompt engineer for AI image generation. "
-        "You write prompts for empty scenes (NO characters) in a sci-fi/space-opera aesthetic. "
-        "The prompt is always English: environment, objects, lighting, atmosphere, composition."
+        "You write prompts for empty STAGE scenes (NO characters) in a sci-fi/space-opera "
+        "aesthetic. The prompt is always English: environment, objects, lighting, "
+        "atmosphere, composition."
     )
     user = (
         f"Turn setting: {setting}\n"
-        f"Turn situation: {conflict or '—'}\n\n"
-        "Write ONE English txt2img prompt for this turn's shared scene — the place where "
-        "every crew action of the turn takes place. "
+        f"Turn situation: {conflict or '—'}\n"
+        f"{location_block}\n"
+        "Write ONE English txt2img prompt for the shared scene — a working stage where the "
+        "whole crew will act. "
         "Strictly NO characters or people: only environment, machinery, objects, lighting. "
-        "The scene must be concrete and recognizable (a ship compartment interior, a planet "
-        "surface, open space with the ship — whatever the setting implies), with 2-4 notable "
-        "objects that character placements can later refer to. "
-        "Cinematic wide shot, detailed, 4K quality."
+        "STAGE REQUIREMENTS: "
+        "1) The lower half of the frame must contain a standable surface (deck plating, "
+        "platform, catwalk, rungs, ground) at a distance where a full-body character fits "
+        "in frame; "
+        "2) 3-5 anchor objects AT CHARACTER SCALE: consoles with holographic displays, "
+        "hatches, handrails, engineering panels — poses will brace against them; "
+        "3) Starship-grade props ONLY: sensor displays, holographic projectors, airlocks. "
+        "Domestic windows, curtains, bookshelves or apartment furniture are FORBIDDEN; "
+        "4) If the conflict involves external events (enemy ships, a planet, objects) show "
+        "them CLEARLY visible (through the main viewscreen or a panoramic canopy); "
+        "5) Cinematic medium-wide shot from a vantage point that sees the whole stage. "
+        "Describe the lighting explicitly (source + color) — the composed character will "
+        "inherit it. 4K quality."
     )
     return system, user
 
@@ -2026,11 +2093,26 @@ AVATAR_PROMPT_SYSTEM_TAIL = (
     "beings whose biology would not have them."
 )
 
+# Crew presentation contract (GM feedback 2026-11-11: avatars read as
+# "какая-то тетка с тетрадкой у окна", not as starship crew). Appended after
+# the GEPA compilation of the NPC prompt — needs a tools/prompt_optimizer
+# re-run to re-absorb into the compiled instruction.
+AVATAR_CREW_CONTRACT = (
+    "CREW PRESENTATION CONTRACT: this character is a crew member of a starship. "
+    "They ALWAYS wear their role's duty uniform or working suit with role insignia. "
+    "Lighting is ship-grade — neutral studio key light or cool console glow; NEVER "
+    "window light, warm home lighting or sunlight through domestic windows. Props are "
+    "FORBIDDEN unless issued starship equipment (a scanner, an engineering tool held "
+    "naturally); no notebooks, books, paper, phones, coffee cups, food or personal items."
+)
+
 
 def build_avatar_prompt_system(species_category: str) -> str:
     """System prompt for the player-avatar image-prompt LLM call."""
     if species_category in ("human", "humanoid"):
-        contract = AVATAR_ANATOMY_CONTRACT_HUMAN
+        contract = AVATAR_ANATOMY_CONTRACT_HUMAN + "\n\n" + AVATAR_CREW_CONTRACT
+    elif species_category == "cybernetic":
+        contract = AVATAR_ANATOMY_CONTRACT_ALIEN + "\n\n" + AVATAR_CREW_CONTRACT
     else:
         contract = AVATAR_ANATOMY_CONTRACT_ALIEN
     return AVATAR_PROMPT_SYSTEM_INTRO + "\n\n" + contract + "\n\n" + AVATAR_PROMPT_SYSTEM_TAIL
@@ -2121,8 +2203,8 @@ Return only the generated prompt string. Do not include explanations or markdown
 # uniformed human. Shared with tools/prompt_optimizer so the optimizer measures
 # the same contract the runtime enforces.
 NPC_AVATAR_SPECIES_RULES = {
-    "human": "The character is human. Describe face, expression, uniform details. Full body view, isolated character cutout.",
-    "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Full body view, isolated character cutout.",
+    "human": "The character is human. Describe face, expression, uniform details. Full body view, isolated character cutout. " + AVATAR_CREW_CONTRACT,
+    "humanoid": "The character is humanoid — subtle alien features (unusual skin/hair/eye color, distinct ears/ridges, etc.) but overall human-like silhouette. Full body view, isolated character cutout. " + AVATAR_CREW_CONTRACT,
     "non_humanoid": (
         "The creature is NON-HUMANOID — alien anatomy (tentacles, carapace, exoskeleton, crystalline "
         "structure, multiple limbs, amorphous form, hive cluster, etc.). "
@@ -2132,7 +2214,7 @@ NPC_AVATAR_SPECIES_RULES = {
         "'An insectoid being with chitinous armor'). Alien creature concept art, NOT a Star Trek officer. "
         "Full body or 3/4 view showing the alien physiology."
     ),
-    "cybernetic": "The character is CYBERNETIC/SYNTHETIC — mechanical or cybernetic body (metal, circuits, synthetic components, digital displays). If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts. Start the prompt with the species/mechanical description. Full body or 3/4 view.",
+    "cybernetic": "The character is CYBERNETIC/SYNTHETIC — mechanical or cybernetic body (metal, circuits, synthetic components, digital displays). If part-organic, highlight the blend of biological and mechanical. Do NOT default to a plain human with robot parts. Start the prompt with the species/mechanical description. Full body or 3/4 view. " + AVATAR_CREW_CONTRACT,
     "energy": (
         "The being is an ENERGY BEING — NO solid physical body, composed of energy, plasma, or light. "
         "Describe the visual signature (glow, frequency patterns, luminosity). "
@@ -2193,15 +2275,25 @@ def build_scene_instruction_system(language: str) -> str:
     reference images as "Picture 1" (character) and "Picture 2" (background).
     Picture 2 is the turn's SHARED background: the whole crew acts in the same
     scene, so the instruction must stage the action inside that exact scene
-    instead of inventing a new environment.
+    instead of inventing a new environment. When a pose reference is supplied
+    it arrives as "Picture 3" (an OpenPose skeleton) and the instruction must
+    tell the model to adopt that pose.
     """
     if language == LANGUAGE_RU:
         return (
             "Ты — эксперт по написанию инструкций для AI image-editing модели Qwen-Image-Edit. "
-            "Модель получает два изображения: Picture 1 — персонаж (аватар), Picture 2 — ОБЩИЙ фон "
-            "сцены текущего хода (в нём действуют все члены экипажа в этом ходу). "
+            "Модель получает два или три изображения: Picture 1 — персонаж (аватар), Picture 2 — ОБЩИЙ фон "
+            "сцены текущего хода (в нём действуют все члены экипажа в этом ходу), "
+            "и возможно Picture 3 — скелет OpenPose с целевой позой персонажа. "
             "Напиши инструкцию на АНГЛИЙСКОМ, как разместить персонажа из Picture 1 в сцену из "
             "Picture 2: поза, действие, положение относительно объектов сцены, освещение. "
+            "Если есть Picture 3 — персонаж ОБЯЗАН принять позу со скелета; упомяни это явно "
+            "(напр. 'adopting the exact pose shown in Picture 3') и не описывай позу словами, "
+            "конфликтующими со скелетом. "
+            "ГЛАВНОЕ — СМЫСЛОВАЯ ПОСТАНОВКА: персонаж всегда ориентирован на объект, значимый для "
+            "действия (работает — лицом к нужной консоли/панели; перемещается — в движении К видимому "
+            "месту сцены, в сторону цели). Персонаж НИКОГДА не смотрит в камеру и не позирует зрителю — "
+            "взгляд всегда на оборудовании или цели действия. "
             "Опирайся ТОЛЬКО на объекты, которые есть в описании сцены (и объекты из самого "
             "действия) — НЕ добавляй новых локаций, планет, кораблей, чёрных дыр и прочего, "
             "чего нет в сцене. "
@@ -2210,10 +2302,19 @@ def build_scene_instruction_system(language: str) -> str:
         )
     return (
         "You are an expert at writing instructions for the Qwen-Image-Edit AI model. "
-        "The model receives two images: Picture 1 — a character (avatar), Picture 2 — the SHARED "
-        "scene background of the current turn (the whole crew acts in this same scene). "
+        "The model receives two or three images: Picture 1 — a character (avatar), Picture 2 — the SHARED "
+        "scene background of the current turn (the whole crew acts in this same scene), and optionally "
+        "Picture 3 — an OpenPose skeleton with the character's target pose. "
         "Write an ENGLISH instruction on how to place the character from Picture 1 into the scene "
         "of Picture 2: pose, action, position relative to the scene's objects, lighting. "
+        "When Picture 3 is present, the character MUST adopt the skeleton's pose — state it "
+        "explicitly (e.g. 'adopting the exact pose shown in Picture 3') and never describe the "
+        "pose with words that contradict the skeleton. "
+        "SEMANTIC STAGING IS THE CORE: the character is always oriented toward the object that "
+        "matters for the action (working — facing the relevant console/panel; moving — mid-motion "
+        "TOWARD a visible destination in the scene, in the direction of the goal). The character "
+        "NEVER looks at or poses for the camera — their gaze is always on the equipment or the "
+        "action's target. "
         "Refer ONLY to objects present in the scene description (and objects named by the action "
         "itself) — do NOT add new locations, planets, ships, black holes or anything not in the scene. "
         "Do NOT restate the character's description or identity — the model preserves it automatically. "
@@ -2228,6 +2329,7 @@ def build_scene_instruction_user(
     scene_description: str,
     scene_context: str,
     species_category: str = "",
+    pose_catalogue: str = "",
 ) -> str:
     """User prompt for the scene-instruction LLM call.
 
@@ -2254,6 +2356,11 @@ def build_scene_instruction_user(
         species_category: Canonical species key (human / humanoid / non_humanoid
             / energy / cybernetic / symbiotic). Empty string = human fallback.
             Only non_humanoid / energy / symbiotic trigger the anatomy guard.
+        pose_catalogue: Pose library listing ("pose_id: description" per line)
+            for humanoid characters. When non-empty the chosen pose skeleton is
+            passed to the edit model as Picture 3 and the instruction must
+            reference it. Empty = no pose reference (non-humanoid beings or a
+            pose-less fallback path).
     """
     if scene_description:
         scene_block_ru = f"\nСцена из Picture 2 (общий фон хода, БЕЗ персонажей): {scene_description}\n"
@@ -2282,6 +2389,10 @@ def build_scene_instruction_user(
             "(dissipating), меняет форму (shifting form), обращается вокруг (orbiting), излучает "
             "(radiating), сгущается (coalescing). Указывай ориентацию в пространстве (над/между/"
             "рядом с объектами), а не «стоит в центре».\n"
+            "СУЩНОСТЬ НЕ ДОЛЖНА БЫТЬ ПАССИВНЫМ ПРЕДМЕТОМ ПОСЕРЕДИНЕ СЦЕНЫ: форма явно взаимодействует "
+            "с конкретным объектом сцены — вплетена в консоль (woven into the console), течёт вдоль "
+            "кабеля (flowing along the cable), пульсирует у панели (pulsating at the panel) — "
+            "согласно смыслу действия.\n"
         )
         anatomy_guard_en = (
             "\nIMPORTANT: this character is a non-humanoid / energy / symbiotic being "
@@ -2297,17 +2408,47 @@ def build_scene_instruction_user(
             "hovering, drifting, suspended in space, pulsating, expanding/contracting, flowing, "
             "dissipating, shifting form, orbiting, radiating, coalescing. Give the spatial "
             "orientation (above / between / next to objects) rather than \"standing in the center\".\n"
+            "THE BEING MUST NOT BE AN INERT OBJECT IN THE MIDDLE OF THE SCENE: its form visibly "
+            "interacts with a concrete scene object — woven into the console, flowing along the "
+            "cable, pulsating at the panel — according to the meaning of the action.\n"
+        )
+    pose_block_ru = ""
+    pose_block_en = ""
+    if pose_catalogue:
+        pose_block_ru = (
+            f"\nДоступные позы (скелет OpenPose будет Picture 3):\n{pose_catalogue}\n"
+            "Выбери ОДНУ позу, точнее всего соответствующую СМЫСЛУ действия (не дефолть к одной и той же!), "
+            "и укажи её pose_id в поле pose_id ответа. В инструкции персонаж принимает позу из Picture 3.\n"
+            "ПРЕДПОЧТЕНИЕ РАКУРСУ: если персонаж работает за станцией — выбирай боковой или 3/4 ракурс "
+            "(console_side, console_sitting_side, examining_hologram), чтобы лицо оставалось видно; "
+            "поза спиной к камере (console_typing) — ТОЛЬКО для консоли прямо на стене.\n"
+        )
+        pose_block_en = (
+            f"\nAvailable poses (an OpenPose skeleton will be supplied as Picture 3):\n{pose_catalogue}\n"
+            "Pick the ONE pose that most precisely matches the MEANING of the action (do NOT default to "
+            "the same pose every time) and return its pose_id in the pose_id field. In the instruction, "
+            "the character adopts the pose from Picture 3.\n"
+            "VIEWING-ANGLE PREFERENCE: when the character works at a station, prefer a SIDE or "
+            "THREE-QUARTER pose (console_side, console_sitting_side, examining_hologram) so the face "
+            "stays visible; the back-to-camera pose (console_typing) is ONLY for a console mounted "
+            "dead-on in a wall.\n"
         )
     if language == LANGUAGE_RU:
         user = (
             f"Действие: {action_text}\n"
             f"Описание вида: {species_desc}{scene_block_ru}{ctx_block}\n"
+            f"{pose_block_ru}"
             f"{anatomy_guard_ru}"
             "Напиши ОДНУ инструкцию (1-3 предложения) для Qwen-Image-Edit, "
             "начиная с 'Place the character from Picture 1...'. "
             "Персонаж действует ВНУТРИ сцены из Picture 2: привяжи позу и действие к конкретным "
             "объектам этой сцены (у консоли, над столом, между механизмами — что реально есть "
             "в описании сцены). Освещение бери из сцены. "
+            + ("Персонаж принимает позу из Picture 3. " if pose_catalogue else "")
+            + "ЯВНО укажи ориентацию и цель: персонаж обращён ЛИЦОМ к объекту, значимому для "
+            "действия (консоль, панель, направление движения к видимой цели), и НЕ смотрит в камеру. "
+            "Персонаж в МАСШТАБЕ сцены: естественный рост человека рядом с якорными объектами, "
+            "примерно от трети до половины высоты кадра — НЕ гигант. "
             "НЕ добавляй объекты и локации, которых нет в описании сцены и в действии. "
             "Без описания внешности персонажа."
         )
@@ -2315,12 +2456,19 @@ def build_scene_instruction_user(
         user = (
             f"Action: {action_text}\n"
         f"Species: {species_desc}{scene_block_en}{ctx_block}\n"
+        f"{pose_block_en}"
         f"{anatomy_guard_en}"
         "Write ONE instruction (1-3 sentences) for Qwen-Image-Edit, "
         "starting with 'Place the character from Picture 1...'. "
         "The character acts INSIDE the scene of Picture 2: anchor the pose and action to concrete "
         "objects of that scene (at a console, above the table, between the machinery — whatever "
         "is actually in the scene description). Take the lighting from the scene. "
+        + ("The character adopts the pose shown in Picture 3. " if pose_catalogue else "")
+        + "State the orientation and target EXPLICITLY: the character FACES the object that matters "
+        "for the action (the console, the panel, the visible direction of movement toward the goal) "
+        "and does NOT look at the camera. "
+        "The character matches the scene's scale: natural human height next to the anchor objects, "
+        "roughly one third to one half of the frame height — never a giant. "
         "Do NOT add objects or locations that are absent from the scene description and the action. "
         "Do not describe the character's appearance."
     )

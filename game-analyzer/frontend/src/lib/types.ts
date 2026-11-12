@@ -52,6 +52,19 @@ export interface ChainSection {
   images?: string[];
 }
 
+export interface EditInputRef {
+  filename: string;
+  image_url: string | null;
+}
+
+export interface EditInputs {
+  instruction: string | null;
+  avatar: EditInputRef | null;
+  background: EditInputRef | null;
+  pose: EditInputRef | null;
+  output_image_url: string | null;
+}
+
 export interface ChainStep {
   event_id: number;
   backend: 'llm' | 'comfyui';
@@ -65,6 +78,7 @@ export interface ChainStep {
   response_at: string | null;
   duration_ms: number | null;
   image_url: string | null;
+  edit_inputs: EditInputs | null;
   request_sections: ChainSection[];
   response_sections: ChainSection[];
   usage: string;

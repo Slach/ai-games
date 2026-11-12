@@ -1,7 +1,7 @@
 # AI Game Master
 
 AI-powered cooperative game delivered through Telegram bot. Each turn, an AI generates a
-unique story, personalized comics, and NPC interactions based on player choices.
+unique story, personalized action images, and NPC interactions based on player choices.
 
 The game is finite and can be lost. A doom clock (threat level 0-100) ticks every turn
 (+8 base, accelerated by hesitations, a critically damaged hull and mission stagnation) —
@@ -43,7 +43,7 @@ FastAPI service that orchestrates the game:
 
 - Turn story generation using OpenAI API
 - NPC dialogue generation
-- Personalized comic generation via ComfyUI
+- Personalized action-image generation via ComfyUI
 - Player action processing
 - Text/voice message handling
 - SQLite persistence for game state
@@ -204,7 +204,7 @@ sequenceDiagram
 
     P->>TB: select an action
     TB->>GS: POST /game/actions
-    Note over GS: record choice -> generate player comic panel
+    Note over GS: record choice -> generate chosen-action image
     opt all live players have chosen
         GS->>GS: _analyze_turn_outcome(N) immediately
         GS->>TB: POST /push/outcome
@@ -217,15 +217,19 @@ sequenceDiagram
    endpoint returns `202` immediately; all generation runs in the background.
 2. **Global circumstances** — LLM produces the turn's setting, narrative,
    conflict and a scene prompt.
-3. **Scene image** — ComfyUI renders the turn's scene from that prompt.
+3. **Scene & turn background images** — ComfyUI renders the turn's briefing
+   scene from that prompt, plus a character-free **turn background** (empty
+   environment built from the setting + conflict) that is reused as the
+   shared canvas for every character/action image of the turn.
 4. **Briefings & choices** — every live player and NPC gets a personalized
    briefing with **5 action choices** with hidden consequence kinds in a fixed
    quota — **2 progress / 2 injury / 1 fatal** (configurable via
    `GAME_TURN_PROGRESS_ACTIONS` / `GAME_TURN_INJURY_ACTIONS` /
    `GAME_TURN_FATAL_ACTIONS`). NPC choices are auto-selected by the LLM;
    players' choices stay open until the turn deadline.
-5. **Character & NPC images** — ComfyUI renders per-player character images
-   (each player's avatar as reference) and NPC action images.
+5. **Character & NPC images** — ComfyUI renders each player's personal
+   briefing image as an identity-preserving edit: the player's avatar as
+   reference image 1 placed into the turn background as reference image 2.
 6. **Crew dialogues** — LLM generates NPC banter for the turn.
 7. **Game state advances** — the turn record is created (with its deadline),
    state moves to turn `N+1`.
@@ -247,8 +251,9 @@ sequenceDiagram
 ### Action selection & outcome resolution
 
 - Players pick an action in the bot → `POST /game/actions`. The server records
-  the choice and kicks off a **comic panel** of that player performing the
-  action (avatar as reference).
+  the choice and kicks off a **chosen-action image**: an edit-model render
+  placing the player's avatar (reference 1) into the turn's shared background
+  (reference 2), staged per the action text.
 - The moment **all live players** have chosen, the outcome is analyzed
   immediately — it does not wait for the next scheduled tick. (The per-turn
   outcome analysis is idempotent, so a turn already resolved on time is a no-op
@@ -290,18 +295,41 @@ mutinies** — one of the five ways the game can end.
 
 ## Content Generation
 
-### Personalized Comics
+### Image pipeline
 
-- Generated per player based on their role and traits
-- 4-6 panel format
-- Includes player character prominently
-- Speech bubbles with NPC dialogue
+All images are rendered by ComfyUI. Workflows are built programmatically in
+`game-server/image_generator.py` (one builder per model family); per-kind
+model routing lives in `game-server/comfyui_config.py` and is configured via
+`COMFYUI_TXT2IMG_MODEL` / `COMFYUI_AVATAR_MODEL` / `COMFYUI_EDIT_MODEL` in
+`.env`. Image prompts are LLM-authored from templates in
+`game-server/prompts.py`.
 
-### Image Generation
+- **txt2img** — `turn_background` (the shared stage of the current LOCATION —
+  generated with standable surfaces and character-scale anchor objects,
+  cached per `(game, location_id)` so the world stays consistent while the
+  crew stays put; it is also the briefing header image), `splash`, `loading`,
+  `finale`.
+- **avatar** — RGBA character cutout on a transparent background
+  (`avatar`, `npc_avatar_*`), currently MOSS-Image-SFT. Prompts carry a crew
+  presentation contract (role uniform, ship-grade lighting, no civilian
+  props).
+- **identity-preserving edit** — `character` (personal briefing image),
+  `player_action` / `npc_action` (chosen action), `player_death`: the
+  avatar (reference image 1) is placed into the location background
+  (reference image 2) following a short LLM-written staging instruction. For
+  humanoid characters the LLM also picks a pose from `pose_library.py`
+  (OpenPose skeletons rendered in pure Python) and the skeleton goes to the
+  edit model as reference image 3 — "the character adopts the pose of
+  Picture 3".
+- **multi-reference** — `bridge` (crew on the bridge) and `outcome` (turn
+  outcome scene) render all crew avatars in one scene via Qwen-Image-2.1
+  multi-reference.
 
-- Scene images for story settings
-- Character portraits
-- 3D scene descriptions
+Global circumstances carry a stable `location` object (`id`, `name`,
+`description`); the LLM is told to reuse the same `location.id` while the
+crew stays in the same place, and the backdrop is cached per location.
+Consistency comes from the shared location background, the avatar reference
+and the pose skeleton; there is no fixed seed.
 
 ## Development
 

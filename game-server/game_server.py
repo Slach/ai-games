@@ -29,6 +29,7 @@ from language import (
     get_game_strings,
 )
 from openai import AsyncOpenAI
+import pose_library
 from prompts import (
     BRIDGE_IMAGE_PROMPT_SYSTEM,
     BRIDGE_IMAGE_VIEWPOINT_RULE,
@@ -72,6 +73,24 @@ from openai.types.shared_params.response_format_json_schema import (
     ResponseFormatJSONSchema,
 )
 from pydantic import BaseModel
+
+
+def _parse_llm_json(content: str) -> Any:
+    """Parse an LLM response as JSON, tolerating trailing junk after the object.
+
+    The model occasionally appends prose or a stray fragment after the JSON
+    ("Extra data"); raw json.loads then fails even past repair_json, and the
+    caller's own fallback chain collapses — a whole game turn once ran on the
+    'Unknown space region' default because of this (ixisyr turn 11,
+    2026-11-11). Decode the FIRST complete JSON value starting at the first
+    '{' and ignore whatever follows.
+    """
+    text = content.strip()
+    start = text.find("{")
+    if start == -1:
+        raise ValueError(f"No JSON object in LLM output: {text[:120]!r}")
+    obj, _end = json.JSONDecoder().raw_decode(text[start:])
+    return obj
 
 from verbalize_sampling import DIVERSITY_HINTS, repair_json, select_response, verbalize_prompt, vs_response_schema
 from vs_config import resolve_vs_k
@@ -397,8 +416,15 @@ GAME_TITLE_SCHEMA = {
                     "type": "string",
                     "description": "An atmospheric welcome message in the starship setting",
                 },
+                "splash_scene": {
+                    "type": "string",
+                    "description": (
+                        "Short English visual description of the game's splash scene "
+                        "(ship, environment, lighting) — mentions no text or lettering"
+                    ),
+                },
             },
-            "required": ["title", "welcome_text"],
+            "required": ["title", "welcome_text", "splash_scene"],
             "additionalProperties": False,
         },
     },
@@ -452,9 +478,25 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
                     "items": {"type": "string"},
                     "description": "3-5 key events happening in the background that all characters can perceive",
                 },
-                "scene_prompt": {
-                    "type": "string",
-                    "description": "A detailed English image generation prompt for this turn's scene. Must be cinematic, sci-fi/space opera, 4K quality. Describe the setting, crew at their positions, lighting, and atmosphere.",
+                "location": {
+                    "type": "object",
+                    "description": "The scene's location. Keep the SAME id while the crew stays in the same place — the shared backdrop image is cached per location id.",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Stable snake_case identifier, e.g. 'witness_cargo_bay', 'targus_iv_deep_atmosphere'",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Short display name of the location",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "1-2 sentences about the environment (used for backdrop generation)",
+                        },
+                    },
+                    "required": ["id", "name", "description"],
+                    "additionalProperties": False,
                 },
                 "crew_positions": {
                     "type": "array",
@@ -482,7 +524,7 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
                 "conflict",
                 "narrative",
                 "key_events",
-                "scene_prompt",
+                "location",
                 "crew_positions",
             ],
             "additionalProperties": False,
@@ -622,24 +664,48 @@ TURN_BACKGROUND_PROMPT_SCHEMA = {
 }
 
 
-SCENE_INSTRUCTION_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "scene_instruction",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "instruction": {
-                    "type": "string",
-                    "description": "English instruction for Qwen-Image-Edit, starting with 'Place the character from Picture 1...'",
+def scene_instruction_schema(valid_pose_ids: list[str] | None = None):
+    """Build the scene-instruction response schema.
+
+    pose_id is a strict enum of the offered pose ids (plus 'none') so the
+    model cannot hallucinate a random id — an unvalidated id would leave the
+    instruction mandating a "Picture 3" that never gets wired into the edit.
+    """
+    if valid_pose_ids:
+        pose_field: dict[str, Any] = {
+            "type": "string",
+            "enum": [*valid_pose_ids, "none"],
+            "description": "The pose_id from the listed pose catalogue that best matches the action; 'none' when no pose fits",
+        }
+    else:
+        pose_field = {
+            "type": "string",
+            "enum": ["none"],
+            "description": "No pose catalogue was offered; always 'none'",
+        }
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "scene_instruction",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "English instruction for Qwen-Image-Edit, starting with 'Place the character from Picture 1...'",
+                    },
+                    "pose_id": pose_field,
                 },
+                "required": ["instruction", "pose_id"],
+                "additionalProperties": False,
             },
-            "required": ["instruction"],
-            "additionalProperties": False,
         },
-    },
-}
+    }
+
+
+# Kept for backward imports (tests, tools); equivalent to an empty catalogue.
+SCENE_INSTRUCTION_SCHEMA = scene_instruction_schema()
 
 
 DEATH_NOTICE_SCHEMA = {
@@ -991,7 +1057,7 @@ class GameServer:
 
             if content is None:
                 raise ValueError(f"LLM returned content=None. Finish reason: {finish_reason}. Usage: {_u}")
-            return json.loads(content)
+            return _parse_llm_json(content)
 
         # pi-lens-ignore: no-boolean-in-except
         except Exception as e:
@@ -1058,7 +1124,7 @@ class GameServer:
             content = content.strip()
             content = self._strip_json_block(content)
             try:
-                return json.loads(content)
+                return _parse_llm_json(content)
             except json.JSONDecodeError as parse_err:
                 repaired = repair_json(content)
                 if repaired != content:
@@ -2197,6 +2263,7 @@ class GameServer:
         player_id: str | None,
         kind: str | None,
         threat_level: int | None = None,
+        previous_location: str = "",
     ) -> dict[str, Any]:
         """Generate the shared global circumstances for a game turn.
 
@@ -2210,6 +2277,9 @@ class GameServer:
             mission_context: Optional mission data to ensure story consistency
             threat_level: Current doom-clock level (0-100); shown to the LLM
                 so rising threat is reflected in the narrative.
+            previous_location: "id — name — description" of the previous
+                turn's location; the LLM is told to reuse the same location.id
+                while the crew stays put so the backdrop stays consistent.
         """
         logger.info(f"[TURN] Generating global circumstances for Turn {turn}")
 
@@ -2263,6 +2333,7 @@ class GameServer:
             use_vs=self.vs_enabled,
             vs_k=resolve_vs_k("global_circumstances", self.vs_k),
             threat_status=format_threat_status(self.language, threat_level) if threat_level is not None else "",
+            previous_location=previous_location,
         )
 
         try:
@@ -3035,6 +3106,8 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
+        scene_description: str = "",
+        max_characters: int = 0,
     ) -> dict[str, Any]:
         """Generate an English image prompt for the turn-outcome scene.
 
@@ -3043,27 +3116,55 @@ class GameServer:
         against pre-assigned "Picture N" slots so the image model stages the
         involved characters with their canonical avatar looks. Without
         references the prompt is a standalone scene description (plain txt2img).
+
+        With ``scene_description`` (the turn's shared location backdrop) the
+        backdrop arrives as Picture 1 and the crew as Pictures 2..N+1: the
+        outcome must unfold inside that exact environment — previously the
+        outcome invented its own backdrop and read as a different place than
+        every action image of the turn (GM feedback 2026-11-12).
+
+        ``max_characters`` caps the staged cast: the living crew count at
+        generation time (0 = derive from ``crew_refs``).
         """
         logger.info("[OUTCOME_IMAGE] Generating outcome image prompt")
 
         mission_name = ""
+        first_picture = 2 if scene_description else 1
+        if max_characters <= 0:
+            max_characters = len(crew_refs or [])
+        background_section = ""
+        if scene_description:
+            background_section = (
+                "Picture 1 — the SCENE BACKGROUND (the location's shared backdrop every action\n"
+                f"image of this turn used): {scene_description}\n"
+                "- Compose the ENTIRE scene inside the environment of Picture 1: use only its\n"
+                "  objects, geometry and lighting. Do NOT invent a different environment.\n"
+                "- All characters at consistent human scale relative to Picture 1's objects\n"
+                "  (each roughly one third to one half of the frame height — never giants).\n"
+            )
         if crew_refs:
             picture_lines = "\n".join(
-                f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}" for i, r in enumerate(crew_refs, start=1)
+                f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}" for i, r in enumerate(crew_refs, start=first_picture)
             )
             crew_section = (
-                "The image model will receive the crew's avatar reference pictures:\n"
+                "The image model will receive the following reference pictures:\n"
+                f"{background_section}"
+                f"The crew's avatar reference pictures:\n"
                 f"{picture_lines}\n\n"
                 "The image_prompt MUST be a composition instruction for these references:\n"
-                "- Stage ONLY the characters the narrative actually shows, each referred to as\n"
+                f"- Stage AT MOST {max_characters} characters — the living crew at this moment\n"
+                "  numbers exactly " + str(max_characters) + "; never stage more people than that.\n"
+                "  Pick the ones the narrative moment actually centers on. Each is referred to as\n"
                 "  \"the character from Picture N\" with the exact pre-assigned number above.\n"
+                "- Each Picture may be used AT MOST ONCE in the scene. Never render the same\n"
+                "  reference twice, never stage two characters from the same Picture — a\n"
+                "  duplicated character ruins the image (GM feedback 2026-11-12).\n"
                 "- The scene must contain no other people and no duplicate of any character.\n"
                 "- For each staged character repeat their key visual traits right after the\n"
                 "  Picture reference, in the form \"render this character EXACTLY as in Picture N:\n"
                 "  same <2-4 distinctive traits from the description above>\".\n"
                 "- Every staged character must be clearly visible (foreground or midground).\n"
-                "- Pick the single most dramatic moment of the narrative as the scene; describe\n"
-                "  the environment, lighting and atmosphere yourself.\n"
+                "- Pick the single most dramatic moment of the narrative as the scene.\n"
             )
         else:
             crew_section = (
@@ -3109,18 +3210,23 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
+        location_name: str = "",
+        location_description: str = "",
     ) -> str:
-        """Generate an English txt2img prompt for the turn's shared background.
+        """Generate an English txt2img prompt for the shared background.
 
-        One empty scene (no characters) derived from the turn's global
-        circumstances (setting + conflict). Every action image of the turn is
-        composed onto this same background, so the crew's actions share a
-        coherent environment instead of each floating in its own abstract void.
+        One empty stage scene (no characters) derived from the turn's global
+        circumstances (setting + conflict, plus the location's name/description
+        when known). Every action image is composed onto this same background,
+        so the crew's actions share a coherent environment with standable
+        surfaces instead of each floating in its own abstract void.
 
         Returns the prompt string, or "" on failure (the caller falls back to
         a prompt built from the raw setting text).
         """
-        system, user = build_turn_background_prompts(language, setting, conflict)
+        system, user = build_turn_background_prompts(
+            language, setting, conflict, location_name, location_description,
+        )
         try:
             result = await self._call_llm(
                 system_prompt=system,
@@ -3155,13 +3261,17 @@ class GameServer:
         player_id: str | None,
         turn: int | str | None,
         kind: str | None,
-    ) -> str:
+        pose_catalogue: str = "",
+    ) -> dict[str, str]:
         """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
 
         The returned instruction refers to "Picture 1" (the character) and
         stages the action inside the turn's SHARED scene (Picture 2), using
         only the objects present in ``scene_description`` so all action images
-        of the turn stay logically consistent.
+        of the turn stay logically consistent. When ``pose_catalogue`` is
+        given (humanoid characters), the LLM also picks the best-fitting
+        ``pose_id`` whose OpenPose skeleton is supplied to the edit model as
+        Picture 3.
 
         Args:
             action_text: What the character is doing (player action or scene setup).
@@ -3175,19 +3285,27 @@ class GameServer:
                 symbiotic an anatomy guard is added to the prompt forbidding
                 human-body terms ("arms/hands/face/expression") that collapse
                 Qwen-Image-Edit back into a humanoid.
+            pose_catalogue: Pose library listing ("pose_id: description" lines).
+                Empty = no pose reference.
 
         Returns:
-            The instruction string (never empty — falls back to a generic
-            staging instruction built from the action text).
+            {"instruction": str, "pose_id": str} — the instruction is never
+            empty (falls back to a generic staging instruction built from the
+            action text); pose_id is "" when no pose was chosen/available.
         """
         system = build_scene_instruction_system(language)
-        user = build_scene_instruction_user(language, action_text, species_desc, scene_description, scene_context, species_category)
+        user = build_scene_instruction_user(
+            language, action_text, species_desc, scene_description, scene_context,
+            species_category, pose_catalogue,
+        )
 
+        fallback = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic lighting, photorealistic, 4K."
+        offered_pose_ids = list(pose_library.pose_ids()) if pose_catalogue else None
         try:
             result = await self._call_llm(
                 system_prompt=system,
                 user_prompt=user,
-                response_schema=SCENE_INSTRUCTION_SCHEMA,
+                response_schema=scene_instruction_schema(offered_pose_ids),
                 use_case='scene_instruction',
                 game_id=game_id,
                 player_id=player_id,
@@ -3195,12 +3313,13 @@ class GameServer:
                 kind=kind,
             )
             instruction = result.get("instruction", "").strip()
+            pose_id = result.get("pose_id", "").strip()
             if instruction:
-                return instruction
+                return {"instruction": instruction, "pose_id": pose_id if pose_catalogue and pose_id != "none" else ""}
             logger.warning("[SCENE_INSTRUCTION] Empty instruction, using fallback")
         except Exception:
             logger.warning("[SCENE_INSTRUCTION] failed, using fallback", exc_info=True)
-        return f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic lighting, photorealistic, 4K."
+        return {"instruction": fallback, "pose_id": ""}
 
     async def generate_death_notice(
         self,

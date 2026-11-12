@@ -122,15 +122,32 @@ extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
 ## 2. ComfyUI Integration (Image Generation)
 
-**Files:** `game-server/image_generator.py`
+**Files:** `game-server/image_generator.py` (HTTP client + workflow builders),
+`game-server/comfyui_config.py` (per-kind model routing).
 
-Direct HTTP API integration for text-to-image generation using Z-Image Turbo model.
+Direct HTTP API integration. Workflows are built programmatically as dicts —
+one builder per model family (`_TXT2IMG_BUILDERS`, `_EDIT_BUILDERS`,
+`_MULTIREF_BUILDERS`, `_IMG2IMG_BUILDER_METHODS` in `image_generator.py`) —
+there are no static workflow JSON files at runtime.
 
 ### Configuration
 
 ```python
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://comfyui:8188")
 ```
+
+Which model is used for which image kind is resolved in `comfyui_config.py`
+and controlled by env:
+
+```bash
+COMFYUI_TXT2IMG_MODEL=flux3_klein_nvfp4            # scene, turn_background, splash, loading, finale
+COMFYUI_AVATAR_MODEL=moss_image_sft_nvfp4           # avatar, npc_avatar_* (RGBA cutout)
+COMFYUI_EDIT_MODEL=qwen_image_edit_2_1_viggle_turbo # character, player_action/npc_action, player_death
+```
+
+The downloadable model catalog (checkpoints, quantizations, license notes)
+lives in `comfyui/model_urls.txt`; valid model keys are defined in
+`TXT2IMG_MODELS` / `EDIT_MODELS` in `comfyui_config.py`.
 
 ### API Endpoints Used
 
@@ -143,44 +160,59 @@ COMFYUI_URL = os.getenv("COMFYUI_URL", "http://comfyui:8188")
 
 ### Generation Flow
 
-1. **Build Workflow** — Construct a JSON workflow for the Z-Image Turbo model
+1. **Build Workflow** — pick the builder for the resolved model and image family
 2. **Queue Prompt** — POST to `/prompt`, receive `prompt_id`
 3. **Poll Completion** — GET `/history/{prompt_id}` with 2s interval, 180s timeout
 4. **Extract URL** — Parse output images from completed workflow response
 
-### Workflow Structure (Z-Image Turbo)
+### Workflow families
 
-```python
-# Models used:
-#   UNET: z_image_turbo_bf16.safetensors
-#   CLIP: qwen_3_4b.safetensors (type: lumina2)
-#   VAE:  ae.safetensors
-#
-# Settings:
-#   Steps: 8 (distilled model)
-#   CFG: 1.0
-#   Sampler: res_multistep
-#   Scheduler: simple
-#   Shift: 3.0 (AuraFlow sampling)
-```
+| Family | Kinds | Inputs |
+|--------|-------|--------|
+| txt2img | `turn_background`, `splash`, `loading`, `finale`, bridge/outcome fallback | prompt only |
+| avatar RGBA | `avatar`, `npc_avatar_*` | prompt (transparent-background cutout, Qwen RGBA template + crew presentation contract) |
+| edit | `character`, `player_action`/`npc_action`, `player_death` | reference image 1 = avatar, reference image 2 = location background, optionally reference image 3 = OpenPose pose skeleton, prompt = LLM staging instruction (pose/position/lighting only) |
+| multi-reference | `bridge`, `outcome` | up to 10 avatars as "Picture N" references (Qwen-Image-2.1) |
+
+### Turn consistency
+
+- Each `(game, location)` gets one **turn background** — a character-free
+  STAGE (standable surface in the lower half, 3-5 character-scale anchor
+  objects, starship-grade props only) generated from the turn's setting +
+  conflict + the location's name/description. It is persisted in
+  `game_images` keyed by the `location.id` that the global-circumstances LLM
+  emits; while the crew stays in the same place the LLM is told to reuse the
+  same id, so every turn (and every action image) composes against the SAME
+  backdrop. Turns without a location fall back to a per-turn key.
+- Character identity across images is preserved by passing the avatar as
+  reference image 1 to the edit model.
+- Pose control: for humanoid characters the scene-instruction LLM picks a
+  `pose_id` from `game-server/pose_library.py` (OpenPose skeletons rendered
+  deterministically in pure Python, uploaded to ComfyUI's input folder via
+  `/upload/image`); the skeleton is passed as reference image 3 and the
+  instruction mandates "the character adopts the pose of Picture 3".
+- There is **no fixed seed**: `seed=0` randomizes every render.
 
 ### Retry Logic
 
 - 3 connection retries with exponential backoff (1s, 2s, 4s)
-- 3 generation retries with 2s, 4s, 8s backoff
-- Random seed on each retry (produces different image)
+- 3 generation retries with 2s, 4s, 8s backoff; the seed is randomized on
+  each retry (produces a different image)
+- Edit path: after 2 edit attempts it falls back to img2img (denoise 0.75),
+  then to plain txt2img with the character description appended to the
+  prompt, then to a placeholder
 
 ### Generation Types
 
 | Method | Description | Default Size |
-|--------|-------------|-------------|
-| `generate_image()` | General-purpose generation | 1024×1024 |
-| `generate_avatar_image()` | Character portrait | 768×1024 |
+|--------|-------------|--------------|
+| `generate_image()` | General-purpose txt2img | 1024×1024 |
+| `generate_avatar_image()` | Character portrait (RGBA cutout) | 768×1024 |
 | `generate_scene_image()` | Scene/background | 1024×1024 |
+| `generate_character_in_scene()` | Edit: avatar placed into the turn background | 1024×1024 |
+| `generate_multi_reference_image()` | Crew scene from N avatar references | 1024×1024 |
 | `generate_loading_images()` | Batch loading screens (10 prompts) | 768×768 |
 | `generate_splash_images()` | Splash/landing screens (3 prompts) | 1024×768 |
-| `generate_character_image()` | NPC character portrait | — |
-| `generate_personalized_comic()` | Per-player comic scene | — |
 
 ### Fallbacks
 
@@ -188,7 +220,6 @@ When image generation fails, the system falls back to placeholder images:
 
 - Splash: `DEFAULT_SPLASH_FALLBACK_URL` (configured in env)
 - Loading: `DEFAULT_LOADING_FALLBACK_URL` (configured in env)
-- Comics: `/content/comics/turn_{n}_placeholder.webp`
 
 ---
 

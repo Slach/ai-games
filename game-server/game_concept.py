@@ -14,6 +14,7 @@ import logging
 
 from database import (
     create_mission,
+    get_game_splash_scene,
     get_game_title,
     get_game_welcome_text,
     get_mission,
@@ -49,7 +50,8 @@ async def generate_game_concept(
     seeds) → title + welcome (tied to that mission).
 
     Idempotent: a second call reuses the existing mission and title.
-    Returns ``{"mission": dict|None, "title": str, "welcome_text": str}``.
+    Returns ``{"mission": dict|None, "title": str, "welcome_text": str,
+    "splash_scene": str}``.
     """
     lock = get_game_concept_lock(game_id)
     async with lock:
@@ -89,6 +91,7 @@ async def generate_game_concept(
         # a blind placeholder generated earlier).
         title = get_game_title(game_id)
         welcome_text = get_game_welcome_text(game_id)
+        splash_scene = get_game_splash_scene(game_id) or ""
         if not title or mission_just_created:
             try:
                 title_data = await gm.generate_game_title(
@@ -101,7 +104,8 @@ async def generate_game_concept(
                 if title_data.get("title"):
                     title = title_data["title"]
                     welcome_text = title_data.get("welcome_text", "") or gs["welcome_text_fallback"]
-                    save_game_title_and_welcome(game_id, title, welcome_text)
+                    splash_scene = title_data.get("splash_scene", "")
+                    save_game_title_and_welcome(game_id, title, welcome_text, splash_scene)
                     logger.info("[CONCEPT] Generated title for game %s: %s", game_id, title)
             except Exception:
                 logger.error("[CONCEPT] Title generation failed for game %s", game_id, exc_info=True)
@@ -113,4 +117,5 @@ async def generate_game_concept(
             "mission": mission_data,
             "title": title or gs["game_title_fallback"],
             "welcome_text": welcome_text or gs["welcome_text_fallback"],
+            "splash_scene": splash_scene,
         }

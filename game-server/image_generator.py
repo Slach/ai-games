@@ -144,6 +144,7 @@ def _build_qwen_edit_workflow(
     cfg: EditModelConfig,
     *,
     species_category: str = "",
+    pose_filename: str | None = None,
 ) -> dict[str, Any]:
     """Build a Qwen-Image-Edit-2511 workflow for placing a character into a scene.
 
@@ -319,6 +320,7 @@ def _build_qwen_edit_21_workflow(
     cfg: EditModelConfig,
     *,
     species_category: str = "",
+    pose_filename: str | None = None,
 ) -> dict[str, Any]:
     """Build a Qwen-Image-2.1 instruction-edit workflow (unified t2i+edit ckpt).
 
@@ -420,6 +422,12 @@ def _build_qwen_edit_21_workflow(
             "inputs": {"image": background_filename},
         }
         workflow["70"]["inputs"]["images.image_2"] = ["42", 0]
+    if pose_filename:
+        workflow["43"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": pose_filename},
+        }
+        workflow["70"]["inputs"]["images.image_3"] = ["43", 0]
     return workflow
 
 
@@ -434,6 +442,7 @@ def _build_qwen_edit_21_viggle_turbo_workflow(
     cfg: EditModelConfig,
     *,
     species_category: str = "",
+    pose_filename: str | None = None,
 ) -> dict[str, Any]:
     """Build a Viggle Turbo instruction-edit workflow (6-step DMD student).
 
@@ -562,6 +571,12 @@ def _build_qwen_edit_21_viggle_turbo_workflow(
             "inputs": {"image": background_filename},
         }
         workflow["70"]["inputs"]["images.image_2"] = ["42", 0]
+    if pose_filename:
+        workflow["43"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": pose_filename},
+        }
+        workflow["70"]["inputs"]["images.image_3"] = ["43", 0]
     return workflow
 
 
@@ -2026,6 +2041,7 @@ def _build_p_h3_edit_workflow(
     cfg: EditModelConfig,
     *,
     species_category: str = "",
+    pose_filename: str | None = None,
 ) -> dict[str, Any]:
     """Build a P-H3-Image instruction-edit workflow (character in scene).
 
@@ -2144,6 +2160,7 @@ def _build_minimax_h3_edit_workflow(
     cfg: EditModelConfig,
     *,
     species_category: str = "",
+    pose_filename: str | None = None,
 ) -> dict[str, Any]:
     """Build a MiniMax-H3-Image instruction-edit workflow (character in scene).
 
@@ -2254,6 +2271,7 @@ def _build_moss_edit_workflow(
     cfg: EditModelConfig,
     *,
     species_category: str = "",
+    pose_filename: str | None = None,
 ) -> dict[str, Any]:
     """Build a MOSS-Image instruction-edit workflow (character in scene).
 
@@ -3339,6 +3357,7 @@ class ImageGenerator:
         turn: int | None,
         kind: str | None,
         species_category: str = "",
+        pose_filename: str | None = None,
     ) -> str | None:
         """Place a character into a scene via Qwen-Image-Edit-2511.
 
@@ -3416,6 +3435,7 @@ class ImageGenerator:
             filename_prefix=filename_prefix,
             cfg=edit_cfg,
             species_category=species_category,
+            pose_filename=pose_filename,
         )
 
         ctx_game = game_id or "none"
@@ -3438,6 +3458,7 @@ class ImageGenerator:
                     f"--- INSTRUCTION ---\n{instruction_prompt}\n\n"
                     f"--- CHARACTER AVATAR ---\n{char_filename}\n\n"
                     f"--- BACKGROUND ---\n{bg_filename or '(none)'}\n\n"
+                    f"--- POSE REFERENCE ---\n{pose_filename or '(none)'}\n\n"
                     f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
                 )
                 write_comfyui_log(
@@ -3573,6 +3594,7 @@ class ImageGenerator:
         height: int,
         player_id: str | None = None,
         turn: int | None = None,
+        background_url: str | None = None,
     ) -> str | None:
         """Generate a scene composed from crew avatar references in ONE call.
 
@@ -3583,6 +3605,11 @@ class ImageGenerator:
         Qwen-Image-Edit compositing — the unified 2.1 checkpoint handles
         multi-reference generation natively.
 
+        With ``background_url`` (the turn's shared location backdrop) the
+        background becomes Picture 1 and the avatars shift to Pictures 2..N+1,
+        so the composed scene lives in the exact environment every action
+        image of the turn used instead of inventing a new one.
+
         Falls back to plain txt2img (:meth:`generate_scene_image`) with the
         same ``kind`` when no usable references exist or the multi-reference
         generation fails.
@@ -3590,18 +3617,27 @@ class ImageGenerator:
         Args:
             prompt: Scene prompt from the LLM, referring to the references as
                 "Picture N".
-            avatar_urls: Avatar image URLs in Picture order (Picture 1 first).
+            avatar_urls: Avatar image URLs in Picture order.
                 Entries may be None/unparseable and are skipped.
             filename_prefix: Prefix for output file.
             game_id: Game to scope the image to.
             kind: Call type descriptor for log file naming and model routing.
             width: Image width.
             height: Image height.
+            background_url: Optional shared backdrop URL — prepended as
+                Picture 1 (avatars then start at Picture 2).
 
         Returns:
             URL of the generated image, or None on failure
         """
         ref_filenames = []
+        bg_filename = None
+        if background_url:
+            bg_filename = self._extract_filename_from_url(background_url)
+            if bg_filename:
+                ref_filenames.append(bg_filename)
+            else:
+                logger.warning("[%s] Could not parse background filename from %s, skipping", kind, background_url)
         for url in avatar_urls or []:
             if not url:
                 continue
@@ -3648,7 +3684,12 @@ class ImageGenerator:
                     f"Filename prefix: {filename_prefix}\n"
                     f"Attempt: {attempt}/{max_attempts}\n\n"
                     f"--- PROMPT ---\n{prompt}\n\n"
-                    f"--- REFERENCE AVATARS ---\n" + "\n".join(f"Picture {i}: {fn}" for i, fn in enumerate(ref_filenames, start=1)) + "\n\n"
+                    f"--- REFERENCE IMAGES ---\n"
+                    + (f"Picture 1: (scene background) {bg_filename}\n" if bg_filename else "")
+                    + "\n".join(
+                        f"Picture {i}: {fn}"
+                        for i, fn in enumerate(ref_filenames[1:] if bg_filename else ref_filenames, start=2 if bg_filename else 1)
+                    ) + "\n\n"
                     f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
                 )
                 write_comfyui_log(
@@ -3758,8 +3799,7 @@ class ImageGenerator:
 
     async def generate_splash_images(
         self,
-        game_title: str,
-        welcome_text: str,
+        scene_description: str,
         count: int,
         filename_prefix: str,
         *,
@@ -3767,11 +3807,12 @@ class ImageGenerator:
         width: int,
         height: int,
     ) -> list[str]:
-        """Generate N splash images based on game title and description.
+        """Generate N splash images from the game's visual scene description.
 
         Args:
-            game_title: The generated game/ship title
-            welcome_text: The atmospheric welcome description
+            scene_description: Short English visual description (ship,
+                environment, lighting) — no literal titles or prose, so image
+                models have nothing to render as text
             count: Number of splash images to generate
             filename_prefix: Prefix for output files
             game_id: Game ID to scope generated filenames
@@ -3779,12 +3820,15 @@ class ImageGenerator:
         Returns:
             List of generated image URLs.
         """
-        logger.info(f"[IMAGE] Generating {count} splash images for: {game_title}...")
+        scene_description = (scene_description or "").strip()
+        if not scene_description:
+            scene_description = "A starship in the depths of deep space, nebula backdrop, cinematic lighting."
+        logger.info(f"[IMAGE] Generating {count} splash images for game {game_id}...")
 
         prompts = [
-            f"Epic establishing shot of {game_title}. {welcome_text}. Wide-angle view of starship exterior, nebula background, Star Trek style, cinematic lighting, 4K quality, space opera aesthetic.",
-            f"Starship bridge interior scene for: {game_title}. {welcome_text}. Crew at stations, holographic displays, warm interior light through viewport showing stars, cinematic composition.",
-            f"Dramatic space scene: {game_title}. {welcome_text}. Starship flying through cosmic phenomenon, lens flare, starfield, deep space colors, epic sci-fi art style, 4K.",
+            f"Epic establishing shot. {scene_description} Wide-angle view of starship exterior, nebula background, Star Trek style, cinematic lighting, 4K quality, space opera aesthetic.",
+            f"Starship bridge interior scene. {scene_description} Crew at stations, holographic displays, warm interior light through viewport showing stars, cinematic composition.",
+            f"Dramatic space scene. {scene_description} Starship flying through cosmic phenomenon, lens flare, starfield, deep space colors, epic sci-fi art style, 4K.",
         ]
 
         urls = []

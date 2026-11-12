@@ -29,6 +29,10 @@ _TEXT_OUTCOME_FIELDS = (
     "next_turn_hook",
 )
 
+# Image kinds produced by the multi-reference edit model: avatar (Picture 1),
+# background (Picture 2), optional pose skeleton (Picture 3).
+EDIT_KINDS = frozenset({"player_action", "npc_action", "character_scene", "player_death"})
+
 
 def _j(raw, default):
     if not raw:
@@ -89,6 +93,46 @@ def _duration_ms(request_at: str | None, response_at: str | None) -> int | None:
     return int((end - start).total_seconds() * 1000)
 
 
+def _ref_filename(section_text: str | None) -> str | None:
+    """First filename line of a reference-image section; '(none)' = absent."""
+    if not section_text:
+        return None
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if stripped and stripped != "(none)":
+            return stripped
+    return None
+
+
+def _edit_inputs(event: dict) -> dict | None:
+    """Reference images + instruction fed into an edit-kind ComfyUI call.
+
+    The request body is mirrored in generation_events.request_text (same
+    content as the detailed log file), so it is parsed straight from the row.
+    Avatar/background lines are 'game_id/file.png' subfolder paths; pose
+    skeletons are bare volume-root filenames.
+    """
+    if event["backend"] != "comfyui" or event["kind"] not in EDIT_KINDS:
+        return None
+    if not event["request_text"]:
+        return None
+    sections = {s["name"]: s["text"] for s in _parse_sections(event["request_text"])}
+
+    def ref(name: str) -> dict | None:
+        filename = _ref_filename(sections.get(name))
+        if not filename:
+            return None
+        return {"filename": filename, "image_url": image_endpoint_path(filename)}
+
+    return {
+        "instruction": sections.get("INSTRUCTION") or None,
+        "avatar": ref("CHARACTER AVATAR"),
+        "background": ref("BACKGROUND"),
+        "pose": ref("POSE REFERENCE"),
+        "output_image_url": image_endpoint_path(_comfyui_path(event["image_url"])),
+    }
+
+
 def _event_steps(event_ids: list[int]) -> list[dict]:
     if not event_ids:
         return []
@@ -117,6 +161,7 @@ def _event_steps(event_ids: list[int]) -> list[dict]:
             "image_url": image_endpoint_path(
                 _comfyui_path(event["image_url"])
             ),
+            "edit_inputs": _edit_inputs(event),
             "request_sections": _parse_sections(event["request_text"]),
             "response_sections": _parse_sections(event["response_text"]),
             "usage": event["usage"],

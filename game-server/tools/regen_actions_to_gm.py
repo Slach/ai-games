@@ -33,6 +33,7 @@ from database import (
 from game_server import create_game_server
 from image_generator import create_image_generator
 from main import _ensure_turn_background as ensure_turn_background
+import pose_library
 
 OUT_DIR = "/app/logs/regen_gm"
 COMFYUI_BASE = os.getenv("COMFYUI_URL", "http://comfyui:8188")
@@ -145,8 +146,10 @@ async def main() -> None:
         background_url = turn_bg["image_url"] if turn_bg else None
         scene_desc = turn_bg["prompt"] if turn_bg else ""
         instruction = ""
+        pose_filename = ""
+        pose_id = ""
         try:
-            instruction = await gm.generate_scene_instruction(
+            scene = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc,
                 language=language,
@@ -157,7 +160,14 @@ async def main() -> None:
                 player_id=str(player_id) if player_id else npc_key,
                 turn=turn,
                 kind=kind,
+                pose_catalogue=pose_library.pose_prompt_block()
+                if species_category not in ("non_humanoid", "energy", "symbiotic")
+                else "",
             )
+            instruction = scene["instruction"]
+            pose_id = scene.get("pose_id", "")
+            if pose_id:
+                pose_filename = await pose_library.ensure_pose_uploaded(COMFYUI_BASE, pose_id) or ""
         except Exception as e:
             print(f"  ! scene instruction failed: {e}")
         if not instruction:
@@ -166,7 +176,7 @@ async def main() -> None:
                 "Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
             )
 
-        print(f"[{i}/{len(briefings)}] {name} — action image (category={species_category or 'human'})...")
+        print(f"[{i}/{len(briefings)}] {name} — action image (category={species_category or 'human'}, pose={pose_id or '-'})...")
         action_url = await gen.generate_character_in_scene(
             instruction_prompt=instruction,
             character_avatar_url=avatar_url,
@@ -180,6 +190,7 @@ async def main() -> None:
             turn=turn,
             kind=kind,
             species_category=species_category,
+            pose_filename=pose_filename or None,
         )
         if not action_url:
             print(f"  ! action image failed for {name}")

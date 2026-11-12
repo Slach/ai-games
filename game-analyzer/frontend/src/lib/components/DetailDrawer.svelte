@@ -1,7 +1,7 @@
 <script lang="ts">
   import { fetchNodeDetail } from '../api';
   import { store } from '../graph.svelte';
-  import type { ChainSection, ChainStep, NodeDetail } from '../types';
+  import type { ChainSection, ChainStep, EditInputs, NodeDetail } from '../types';
 
   let detail = $state<NodeDetail | null>(null);
   let error = $state('');
@@ -57,6 +57,12 @@
     if (!nodeId) return;
     store.focusNode(nodeId);
     store.openDetail(nodeId);
+  }
+
+  /** Pose id from a pose_lib_*.png skeleton filename (e.g. 'console_typing'). */
+  function poseId(filename: string): string {
+    const match = filename.match(/^pose_lib_(\w+)\.png$/);
+    return match ? match[1] : filename;
   }
 
   const playerView = $derived((detail?.player_view ?? null) as Record<string, unknown> | null);
@@ -232,6 +238,9 @@
                   <img class="step-image" src={step.image_url} alt="generated" loading="lazy" />
                 </a>
               {/if}
+              {#if step.edit_inputs}
+                {@render editInputsBlock(step.edit_inputs)}
+              {/if}
               {#each step.request_sections as section, i (step.event_id + ':' + i + ':' + section.name)}
                 {@render sectionBlock(section, 'request')}
               {/each}
@@ -276,6 +285,52 @@
     {/if}
   </div>
 {/if}
+
+{#snippet editRefThumb(label: string, imageUrl: string | null | undefined, filename: string | null, pendingLabel = 'none')}
+  <div class="edit-thumb">
+    <span class="edit-label">
+      {label}
+      {#if label === 'Pose' && filename}
+        <span class="edit-pose-id">{poseId(filename)}</span>
+      {/if}
+    </span>
+    {#if imageUrl}
+      <a href={imageUrl} target="_blank">
+        <img src={imageUrl} alt={label} title={filename ?? label} loading="lazy" />
+      </a>
+    {:else}
+      <span class="edit-missing">{pendingLabel}</span>
+    {/if}
+    {#if filename}<span class="edit-file">{filename}</span>{/if}
+  </div>
+{/snippet}
+
+{#snippet editInputsBlock(edit: EditInputs)}
+  <div class="edit-inputs">
+    <div class="edit-strip">
+      {@render editRefThumb('Avatar', edit.avatar?.image_url, edit.avatar?.filename ?? null)}
+      {@render editRefThumb('Background', edit.background?.image_url, edit.background?.filename ?? null)}
+      {@render editRefThumb('Pose', edit.pose?.image_url, edit.pose?.filename ?? null)}
+      <span class="edit-arrow">→</span>
+      {@render editRefThumb('Output', edit.output_image_url, null, 'pending')}
+    </div>
+    {#if edit.instruction}
+      <details>
+        <summary class="sec-request">
+          edit instruction
+          <button
+            class="copy"
+            title="Copy"
+            onclick={(e) => {
+              e.preventDefault();
+              copyText(edit.instruction ?? '');
+            }}>⧉</button>
+        </summary>
+        <pre class="sec-text">{edit.instruction}</pre>
+      </details>
+    {/if}
+  </div>
+{/snippet}
 
 {#snippet sectionBlock(section: ChainSection, direction: string)}
   <details open={direction === 'response' || section.name === 'meta' ? false : undefined}>
@@ -488,6 +543,45 @@
   .sec-imgs { color: #c39bff; font-size: 11px; }
   .sec-image-row { display: flex; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
   .sec-image-row img { width: 120px; border-radius: 6px; }
+  /* Edit-model inputs: three reference thumbs → output thumb, plus the
+   * collapsible edit instruction. */
+  .edit-inputs {
+    border: 1px solid #2a2f3a;
+    border-radius: 8px;
+    background: #10131a;
+    padding: 8px;
+    margin: 6px 0;
+  }
+  .edit-strip { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .edit-thumb { display: flex; flex-direction: column; gap: 3px; width: 116px; }
+  .edit-thumb a { display: block; }
+  .edit-thumb img { width: 116px; border-radius: 6px; border: 1px solid #2a2f3a; display: block; }
+  .edit-label {
+    font-size: 10.5px;
+    color: #9aa2b1;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .edit-pose-id {
+    background: #2b1f3d;
+    color: #c39bff;
+    border-radius: 8px;
+    padding: 0 6px;
+    font-size: 10px;
+    text-transform: none;
+  }
+  .edit-arrow { color: #77808f; font-size: 18px; }
+  .edit-missing {
+    color: #5d6673;
+    font-size: 12px;
+    border: 1px dashed #2a2f3a;
+    border-radius: 6px;
+    padding: 34px 0;
+    text-align: center;
+  }
+  .edit-file { font-size: 10px; color: #77808f; word-break: break-all; }
   /* No per-section max-height/scroll: expanded sections grow fully and the
    * drawer body is the single scroll context. */
   .sec-text {

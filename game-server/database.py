@@ -274,6 +274,23 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """.strip(),
     ),
+    (
+        27,
+        # Location-keyed turn backgrounds: one shared backdrop per
+        # (game, location) instead of one per turn, so the scenery stays
+        # consistent while the crew remains in the same place.
+        """
+        ALTER TABLE game_images ADD COLUMN location_id TEXT;
+        """.strip(),
+    ),
+    (
+        28,
+        # Short English visual scene description produced together with the
+        # game title; the only thing fed into splash image prompts (the
+        # literal title and the player-facing welcome text with its rules
+        # block made image models render text into the pictures).
+        "ALTER TABLE games ADD COLUMN splash_scene TEXT DEFAULT NULL;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -1540,18 +1557,19 @@ def get_game_title(game_id: str) -> str | None:
     return row["name"] if row else None
 
 
-def save_game_title_and_welcome(game_id: str, title: str, welcome_text: str) -> bool:
-    """Persist the game title (ship name + mission) and its welcome text together.
+def save_game_title_and_welcome(game_id: str, title: str, welcome_text: str, splash_scene: str) -> bool:
+    """Persist the game title (ship name + mission), its welcome text and the
+    splash scene description together.
 
-    Both are generated once when the game is created and shared by every player,
-    so they are stored as a single immutable pair per game.
+    All are generated once when the game is created and shared by every player,
+    so they are stored as a single immutable record per game.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
-        """UPDATE games SET name = ?, welcome_text = ? WHERE game_id = ?""",
-        (title, welcome_text, game_id),
+        """UPDATE games SET name = ?, welcome_text = ?, splash_scene = ? WHERE game_id = ?""",
+        (title, welcome_text, splash_scene, game_id),
     )
 
     conn.commit()
@@ -1569,6 +1587,18 @@ def get_game_welcome_text(game_id: str) -> str | None:
     conn.close()
 
     return row["welcome_text"] if row else None
+
+
+def get_game_splash_scene(game_id: str) -> str | None:
+    """Get the splash scene description for a game from the games table."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT splash_scene FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return row["splash_scene"] if row else None
 
 
 def get_game_language(game_id: str) -> str:
@@ -1640,6 +1670,7 @@ def save_game_image(
     game_id: str,
     turn: int | None,
     prompt: str,
+    location_id: str | None = None,
 ) -> int | None:
     """Save a game image URL (loading or splash) to the database.
 
@@ -1649,6 +1680,8 @@ def save_game_image(
         game_id: Game identifier
         turn: Game turn (None for loading or splash images)
         prompt: Generation prompt used
+        location_id: Stable location key for turn_background images
+            (same location across turns reuses one backdrop)
 
     Returns:
         The ID of the inserted row, or None on failure.
@@ -1657,9 +1690,9 @@ def save_game_image(
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO game_images (type, game_id, turn, image_url, prompt, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (type, game_id, turn, image_url, prompt, datetime.now().isoformat()),
+            """INSERT INTO game_images (type, game_id, turn, image_url, prompt, created_at, location_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (type, game_id, turn, image_url, prompt, datetime.now().isoformat(), location_id),
         )
         row_id = cursor.lastrowid
         conn.commit()
@@ -1765,6 +1798,36 @@ def get_turn_background(game_id: str, turn: int) -> dict[str, Any] | None:
         return None
     except Exception as e:
         logger.error(f"[IMAGE] Failed to get turn_background for turn {turn}: {e}", exc_info=True)
+        return None
+
+
+def get_location_background(game_id: str, location_id: str) -> dict[str, Any] | None:
+    """Get the shared per-location background image (URL + generation prompt).
+
+    Args:
+        game_id: Game identifier.
+        location_id: Stable location key from global_circumstances.
+
+    Returns:
+        {"image_url": str, "prompt": str} or None when this location has no
+        shared background yet.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT image_url, prompt FROM game_images
+               WHERE type = 'turn_background' AND game_id = ? AND location_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (game_id, location_id),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"image_url": row["image_url"], "prompt": row["prompt"] or ""}
+        return None
+    except Exception as e:
+        logger.error(f"[IMAGE] Failed to get location_background for {location_id}: {e}", exc_info=True)
         return None
 
 

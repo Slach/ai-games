@@ -1,0 +1,17 @@
+{"ts": "2026-11-12T02:25:05", "game_id": "ixisyr", "turn": 11, "stage": "s1", "verdict": "up"}
+{"ts": "2026-11-12T02:25:28", "game_id": "ixisyr", "turn": 11, "stage": "s2", "verdict": "up"}
+{"ts": "2026-11-12T02:26:11", "game_id": "ixisyr", "turn": 11, "stage": "a1", "verdict": "down"}
+{"ts": "2026-11-12T02:26:33", "game_id": "ixisyr", "turn": 11, "stage": "a1", "reason": "bg"}
+{"ts": "2026-11-12T02:27:05", "game_id": "ixisyr", "turn": 11, "stage": "a2", "verdict": "down"}
+{"ts": "2026-11-12T02:27:18", "game_id": "ixisyr", "turn": 11, "stage": "a2", "reason": "other"}
+{"ts": "2026-11-12T02:28:15", "game_id": "ixisyr", "turn": 11, "stage": "a2", "comment": "размер персонажа, он гигантский какой то"}
+{"ts": "2026-11-12T06:28:49", "game_id": "ixisyr", "turn": 11, "stage": "b1", "verdict": "up"}
+{"ts": "2026-11-12T06:29:13", "game_id": "ixisyr", "turn": 11, "stage": "o1", "verdict": "down"}
+{"ts": "2026-11-12T06:29:19", "game_id": "ixisyr", "turn": 11, "stage": "o1", "reason": "logic"}
+{"ts": "2026-11-12T06:29:32", "game_id": "ixisyr", "turn": 11, "stage": "o1", "comment": "там два персонажа одинаковых слева и справа, как так получилось?"}
+{"ts": "2026-11-12T10:43:23", "game_id": "ixisyr", "turn": 11, "stage": "o2", "verdict": "down"}
+{"ts": "2026-11-12T10:43:26", "game_id": "ixisyr", "turn": 11, "stage": "o2", "reason": "logic"}
+{"ts": "2026-11-12T10:44:37", "game_id": "ixisyr", "turn": 11, "stage": "o2", "comment": "один из энергетических персонажей который слева, показан ЗА иллюминатором... позы остальных игроков противоречат направлению консолей оборудования... они стоят спиной к экрану... так наверное быть не должно"}
+{"ts": "2026-11-12T10:51:56", "game_id": "ixisyr", "turn": 11, "stage": "o3", "verdict": "down"}
+{"ts": "2026-11-12T10:52:02", "game_id": "ixisyr", "turn": 11, "stage": "o3", "reason": "logic"}
+{"ts": "2026-11-12T10:52:40", "game_id": "ixisyr", "turn": 11, "stage": "o3", "comment": "пилот с шлемом стоит спиной к иллюминатору? почему? опять же энергетический персонаж на подставку не посажен а висит в воздухе..."}

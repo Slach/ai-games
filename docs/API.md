@@ -23,17 +23,22 @@ ComfyUI appends `_00001_` (batch counter) and `.png` automatically.
 | `loading` | `{game_id}/loading_{i}` | `http://comfyui:8188/view?filename=loading_2_00001_.png&subfolder=default_game&type=output` |
 | `splash` | `{game_id}/splash_{i}` | `http://comfyui:8188/view?filename=splash_2_00001_.png&subfolder=default_game&type=output` |
 | `bridge` | `{game_id}/bridge` | `http://comfyui:8188/view?filename=bridge_00001_.png&subfolder=default_game&type=output` |
-| `scene` | `{game_id}/scene_turn{turn}` | `http://comfyui:8188/view?filename=scene_turn3_00001_.png&subfolder=default_game&type=output` |
+| `scene` *(legacy)* | `{game_id}/scene_turn{turn}` | `http://comfyui:8188/view?filename=scene_turn3_00001_.png&subfolder=default_game&type=output` |
+| `turn_background` | `{game_id}/turn_bg_turn{turn}` or `{game_id}/turn_bg_loc_{location_id}` | `http://comfyui:8188/view?filename=turn_bg_loc_witness_bridge_00001_.png&subfolder=default_game&type=output` |
+| pose skeleton | `pose_lib_{pose_id}` (uploaded to ComfyUI input, not stored in `game_images`) | `pose_lib_console_typing.png` |
 | `outcome` | `{game_id}/outcome_turn{turn}` | `http://comfyui:8188/view?filename=outcome_turn3_00001_.png&subfolder=default_game&type=output` |
 | `finale` | `{game_id}/finale_{type}` | `http://comfyui:8188/view?filename=finale_victory_00001_.png&subfolder=default_game&type=output` |
 | `character` | `{game_id}/char_turn{turn}_p{pid}` | `http://comfyui:8188/view?filename=char_turn3_p123456_00001_.png&subfolder=default_game&type=output` |
 | `action` (player) | `{game_id}/action_turn{turn}_p{pid}` | `http://comfyui:8188/view?filename=action_turn3_p123456_00001_.png&subfolder=default_game&type=output` |
 | `action` (NPC) | `{game_id}/action_turn{turn}_{npc_key}` | `http://comfyui:8188/view?filename=action_turn3_npc_captain_default_game_00001_.png&subfolder=default_game&type=output` |
+| `death` | `{game_id}/death_turn{turn}_p{pid}` | `http://comfyui:8188/view?filename=death_turn3_p123456_00001_.png&subfolder=default_game&type=output` |
 
 How each type reaches the client:
 
-- `avatar`, `loading`, `splash`, `bridge`, `scene` — stored in `game_images` table, retrieved via `get_random_game_image()`
+- `avatar`, `loading`, `splash`, `bridge` — stored in `game_images` table, retrieved via `get_random_game_image()`
+- `turn_background` — stored in `game_images` (type `turn_background`, keyed by `location_id` when the turn's global circumstances carry a location), generated as a character-free STAGE (standable surfaces, character-scale anchor objects). It is both the briefing header image (sent as `scene_url`) and the shared reference-2 canvas every character/action/death edit is composed against. Legacy `scene` rows are still served for turns generated before 2026-11-11.
 - `action` — stored in `player_briefings.chosen_action_url` column, returned in `/game/poll/{player_id}`
+- `death` — pushed to the player via `push_player_death`
 - `character` — stored in push payload as `character_image_url`, not persisted in DB beyond `game_images`
 - `outcome`, `finale` — stored in `game_images` table, pushed via `push_turn_outcome`/`push_game_over`
 

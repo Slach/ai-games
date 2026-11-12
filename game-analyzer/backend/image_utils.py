@@ -7,7 +7,9 @@ serves the actual PNGs from its read-only mount of comfyui/files.
 import re
 from urllib.parse import parse_qs, quote, urlparse
 
-_FILENAME_RE = re.compile(r"^[\w\-.]+/[\w\-.]+$")
+# 'subfolder/file.png' (per-game ComfyUI outputs) or a bare 'file.png'
+# (volume-root files such as the pose_lib_*.png skeletons).
+_FILENAME_RE = re.compile(r"^[\w\-.]+(?:/[\w\-.]+)?$")
 
 
 def comfyui_url_to_path(url: str | None) -> str | None:
