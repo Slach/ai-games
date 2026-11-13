@@ -228,6 +228,12 @@ def _seed(conn: sqlite3.Connection):
          "2026-11-01T17:01:00", "2026-11-01T17:02:00", "--- PROMPT ---\naftermath scene",
          "URL: %s\nPrompt ID: p4" % COMFY.format(name="outcome_turn1_00002_.png", gid=GID),
          COMFY.format(name="outcome_turn1_00002_.png", gid=GID), "ok"),
+        # Splash pool image: stage=content_pool, no natural graph home —
+        # attaches to the concept node (title/welcome siblings).
+        ("game_%s_player_none_turn0_splash_comfyui" % GID, "", 0, "splash", "content_pool", "comfyui",
+         "2026-11-01T10:01:30", "2026-11-01T10:02:00", "--- PROMPT ---\ndramatic space scene",
+         "URL: %s\nPrompt ID: p5" % COMFY.format(name="splash_1_00001_.png", gid=GID),
+         COMFY.format(name="splash_1_00001_.png", gid=GID), "ok"),
     ]
     for row in events:
         c.execute(
@@ -333,6 +339,9 @@ class TestGraphBuilder(unittest.TestCase):
         # combined_outcome LLM + the legacy outcome image that recovered its
         # turn from the outcome_turn{N} filename.
         self.assertEqual(len(outcome["event_ids"]), 2)
+        concept = nodes[f"concept:{GID}"]
+        # mission LLM + the splash pool image (content_pool stage attaches here)
+        self.assertEqual(len(concept["event_ids"]), 2)
         # Orphan NPC comfyui action panel (player_id='none') attaches via the
         # CHARACTER AVATAR reference → the engineer's action image node.
         npc_actionimg = nodes[f"actionimg:{GID}:1:n:engineer"]
@@ -479,7 +488,7 @@ class TestGraphBuilder(unittest.TestCase):
         self.assertEqual(game["players"]["total"], 2)
         self.assertEqual(game["players"]["dead"], 1)
         self.assertEqual(game["npcs"], 1)
-        self.assertEqual(game["event_count"], 11)
+        self.assertEqual(game["event_count"], 12)
         self.assertEqual(game["mission"]["archetype"], "escort")
 
 

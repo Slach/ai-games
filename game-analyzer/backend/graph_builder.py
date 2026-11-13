@@ -863,7 +863,9 @@ def _build_graph_uncached(game_id: str) -> dict | None:
             # Batch prompt call shared by all NPCs → game node chain.
             return game_node_id
         if stage == "content_pool":
-            return None
+            # Splash/loading pool images are generated alongside the game
+            # concept (title + welcome); show them on the concept node.
+            return f"concept:{gid}" if f"concept:{gid}" in nodes else None
         if stage == "turn":
             if kind in ("global_circumstances", "turn_background_prompt", "turn_background", "scene"):
                 return f"scene:{gid}:{turn}" if f"scene:{gid}:{turn}" in nodes else None
