@@ -63,6 +63,7 @@ from player_store import (
     set_outcome_dedup,
     update_player_state,
 )
+from push_server import FEEDBACK_IDS
 
 # Configure logging.
 # A daily file handler mirrors logs to logs/ subdirectory so they
@@ -3935,9 +3936,10 @@ async def handle_voice_message(message: types.Message):
 
 # --- GM image-review feedback (verdict buttons under review/simulation photos) ---
 
-# Stages ("game_id:turn:stage" keys) awaiting an optional free-text comment
-# from the GM, with expiry timestamps. The next non-command GM text message is
-# attached to the most recent pending stage instead of going to the LLM chat.
+# Stages ("user_id:game_id:turn:stage" keys) awaiting an optional free-text
+# comment from the presser, with expiry timestamps. The next non-command text
+# message from that same user is attached to the most recent pending stage
+# instead of going to the LLM chat.
 _gm_feedback_pending: dict[str, float] = {}
 
 GM_FEEDBACK_REASONS = {
@@ -3963,12 +3965,14 @@ def _record_gm_feedback(payload: dict) -> None:
 
 
 async def gm_feedback_callback(callback: types.CallbackQuery):
-    """Verdict (👍/👎/🤔) and reason buttons under GM image-review messages.
+    """Verdict (👍/👎/🤔) and reason buttons under image-review messages.
 
-    callback_data: gmfb:<v|r>:<game_id>:<turn>:<stage>:<value>
+    Pressable by the GM and by players listed in TELEGRAM_BOT_FEEDBACK_IDS
+    (playtest statistics). callback_data: gmfb:<v|r>:<game_id>:<turn>:<stage>:<value>
     """
-    if GAME_MASTER_ID <= 0 or callback.from_user.id != GAME_MASTER_ID:
-        await callback.answer("GM only", show_alert=True)
+    user_id = callback.from_user.id
+    if not (user_id == GAME_MASTER_ID or user_id in FEEDBACK_IDS):
+        await callback.answer("Feedback is closed", show_alert=True)
         return
     parts = (callback.data or "").split(":")
     if len(parts) != 6:
@@ -3983,7 +3987,7 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
 
     if kind == "v":
         icons = {"up": "👍", "down": "👎", "meh": "🤔"}
-        _record_gm_feedback({"game_id": game_id, "turn": turn, "stage": stage, "verdict": value})
+        _record_gm_feedback({"game_id": game_id, "turn": turn, "stage": stage, "verdict": value, "user_id": user_id})
         marker = f"\n\n✅ Записано: {icons.get(value, value)}"
         caption = callback.message.caption or ""
         if marker not in caption:
@@ -3996,7 +4000,7 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
         if value == "up":
             await callback.answer("Записано 👍")
             return
-        _gm_feedback_pending[f"{game_id}:{turn}:{stage}"] = time.time() + 600
+        _gm_feedback_pending[f"{user_id}:{game_id}:{turn}:{stage}"] = time.time() + 600
         builder = InlineKeyboardBuilder()
         for code, label in GM_FEEDBACK_REASONS.items():
             builder.button(text=label, callback_data=f"gmfb:r:{game_id}:{turn}:{stage}:{code}")
@@ -4006,8 +4010,8 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
         return
 
     if kind == "r":
-        _record_gm_feedback({"game_id": game_id, "turn": turn, "stage": stage, "reason": value})
-        _gm_feedback_pending[f"{game_id}:{turn}:{stage}"] = time.time() + 600
+        _record_gm_feedback({"game_id": game_id, "turn": turn, "stage": stage, "reason": value, "user_id": user_id})
+        _gm_feedback_pending[f"{user_id}:{game_id}:{turn}:{stage}"] = time.time() + 600
         await callback.answer("Записано")
         await callback.message.edit_text(
             f"Причина: {GM_FEEDBACK_REASONS.get(value, value)}\n"
@@ -4023,18 +4027,20 @@ async def handle_text_message(message: types.Message):
     logger.info("[HANDLER] handle_text_message")
     player_lang = get_player_language(player_id)
 
-    # GM image-review comment: attach to the most recent pending feedback
-    # stage instead of forwarding the text to the LLM game-master chat.
-    if GAME_MASTER_ID > 0 and player_id == GAME_MASTER_ID and _gm_feedback_pending:
+    # Image-review comment: attach to the most recent pending feedback stage
+    # of THIS user (GM or a feedback subscriber) instead of forwarding the
+    # text to the LLM game-master chat.
+    if (player_id == GAME_MASTER_ID or player_id in FEEDBACK_IDS) and _gm_feedback_pending:
         now = time.time()
         for key in [k for k, exp in _gm_feedback_pending.items() if exp <= now]:
             _gm_feedback_pending.pop(key)
-        if _gm_feedback_pending:
-            key = list(_gm_feedback_pending)[-1]
+        own_keys = [k for k in _gm_feedback_pending if k.startswith(f"{player_id}:")]
+        if own_keys:
+            key = own_keys[-1]
             _gm_feedback_pending.pop(key)
-            game_id, turn, stage = key.split(":")
+            _, game_id, turn, stage = key.split(":")
             _record_gm_feedback(
-                {"game_id": game_id, "turn": int(turn), "stage": stage, "comment": message.text}
+                {"game_id": game_id, "turn": int(turn), "stage": stage, "comment": message.text, "user_id": player_id}
             )
             await message.answer(f"💬 Коммент записан к стадии {stage}")
             return

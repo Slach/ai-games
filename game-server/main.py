@@ -1130,6 +1130,7 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                         if bridge_url:
                             save_game_image(type="bridge", image_url=bridge_url, prompt=bridge_prompt, game_id=game_id, turn=None)
                             logger.info(f"[BRIDGE] Generated bridge image for auto-started game {game_id}: {bridge_url}")
+                            await _ensure_bridge_stage_image(game_id, bridge_result)
                 except Exception:
                     logger.error(f"[BRIDGE] Failed to generate bridge image for auto-started game {game_id}", exc_info=True)
         except Exception:
@@ -2363,6 +2364,41 @@ def _scene_image_for_turn(game_id: str, turn: int) -> str | None:
     return None
 
 
+async def _ensure_bridge_stage_image(game_id: str, bridge_result: dict) -> None:
+    """Generate the EMPTY stage twin of the crew bridge image (type="bridge_stage").
+
+    The crew bridge splash carries the whole crew, and an image-edit cannot
+    remove people from its reference — the aboard-ship turn backdrop needs an
+    empty rendering of the same interior as its edit source instead (GM
+    feedback 2026-11-13: the backdrop edit kept reproducing the crew).
+    """
+    if get_random_game_image(type="bridge_stage", game_id=game_id, turn=None):
+        return
+    stage_prompt = bridge_result.get("bridge_stage_prompt", "")
+    if not stage_prompt:
+        return
+    image_gen = create_image_generator()
+    url = await image_gen.generate_scene_image(
+        prompt=stage_prompt,
+        filename_prefix=f"{game_id}/bridge_stage",
+        width=1024,
+        height=1024,
+        game_id=game_id,
+        player_id=None,
+        turn=None,
+        kind="bridge_stage",
+    )
+    if url:
+        save_game_image(
+            type="bridge_stage",
+            image_url=url,
+            game_id=game_id,
+            turn=None,
+            prompt=stage_prompt,
+        )
+        logger.info(f"[BRIDGE] Stage image saved: {url}")
+
+
 async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
     """Return the shared background ({"image_url", "prompt"}), generating it on first use.
 
@@ -2373,6 +2409,10 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
     games) fall back to a per-turn cache. Every action / character / death
     image is composed onto this same Picture 2. Persisted in game_images
     (type="turn_background"); generation races are serialized per cache key.
+
+    When the location is aboard_ship and the game has a bridge image, the
+    backdrop is an EDIT of that bridge (their own ship's interior) instead of
+    an invented txt2img one.
     Returns None when the background cannot be produced (callers then pass
     no Picture 2 and the edit model imagines the scene from the instruction).
     """
@@ -2383,6 +2423,18 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
         global_circ = {}
     location = global_circ.get("location") or {}
     location_id = (location.get("id") or "").strip()
+    # aboard_ship (GM feedback 2026-11-13): the crew is inside their own vessel,
+    # so the backdrop is built FROM the ship's established interior — fresh
+    # txt2img kept inventing "another ship's" bridge every time. The EMPTY
+    # stage twin is the preferred edit source: the crew bridge splash carries
+    # the whole crew and an edit cannot remove them from its reference.
+    bridge_url = ""
+    if location.get("aboard_ship"):
+        bridge_url = (
+            get_random_game_image(type="bridge_stage", game_id=game_id, turn=None)
+            or get_random_game_image(type="bridge", game_id=game_id, turn=None)
+            or ""
+        )
 
     def _lookup() -> dict | None:
         if location_id:
@@ -2418,31 +2470,54 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
                 kind="turn_background_prompt",
                 location_name=location.get("name", ""),
                 location_description=location.get("description", ""),
+                edit_reference=bool(bridge_url),
             )
         except Exception:
             logger.warning(f"[TURN_BACKGROUND] Prompt LLM call failed for {game_id} turn {turn}", exc_info=True)
             prompt = ""
         if not prompt:
-            prompt = (
-                f"Cinematic medium-wide shot of a sci-fi space-opera stage: {setting}. "
-                "Standable deck surface across the lower half of the frame, 3-5 human-scale anchor "
-                "objects (consoles with holographic displays, hatches, handrails), starship-grade "
-                "props only, dramatic lighting with an explicit source, detailed, 4K. "
-                "No characters, no people, no domestic windows."
-            )
+            if bridge_url:
+                prompt = (
+                    "Remove every person from the interior of Picture 1 (this ship's bridge), "
+                    "leaving every station unattended — a completely vacant room. Keep the "
+                    f"architecture, consoles and layout exactly; {setting}. "
+                    "Adjusted lighting and atmosphere, 4K."
+                )
+            else:
+                prompt = (
+                    f"Cinematic medium-wide shot of a sci-fi space-opera stage: {setting}. "
+                    "Standable deck surface across the lower half of the frame, 3-5 human-scale anchor "
+                    "objects (consoles with holographic displays, hatches, handrails), starship-grade "
+                    "props only, dramatic lighting with an explicit source, detailed, 4K. "
+                    "No characters, no people, no domestic windows."
+                )
 
         image_gen = create_image_generator()
         prefix = f"{game_id}/turn_bg_loc_{location_id}" if location_id else f"{game_id}/turn_bg_turn{turn}"
-        url = await image_gen.generate_scene_image(
-            prompt=prompt,
-            filename_prefix=prefix,
-            width=1024,
-            height=1024,
-            game_id=game_id,
-            player_id=None,
-            turn=turn,
-            kind="turn_background",
-        )
+        if bridge_url:
+            url = await image_gen.generate_multi_reference_image(
+                prompt=prompt,
+                avatar_urls=[],
+                filename_prefix=prefix,
+                width=1024,
+                height=1024,
+                game_id=game_id,
+                player_id=None,
+                turn=turn,
+                kind="turn_background",
+                background_url=bridge_url,
+            )
+        else:
+            url = await image_gen.generate_scene_image(
+                prompt=prompt,
+                filename_prefix=prefix,
+                width=1024,
+                height=1024,
+                game_id=game_id,
+                player_id=None,
+                turn=turn,
+                kind="turn_background",
+            )
         if not url:
             logger.warning(f"[TURN_BACKGROUND] Generation failed for {game_id} turn {turn}")
             return None
@@ -5115,6 +5190,7 @@ async def _original_start_game(request: StartGameRequest):
                         prompt=bridge_prompt,
                     )
                     logger.info(f"[BRIDGE] Bridge image saved: {bridge_url}")
+                    await _ensure_bridge_stage_image(game_id, bridge_result)
     except Exception as e:
         logger.warning(f"[BRIDGE] Image generation failed: {e}")
 

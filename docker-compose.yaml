@@ -108,6 +108,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_GAME_MASTER_ID=${TELEGRAM_BOT_GAME_MASTER_ID:-}
+      - TELEGRAM_BOT_FEEDBACK_IDS=${TELEGRAM_BOT_FEEDBACK_IDS:-}
       - GAME_SERVER_URL=${GAME_SERVER_URL:-http://game-server:8000}
       - GAME_SCHEDULER_URL=${GAME_SCHEDULER_URL:-http://game-scheduler:8001}
       - AI_FSM_DB=/app/bot_storage.db

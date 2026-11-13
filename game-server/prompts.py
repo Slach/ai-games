@@ -1534,13 +1534,20 @@ def build_global_circumstances_prompts(
             f"Локация предыдущего хода: {previous_location}\n"
             "Если экипаж всё ещё в том же месте — верни РОВНО тот же location.id "
             "(задник локации переиспользуется, мир остаётся консистентным). "
-            "Новый id — только когда действие реально переместилось в другое место.\n"
+            "Но ВЕДИ СЮЖЕТ ЧЕРЕЗ ЛОКАЦИИ: когда нарратив продвинул экипаж в другое место "
+            "(другой отсек/уровень корабля, поверхность планеты, новый район, станция) — "
+            "верни НОВЫЙ id с новым именем и описанием. Не запирай экипаж в одной локации "
+            "на много ходов подряд, если действие не осаждает их на месте.\n"
         )
         location_block_en = (
             f"Previous turn's location: {previous_location}\n"
             "If the crew is still in the same place, return EXACTLY the same location.id "
             "(the location's backdrop image is reused, keeping the world consistent). "
-            "Mint a new id only when the scene has actually moved elsewhere.\n"
+            "But PROGRESS THE STORY THROUGH LOCATIONS: when the narrative has moved the crew "
+            "somewhere new (another ship compartment/deck, the planet's surface, a new "
+            "district, a station), return a NEW id with a new name and description. Do not "
+            "lock the crew into one location for many consecutive turns unless the action "
+            "besieges them in place.\n"
         )
     if language == LANGUAGE_RU:
         system = (
@@ -1568,10 +1575,12 @@ def build_global_circumstances_prompts(
             "3. Нарратив — описание ситуации от лица GM (2-3 абзаца). "
             "Упоминай членов экипажа по ИМЕНИ, показывая их местоположение и действия.\n"
             "4. Ключевые события — 3-5 фоновых событий, которые могут заметить все\n"
-            "5. location — локация действия: объект {id, name, description}. "
+            "5. location — локация действия: объект {id, name, description, aboard_ship}. "
             "id — стабильный snake_case-идентификатор на английском (например 'witness_cargo_bay', "
             "'targus_iv_deep_atmosphere'), name — короткое имя, description — 1-2 предложения "
-            "об окружении локации для генерации задника. Пока экипаж в том же месте — id тот же.\n"
+            "об окружении локации для генерации задника. Пока экипаж в том же месте — id тот же; "
+            "когда сюжет сдвигает их дальше — новый id. aboard_ship — true, если экипаж проводит "
+            "этот ход ВНУТРИ своего корабля (тогда задником станет интерьер их корабля).\n"
             "6. crew_positions — массив позиций каждого члена экипажа: где они находятся и что делают.\n\n"
             "ВАЖНО: Все обстоятельства дня должны соответствовать контексту миссии.\n"
             "Не выдумывай новый независимый сюжет — развивай события в рамках миссии.\n"
@@ -1603,11 +1612,13 @@ def build_global_circumstances_prompts(
             "3. Narrative — GM voice description (2-3 paragraphs). "
             "Refer to crew members by NAME, showing their location and actions.\n"
             "4. Key events — 3-5 background events everyone can perceive\n"
-            "5. location — the scene's location: object {id, name, description}. "
+            "5. location — the scene's location: object {id, name, description, aboard_ship}. "
             "id is a stable snake_case identifier (e.g. 'witness_cargo_bay', "
             "'targus_iv_deep_atmosphere'), name is a short display name, description is 1-2 "
             "sentences about the environment for backdrop generation. Keep the same id while "
-            "the crew stays in the same place.\n"
+            "the crew stays in the same place; when the story moves them on, mint a new id. "
+            "aboard_ship is true when the crew spends this turn INSIDE their own vessel (its "
+            "interior becomes the backdrop).\n"
             "6. crew_positions — array of positions for each crew member: where they are and what they're doing.\n\n"
             "IMPORTANT: All circumstances must be consistent with the mission context. "
             "Do not invent an independent plot — develop events within the mission framework. "
@@ -1942,6 +1953,8 @@ def build_turn_background_prompts(
     conflict: str,
     location_name: str = "",
     location_description: str = "",
+    *,
+    edit_reference: bool = False,
 ) -> tuple[str, str]:
     """Build (system, user) prompts for the shared background LLM call.
 
@@ -1954,12 +1967,42 @@ def build_turn_background_prompts(
     The scene is a STAGE for the whole crew, not an establishing wide shot:
     it must provide standable surfaces and human-scale anchor objects, or
     every composed action image ends up with a character floating in space.
+
+    With ``edit_reference`` the backdrop will be generated as an EDIT of the
+    ship's own bridge image (Picture 1) — the crew is aboard their vessel, and
+    a fresh txt2img invented a "different ship's" interior every time (GM
+    feedback 2026-11-13). The prompt becomes a transform instruction: keep the
+    reference architecture, change only the state.
     """
     location_block = ""
     if location_name:
         detail = f" — {location_description}" if location_description else ""
         location_block = f"\nЛокация (Location): {location_name}{detail}\n" if language == LANGUAGE_RU else f"\nLocation: {location_name}{detail}\n"
     if language == LANGUAGE_RU:
+        if edit_reference:
+            system = (
+                "Ты — эксперт по cinematic prompt engineering для AI-генерации изображений. "
+                "Пишешь инструкции для image-editing модели: она получает РЕФЕРЕНС — интерьер "
+                "своего корабля экипажа (Picture 1) — и перерисовывает его в текущее состояние. "
+                "Результат — ПУСТАЯ СЦЕНА-ПЛОЩАДКА для последующей посадки персонажей. "
+                "Инструкция всегда на английском."
+            )
+            user = (
+                f"Обстановка хода (Setting): {setting}\n"
+                f"Ситуация хода (Conflict): {conflict or '—'}\n"
+                f"{location_block}\n"
+                "Напиши ОДНУ инструкцию на АНГЛИЙСКОМ для перерисовки интерьера из Picture 1. "
+                "Два обязательных требования:\n"
+                "1) В Picture 1 могут быть люди — УДАЛИ ИХ ВСЕХ: интерьер должен стать "
+                "ПОЛНОСТЬЮ ПУСТЫМ (каждая станция безлюдна, в комнате никого нет). Это "
+                "сцена-площадка, персонажей добавит следующий шаг пайплайна.\n"
+                "2) ЭТО ИХ КОРАБЛЬ — архитектуру, консоли, планировку и стиль сохранить ТОЧНО; "
+                "меняется только СОСТОЯНИЕ: освещение, атмосфера, вид за иллюминаторами, "
+                "аварийные индикаторы, дым/искры/пепел, если позволяет ситуация.\n"
+                "НЕ придумывай новые помещения, мебель или планировку. Свет опиши явно "
+                "(источник + цвет). 4K."
+            )
+            return system, user
         system = (
             "Ты — эксперт по cinematic prompt engineering для AI-генерации изображений. "
             "Пишешь промпты для пустых сцен-СЦЕНИЧЕСКИХ ПЛОЩАДОК (БЕЗ персонажей) в эстетике "
@@ -1986,6 +2029,30 @@ def build_turn_background_prompts(
             "корабля); "
             "5) Кинематографичный средне-широкий кадр с места, откуда видно всю площадку. "
             "Свет опиши явно (источник + цвет) — его будет наследовать персонаж. 4K."
+        )
+        return system, user
+    if edit_reference:
+        system = (
+            "You are an expert cinematic prompt engineer for AI image generation. "
+            "You write instructions for an image-editing model: it receives a REFERENCE — "
+            "the crew's OWN ship interior (Picture 1) — and redraws it into its current state. "
+            "The result must be an EMPTY stage for later character compositing. "
+            "The instruction is always English."
+        )
+        user = (
+            f"Turn setting: {setting}\n"
+            f"Turn situation: {conflict or '—'}\n"
+            f"{location_block}\n"
+            "Write ONE English EDIT instruction that redraws the interior of Picture 1. "
+            "Two mandatory requirements:\n"
+            "1) Picture 1 may contain people — REMOVE ALL OF THEM: the interior must become "
+            "COMPLETELY VACANT (every station unattended, nobody aboard). This is a stage; "
+            "characters are composited in by the next pipeline step.\n"
+            "2) THIS IS THEIR SHIP — keep the architecture, consoles, layout and style "
+            "EXACTLY; only the STATE changes: lighting, atmosphere, the view outside the "
+            "windows, alert indicators, smoke/sparks/ash if the situation allows.\n"
+            "Do NOT invent new rooms, furniture or a different layout. Describe the lighting "
+            "explicitly (source + color). 4K quality."
         )
         return system, user
     system = (
@@ -2253,16 +2320,25 @@ BRIDGE_IMAGE_VIEWPOINT_RULE = (
 OUTCOME_IMAGE_PROMPT_SYSTEM = (
     "You are an expert cinematic prompt engineer for AI image generation. "
     "Turn the outcome narrative of a starship-crew game turn into ONE detailed "
-    "English image prompt for the key moment of that outcome: the scene where "
-    "the most dramatic events happen, the involved crew members visible with "
-    "their faces and poses. Never a floor plan or schematic. "
-    "When reference pictures of the crew are provided, the prompt is a "
-    "composition instruction for a multi-reference image model: stage ONLY the "
-    "characters the narrative actually shows, BY their picture numbers "
-    "(\"the character from Picture N\"), reinforce each one's key visual traits "
-    "(\"EXACTLY as in Picture N: same <traits>\"), make each of them clearly "
-    "visible, and never duplicate a character or add people the narrative does "
-    "not mention."
+    "English image prompt. Never a floor plan or schematic. "
+    "With crew reference pictures the image is a COMIC PAGE: a single graphic-novel "
+    "sheet divided into panels, ONE PANEL PER CREW MEMBER, each panel showing that "
+    "character mid-action doing THEIR part of the outcome. A single group photo keeps "
+    "failing — every character ends up facing the camera or someone drops out of the "
+    "frame entirely (GM feedback 2026-11-13), so the panel-per-character layout is "
+    "mandatory. "
+    "SEMANTIC STAGING inside every panel: the character is oriented toward what they "
+    "are doing — working at a console means FACING that console with the gaze on its "
+    "displays; the camera sees them from the side or three-quarter, face visible in "
+    "profile; nobody looks at or poses for the camera, and nobody is shown as a bare "
+    "back filling the panel. Energy/plasma/non-solid beings must interact with a "
+    "concrete scene object — hovering over a console pad, weaving into a panel — "
+    "never floating aimlessly or outside windows. "
+    "The prompt is a composition instruction for a multi-reference image model: refer "
+    "to characters BY their picture numbers (\"the character from Picture N\"), "
+    "reinforce each one's key visual traits (\"EXACTLY as in Picture N: same "
+    "<traits>\"), and never duplicate a character or add people the narrative does "
+    "not mention. No text, captions or speech bubbles anywhere in the image."
 )
 
 
@@ -2294,6 +2370,9 @@ def build_scene_instruction_system(language: str) -> str:
             "действия (работает — лицом к нужной консоли/панели; перемещается — в движении К видимому "
             "месту сцены, в сторону цели). Персонаж НИКОГДА не смотрит в камеру и не позирует зрителю — "
             "взгляд всегда на оборудовании или цели действия. "
+            "КАМЕРА ВИДИТ ПЕРСОНАЖА СБОКУ или в 3/4: лицо видно в профиль, пока он действует. "
+            "Сплошной вид со спины (спина заполняет кадр) ЗАПРЕЩЁН — «не смотри в камеру» означает "
+            "«взгляд на работу», а НЕ «повернись спиной к зрителю». "
             "Опирайся ТОЛЬКО на объекты, которые есть в описании сцены (и объекты из самого "
             "действия) — НЕ добавляй новых локаций, планет, кораблей, чёрных дыр и прочего, "
             "чего нет в сцене. "
@@ -2315,6 +2394,10 @@ def build_scene_instruction_system(language: str) -> str:
         "TOWARD a visible destination in the scene, in the direction of the goal). The character "
         "NEVER looks at or poses for the camera — their gaze is always on the equipment or the "
         "action's target. "
+        "THE CAMERA SEES THE CHARACTER FROM THE SIDE or in three-quarter view: the face stays "
+        "visible in profile while they act. A wholesale back view (the character's back filling "
+        "the frame) is FORBIDDEN — 'do not look at the camera' means 'gaze on the work', NOT "
+        "'turn your back to the viewer'. "
         "Refer ONLY to objects present in the scene description (and objects named by the action "
         "itself) — do NOT add new locations, planets, ships, black holes or anything not in the scene. "
         "Do NOT restate the character's description or identity — the model preserves it automatically. "
@@ -2433,11 +2516,26 @@ def build_scene_instruction_user(
             "stays visible; the back-to-camera pose (console_typing) is ONLY for a console mounted "
             "dead-on in a wall.\n"
         )
+    shot_block_ru = (
+        "\nПоле shot (кадрирование) — выбери по смыслу действия:\n"
+        "- close_up: манипуляции, чтение/поиск на экранах, точная работа руками — "
+        "работаемый экран/панель КРУПНЫЙ и читаемый, рядом с персонажем (кадр по пояс);\n"
+        "- medium (по умолчанию): действие в полный рост рядом с оборудованием сцены;\n"
+        "- wide: перемещение через сцену, простор — виден масштаб локации.\n"
+    )
+    shot_block_en = (
+        "\nThe shot field (framing) — pick by the action's meaning:\n"
+        "- close_up: manipulation, reading/searching screens, precise handwork — the operated "
+        "screen/panel is LARGE and readable next to the character (waist-up framing);\n"
+        "- medium (default): full-body action next to the scene's equipment;\n"
+        "- wide: moving across the scene, open space — the location's scale is visible.\n"
+    )
     if language == LANGUAGE_RU:
         user = (
             f"Действие: {action_text}\n"
             f"Описание вида: {species_desc}{scene_block_ru}{ctx_block}\n"
             f"{pose_block_ru}"
+            f"{shot_block_ru}"
             f"{anatomy_guard_ru}"
             "Напиши ОДНУ инструкцию (1-3 предложения) для Qwen-Image-Edit, "
             "начиная с 'Place the character from Picture 1...'. "
@@ -2446,7 +2544,8 @@ def build_scene_instruction_user(
             "в описании сцены). Освещение бери из сцены. "
             + ("Персонаж принимает позу из Picture 3. " if pose_catalogue else "")
             + "ЯВНО укажи ориентацию и цель: персонаж обращён ЛИЦОМ к объекту, значимому для "
-            "действия (консоль, панель, направление движения к видимой цели), и НЕ смотрит в камеру. "
+            "действия (консоль, панель, направление движения к видимой цели), лицо видно в профиль — "
+            "он НЕ смотрит в камеру и НЕ поворачивается к зрителю спиной. "
             "Персонаж в МАСШТАБЕ сцены: естественный рост человека рядом с якорными объектами, "
             "примерно от трети до половины высоты кадра — НЕ гигант. "
             "НЕ добавляй объекты и локации, которых нет в описании сцены и в действии. "
@@ -2457,6 +2556,7 @@ def build_scene_instruction_user(
             f"Action: {action_text}\n"
         f"Species: {species_desc}{scene_block_en}{ctx_block}\n"
         f"{pose_block_en}"
+        f"{shot_block_en}"
         f"{anatomy_guard_en}"
         "Write ONE instruction (1-3 sentences) for Qwen-Image-Edit, "
         "starting with 'Place the character from Picture 1...'. "
@@ -2465,8 +2565,8 @@ def build_scene_instruction_user(
         "is actually in the scene description). Take the lighting from the scene. "
         + ("The character adopts the pose shown in Picture 3. " if pose_catalogue else "")
         + "State the orientation and target EXPLICITLY: the character FACES the object that matters "
-        "for the action (the console, the panel, the visible direction of movement toward the goal) "
-        "and does NOT look at the camera. "
+        "for the action (the console, the panel, the visible direction of movement toward the goal), "
+        "face visible in profile — they do NOT look at the camera and are NOT shown from the back. "
         "The character matches the scene's scale: natural human height next to the anchor objects, "
         "roughly one third to one half of the frame height — never a giant. "
         "Do NOT add objects or locations that are absent from the scene description and the action. "

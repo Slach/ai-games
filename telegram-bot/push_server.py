@@ -73,6 +73,38 @@ except (ValueError, TypeError):
     logger.warning("Invalid TELEGRAM_BOT_GAME_MASTER_ID env var, using default 0")
     GAME_MASTER_ID = 0
 
+
+def _parse_feedback_ids() -> set[int]:
+    raw = os.getenv("TELEGRAM_BOT_FEEDBACK_IDS", "")
+    ids: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.add(int(part))
+    return ids
+
+
+# Players whose image pushes carry 👍/👎/🤔 verdict buttons; every press is
+# recorded to logs/gm_feedback-*.jsonl for playtest statistics.
+FEEDBACK_IDS = _parse_feedback_ids()
+
+
+def feedback_markup_if_needed(
+    recipient_id: int, game_id: str, turn: int | None, stage: str
+) -> InlineKeyboardMarkup | None:
+    """Verdict keyboard for an image push, when the recipient is a feedback subscriber."""
+    if recipient_id not in FEEDBACK_IDS:
+        return None
+    turn_label = turn if turn is not None else 0
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="👍", callback_data=f"gmfb:v:{game_id}:{turn_label}:{stage}:up"),
+            InlineKeyboardButton(text="👎", callback_data=f"gmfb:v:{game_id}:{turn_label}:{stage}:down"),
+            InlineKeyboardButton(text="🤔", callback_data=f"gmfb:v:{game_id}:{turn_label}:{stage}:meh"),
+        ]]
+    )
+
+
 GAME_SERVER_URL = os.getenv("GAME_SERVER_URL", "http://game-server:8000")
 
 # Telegram media caption limit (https://core.telegram.org/bots/api#sendphoto).
@@ -284,6 +316,7 @@ async def _deliver_briefing(
 ) -> bool:
     """Deliver a /push/briefings message to all players in the payload."""
     turn = payload.get("turn")
+    game_id = payload.get("game_id", "")
     players = payload.get("players", [])
     bridge_url = payload.get("bridge_image_url")
     mission = payload.get("mission")
@@ -334,12 +367,14 @@ async def _deliver_briefing(
                 img_data = await _download_image(bridge_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="bridge.png")
+                    _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "bridge")
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
                             caption=caption,
                             parse_mode="Markdown",
+                            reply_markup=_fb_kb,
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
                 else:
@@ -374,12 +409,14 @@ async def _deliver_briefing(
                     narrative_too_long = global_narrative and len(global_narrative) > 900
                     if not narrative_too_long and global_narrative:
                         caption += f"\n\n{_escape_md(global_narrative)}"
+                    _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "scene")
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
                             caption=caption,
                             parse_mode="Markdown",
+                            reply_markup=_fb_kb,
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
 
@@ -404,12 +441,14 @@ async def _deliver_briefing(
                     photo = BufferedInputFile(img_data, filename="character.png")
                     outcome_msgs = get_push_outcome(language)
                     caption_text = personal_title or outcome_msgs["character_caption"].format(turn=turn, role=_escape_md(player_data.get("role", "")))
+                    _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "char")
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
                             caption=f"*{_escape_md(caption_text)}*",
                             parse_mode="Markdown",
+                            reply_markup=_fb_kb,
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
 
@@ -419,7 +458,8 @@ async def _deliver_briefing(
                 img_data = await _download_image(chosen_action_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="action.png")
-                    await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo), max_retries=3, base_delay=1.0, max_delay=10.0)
+                    _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "action")
+                    await call_with_retry(lambda: bot.send_photo(chat_id=player_id, photo=photo, reply_markup=_fb_kb), max_retries=3, base_delay=1.0, max_delay=10.0)
 
             # Crew dialogues as a separate message (before briefing to avoid 4096 limit)
             crew_text = _build_crew_dialogues_text(crew_dialogues, language)
@@ -523,6 +563,7 @@ async def _deliver_player_action(
     """Deliver a /push/player-action message."""
     player_id = payload.get("player_id")
     turn = payload.get("turn")
+    game_id = payload.get("game_id", "")
     chosen_action_url = payload.get("chosen_action_url")
     action_text = payload.get("action_text", "")
     language = payload.get("language", language)
@@ -539,11 +580,13 @@ async def _deliver_player_action(
             photo = BufferedInputFile(img_data, filename="action_image.png")
             msgs = get_actions(language)
             caption = action_text or msgs.get("action_caption", "")
+            _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "action")
             await call_with_retry(
                 lambda: bot.send_photo(
                     chat_id=player_id,
                     photo=photo,
                     caption=caption,
+                    reply_markup=_fb_kb,
                 )
             , max_retries=3, base_delay=1.0, max_delay=10.0)
         return True
@@ -590,6 +633,7 @@ async def _deliver_player_death(
     """
     player_id = payload.get("player_id")
     turn = payload.get("turn")
+    game_id = payload.get("game_id", "")
     death_title = payload.get("death_title", "")
     death_narrative = payload.get("death_narrative", "")
     outcome_narrative = payload.get("outcome_narrative", "")
@@ -631,11 +675,13 @@ async def _deliver_player_death(
             img_data = await _download_image(death_image_url, 30)
             if img_data:
                 photo = BufferedInputFile(img_data, filename="death_image.png")
+                _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "death")
                 await call_with_retry(
                     lambda: bot.send_photo(
                         chat_id=player_id,
                         photo=photo,
                         caption=header,
+                        reply_markup=_fb_kb,
                     )
                 , max_retries=3, base_delay=1.0, max_delay=10.0)
         await _send_long_message(bot, player_id, death_message)
@@ -731,6 +777,7 @@ async def _deliver_outcome(
     logged and skipped — one failing player never blocks the rest.
     """
     turn = payload.get("turn")
+    game_id = payload.get("game_id", "")
     outcome_text = payload.get("outcome_text", "")
     alive_players = payload.get("alive_players", [])
     outcome_image_url = payload.get("outcome_image_url")
@@ -936,11 +983,13 @@ async def _deliver_outcome(
             if not caption:
                 caption = outcome_msgs["turn_prefix"].format(turn=turn)
             try:
+                _fb_kb = feedback_markup_if_needed(target_player_id, game_id, turn, "action")
                 await call_with_retry(
                     lambda: bot.send_photo(
                         chat_id=target_player_id,
                         photo=photo,
                         caption=caption,
+                        reply_markup=_fb_kb,
                     )
                 , max_retries=3, base_delay=1.0, max_delay=10.0)
             except TelegramBadRequest as send_err:
@@ -977,10 +1026,12 @@ async def _deliver_outcome(
                 img_data = await _download_image(outcome_image_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="outcome_image.png")
+                    _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "outcome")
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
+                            reply_markup=_fb_kb,
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
 
@@ -1295,12 +1346,14 @@ async def _deliver_game_over(
                 img_data = await _download_image(finale_image_url, 30)
                 if img_data:
                     photo = BufferedInputFile(img_data, filename="finale.png")
+                    _fb_kb = feedback_markup_if_needed(player_id, game_id, turn, "finale")
                     await call_with_retry(
                         lambda: bot.send_photo(
                             chat_id=player_id,
                             photo=photo,
                             caption=f"*{title}*",
                             parse_mode="Markdown",
+                            reply_markup=_fb_kb,
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
 

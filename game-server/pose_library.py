@@ -18,7 +18,11 @@ Keypoint layout is OpenPose COCO-18:
     8 R hip, 9 R knee, 10 R ankle,
     11 L hip, 12 L knee, 13 L ankle,
     14 R eye, 15 L eye, 16 R ear, 17 L ear
-Coordinates live on a 768x1024 canvas, y grows downward.
+Coordinates are authored on a 768x1024 grid, y grows downward; render_pose_png
+fits the skeleton into a target box at ~44% of the canvas height (see
+FIGURE_TARGET_H below) — the edit model copies the reference's relative size
+as the rendered character's scale, so a full-canvas skeleton made the
+character a full-frame giant (GM feedback 2026-11-13).
 """
 
 import logging
@@ -31,6 +35,13 @@ logger = logging.getLogger(__name__)
 
 CANVAS_W = 768
 CANVAS_H = 1024
+
+# Where the rendered skeleton lands on the canvas: figure height ~44% of the
+# frame (the "one third to one half of the frame height" rule), feet near the
+# bottom edge, horizontally centered — the environment keeps the upper half.
+FIGURE_TARGET_H = 450
+FIGURE_BASE_Y = 948
+FIGURE_CENTER_X = 384
 
 # (from, to) keypoint index pairs, with the canonical OpenPose limb colors.
 _LIMBS = [
@@ -60,27 +71,13 @@ _JOINT_COLOR = (0, 0, 255)
 # they were bare ("leaning over a console") — tell it WHEN each pose fits and
 # whether the face stays visible, so side/three-quarter views win over the
 # back-to-camera one (GM feedback 2026-11-12: "персонаж стоит жопой в экран").
-# Person reference proportions on the 768x1024 canvas: head top ~y=70,
-# neck ~y=150, hips ~y=430, ankles ~y=930, shoulder half-width ~95.
+# Side/profile poses come FIRST on purpose: with a free choice the instruction
+# LLM is biased toward early catalogue entries, and the user wants the face in
+# profile, not a back view (GM feedback 2026-11-13).
+# Coordinates are authored full-canvas (head top ~y=70..300 by pose, ankles
+# ~y=930, shoulder half-width ~95); render_pose_png fits them into the
+# FIGURE_* box.
 POSES: dict[str, tuple[str, tuple[tuple[int, int], ...]]] = {
-    "standing_three_quarter": (
-        "relaxed three-quarter standing view, weight on one leg, face clearly visible — talking, deciding, observing; more natural than a flat frontal stance",
-        ((392, 92), (386, 156), (472, 170), (488, 304), (492, 438), (302, 174),
-         (270, 308), (262, 444), (448, 432), (456, 676), (462, 926), (326, 436),
-         (300, 678), (292, 926), (412, 80), (372, 78), (436, 94), (352, 92)),
-    ),
-    "standing": (
-        "standing upright facing the camera, arms relaxed — neutral presenting pose; use only for talking or calmly observing",
-        ((384, 90), (384, 155), (479, 170), (497, 305), (503, 440), (289, 170),
-         (271, 305), (265, 440), (444, 430), (452, 675), (458, 925), (324, 430),
-         (316, 675), (310, 925), (409, 78), (359, 78), (432, 95), (336, 95)),
-    ),
-    "hands_on_hips": (
-        "standing confident, both hands on the hips, elbows out, face visible — commanding, arguing, objecting",
-        ((384, 90), (384, 155), (479, 170), (560, 300), (462, 430), (289, 170),
-         (208, 300), (306, 430), (444, 430), (452, 675), (458, 925), (324, 430),
-         (316, 675), (310, 925), (409, 78), (359, 78), (432, 95), (336, 95)),
-    ),
     "console_side": (
         "SIDE VIEW standing at a console, both hands on the controls, head in profile — face stays visible while working; the best default for operating any station",
         ((300, 105), (362, 162), (392, 176), (296, 288), (198, 332), (372, 182),
@@ -99,17 +96,23 @@ POSES: dict[str, tuple[str, tuple[tuple[int, int], ...]]] = {
          (264, 306), (258, 442), (444, 434), (452, 678), (456, 926), (322, 434),
          (312, 678), (306, 926), (400, 80), (356, 78), (426, 95), (334, 92)),
     ),
-    "console_typing": (
-        "BACK TO CAMERA, leaning forward over a wall-mounted console, both hands working the controls — use ONLY for dead-on wall consoles; the face is hidden from the viewer",
-        ((384, 105), (384, 165), (474, 175), (566, 258), (656, 330), (294, 175),
-         (202, 258), (112, 330), (448, 435), (466, 685), (478, 930), (320, 435),
-         (304, 685), (290, 930), (410, 92), (358, 92), (433, 108), (335, 108)),
+    "standing_three_quarter": (
+        "relaxed three-quarter standing view, weight on one leg, face clearly visible — talking, deciding, observing; more natural than a flat frontal stance",
+        ((392, 92), (386, 156), (472, 170), (488, 304), (492, 438), (302, 174),
+         (270, 308), (262, 444), (448, 432), (456, 676), (462, 926), (326, 436),
+         (300, 678), (292, 926), (412, 80), (372, 78), (436, 94), (352, 92)),
     ),
-    "reaching_up": (
-        "reaching up with the right arm stretched high, head tilted up — pulling cables, turning valves, repairing overhead equipment",
-        ((384, 95), (384, 160), (479, 175), (551, 90), (577, 20), (289, 175),
-         (267, 310), (275, 445), (444, 435), (452, 680), (458, 928), (324, 435),
-         (316, 680), (310, 928), (409, 82), (359, 82), (432, 98), (336, 98)),
+    "standing": (
+        "standing upright facing the camera, arms relaxed — neutral presenting pose; use only for talking or calmly observing",
+        ((384, 90), (384, 155), (479, 170), (497, 305), (503, 440), (289, 170),
+         (271, 305), (265, 440), (444, 430), (452, 675), (458, 925), (324, 430),
+         (316, 675), (310, 925), (409, 78), (359, 78), (432, 95), (336, 95)),
+    ),
+    "hands_on_hips": (
+        "standing confident, both hands on the hips, elbows out, face visible — commanding, arguing, objecting",
+        ((384, 90), (384, 155), (479, 170), (560, 300), (462, 430), (289, 170),
+         (208, 300), (306, 430), (444, 430), (452, 675), (458, 925), (324, 430),
+         (316, 675), (310, 925), (409, 78), (359, 78), (432, 95), (336, 95)),
     ),
     "walking": (
         "mid-stride walking forward in three-quarter view, face visible — moving across the scene to another position",
@@ -122,6 +125,12 @@ POSES: dict[str, tuple[str, tuple[tuple[int, int], ...]]] = {
         ((420, 120), (400, 185), (492, 195), (560, 130), (630, 170), (308, 195),
          (238, 275), (180, 330), (448, 450), (590, 610), (560, 800), (352, 460),
          (260, 680), (180, 880), (444, 106), (395, 106), (467, 122), (371, 122)),
+    ),
+    "reaching_up": (
+        "reaching up with the right arm stretched high, head tilted up — pulling cables, turning valves, repairing overhead equipment",
+        ((384, 95), (384, 160), (479, 175), (551, 90), (577, 20), (289, 175),
+         (267, 310), (275, 445), (444, 435), (452, 680), (458, 928), (324, 435),
+         (316, 680), (310, 928), (409, 82), (359, 82), (432, 98), (336, 98)),
     ),
     "combat_stance": (
         "braced combat stance, knees bent, weight low, arms raised guarding — fighting, bracing for impact, readying weapons",
@@ -164,6 +173,12 @@ POSES: dict[str, tuple[str, tuple[tuple[int, int], ...]]] = {
         ((384, 300), (384, 365), (479, 380), (520, 480), (470, 560), (289, 380),
          (248, 480), (298, 560), (452, 610), (500, 800), (520, 930), (316, 610),
          (268, 800), (250, 930), (409, 287), (359, 287), (432, 303), (336, 303)),
+    ),
+    "console_typing": (
+        "BACK TO CAMERA, leaning forward over a console mounted DEAD-ON IN A WALL, both hands working the controls — the face is hidden from the viewer; WRONG for free-standing or central consoles (a back view there reads as 'presenting their back to the room'; use console_side instead)",
+        ((384, 105), (384, 165), (474, 175), (566, 258), (656, 330), (294, 175),
+         (202, 258), (112, 330), (448, 435), (466, 685), (478, 930), (320, 435),
+         (304, 685), (290, 930), (410, 92), (358, 92), (433, 108), (335, 108)),
     ),
     "sitting": (
         "sitting facing the camera, hands on knees — only when a frontal seated view is needed (briefings, medical exam)",
@@ -224,15 +239,41 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 
 
 def render_pose_png(pose_id: str) -> bytes:
-    """Render a pose skeleton to an RGB PNG (stdlib only)."""
+    """Render a pose skeleton to an RGB PNG (stdlib only).
+
+    The authored coordinates are fitted into the FIGURE_* box (~44% of the
+    canvas height, feet near the bottom, horizontally centered): the edit
+    model copies the reference's relative size as the character's scale, so
+    the skeleton must NOT fill the frame.
+    """
     keypoints = POSES[pose_id][1]
+    xs = [p[0] for p in keypoints]
+    ys = [p[1] for p in keypoints]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    scale = FIGURE_TARGET_H / max(max_y - min_y, 1)
+    max_w = CANVAS_W * 0.62
+    if (max_x - min_x) * scale > max_w:
+        scale = max_w / (max_x - min_x)
+    center_x = (min_x + max_x) / 2
+
+    def _tx(x: int) -> int:
+        return int(round(FIGURE_CENTER_X + (x - center_x) * scale))
+
+    def _ty(y: int) -> int:
+        return int(round(FIGURE_BASE_Y - (max_y - y) * scale))
+
+    pts = [(_tx(x), _ty(y)) for x, y in keypoints]
+    stroke_w = max(4, round(9 * scale))
+    joint_r = max(3, round(5 * scale))
+
     img = bytearray(CANVAS_W * CANVAS_H * 3)  # black background
     for a, b, color in _LIMBS:
-        x0, y0 = keypoints[a]
-        x1, y1 = keypoints[b]
-        _stroke(img, x0, y0, x1, y1, color, 9)
-    for x, y in keypoints[:14]:  # body joints only (skip eye/ear dots)
-        _joint(img, x, y, 5)
+        x0, y0 = pts[a]
+        x1, y1 = pts[b]
+        _stroke(img, x0, y0, x1, y1, color, stroke_w)
+    for x, y in pts[:14]:  # body joints only (skip eye/ear dots)
+        _joint(img, x, y, joint_r)
     raw = b"".join(
         b"\x00" + bytes(img[row * CANVAS_W * 3:(row + 1) * CANVAS_W * 3])
         for row in range(CANVAS_H)

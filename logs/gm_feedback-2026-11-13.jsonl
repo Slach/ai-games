@@ -1,0 +1,47 @@
+{"ts": "2026-11-13T09:15:32", "game_id": "althef", "turn": 2, "stage": "scene", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T09:15:45", "game_id": "althef", "turn": 2, "stage": "scene", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-13T09:16:30", "game_id": "althef", "turn": 2, "stage": "scene", "comment": "это рубка другого корабля, наверное все таки лучше как то более правильно показывать место действия, но надо место действия менять, а то все картинки будут чисто из рубки...", "user_id": 281412419}
+{"ts": "2026-11-13T09:16:44", "game_id": "althef", "turn": 2, "stage": "char", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T09:16:51", "game_id": "althef", "turn": 2, "stage": "char", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T09:17:08", "game_id": "althef", "turn": 2, "stage": "char", "comment": "персонаж получается слишком большой относительно размеров помещения на картинке", "user_id": 281412419}
+{"ts": "2026-11-13T09:19:24", "game_id": "althef", "turn": 2, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T09:19:27", "game_id": "althef", "turn": 2, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T09:19:56", "game_id": "althef", "turn": 2, "stage": "action", "comment": "опять персонаж большой, кроме того руки нависают и ничего не делают, я бы предпочел вид сбоку и крупный план экранов на которых делается поиск", "user_id": 281412419}
+{"ts": "2026-11-13T09:24:48", "game_id": "althef", "turn": 2, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T09:24:54", "game_id": "althef", "turn": 2, "stage": "outcome", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-13T09:27:05", "game_id": "althef", "turn": 2, "stage": "outcome", "comment": "почему они все смотрят в камеру? нельзя чтоли как то изменить это, ну они же какие то действия делают, там один с частотами играет, другой в реакторный отсек идет, научный офицер тоже как то \"отделяет вихри\", медика вообещ не видно на итоговой картинке, как  будто там только 4 персонажа а не все живые...  возможно надо вообще логику картинки переделать, вместо общей картинки делать какой то комикс", "user_id": 281412419}
+{"ts": "2026-11-13T09:35:23", "game_id": "althef", "turn": 2, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T09:35:28", "game_id": "althef", "turn": 2, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T09:36:13", "game_id": "althef", "turn": 2, "stage": "action", "comment": "персонаж слишком большой по отношению к заднику, а рука в позе выглядит неестетсвенно, он если пошел куда то и дверь открывает, то надо по другому руку показывать...", "user_id": 281412419}
+{"ts": "2026-11-13T09:36:34", "game_id": "althef", "turn": 2, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T09:36:38", "game_id": "althef", "turn": 2, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T09:36:58", "game_id": "althef", "turn": 2, "stage": "action", "comment": "в нижний уровень корабля, а ногу левую вообще не видно, и сам люк полу криво сделан...", "user_id": 281412419}
+{"ts": "2026-11-13T10:12:49", "game_id": "althef", "turn": 3, "stage": "char", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-13T10:13:26", "game_id": "althef", "turn": 3, "stage": "scene", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T10:13:38", "game_id": "althef", "turn": 3, "stage": "scene", "reason": "bg", "user_id": 281412419}
+{"ts": "2026-11-13T10:14:00", "game_id": "althef", "turn": 3, "stage": "scene", "comment": "картинка не отображает то что написано текстом в \"общая вводная\"", "user_id": 281412419}
+{"ts": "2026-11-13T10:14:34", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T10:14:36", "game_id": "althef", "turn": 3, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T10:14:47", "game_id": "althef", "turn": 3, "stage": "action", "comment": "персонаж слишком большой и руки висят в воздуха", "user_id": 281412419}
+{"ts": "2026-11-13T10:20:10", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T10:20:15", "game_id": "althef", "turn": 3, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-13T10:20:49", "game_id": "althef", "turn": 3, "stage": "action", "comment": "ну если он в реакторном отсеке, то задник должен быть другой, где этот герметик? почитай что именно написано в action", "user_id": 281412419}
+{"ts": "2026-11-13T10:21:09", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T10:21:12", "game_id": "althef", "turn": 3, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T10:21:17", "game_id": "althef", "turn": 3, "stage": "action", "comment": "персонаж слишком большой", "user_id": 281412419}
+{"ts": "2026-11-13T10:21:36", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T10:21:39", "game_id": "althef", "turn": 3, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T10:21:56", "game_id": "althef", "turn": 3, "stage": "action", "comment": "персонаж непропорционально большой, из-за этого рука неестественно выгнута в позе", "user_id": 281412419}
+{"ts": "2026-11-13T10:23:05", "game_id": "althef", "turn": 3, "stage": "outcome", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-13T10:23:11", "game_id": "althef", "turn": 3, "stage": "outcome", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-13T10:23:38", "game_id": "althef", "turn": 3, "stage": "outcome", "comment": "думаю вместо одного задника для всех персонажей, надо генерировать консистентные задники для каждого персонажа в отдельности", "user_id": 281412419}
+{"ts": "2026-11-13T11:05:24", "game_id": "althef", "turn": 3, "stage": "scene", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-13T11:05:39", "game_id": "althef", "turn": 3, "stage": "char", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-13T11:05:53", "game_id": "althef", "turn": 3, "stage": "char", "reason": "bg", "user_id": 281412419}
+{"ts": "2026-11-13T11:06:21", "game_id": "althef", "turn": 3, "stage": "char", "comment": "персонаж стоит правильно, но кресла по бокам СЛИШКОМ большие получаются", "user_id": 281412419}
+{"ts": "2026-11-13T11:06:33", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-13T11:06:51", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-13T11:07:04", "game_id": "althef", "turn": 3, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-13T11:07:07", "game_id": "althef", "turn": 3, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-13T11:08:10", "game_id": "althef", "turn": 3, "stage": "action", "comment": "персонаж стоит правильно, но левая рука криво отображается, только та рука которая касается иллюминатора, там было про то что зажимает голову руками, второй рукой наверное можно было бы по другому сделать", "user_id": 281412419}
+{"ts": "2026-11-13T11:08:23", "game_id": "althef", "turn": 3, "stage": "outcome", "verdict": "up", "user_id": 281412419}
