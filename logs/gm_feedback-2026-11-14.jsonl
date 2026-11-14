@@ -74,3 +74,12 @@
 {"ts": "2026-11-14T11:26:40", "game_id": "althef", "turn": 6, "stage": "outcome", "reason": "other", "user_id": 281412419}
 {"ts": "2026-11-14T11:27:18", "game_id": "althef", "turn": 6, "stage": "outcome", "comment": "слева вверху половина синего туловища торчит из \"ниоткуда\" точнее \"из пола\"", "user_id": 281412419}
 {"ts": "2026-11-14T11:27:39", "game_id": "althef", "turn": 7, "stage": "outcome", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T14:16:10", "game_id": "althef", "turn": 8, "stage": "scene", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T14:16:19", "game_id": "althef", "turn": 8, "stage": "scene", "reason": "other", "user_id": 281412419}
+{"ts": "2026-11-14T14:17:09", "game_id": "althef", "turn": 8, "stage": "scene", "comment": "ширина картинки ЗДОРОВАЯ, а при этом все персонажи в центре, визуально телеграм клиенте картинка выглядит маленькой и слишком маленькой по высоте", "user_id": 281412419}
+{"ts": "2026-11-14T14:17:36", "game_id": "althef", "turn": 7, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T14:17:42", "game_id": "althef", "turn": 7, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T14:18:52", "game_id": "althef", "turn": 8, "stage": "char", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T14:20:27", "game_id": "althef", "turn": 8, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T14:20:39", "game_id": "althef", "turn": 8, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T14:21:27", "game_id": "althef", "turn": 8, "stage": "action", "comment": "два персонажа, один гигантский, второй спиной. вообще не соотносится с \"попросить ветрову\", никто никого не просит, непропорционально все показано", "user_id": 281412419}
