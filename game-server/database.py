@@ -300,6 +300,14 @@ MIGRATIONS: list[tuple[int, str]] = [
         # остальными задниками").
         "ALTER TABLE games ADD COLUMN ship_style TEXT DEFAULT '';",
     ),
+    (
+        30,
+        # NPC choices come from the decision model or a bare action_id from
+        # the generative fallback — no in-character rationale is generated
+        # or stored anymore (A/B on khfan2 t3: outcome mechanics are
+        # [tag]-bound, rationale added nothing measurable).
+        "ALTER TABLE player_briefings DROP COLUMN choice_rationale;",
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -2203,8 +2211,8 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[st
     cursor.execute(
         """INSERT OR REPLACE INTO player_briefings
            (turn, player_id, npc_key, is_npc, briefing, choices,
-            selected_action_id, choice_rationale, consequence_result, chosen_action_url, personal_title, image_prompt, created_at, game_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            selected_action_id, consequence_result, chosen_action_url, personal_title, image_prompt, created_at, game_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             briefing_data["turn"],
             briefing_data.get("player_id"),
@@ -2213,7 +2221,6 @@ def save_player_briefing(briefing_data: dict[str, Any], game_id: str) -> dict[st
             briefing_data["briefing"],
             json.dumps(briefing_data.get("choices", []), ensure_ascii=False),
             briefing_data.get("selected_action_id"),
-            briefing_data.get("choice_rationale", ""),
             json.dumps(briefing_data.get("consequence_result", {}), ensure_ascii=False),
             briefing_data.get("chosen_action_url"),
             briefing_data.get("personal_title", ""),
@@ -2271,7 +2278,6 @@ def _briefing_row_to_dict(row) -> dict[str, Any]:
         "briefing": row["briefing"],
         "choices": _safe_json_loads(row["choices"], []),
         "selected_action_id": row["selected_action_id"],
-        "choice_rationale": row["choice_rationale"],
         "consequence_result": _safe_json_loads(row["consequence_result"], {}),
         "chosen_action_url": row["chosen_action_url"],
         "personal_title": row["personal_title"] if "personal_title" in row.keys() else "",
@@ -2319,7 +2325,6 @@ def delete_briefing(turn: int, npc_key: str, game_id: str) -> bool:
 def update_briefing_choice(
     briefing_id: int,
     selected_action_id: str,
-    choice_rationale: str,
     consequence_result: dict[str, Any] | None,
     choices: list[dict[str, Any]] | None = None,
 ) -> bool:
@@ -2338,11 +2343,10 @@ def update_briefing_choice(
         )
     cursor.execute(
         """UPDATE player_briefings
-           SET selected_action_id = ?, choice_rationale = ?, consequence_result = ?
+           SET selected_action_id = ?, consequence_result = ?
            WHERE id = ?""",
         (
             selected_action_id,
-            choice_rationale,
             json.dumps(consequence_result or {}, ensure_ascii=False),
             briefing_id,
         ),

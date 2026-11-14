@@ -164,6 +164,11 @@ _CHOICES = [
 
 
 class TestDelayFallback(unittest.IsolatedAsyncioTestCase):
+    # generate_npc_choice tries the decision model first; these tests
+    # exercise the generative fallback, so the decision call is patched out.
+    def _no_decision(self):
+        return patch("game_server.choose_action", new=AsyncMock(return_value=None))
+
     async def test_player_auto_choice_llm_failure_returns_delay(self):
         agent = GameServer(language="ru")
         agent.vs_enabled = False
@@ -188,7 +193,7 @@ class TestDelayFallback(unittest.IsolatedAsyncioTestCase):
     async def test_player_auto_choice_invalid_id_returns_delay(self):
         agent = GameServer(language="en")
         agent.vs_enabled = False
-        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"action_id": "bogus", "rationale": "?"})):
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"action_id": "bogus"})):
             decision = await agent.generate_player_auto_choice(
                 _CHOICES,
                 {"role": "Pilot", "personality_traits": [], "species": ""},
@@ -207,7 +212,7 @@ class TestDelayFallback(unittest.IsolatedAsyncioTestCase):
     async def test_npc_choice_llm_failure_returns_delay(self):
         agent = GameServer(language="en")
         agent.vs_enabled = False
-        with patch.object(GameServer, "_call_llm", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        with self._no_decision(), patch.object(GameServer, "_call_llm", new=AsyncMock(side_effect=RuntimeError("boom"))):
             decision = await agent.generate_npc_choice(
                 _CHOICES,
                 {"npc_name": "Ripley", "role": "Engineer", "personality_traits": []},
@@ -223,7 +228,7 @@ class TestDelayFallback(unittest.IsolatedAsyncioTestCase):
     async def test_npc_choice_invalid_id_returns_delay_ru(self):
         agent = GameServer(language="ru")
         agent.vs_enabled = False
-        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"action_id": "nope", "rationale": "?"})):
+        with self._no_decision(), patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"action_id": "nope"})):
             decision = await agent.generate_npc_choice(
                 _CHOICES,
                 {"npc_name": "Рипли", "role": "Инженер", "personality_traits": []},
@@ -238,7 +243,7 @@ class TestDelayFallback(unittest.IsolatedAsyncioTestCase):
     async def test_valid_choice_still_passes_through(self):
         agent = GameServer(language="en")
         agent.vs_enabled = False
-        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"action_id": "action_2", "rationale": "in character"})):
+        with patch.object(GameServer, "_call_llm", new=AsyncMock(return_value={"action_id": "action_2"})):
             decision = await agent.generate_player_auto_choice(
                 _CHOICES,
                 {"role": "Pilot", "personality_traits": [], "species": ""},

@@ -226,7 +226,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
     # games), so the roster is supplemented from briefings and events.
     briefs = db.query_game_server(
         "SELECT id, turn, player_id, npc_key, is_npc, briefing, choices, selected_action_id, "
-        "choice_rationale, chosen_action_url, personal_title, created_at "
+        "chosen_action_url, personal_title, created_at "
         "FROM player_briefings WHERE game_id = ? ORDER BY turn, player_id, npc_key",
         (game_id,),
     )

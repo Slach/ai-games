@@ -164,7 +164,7 @@ GAME_STRINGS = {
         ),
         "turn_prefix": "Ход {turn} — {title}",
         "turn_prefix_simple": "Ход {turn}",
-        "auto_select_notification": ("⏳ *Время хода вышло — зафиксировано ПРОМЕДЛЕНИЕ.*\n\nНерешительность имеет цену: угроза растёт. Game Master выбрал за вас:\n\nВыбрано действие: *{action_text}*\n\n_{rationale}_"),
+        "auto_select_notification": ("⏳ *Время хода вышло — зафиксировано ПРОМЕДЛЕНИЕ.*\n\nНерешительность имеет цену: угроза растёт. Game Master выбрал за вас:\n\nВыбрано действие: *{action_text}*"),
         "turn_summary": {
             "ship_status": "Состояние корабля: {status}",
             "hull_shields": "Корпус: {hull}, Щиты: {shields}",
@@ -296,7 +296,7 @@ GAME_STRINGS = {
         ),
         "turn_prefix": "Turn {turn} — {title}",
         "turn_prefix_simple": "Turn {turn}",
-        "auto_select_notification": ("⏳ *Turn time ran out — DELAY recorded.*\n\nHesitation has a price: the threat grows. The Game Master chose for you:\n\nSelected action: *{action_text}*\n\n_{rationale}_"),
+        "auto_select_notification": ("⏳ *Turn time ran out — DELAY recorded.*\n\nHesitation has a price: the threat grows. The Game Master chose for you:\n\nSelected action: *{action_text}*"),
         "turn_summary": {
             "ship_status": "Ship status: {status}",
             "hull_shields": "Hull: {hull}, Shields: {shields}",

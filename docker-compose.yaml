@@ -62,6 +62,8 @@ services:
       - LLM_URL=${LLM_URL:-http://llama.cpp:8090/v1}
       - LLM_API_KEY=${LLM_API_KEY:-placeholder-key-for-llama-cpp}
       - LLM_MODEL=${LLM_MODEL:-unsloth/Qwen3.5-27B}
+      # Decision model for NPC choices (/v1/systemone on the same llama-server)
+      - LLM_DECISION_MODEL=${LLM_DECISION_MODEL:-ggml-org/lev}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-32768}
       - COMFYUI_URL=${COMFYUI_URL:-http://comfyui:8188}
       - COMFYUI_TXT2IMG_MODEL=${COMFYUI_TXT2IMG_MODEL:-flux3_klein_nvfp4}

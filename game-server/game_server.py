@@ -94,6 +94,7 @@ def _parse_llm_json(content: str) -> Any:
 
 from verbalize_sampling import DIVERSITY_HINTS, repair_json, select_response, verbalize_prompt, vs_response_schema
 from vs_config import resolve_vs_k
+from decision_model import choose_action
 
 logger = logging.getLogger(__name__)
 
@@ -442,12 +443,8 @@ NPC_CHOICE_SCHEMA = {
                     "type": "string",
                     "description": "The ID of the selected action/choice",
                 },
-                "rationale": {
-                    "type": "string",
-                    "description": "In-character reasoning for why this NPC chose this action, based on their personality and role (2-3 sentences)",
-                },
             },
-            "required": ["action_id", "rationale"],
+            "required": ["action_id"],
             "additionalProperties": False,
         },
     },
@@ -861,6 +858,8 @@ class GameServer:
         self.llm_base_url = os.getenv("LLM_URL", "http://llama.cpp:8090/v1")
         self.llm_api_key = os.getenv("LLM_API_KEY", "placeholder-key-for-llama-cpp")
         self.llm_model = os.getenv("LLM_MODEL", "unsloth/Qwen3.5-27B")
+        self.decision_url = self.llm_base_url.rstrip("/") + "/systemone"
+        self.decision_model = os.getenv("LLM_DECISION_MODEL", "ggml-org/lev")
         self.llm_max_tokens = _safe_int_env("LLM_MAX_TOKENS", 32768)
         self.llm_max_avatar_tokens = _safe_int_env("LLM_MAX_AVATAR_TOKENS", 4096)
         self.turn_progress_actions = _safe_int_env("GAME_TURN_PROGRESS_ACTIONS", 2)
@@ -2113,7 +2112,6 @@ class GameServer:
         text = template.format(name=name)
         return {
             "action_id": "delay",
-            "rationale": text,
             "choice": {"id": "delay", "text": text, "consequence_kind": "delay"},
         }
 
@@ -2129,12 +2127,16 @@ class GameServer:
         crew_dialogue_context: str | None = None,
         loyalty: int = 70,
     ) -> dict[str, Any]:
-        """NPC makes a choice using LLM without seeing the consequences.
+        """NPC makes a choice without seeing the consequences.
 
-        The NPC only sees the action text IDs and descriptions — no consequences.
-        This ensures NPC decisions are role-played in-character. Loyalty
-        (code-owned state, 0-100) steers how the NPC treats orders: from
-        acting in the mission's interest down to sabotage and mutiny.
+        Primary path: the decision model (/v1/systemone) returns calibrated
+        probabilities per action in a single forward pass; the action is
+        sampled from that distribution. Loyalty (code-owned state, 0-100)
+        steers the choice through the persona block of the decision state.
+
+        Fallback: the generative LLM with the NPC decision prompt, used when
+        the decision model is unavailable or returns unusable probabilities.
+        Neither path sees the hidden consequences of the actions.
         """
         logger.info(f"[NPC] Generating choice for NPC {npc_profile.get('npc_name', 'Unknown')} (loyalty={loyalty})")
 
@@ -2150,6 +2152,31 @@ class GameServer:
                     "id": c.get("id", ""),
                     "text": c.get("text", ""),
                 }
+            )
+
+        traits_str = ", ".join(traits) if isinstance(traits, list) else traits
+
+        decision_id = await choose_action(
+            url=self.decision_url,
+            model=self.decision_model,
+            npc_name=npc_name,
+            npc_role=npc_role,
+            traits_str=traits_str,
+            loyalty=loyalty,
+            choices=clean_choices,
+            dialogue_context=crew_dialogue_context,
+            game_id=game_id,
+            player_id=player_id,
+            turn=turn,
+            kind=f"{kind}_systemone" if kind else "npc_choice_systemone",
+        )
+        valid_ids = [c.get("id") for c in choices]
+        if decision_id in valid_ids:
+            return {"action_id": decision_id}
+        if decision_id is not None:
+            logger.warning(
+                f"[NPC] decision model returned unknown action '{decision_id}' "
+                f"for {npc_name}, falling back to generative LLM"
             )
 
         # Build the choice text for the NPC
@@ -2185,16 +2212,14 @@ class GameServer:
                     kind=kind,
                 )
             action_id = parsed.get("action_id", "")
-            rationale = parsed.get("rationale", "")
 
             # Validate the choice is among available options
-            valid_ids = [c.get("id") for c in choices]
             if action_id not in valid_ids:
                 logger.warning(f"[NPC] LLM returned invalid choice '{action_id}' for {npc_name}, falling back to delay action")
                 return self._delay_decision(npc_name)
 
-            logger.info(f"[NPC] {npc_name} chose '{action_id}': {rationale}...")
-            return {"action_id": action_id, "rationale": rationale}
+            logger.info(f"[NPC] {npc_name} chose '{action_id}'")
+            return {"action_id": action_id}
 
         except Exception as e:
             logger.error(f"[NPC] LLM choice failed for {npc_name}: {e}", exc_info=True)
@@ -2229,7 +2254,7 @@ class GameServer:
             player_name: Optional player name for personalized prompt
 
         Returns:
-            Dict with action_id and rationale.
+            Dict with action_id.
         """
         role = player_profile.get("role", "Crew Member")
         traits = player_profile.get("personality_traits", [])
@@ -2296,15 +2321,14 @@ class GameServer:
                     kind=kind,
                 )
             action_id = parsed.get("action_id", "")
-            rationale = parsed.get("rationale", "")
 
             valid_ids = [c.get("id") for c in choices]
             if action_id not in valid_ids:
                 logger.warning(f"[AUTO_CHOICE] LLM returned invalid choice '{action_id}' for {display_name}, falling back to delay action")
                 return self._delay_decision(display_name)
 
-            logger.info(f"[AUTO_CHOICE] Player {display_name} auto-chose '{action_id}': {rationale[:80]}...")
-            return {"action_id": action_id, "rationale": rationale}
+            logger.info(f"[AUTO_CHOICE] Player {display_name} auto-chose '{action_id}'")
+            return {"action_id": action_id}
 
         except Exception as e:
             logger.error(f"[AUTO_CHOICE] LLM failed for {display_name}: {e}", exc_info=True)
@@ -2720,11 +2744,10 @@ class GameServer:
             action_text = d.get("action_text", "")
             consequence = d.get("consequence", "")
             consequence_kind = d.get("consequence_kind", "")
-            rationale = d.get("rationale", "")
             is_player = bool(d.get("player_id"))
             weight = "HIGH (PLAYER)" if is_player else "NORMAL (NPC)"
             id_suffix = f" [{entity_id}]" if entity_id else ""
-            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role}){id_suffix}\nChose: {action_text} ({action})\nRationale: {rationale}\nHIDDEN CONSEQUENCE: [{consequence_kind}] {consequence}\n"
+            decisions_text += f"\n--- Decision {i} (Weight: {weight}) ---\nCharacter: {name} ({role}){id_suffix}\nChose: {action_text} ({action})\nHIDDEN CONSEQUENCE: [{consequence_kind}] {consequence}\n"
 
         # Full crew roster — prevents the LLM from inventing non-existent crew members.
         # Each line carries the stable entity_id ([p<player_id>] / [n<npc_key>]) the

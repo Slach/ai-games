@@ -1793,7 +1793,6 @@ async def submit_player_action(request: PlayerActionRequest):
         update_briefing_choice(
             briefing_id=briefing["id"],
             selected_action_id=request.action_id,
-            choice_rationale="selected by player",
             consequence_result={"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
         )
 
@@ -1926,7 +1925,6 @@ async def auto_select_action(
     )
 
     action_id = decision.get("action_id", "")
-    rationale = decision.get("rationale", "Auto-selected by Game Server")
 
     if not action_id:
         raise HTTPException(status_code=500, detail="LLM returned no valid action")
@@ -1952,7 +1950,6 @@ async def auto_select_action(
     update_briefing_choice(
         briefing_id=briefing["id"],
         selected_action_id=action_id,
-        choice_rationale=rationale,
         consequence_result={"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
         choices=choices,
     )
@@ -2008,7 +2005,7 @@ async def auto_select_action(
             break
 
     gs = get_game_strings(language)
-    notification = gs["auto_select_notification"].format(action_text=action_text, rationale=rationale)
+    notification = gs["auto_select_notification"].format(action_text=action_text)
 
     add_game_message(
         player_id=player_id,
@@ -2031,7 +2028,6 @@ async def auto_select_action(
         "status": "selected",
         "action_id": action_id,
         "action_text": action_text,
-        "rationale": rationale,
     }
 
 
@@ -2901,7 +2897,6 @@ async def _inherit_npc_briefing_for_player(player_id: int, game_id: str, languag
                 "briefing": npc_briefing["briefing"],
                 "choices": npc_briefing.get("choices", []),
                 "selected_action_id": None,
-                "choice_rationale": "",
                 "consequence_result": {},
                 "chosen_action_url": None,
                 "personal_title": npc_briefing.get("personal_title", ""),
@@ -3352,7 +3347,7 @@ async def _analyze_turn_outcome(
             except (json.JSONDecodeError, TypeError):
                 global_circ = {}
 
-            # Build decisions list (name, role, action, consequence, rationale)
+            # Build decisions list (name, role, action, consequence)
             all_decisions = []
             for b in all_briefings:
                 selected_id = b.get("selected_action_id")
@@ -3405,7 +3400,6 @@ async def _analyze_turn_outcome(
                         "action_text": action_text,
                         "consequence": cr.get("consequence") or consequence,
                         "consequence_kind": cr.get("consequence_kind") or consequence_kind,
-                        "rationale": b.get("choice_rationale", ""),
                     }
                 )
 
@@ -5883,7 +5877,6 @@ async def _original_start_game(request: StartGameRequest):
                     return None
 
                 selected_id = npc_decision.get("action_id", "")
-                rationale = npc_decision.get("rationale", "")
 
                 # Fallback delay decision carries a synthetic choice — append
                 # it so the selected id resolves for every consumer.
@@ -5909,7 +5902,6 @@ async def _original_start_game(request: StartGameRequest):
                         "briefing": briefing,
                         "choices": choices,
                         "selected_action_id": selected_id,
-                        "choice_rationale": rationale,
                         "consequence_result": {"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
                     },
                     game_id,
@@ -5947,7 +5939,6 @@ async def _original_start_game(request: StartGameRequest):
                         "briefing": briefing,
                         "choices": choices,
                         "selected_action_id": None,
-                        "choice_rationale": "",
                         "consequence_result": {},
                         "personal_title": personal_title,
                     },
@@ -6154,7 +6145,6 @@ async def _original_start_game(request: StartGameRequest):
                 "briefing": b.get("briefing", ""),
                 "choices": b.get("choices", []),
                 "selected_action_id": b.get("selected_action_id"),
-                "choice_rationale": b.get("choice_rationale", ""),
             }
         )
 
@@ -7090,7 +7080,6 @@ async def _original_continue_game(
                 loyalty=npc_profile.get("loyalty", 70),
             )
             selected_id = npc_decision.get("action_id", "")
-            rationale = npc_decision.get("rationale", "")
 
             # Fallback delay decision carries a synthetic choice — append
             # it so the selected id resolves for every consumer.
@@ -7115,7 +7104,6 @@ async def _original_continue_game(
                     "briefing": briefing,
                     "choices": choices,
                     "selected_action_id": selected_id,
-                    "choice_rationale": rationale,
                     "consequence_result": {"consequence": chosen_consequence, "consequence_kind": chosen_consequence_kind},
                 },
                 game_id,
@@ -7154,7 +7142,6 @@ async def _original_continue_game(
                     "briefing": briefing,
                     "choices": choices,
                     "selected_action_id": None,
-                    "choice_rationale": "",
                     "consequence_result": {},
                     "personal_title": personal_title,
                 },

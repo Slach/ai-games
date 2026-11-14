@@ -32,7 +32,7 @@ CREATE TABLE game_turns (turn INTEGER, game_id TEXT, created_at TEXT, deadline T
     PRIMARY KEY (turn, game_id));
 CREATE TABLE player_briefings (id INTEGER PRIMARY KEY AUTOINCREMENT, turn INTEGER,
     player_id INTEGER, npc_key TEXT, is_npc INTEGER DEFAULT 0, briefing TEXT, choices TEXT,
-    selected_action_id TEXT, choice_rationale TEXT, chosen_action_url TEXT, personal_title TEXT,
+    selected_action_id TEXT, chosen_action_url TEXT, personal_title TEXT,
     created_at TEXT, game_id TEXT);
 CREATE TABLE game_images (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, turn INTEGER,
     image_url TEXT, prompt TEXT, created_at TEXT, game_id TEXT);

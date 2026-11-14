@@ -36,7 +36,6 @@ class TestBriefingPersistence(unittest.TestCase):
             "briefing": "Situation critical",
             "choices": [{"id": "action_1", "text": "Fire"}],
             "selected_action_id": None,
-            "choice_rationale": "",
             "consequence_result": {},
             "personal_title": personal_title,
             "image_prompt": image_prompt,
