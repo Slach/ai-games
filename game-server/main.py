@@ -3793,6 +3793,41 @@ async def _analyze_turn_outcome(
                 except (json.JSONDecodeError, TypeError):
                     outcome_gc = {}
                 crew_positions = outcome_gc.get("crew_positions") or []
+                # Per-location backdrops (GM feedback 2026-11-14: the security
+                # chief was already OUTSIDE the ship while every outcome panel
+                # kept the ship interior): one backdrop picture per location
+                # the crew actually occupies this turn.
+                loc_ids: list[str] = []
+                for (g, t, _key), loc in _turn_crew_locations.items():
+                    if g == game_id and t == turn and loc and loc not in loc_ids:
+                        loc_ids.append(loc)
+                turn_loc_id = ((outcome_gc.get("location") or {}).get("id") or "").strip()
+                if loc_ids and turn_loc_id and turn_loc_id not in loc_ids:
+                    loc_ids.insert(0, turn_loc_id)
+                backdrops: list[dict] = []
+                backdrop_urls: list[str] = []
+                setting_o = outcome_gc.get("setting", "") or ""
+                conflict_o = outcome_gc.get("conflict", "")
+                aboard_o = bool((outcome_gc.get("location") or {}).get("aboard_ship"))
+                for i, loc_id in enumerate(loc_ids[:3], start=1):
+                    bg = await _ensure_location_background(
+                        game_id, turn,
+                        {"id": loc_id, "name": loc_id, "description": "", "aboard_ship": aboard_o},
+                        setting=setting_o, conflict=conflict_o,
+                    )
+                    if bg:
+                        backdrop_urls.append(bg["image_url"])
+                        name = loc_id
+                        if turn_loc_id and loc_id == turn_loc_id:
+                            name = (outcome_gc.get("location") or {}).get("name") or loc_id
+                        backdrops.append({
+                            "picture": i,
+                            "name": name,
+                            "description": (bg["prompt"] or "")[:220],
+                        })
+                if backdrop_urls:
+                    # 10 reference pictures max: backdrops take the first slots.
+                    crew_refs = crew_refs[:10 - len(backdrop_urls)]
                 image_prompt = ""
                 try:
                     prompt_result = await gm.generate_outcome_image_prompt(
@@ -3804,9 +3839,10 @@ async def _analyze_turn_outcome(
                         player_id=None,
                         turn=turn,
                         kind="outcome_image_prompt",
-                        scene_description=turn_bg_prompt,
+                        scene_description=turn_bg_prompt if not backdrop_urls else "",
                         max_characters=max_staged,
                         crew_positions=crew_positions,
+                        backdrops=backdrops or None,
                     )
                     image_prompt = prompt_result.get("image_prompt", "")
                 except Exception:
@@ -3831,7 +3867,8 @@ async def _analyze_turn_outcome(
                     width=1024,
                     height=1024,
                     turn=turn,
-                    background_url=turn_bg_url,
+                    background_url=None if backdrop_urls else turn_bg_url,
+                    backdrop_urls=backdrop_urls or None,
                 )
                 if outcome_image_url:
                     save_game_image(
@@ -4660,6 +4697,7 @@ async def _build_scene_stage_url(
                 "key": str(pid),
                 "name": profile.get("player_name", "") or profile.get("role", "?"),
                 "avatar_url": profile.get("avatar_url"),
+                "appearance": _extract_avatar_prompt(profile.get("avatar_description", "") or ""),
                 "species_desc": profile.get("species_description", "") or profile.get("species", ""),
                 "species_category": profile.get("species_primary_key") or "",
                 "image_prompt": b.get("image_prompt", ""),
@@ -4679,6 +4717,7 @@ async def _build_scene_stage_url(
                 "key": npc_key,
                 "name": npc_profile.get("npc_name", "") or npc_profile.get("role", "?"),
                 "avatar_url": avatar_url,
+                "appearance": _extract_avatar_prompt(avatar_desc),
                 "species_desc": npc_profile.get("species", ""),
                 "species_category": npc_profile.get("species", "") or "",
                 "image_prompt": row.get("image_prompt", ""),
@@ -4727,6 +4766,12 @@ async def _build_scene_stage_url(
             if others:
                 def _entry_label(e: dict) -> str:
                     base = e["image_prompt"] or "doing their part of the turn’s start situation"
+                    # Identity anchor: name the participant's visible traits so
+                    # neighbouring references don't bleed into them (GM feedback
+                    # 2026-11-14: Slach was rendered with the lava sphere's red
+                    # skin in a group panel).
+                    appearance = " ".join((e.get("appearance") or "").split())[:140]
+                    label = f"{e['name']} ({appearance})" if appearance else e["name"]
                     # A non-humanoid participant needs anatomy spelled out at
                     # lock grade: a bare name reads as "another person" and
                     # the edit model collapses the being into a small human
@@ -4738,9 +4783,10 @@ async def _build_scene_stage_url(
                             f"render it EXACTLY as its own reference picture shows, NOT as a humanoid "
                             f"figure; it acts through its own body plan, anchored to a concrete spot "
                             f"of the scene — resting its mass on the deck or hovering LOW right over "
-                            f"its workstation, NOT hanging in mid-air between the others — {base}"
+                            f"its workstation, NOT hanging in mid-air between the others; it has NO "
+                            f"face — do NOT render eyes, a mouth or any facial features on it — {base}"
                         )
-                    return f"{e['name']} — {base}"
+                    return f"{label} — {base}"
 
                 others_text = "; ".join(_entry_label(e) for e in others)
                 combined_action = (

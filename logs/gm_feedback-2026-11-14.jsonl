@@ -40,3 +40,17 @@
 {"ts": "2026-11-14T06:14:05", "game_id": "althef", "turn": 5, "stage": "outcome", "verdict": "down", "user_id": 281412419}
 {"ts": "2026-11-14T06:14:09", "game_id": "althef", "turn": 5, "stage": "outcome", "reason": "logic", "user_id": 281412419}
 {"ts": "2026-11-14T06:15:18", "game_id": "althef", "turn": 5, "stage": "outcome", "comment": "опять не правильные задники, безопасник же уже вне корабля, у него другой задник\n\nа ученый и офицер связи вместе в рубке\nпри этом медик в медотсеке, и там заложник на картинке, а его быть не должно мы по сюжету его еще не нашли насколько я понимаю...", "user_id": 281412419}
+{"ts": "2026-11-14T06:39:16", "game_id": "althef", "turn": 6, "stage": "scene", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T06:40:23", "game_id": "althef", "turn": 6, "stage": "scene", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T06:41:01", "game_id": "althef", "turn": 6, "stage": "scene", "comment": "корабль \"въезжает в шахту\", шахту вижу, корабль не вижу\nвыглядит так будто персонажи в шахте лежат", "user_id": 281412419}
+{"ts": "2026-11-14T06:42:35", "game_id": "althef", "turn": 6, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T06:42:41", "game_id": "althef", "turn": 6, "stage": "outcome", "reason": "other", "user_id": 281412419}
+{"ts": "2026-11-14T06:42:53", "game_id": "althef", "turn": 6, "stage": "outcome", "comment": "верхняя строка два одинаковых персонажа", "user_id": 281412419}
+{"ts": "2026-11-14T06:43:02", "game_id": "althef", "turn": 6, "stage": "char", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T06:43:05", "game_id": "althef", "turn": 6, "stage": "char", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-14T06:43:23", "game_id": "althef", "turn": 6, "stage": "char", "comment": "надо полностью переделать персонажа, начальная поза у него видимо в аватаре сильно кривая", "user_id": 281412419}
+{"ts": "2026-11-14T06:44:48", "game_id": "althef", "turn": 6, "stage": "action", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-14T06:44:53", "game_id": "althef", "turn": 6, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T06:45:40", "game_id": "althef", "turn": 6, "stage": "action", "comment": "стало лучше, но все равно, \"корабль\" в \"шахту\", это капец как нелогично если у нас начальник безопасности куда то выдвинулся сам там по узкому месту...", "user_id": 281412419}
+{"ts": "2026-11-14T07:03:34", "game_id": "althef", "turn": 6, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T07:17:49", "game_id": "althef", "turn": 6, "stage": "char", "verdict": "up", "user_id": 281412419}

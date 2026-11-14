@@ -476,7 +476,7 @@ LOCATION_SCHEMA_OBJECT = {
         },
         "aboard_ship": {
             "type": "boolean",
-            "description": "True when the crew spends this turn inside their own vessel (its interior becomes the backdrop, built from the ship's established bridge view)",
+            "description": "True ONLY when this exact place is an interior room of their own vessel (bridge, medbay, cargo hold...). Ancient ruins, shafts, planet surfaces, open ground and exteriors are False — even when the ship is parked right there. A wrong True renders ship walls inside a ruin (GM feedback 2026-11-14: 'корабль в шахту')",
         },
     },
     "required": ["id", "name", "description", "aboard_ship"],
@@ -3179,6 +3179,7 @@ class GameServer:
         scene_description: str = "",
         max_characters: int = 0,
         crew_positions: list[dict[str, Any]] | None = None,
+        backdrops: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Generate an English image prompt for the turn-outcome scene.
 
@@ -3208,11 +3209,30 @@ class GameServer:
         logger.info("[OUTCOME_IMAGE] Generating outcome image prompt")
 
         mission_name = ""
-        first_picture = 2 if scene_description else 1
+        backdrops = backdrops or []
+        first_picture = 1 + len(backdrops) if backdrops else (2 if scene_description else 1)
         if max_characters <= 0:
             max_characters = len(crew_refs or [])
         background_section = ""
-        if scene_description:
+        if backdrops:
+            # One backdrop picture per location the crew occupies (GM feedback
+            # 2026-11-14: the security chief was already OUTSIDE the ship while
+            # every panel kept the ship-interior backdrop).
+            backdrop_lines = "\n".join(
+                f"Picture {b['picture']} — LOCATION BACKDROP «{b['name']}»: {b['description']}"
+                for b in backdrops
+            )
+            background_section = (
+                "LOCATION BACKDROPS (empty room pictures, one per location the crew occupies):\n"
+                f"{backdrop_lines}\n"
+                "- Each panel unfolds inside the environment of ITS group's backdrop picture\n"
+                "  (match panel ↔ backdrop by the location name). Use only that picture's\n"
+                "  objects, geometry and lighting; do NOT blend environments between panels\n"
+                "  and do NOT invent a different environment.\n"
+                "- Characters at consistent human scale relative to their backdrop's objects\n"
+                "  (roughly one third to one half of their panel's height — never giants).\n"
+            )
+        elif scene_description:
             background_section = (
                 "Picture 1 — the SCENE BACKGROUND (the location's shared backdrop every action\n"
                 f"image of this turn used): {scene_description}\n"
@@ -3229,9 +3249,11 @@ class GameServer:
                 f"- ANATOMY LOCK, the panel with Picture {i} ({r.get('name', '?')}): this character is NOT\n"
                 f"  humanoid — it is: {r.get('species_description') or r.get('appearance', '')}. Render its\n"
                 f"  anatomy and silhouette EXACTLY as in Picture {i}: NO human face, NO human hands\n"
-                "  or limbs, NO uniform, NO upright standing pose. It performs its part of the\n"
-                "  outcome through its OWN body plan (tentacles, fields, tendrils, plasma flow),\n"
-                "  interacting with a concrete object of the scene."
+                "  or limbs, NO uniform, NO upright standing pose. IT HAS NO FACE AT ALL — do not\n"
+                "  render eyes, a mouth, a nose or any facial features on it (GM feedback\n"
+                "  2026-11-14: even a tolerable pose is ruined by a face on the being). It performs\n"
+                "  its part of the outcome through its OWN body plan (tentacles, fields, tendrils,\n"
+                "  plasma flow), interacting with a concrete object of the scene."
                 for i, r in enumerate(crew_refs, start=first_picture)
                 if r.get("species_category") in NON_HUMANOID_SPECIES_CATEGORIES
             )
@@ -3249,7 +3271,10 @@ class GameServer:
                     "on their own part of the outcome. Characters in different locations get\n"
                     "separate panels. The page has ONE panel per location group, wide panels for\n"
                     "bigger groups (GM feedback 2026-11-14: co-located crew must not be repeated\n"
-                    "panel after panel in the same room).\n\n"
+                    "panel after panel in the same room).\n"
+                    + ("- Each group's panel uses that group's LOCATION BACKDROP picture as its\n"
+                       "  environment (match by the location named in the positions above).\n" if backdrops else "")
+                    + "\n"
                 )
                 page_rule = (
                     f"The image_prompt MUST describe a COMIC PAGE — one panel per location group\n"
@@ -3311,7 +3336,12 @@ class GameServer:
                 "- ENERGY/PLASMA beings: staged interacting with a concrete object (hovering\n"
                 "  over a console pad, woven into a panel), never floating aimlessly.\n"
                 + (f"{anatomy_locks}\n" if anatomy_locks else "")
-                + "- No other people anywhere on the page. No text, captions or speech bubbles.\n"
+                + "- CREW ONLY: the page contains ONLY the characters from the reference\n"
+                "  pictures above. NO other people anywhere — no hostages, patients, wounded\n"
+                "  bystanders, enemies or any person not in the picture list, even if the\n"
+                "  narrative mentions them (GM feedback 2026-11-14: a hostage the crew has not\n"
+                "  even met yet was staged into a medbay panel).\n"
+                "- No text, captions or speech bubbles.\n"
             )
         else:
             crew_section = (

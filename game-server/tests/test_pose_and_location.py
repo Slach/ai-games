@@ -451,6 +451,47 @@ class TestOutcomeAnatomyLock(unittest.TestCase):
         self.assertIn("One panel per Picture", user)
         self.assertNotIn("GROUPING RULE", user)
 
+    def test_backdrops_per_location(self):
+        # GM feedback 2026-11-14: the security chief was already OUTSIDE the
+        # ship — each location group needs ITS OWN backdrop picture, and the
+        # prompt must map panels to their group's environment.
+        crew = [
+            {"name": "Тарас", "role": "Security", "appearance": "a magma sphere",
+             "avatar_url": "http://x/1.png", "species_category": "energy"},
+            {"name": "Ирина", "role": "Medic", "appearance": "a medic",
+             "avatar_url": "http://x/2.png", "species_category": "human"},
+        ]
+        user = self._capture_outcome_user(
+            crew,
+            crew_positions=[
+                {"role_key": "security", "position": "outside, among the ruins"},
+                {"role_key": "medic", "position": "medbay"},
+            ],
+            backdrops=[
+                {"picture": 1, "name": "Ash ruins", "description": "open ground among broken towers"},
+                {"picture": 2, "name": "Medbay", "description": "cramped medical bay"},
+            ],
+        )
+        self.assertIn("LOCATION BACKDROPS", user)
+        self.assertIn("Picture 1 — LOCATION BACKDROP «Ash ruins»", user)
+        self.assertIn("Picture 2 — LOCATION BACKDROP «Medbay»", user)
+        self.assertIn("ITS group's backdrop picture", user)
+        # crew avatars start AFTER the backdrop pictures
+        self.assertIn("Picture 3 — Тарас", user)
+        self.assertIn("Picture 4 — Ирина", user)
+        # no phantom people (the hostage that was not met yet)
+        self.assertIn("CREW ONLY", user)
+        self.assertIn("no hostages, patients", user)
+
+    def test_no_backdrops_keeps_shared_backdrop(self):
+        crew = [
+            {"name": "Ирина", "role": "Medic", "appearance": "a medic",
+             "avatar_url": "http://x/1.png", "species_category": "human"},
+        ]
+        user = self._capture_outcome_user(crew, scene_description="a bridge stage")
+        self.assertIn("Picture 1 — the SCENE BACKGROUND", user)
+        self.assertNotIn("LOCATION BACKDROPS", user)
+
 
 class TestTurnBackgroundStaging(unittest.TestCase):
     SETTING = "Орбита разрушенной станции, сектор 7-Delta"

@@ -3661,6 +3661,7 @@ class ImageGenerator:
         player_id: str | None = None,
         turn: int | None = None,
         background_url: str | None = None,
+        backdrop_urls: list[str | None] | None = None,
     ) -> str | None:
         """Generate a scene composed from crew avatar references in ONE call.
 
@@ -3692,13 +3693,29 @@ class ImageGenerator:
             height: Image height.
             background_url: Optional shared backdrop URL — prepended as
                 Picture 1 (avatars then start at Picture 2).
+            backdrop_urls: Optional list of location backdrop URLs (Pictures
+                1..K) — takes precedence over ``background_url``. The comic
+                prompt maps each panel to its own location's backdrop picture;
+                avatars start at Picture K+1.
 
         Returns:
             URL of the generated image, or None on failure
         """
         ref_filenames = []
         bg_filename = None
-        if background_url:
+        backdrop_filenames: list[str] = []
+        if backdrop_urls:
+            # Several location backdrops (Pictures 1..K): the comic prompt maps
+            # each panel to ITS location's backdrop picture (GM feedback
+            # 2026-11-14: co-located crew per location, each with its own room).
+            for url in backdrop_urls:
+                fn = self._extract_filename_from_url(url) if url else None
+                if fn:
+                    backdrop_filenames.append(fn)
+                else:
+                    logger.warning("[%s] Could not parse backdrop filename from %s, skipping", kind, url)
+            ref_filenames.extend(backdrop_filenames)
+        elif background_url:
             bg_filename = self._extract_filename_from_url(background_url)
             if bg_filename:
                 ref_filenames.append(bg_filename)
@@ -3744,18 +3761,22 @@ class ImageGenerator:
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
             try:
+                ref_roles = (
+                    ["(location backdrop)"] * len(backdrop_filenames)
+                    + (["(scene background)"] if bg_filename else [])
+                    + ["(avatar)"] * (len(ref_filenames) - len(backdrop_filenames) - (1 if bg_filename else 0))
+                )
+                refs_log = "\n".join(
+                    f"Picture {i}: {role} {fn}"
+                    for i, (role, fn) in enumerate(zip(ref_roles, ref_filenames), start=1)
+                )
                 comfyui_req = (
                     f"Model: Qwen-Image-2.1 multi-reference ({len(ref_filenames)} pictures)\n"
                     f"Size: {width}x{height}\n"
                     f"Filename prefix: {filename_prefix}\n"
                     f"Attempt: {attempt}/{max_attempts}\n\n"
                     f"--- PROMPT ---\n{prompt}\n\n"
-                    f"--- REFERENCE IMAGES ---\n"
-                    + (f"Picture 1: (scene background) {bg_filename}\n" if bg_filename else "")
-                    + "\n".join(
-                        f"Picture {i}: {fn}"
-                        for i, fn in enumerate(ref_filenames[1:] if bg_filename else ref_filenames, start=2 if bg_filename else 1)
-                    ) + "\n\n"
+                    f"--- REFERENCE IMAGES ---\n{refs_log}\n\n"
                     f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"
                 )
                 write_comfyui_log(
