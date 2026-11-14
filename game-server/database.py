@@ -291,6 +291,15 @@ MIGRATIONS: list[tuple[int, str]] = [
         # block made image models render text into the pictures).
         "ALTER TABLE games ADD COLUMN splash_scene TEXT DEFAULT NULL;",
     ),
+    (
+        29,
+        # Ship design language produced together with the bridge prompt
+        # (materials, palette, lighting, console style). Backdrops of other
+        # aboard-ship compartments reuse it so every room of one vessel looks
+        # like the same ship (GM feedback 2026-11-14: "консистентно с
+        # остальными задниками").
+        "ALTER TABLE games ADD COLUMN ship_style TEXT DEFAULT '';",
+    ),
 ]
 
 SHIP_ROLE_KEYS = SHIP_ROLES_KEYS
@@ -1599,6 +1608,38 @@ def get_game_splash_scene(game_id: str) -> str | None:
     conn.close()
 
     return row["splash_scene"] if row else None
+
+
+def save_ship_style(game_id: str, ship_style: str) -> bool:
+    """Persist the ship's design language (migration 29).
+
+    Written once together with the bridge prompt; backdrops of other
+    aboard-ship compartments reuse it so every room looks like the same ship.
+    Empty string until the first bridge generation of this game.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE games SET ship_style = ? WHERE game_id = ?",
+        (ship_style, game_id),
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_ship_style(game_id: str) -> str:
+    """Get the ship design language for a game. Empty when not yet generated."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT ship_style FROM games WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return (row["ship_style"] or "") if row else ""
 
 
 def get_game_language(game_id: str) -> str:

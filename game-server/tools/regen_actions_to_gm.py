@@ -32,7 +32,10 @@ from database import (
 )
 from game_server import create_game_server
 from image_generator import create_image_generator
-from main import _ensure_turn_background as ensure_turn_background
+from main import (
+    _ensure_location_background as ensure_location_background,
+    _resolve_participant_avatars as resolve_participant_avatars,
+)
 import pose_library
 
 OUT_DIR = "/app/logs/regen_gm"
@@ -55,16 +58,18 @@ async def _download(url: str, dest: str) -> bool:
     return False
 
 
-def _scene_context(turn_data: dict | None) -> str:
+def _turn_context(turn_data: dict | None) -> tuple[str, dict]:
+    """(scene context line, the turn's location object) for the given turn."""
     if not turn_data:
-        return ""
+        return "", {}
     try:
         global_circ = json.loads(turn_data.get("global_circumstances", "{}"))
     except (json.JSONDecodeError, TypeError):
         global_circ = {}
     setting = global_circ.get("setting", "") or turn_data.get("story", "")
     conflict = global_circ.get("conflict", "")
-    return f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
+    ctx = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
+    return ctx, global_circ.get("location") or {}
 
 
 async def main() -> None:
@@ -74,7 +79,7 @@ async def main() -> None:
     turn = get_game_state(game_id)["turn"] - 1
     language = get_game_language(game_id)
     turn_data = get_game_turn(turn, game_id)
-    scene_ctx = _scene_context(turn_data)
+    scene_ctx, turn_location = _turn_context(turn_data)
 
     briefings = [
         b for b in (get_all_briefings_for_turn(turn, game_id) or [])
@@ -142,18 +147,17 @@ async def main() -> None:
             continue
 
         print(f"[{i}/{len(briefings)}] {name} — scene instruction...")
-        turn_bg = await ensure_turn_background(game_id, turn)
-        background_url = turn_bg["image_url"] if turn_bg else None
-        scene_desc = turn_bg["prompt"] if turn_bg else ""
         instruction = ""
         pose_filename = ""
         pose_id = ""
+        action_location = turn_location
+        participants: list[str] = []
         try:
             scene = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc,
                 language=language,
-                scene_description=scene_desc,
+                scene_description="",
                 scene_context=scene_ctx,
                 species_category=species_category,
                 game_id=game_id,
@@ -163,9 +167,12 @@ async def main() -> None:
                 pose_catalogue=pose_library.pose_prompt_block()
                 if species_category not in ("non_humanoid", "energy", "symbiotic")
                 else "",
+                turn_location=turn_location,
             )
             instruction = scene["instruction"]
             pose_id = scene.get("pose_id", "")
+            participants = scene.get("participants", [])
+            action_location = scene.get("location") or turn_location
             if pose_id:
                 pose_filename = await pose_library.ensure_pose_uploaded(COMFYUI_BASE, pose_id) or ""
         except Exception as e:
@@ -175,6 +182,17 @@ async def main() -> None:
                 f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. "
                 "Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
             )
+
+        # Backdrop of the action's OWN location (cached per location id).
+        turn_bg = await ensure_location_background(game_id, turn, action_location)
+        background_url = turn_bg["image_url"] if turn_bg else None
+        if action_location.get("id"):
+            print(f"  location: {action_location['id']}")
+        participant_urls = await resolve_participant_avatars(
+            game_id, avatar_url, participants,
+        )
+        if participant_urls:
+            print(f"  participants: {len(participant_urls)} extra reference picture(s)")
 
         print(f"[{i}/{len(briefings)}] {name} — action image (category={species_category or 'human'}, pose={pose_id or '-'})...")
         action_url = await gen.generate_character_in_scene(
@@ -191,6 +209,7 @@ async def main() -> None:
             kind=kind,
             species_category=species_category,
             pose_filename=pose_filename or None,
+            participant_urls=participant_urls,
         )
         if not action_url:
             print(f"  ! action image failed for {name}")

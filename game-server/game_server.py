@@ -453,6 +453,36 @@ NPC_CHOICE_SCHEMA = {
     },
 }
 
+# Species categories whose anatomy must never drift toward a humanoid.
+NON_HUMANOID_SPECIES_CATEGORIES = ("non_humanoid", "energy", "symbiotic")
+
+# Shared shape of a story location (global circumstances + per-action scene
+# instructions): the backdrop image is cached per location id.
+LOCATION_SCHEMA_OBJECT = {
+    "type": "object",
+    "description": "The scene's location. Keep the SAME id while the crew stays in the same place — the shared backdrop image is cached per location id. Move the crew to a NEW id when the story advances to another area.",
+    "properties": {
+        "id": {
+            "type": "string",
+            "description": "Stable snake_case identifier, e.g. 'witness_cargo_bay', 'targus_iv_deep_atmosphere'",
+        },
+        "name": {
+            "type": "string",
+            "description": "Short display name of the location",
+        },
+        "description": {
+            "type": "string",
+            "description": "1-2 sentences about the environment (used for backdrop generation)",
+        },
+        "aboard_ship": {
+            "type": "boolean",
+            "description": "True when the crew spends this turn inside their own vessel (its interior becomes the backdrop, built from the ship's established bridge view)",
+        },
+    },
+    "required": ["id", "name", "description", "aboard_ship"],
+    "additionalProperties": False,
+}
+
 GLOBAL_CIRCUMSTANCES_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -478,30 +508,7 @@ GLOBAL_CIRCUMSTANCES_SCHEMA = {
                     "items": {"type": "string"},
                     "description": "3-5 key events happening in the background that all characters can perceive",
                 },
-                "location": {
-                    "type": "object",
-                    "description": "The scene's location. Keep the SAME id while the crew stays in the same place — the shared backdrop image is cached per location id. Move the crew to a NEW id when the story advances to another area.",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "Stable snake_case identifier, e.g. 'witness_cargo_bay', 'targus_iv_deep_atmosphere'",
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "Short display name of the location",
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "1-2 sentences about the environment (used for backdrop generation)",
-                        },
-                        "aboard_ship": {
-                            "type": "boolean",
-                            "description": "True when the crew spends this turn inside their own vessel (its interior becomes the backdrop, built from the ship's established bridge view)",
-                        },
-                    },
-                    "required": ["id", "name", "description", "aboard_ship"],
-                    "additionalProperties": False,
-                },
+                "location": LOCATION_SCHEMA_OBJECT,
                 "crew_positions": {
                     "type": "array",
                     "items": {
@@ -611,6 +618,16 @@ BRIDGE_IMAGE_SCHEMA = {
                         "aboard-ship turn backdrops"
                     ),
                 },
+                "ship_style": {
+                    "type": "string",
+                    "description": (
+                        "One-paragraph ENGLISH design language of THIS vessel — hull materials, "
+                        "colour palette, lighting character, console and architecture style — "
+                        "shared by every room of the ship. Backdrops of other compartments are "
+                        "generated from it, so they must read as the same vessel (GM feedback "
+                        "2026-11-14: 'консистентно с остальными задниками')"
+                    ),
+                },
                 "crew_descriptions": {
                     "type": "array",
                     "items": {
@@ -628,7 +645,7 @@ BRIDGE_IMAGE_SCHEMA = {
                     "description": "Descriptions of where each crew member is positioned on the bridge",
                 },
             },
-            "required": ["bridge_prompt", "bridge_stage_prompt", "crew_descriptions"],
+            "required": ["bridge_prompt", "bridge_stage_prompt", "ship_style", "crew_descriptions"],
             "additionalProperties": False,
         },
     },
@@ -720,8 +737,28 @@ def scene_instruction_schema(valid_pose_ids: list[str] | None = None):
                             "the location's scale visible"
                         ),
                     },
+                    "location": {
+                        **LOCATION_SCHEMA_OBJECT,
+                        "description": (
+                            "Where THIS action actually takes place, derived from the action "
+                            "text. Same place as the crew's current location → reuse EXACTLY "
+                            "that location id; a different compartment/area → a new stable "
+                            "snake_case id. The action's backdrop image is picked by this id"
+                        ),
+                    },
+                    "participants": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Names or roles of OTHER crew members who take part in this action "
+                            "(empty array when the character acts alone). Each of them is "
+                            "delivered to the edit model as an additional reference picture "
+                            "after the character and scene references, and the instruction must "
+                            "place every one of them in the scene doing their part"
+                        ),
+                    },
                 },
-                "required": ["instruction", "pose_id", "shot"],
+                "required": ["instruction", "pose_id", "shot", "location", "participants"],
                 "additionalProperties": False,
             },
         },
@@ -3075,7 +3112,11 @@ class GameServer:
             "consoles, viewport and lighting) but COMPLETELY VACANT: no people anywhere, "
             "every station unattended. A detailed standalone English txt2img prompt that "
             "must NOT refer to any crew member or Picture.\n"
-            "3. Position descriptions for each crew member — where they are "
+            "3. ship_style — one English paragraph locking THIS vessel's design language "
+            "(hull materials, colour palette, lighting character, console/architecture "
+            "style). Backdrops of the ship's other compartments are generated from it, so "
+            "make it specific enough to recognize the ship (not a generic starship).\n"
+            "4. Position descriptions for each crew member — where they are "
             "on the bridge and what they are doing at their station.\n\n"
             "Write the prompt and descriptions in English."
         )
@@ -3137,6 +3178,7 @@ class GameServer:
         kind: str | None,
         scene_description: str = "",
         max_characters: int = 0,
+        crew_positions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Generate an English image prompt for the turn-outcome scene.
 
@@ -3152,12 +3194,16 @@ class GameServer:
         outcome invented its own backdrop and read as a different place than
         every action image of the turn (GM feedback 2026-11-12).
 
-        The image itself is a COMIC PAGE — one panel per living crew member,
-        each mid-action on their part of the outcome (GM feedback 2026-11-13:
-        the group photo dropped the medic and had everyone facing the camera).
+        The image itself is a COMIC PAGE. With ``crew_positions`` (the turn's
+        global-circumstances placement), characters sharing a location share
+        ONE wide panel — staged together, each on their own part of the
+        outcome — and one panel exists per location group (GM feedback
+        2026-11-14 v3). Without positions the page falls back to one panel
+        per living crew member (GM feedback 2026-11-13: the group photo
+        dropped the medic and had everyone facing the camera).
 
-        ``max_characters`` fixes the panel count: the living crew count at
-        generation time (0 = derive from ``crew_refs``).
+        ``max_characters`` fixes the living-crew count stated to the LLM
+        (0 = derive from ``crew_refs``).
         """
         logger.info("[OUTCOME_IMAGE] Generating outcome image prompt")
 
@@ -3179,41 +3225,93 @@ class GameServer:
             picture_lines = "\n".join(
                 f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}" for i, r in enumerate(crew_refs, start=first_picture)
             )
+            anatomy_locks = "\n".join(
+                f"- ANATOMY LOCK, the panel with Picture {i} ({r.get('name', '?')}): this character is NOT\n"
+                f"  humanoid — it is: {r.get('species_description') or r.get('appearance', '')}. Render its\n"
+                f"  anatomy and silhouette EXACTLY as in Picture {i}: NO human face, NO human hands\n"
+                "  or limbs, NO uniform, NO upright standing pose. It performs its part of the\n"
+                "  outcome through its OWN body plan (tentacles, fields, tendrils, plasma flow),\n"
+                "  interacting with a concrete object of the scene."
+                for i, r in enumerate(crew_refs, start=first_picture)
+                if r.get("species_category") in NON_HUMANOID_SPECIES_CATEGORIES
+            )
             n = len(crew_refs)
-            if n <= 3:
-                layout = f"a single row of {n} panels"
-            elif n == 4:
-                layout = "a 2x2 grid (2 columns, 2 rows)"
+            grouped = bool(crew_positions)
+            if grouped:
+                pos_lines = "\n".join(
+                    f"- {p.get('role_key', '?')}: {p.get('position', '')}" for p in crew_positions
+                )
+                positions_block = (
+                    "\nWhere each crew member is during this outcome (role_key → position):\n"
+                    f"{pos_lines}\n"
+                    "GROUPING RULE: characters whose positions place them in the SAME location\n"
+                    "share ONE wide panel — staged together in that place, each of them mid-action\n"
+                    "on their own part of the outcome. Characters in different locations get\n"
+                    "separate panels. The page has ONE panel per location group, wide panels for\n"
+                    "bigger groups (GM feedback 2026-11-14: co-located crew must not be repeated\n"
+                    "panel after panel in the same room).\n\n"
+                )
+                page_rule = (
+                    f"The image_prompt MUST describe a COMIC PAGE — one panel per location group\n"
+                    "(GROUPING RULE above). The living crew at this moment numbers exactly "
+                    + str(n)
+                    + " —\n"
+                    "EVERY one of them appears EXACTLY once across the panels. Same uniform art\n"
+                    "style; panels separated by thin white gutters.\n"
+                    "COMPOSITION RULES:\n"
+                    "- Each panel is one location group. Identify each panel by the Picture numbers\n"
+                    f"  it contains (\"Panel with the characters from Picture N and Picture M\").\n"
+                    "- Each Picture appears in EXACTLY ONE panel — never duplicated across panels\n"
+                    "  (duplicates ruin the image).\n"
+                    "- In a shared panel the co-located characters are staged side by side, each\n"
+                    "  clearly visible (foreground or midground), each mid-action on THEIR part of\n"
+                    "  the outcome narrative, seen from the side or three-quarter, face in profile,\n"
+                    "  gaze on their task. NOBODY looks at the camera.\n"
+                )
             else:
-                layout = "a 2-column grid with one row per pair of crew members"
+                positions_block = ""
+                if n <= 3:
+                    layout = f"a single row of {n} panels"
+                elif n == 4:
+                    layout = "a 2x2 grid (2 columns, 2 rows)"
+                else:
+                    layout = "a 2-column grid with one row per pair of crew members"
+                page_rule = (
+                    f"The image_prompt MUST describe a COMIC PAGE of exactly {n} panels — {layout}.\n"
+                    "The living crew at this moment numbers exactly " + str(n) + ". Same uniform art\n"
+                    "style and location environment across all panels; panels separated by thin\n"
+                    "white gutters.\n"
+                    "COMPOSITION RULES:\n"
+                    "- One panel per Picture, in the order the narrative introduces their actions.\n"
+                    "  Identify each panel by its Picture number (\"Panel with the character from\n"
+                    f"  Picture N\"). Cover EVERY Picture {first_picture}..{first_picture + n - 1} —\n"
+                    "  NO character may be skipped: a missing panel means that crew member vanishes\n"
+                    "  from the turn's memory (GM feedback 2026-11-13: the medic was dropped).\n"
+                    "- Each Picture is used EXACTLY ONCE. Never render the same reference twice,\n"
+                    "  never stage two characters from one Picture (duplicates ruin the image).\n"
+                    "- Each panel: that character mid-action performing THEIR part of the outcome\n"
+                    "  narrative (one concrete doing — working the console, walking to the compartment,\n"
+                    "  treating the wounded), seen from the side or three-quarter, face visible in\n"
+                    "  profile, gaze on their task. NOBODY looks at the camera and NOBODY is a bare\n"
+                    "  back filling the panel.\n"
+                )
             crew_section = (
                 "The image model will receive the following reference pictures:\n"
                 f"{background_section}"
                 f"The crew's avatar reference pictures:\n"
                 f"{picture_lines}\n\n"
-                f"The image_prompt MUST describe a COMIC PAGE of exactly {n} panels — {layout}.\n"
-                "The living crew at this moment numbers exactly " + str(n) + ". Same uniform art\n"
-                "style and location environment across all panels; panels separated by thin\n"
-                "white gutters.\n"
-                "COMPOSITION RULES:\n"
-                "- One panel per Picture, in the order the narrative introduces their actions.\n"
-                "  Identify each panel by its Picture number (\"Panel with the character from\n"
-                f"  Picture N\"). Cover EVERY Picture {first_picture}..{first_picture + n - 1} —\n"
-                "  NO character may be skipped: a missing panel means that crew member vanishes\n"
-                "  from the turn's memory (GM feedback 2026-11-13: the medic was dropped).\n"
-                "- Each Picture is used EXACTLY ONCE. Never render the same reference twice,\n"
-                "  never stage two characters from one Picture (duplicates ruin the image).\n"
-                "- Each panel: that character mid-action performing THEIR part of the outcome\n"
-                "  narrative (one concrete doing — working the console, walking to the compartment,\n"
-                "  treating the wounded), seen from the side or three-quarter, face visible in\n"
-                "  profile, gaze on their task. NOBODY looks at the camera and NOBODY is a bare\n"
-                "  back filling the panel.\n"
-                "- For each panel repeat their key visual traits right after the Picture\n"
+                f"{positions_block}"
+                f"{page_rule}"
+                "- For each character repeat their key visual traits right after the Picture\n"
                 "  reference: \"render this character EXACTLY as in Picture N: same <2-4\n"
-                "  distinctive traits>\".\n"
+                "  distinctive traits>\". Those traits MUST be copied from THAT Picture's own\n"
+                "  reference description above — NEVER invent facial features, scars, hair or\n"
+                "  clothing that its description does not mention (GM feedback 2026-11-14: a\n"
+                "  lava-sphere crew member was given a human mustache).\n"
                 "- ENERGY/PLASMA beings: staged interacting with a concrete object (hovering\n"
                 "  over a console pad, woven into a panel), never floating aimlessly.\n"
-                "- No other people anywhere on the page. No text, captions or speech bubbles.\n"
+                + (f"{anatomy_locks}\n" if anatomy_locks else "")
+                + "- No other people anywhere on the page. No text, captions or speech bubbles.\n"
             )
         else:
             crew_section = (
@@ -3264,6 +3362,8 @@ class GameServer:
         location_name: str = "",
         location_description: str = "",
         edit_reference: bool = False,
+        compartment: bool = False,
+        ship_style: str = "",
     ) -> str:
         """Generate an English prompt for the shared background.
 
@@ -3278,12 +3378,17 @@ class GameServer:
         — the crew is aboard, and fresh txt2img kept inventing "another ship's"
         bridge (GM feedback 2026-11-13).
 
+        With ``compartment`` (and no ``edit_reference``) the prompt describes a
+        DIFFERENT compartment of the same ship, anchored to its design language
+        (``ship_style``, when known) so the room reads as the same vessel
+        (GM feedback 2026-11-14).
+
         Returns the prompt string, or "" on failure (the caller falls back to
         a prompt built from the raw setting text).
         """
         system, user = build_turn_background_prompts(
             language, setting, conflict, location_name, location_description,
-            edit_reference=edit_reference,
+            edit_reference=edit_reference, compartment=compartment, ship_style=ship_style,
         )
         try:
             result = await self._call_llm(
@@ -3320,7 +3425,8 @@ class GameServer:
         turn: int | str | None,
         kind: str | None,
         pose_catalogue: str = "",
-    ) -> dict[str, str]:
+        turn_location: dict | None = None,
+    ) -> dict[str, Any]:
         """Generate a Qwen-Image-Edit instruction for placing a character in a scene.
 
         The returned instruction refers to "Picture 1" (the character) and
@@ -3345,18 +3451,24 @@ class GameServer:
                 Qwen-Image-Edit back into a humanoid.
             pose_catalogue: Pose library listing ("pose_id: description" lines).
                 Empty = no pose reference.
+            turn_location: The crew's current location from global_circumstances
+                ({id, name, description, aboard_ship}). The LLM derives the
+                action's ACTUAL location from it + the action text (same place →
+                same id; another compartment → new id), so the backdrop is
+                picked/generated per location.
 
         Returns:
-            {"instruction": str, "pose_id": str} — the instruction is never
-            empty (falls back to a generic staging instruction built from the
-            action text); pose_id is "" when no pose was chosen/available.
-            The chosen framing ("shot") is appended to the instruction as an
-            explicit COMPOSITION sentence.
+            {"instruction": str, "pose_id": str, "location": dict,
+            "participants": list[str]} — the instruction is never empty (falls
+            back to a generic staging instruction built from the action text);
+            pose_id is "" when no pose was chosen/available; location falls
+            back to ``turn_location``; the chosen framing ("shot") is appended
+            to the instruction as an explicit COMPOSITION sentence.
         """
         system = build_scene_instruction_system(language)
         user = build_scene_instruction_user(
             language, action_text, species_desc, scene_description, scene_context,
-            species_category, pose_catalogue,
+            species_category, pose_catalogue, turn_location=turn_location,
         )
 
         fallback = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic lighting, photorealistic, 4K."
@@ -3374,13 +3486,25 @@ class GameServer:
             )
             instruction = result.get("instruction", "").strip()
             pose_id = result.get("pose_id", "").strip()
+            location = result.get("location") if isinstance(result.get("location"), dict) else None
+            participants = result.get("participants")
             if instruction:
                 instruction = f"{instruction.rstrip('.')} {self._shot_composition(result.get('shot', ''))}"
-                return {"instruction": instruction, "pose_id": pose_id if pose_catalogue and pose_id != "none" else ""}
+                return {
+                    "instruction": instruction,
+                    "pose_id": pose_id if pose_catalogue and pose_id != "none" else "",
+                    "location": location or (turn_location or {}),
+                    "participants": participants if isinstance(participants, list) else [],
+                }
             logger.warning("[SCENE_INSTRUCTION] Empty instruction, using fallback")
         except Exception:
             logger.warning("[SCENE_INSTRUCTION] failed, using fallback", exc_info=True)
-        return {"instruction": fallback, "pose_id": ""}
+        return {
+            "instruction": fallback,
+            "pose_id": "",
+            "location": turn_location or {},
+            "participants": [],
+        }
 
     @staticmethod
     def _shot_composition(shot: str) -> str:

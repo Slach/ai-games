@@ -1955,6 +1955,8 @@ def build_turn_background_prompts(
     location_description: str = "",
     *,
     edit_reference: bool = False,
+    compartment: bool = False,
+    ship_style: str = "",
 ) -> tuple[str, str]:
     """Build (system, user) prompts for the shared background LLM call.
 
@@ -1973,11 +1975,19 @@ def build_turn_background_prompts(
     a fresh txt2img invented a "different ship's" interior every time (GM
     feedback 2026-11-13). The prompt becomes a transform instruction: keep the
     reference architecture, change only the state.
+
+    With ``compartment`` (and no ``edit_reference``) the backdrop is a DIFFERENT
+    compartment of the SAME ship (reactor bay, medbay — GM feedback
+    2026-11-14: "задник точно надо генерировать под ситуацию но консистентно
+    с остальными задниками"). An edit of the bridge cannot become another room,
+    so the compartment is txt2img-ed but anchored to the ship's design language
+    (``ship_style``, when known) so it reads as the same vessel.
     """
     location_block = ""
     if location_name:
         detail = f" — {location_description}" if location_description else ""
         location_block = f"\nЛокация (Location): {location_name}{detail}\n" if language == LANGUAGE_RU else f"\nLocation: {location_name}{detail}\n"
+    ship_style_block = f"\nDesign language of THIS ship (shared by all its rooms): {ship_style}\n" if ship_style else ""
     if language == LANGUAGE_RU:
         if edit_reference:
             system = (
@@ -2001,6 +2011,32 @@ def build_turn_background_prompts(
                 "аварийные индикаторы, дым/искры/пепел, если позволяет ситуация.\n"
                 "НЕ придумывай новые помещения, мебель или планировку. Свет опиши явно "
                 "(источник + цвет). 4K."
+            )
+            return system, user
+        if compartment:
+            system = (
+                "Ты — эксперт по cinematic prompt engineering для AI-генерации изображений. "
+                "Пишешь промпты для пустых комнат-СЦЕНИЧЕСКИХ ПЛОЩАДОК (БЕЗ персонажей) внутри "
+                "звездолёта. Промпт всегда на английском."
+            )
+            user = (
+                f"Обстановка хода (Setting): {setting}\n"
+                f"Ситуация хода (Conflict): {conflict or '—'}\n"
+                f"{location_block}"
+                f"{ship_style_block}\n"
+                "Напиши ОДИН промпт на АНГЛИЙСКОМ: КОНКРЕТНЫЙ ОТСЕК ИХ КОРАБЛЯ, полностью пустой "
+                "(никого внутри) — рабочая площадка, где будет действовать персонаж. "
+                "1) ЭТО ТОТ ЖЕ КОРАБЛЬ: "
+                + ("следуй design language корабля выше (материалы, палитра, свет, стиль консолей) — " if ship_style else "")
+                + "комната обязана читаться как часть того же судна, что и остальные задники хода.\n"
+                "2) Назначение отсека — из локации выше (реакторный отсек, медотсек, грузовой трюм...): "
+                "реквизит соответствует функции отсека (реакторная колонна/медкапсулы/контейнеры).\n"
+                "3) В нижней половине кадра — поверхность, на которой можно стоять; 3-5 якорных "
+                "объектов В МАСШТАБЕ персонажа (консоли, панели, люки, поручни).\n"
+                "4) Реквизит ТОЛЬКО корабного класса; ЗАПРЕЩЕНЫ бытовые окна, шторы, книжные полки, "
+                "мебель квартиры.\n"
+                "5) Кинематографичный средне-широкий кадр. Свет опиши явно (источник + цвет). "
+                "Строго БЕЗ персонажей. 4K."
             )
             return system, user
         system = (
@@ -2053,6 +2089,33 @@ def build_turn_background_prompts(
             "windows, alert indicators, smoke/sparks/ash if the situation allows.\n"
             "Do NOT invent new rooms, furniture or a different layout. Describe the lighting "
             "explicitly (source + color). 4K quality."
+        )
+        return system, user
+    if compartment:
+        system = (
+            "You are an expert cinematic prompt engineer for AI image generation. "
+            "You write prompts for empty room-STAGES (NO characters) inside a starship. "
+            "The prompt is always English."
+        )
+        user = (
+            f"Turn setting: {setting}\n"
+            f"Turn situation: {conflict or '—'}\n"
+            f"{location_block}"
+            f"{ship_style_block}\n"
+            "Write ONE English txt2img prompt: ONE SPECIFIC COMPARTMENT of THEIR ship, completely "
+            "vacant (nobody inside) — a working stage where a character will act. "
+            "1) THIS IS THE SAME SHIP: "
+            + ("follow the ship's design language above (materials, palette, lighting, console style) — " if ship_style else "")
+            + "the room must read as part of the same vessel as every other backdrop of this turn.\n"
+            "2) The compartment's function comes from the location above (reactor compartment, "
+            "medbay, cargo hold...): props match that function (reactor column / medical pods / "
+            "cargo containers).\n"
+            "3) The lower half of the frame must contain a standable surface; 3-5 anchor objects AT "
+            "CHARACTER SCALE (consoles, panels, hatches, handrails).\n"
+            "4) Starship-grade props ONLY; domestic windows, curtains, bookshelves or apartment "
+            "furniture are FORBIDDEN.\n"
+            "5) Cinematic medium-wide shot. Describe the lighting explicitly (source + color). "
+            "Strictly NO characters. 4K quality."
         )
         return system, user
     system = (
@@ -2338,7 +2401,14 @@ OUTCOME_IMAGE_PROMPT_SYSTEM = (
     "to characters BY their picture numbers (\"the character from Picture N\"), "
     "reinforce each one's key visual traits (\"EXACTLY as in Picture N: same "
     "<traits>\"), and never duplicate a character or add people the narrative does "
-    "not mention. No text, captions or speech bubbles anywhere in the image."
+    "not mention. "
+    "ANATOMY DISCIPLINE: every visual trait you write must come from THAT character's "
+    "own reference description — never invent facial features, scars, hair or clothing "
+    "its description does not mention, and never pull traits from neighbouring crew "
+    "members (GM feedback 2026-11-14: a lava-sphere crew member was described with a "
+    "human mustache and uniform). Non-humanoid characters keep their exact non-human "
+    "anatomy in their panel. "
+    "No text, captions or speech bubbles anywhere in the image."
 )
 
 
@@ -2373,11 +2443,20 @@ def build_scene_instruction_system(language: str) -> str:
             "КАМЕРА ВИДИТ ПЕРСОНАЖА СБОКУ или в 3/4: лицо видно в профиль, пока он действует. "
             "Сплошной вид со спины (спина заполняет кадр) ЗАПРЕЩЁН — «не смотри в камеру» означает "
             "«взгляд на работу», а НЕ «повернись спиной к зрителю». "
+            "МЕБЕЛЬ И РЕКВИЗИТ СЦЕНЫ — ТОЛЬКО ИЗ PICTURE 2: используй лишь мебель, сиденья и консоли, "
+            "уже видимые в сцене; НЕ выдумывай новую мебель (никаких добавленных кресел, коек, столов). "
+            "Если персонаж сидит — только на сиденье, реально присутствующем в сцене, и корпус "
+            "развёрнут К консоли/экрану, за которым он работает (лицо в профиль к работе). "
             "Опирайся ТОЛЬКО на объекты, которые есть в описании сцены (и объекты из самого "
             "действия) — НЕ добавляй новых локаций, планет, кораблей, чёрных дыр и прочего, "
             "чего нет в сцене. "
             "Описание персонажа и его идентичность НЕ повторяй — модель сохранит их сама. "
-            "Фокус на действии и постановке внутри заданной сцены."
+            "Фокус на действии и постановке внутри заданной сцены. "
+            "Также заполни поля location (где действие происходит ФАКТИЧЕСКИ, по тексту действия — "
+            "тот же отсек или другой) и participants (другие члены экипажа, участвующие в действии). "
+            "Если participants непуст — каждый участник приходит дополнительной референс-картинкой "
+            "после картинки персонажа и картинки сцены, и инструкция ОБЯЗАНА разместить КАЖДОГО из "
+            "них в сцене, выполняющим свою часть действия."
         )
     return (
         "You are an expert at writing instructions for the Qwen-Image-Edit AI model. "
@@ -2398,10 +2477,19 @@ def build_scene_instruction_system(language: str) -> str:
         "visible in profile while they act. A wholesale back view (the character's back filling "
         "the frame) is FORBIDDEN — 'do not look at the camera' means 'gaze on the work', NOT "
         "'turn your back to the viewer'. "
+        "THE SCENE PICTURE IS AUTHORITATIVE FOR THE ROOM: use only the furniture, seats and consoles "
+        "already visible in it; do NOT invent new furniture (no added chairs, beds or tables). "
+        "When seated, only on a seat the scene actually shows, with the body turned TOWARD the "
+        "console/screen being operated (face in profile to the work). "
         "Refer ONLY to objects present in the scene description (and objects named by the action "
         "itself) — do NOT add new locations, planets, ships, black holes or anything not in the scene. "
         "Do NOT restate the character's description or identity — the model preserves it automatically. "
-        "Focus on the action and staging within the given scene."
+        "Focus on the action and staging within the given scene. "
+        "Also fill the location field (where THIS action factually happens per the action text — the "
+        "same compartment or a different one) and participants (other crew members taking part in the "
+        "action). When participants is non-empty, each participant arrives as an additional reference "
+        "picture after the character and scene references, and the instruction MUST place EVERY one "
+        "of them in the scene, each performing their part of the action."
     )
 
 
@@ -2413,6 +2501,7 @@ def build_scene_instruction_user(
     scene_context: str,
     species_category: str = "",
     pose_catalogue: str = "",
+    turn_location: dict | None = None,
 ) -> str:
     """User prompt for the scene-instruction LLM call.
 
@@ -2444,6 +2533,11 @@ def build_scene_instruction_user(
             passed to the edit model as Picture 3 and the instruction must
             reference it. Empty = no pose reference (non-humanoid beings or a
             pose-less fallback path).
+        turn_location: The crew's current location from global_circumstances
+            ({id, name, description, aboard_ship}). The LLM derives the
+            action's ACTUAL location from it + the action text: same place →
+            exactly the same id, another compartment/area → a new stable
+            snake_case id (the backdrop image is cached per id).
     """
     if scene_description:
         scene_block_ru = f"\nСцена из Picture 2 (общий фон хода, БЕЗ персонажей): {scene_description}\n"
@@ -2452,6 +2546,25 @@ def build_scene_instruction_user(
         scene_block_ru = ""
         scene_block_en = ""
     ctx_block = f"\nScene context: {scene_context}\n" if scene_context else ""
+    loc_block_ru = ""
+    loc_block_en = ""
+    if turn_location:
+        loc_block_ru = (
+            f"\nТекущая локация экипажа (задник хода): id={turn_location.get('id', '')}, "
+            f"«{turn_location.get('name', '')}» — {turn_location.get('description', '')}\n"
+            "Действие может произойти В ДРУГОМ отсеке/зоне (реакторный отсек, медотсек, "
+            "грузовой трюм, внешняя оболочка...): выведи фактическое место ИЗ ТЕКСТА ДЕЙСТВИЯ и "
+            "верни его в поле location. То же место → РОВНО тот же location.id; другой отсек "
+            "→ новый стабильный snake_case id (задник кэшируется по этому id).\n"
+        )
+        loc_block_en = (
+            f"\nThe crew's current location (the turn's backdrop): id={turn_location.get('id', '')}, "
+            f"'{turn_location.get('name', '')}' — {turn_location.get('description', '')}\n"
+            "The action may happen in a DIFFERENT compartment/area (reactor compartment, "
+            "medbay, cargo hold, outer hull...): derive the factual place FROM THE ACTION TEXT "
+            "and return it in the location field. Same place → EXACTLY the same location.id; "
+            "a different compartment → a new stable snake_case id (backdrops are cached per id).\n"
+        )
     anatomy_guard_ru = ""
     anatomy_guard_en = ""
     if species_category in ("non_humanoid", "energy", "symbiotic"):
@@ -2530,10 +2643,24 @@ def build_scene_instruction_user(
         "- medium (default): full-body action next to the scene's equipment;\n"
         "- wide: moving across the scene, open space — the location's scale is visible.\n"
     )
+    participants_block_ru = (
+        "\nУЧАСТНИКИ: если в действии участвуют другие члены экипажа — перечисли их (имя или роль) "
+        "в поле participants. В инструкции КАЖДЫЙ участник должен быть размещён в сцене и выполнять "
+        "СВОЮ часть действия (они придут дополнительными референс-картинками после картинки "
+        "персонажа и картинки сцены — в инструкции обращайся к ним как 'each additional character "
+        "reference picture'). Если персонаж действует один — participants остаётся пустым массивом.\n"
+    )
+    participants_block_en = (
+        "\nPARTICIPANTS: when other crew members take part in the action, list them (name or role) "
+        "in the participants field. The instruction must place EVERY participant in the scene, each "
+        "performing THEIR part of the action (they arrive as additional reference pictures after "
+        "the character and scene references — refer to them as 'each additional character reference "
+        "picture'). When the character acts alone, participants stays an empty array.\n"
+    )
     if language == LANGUAGE_RU:
         user = (
             f"Действие: {action_text}\n"
-            f"Описание вида: {species_desc}{scene_block_ru}{ctx_block}\n"
+            f"Описание вида: {species_desc}{scene_block_ru}{ctx_block}{loc_block_ru}\n"
             f"{pose_block_ru}"
             f"{shot_block_ru}"
             f"{anatomy_guard_ru}"
@@ -2549,12 +2676,13 @@ def build_scene_instruction_user(
             "Персонаж в МАСШТАБЕ сцены: естественный рост человека рядом с якорными объектами, "
             "примерно от трети до половины высоты кадра — НЕ гигант. "
             "НЕ добавляй объекты и локации, которых нет в описании сцены и в действии. "
-            "Без описания внешности персонажа."
+            "Без описания внешности персонажа. "
+            f"{participants_block_ru}"
         )
     else:
         user = (
             f"Action: {action_text}\n"
-        f"Species: {species_desc}{scene_block_en}{ctx_block}\n"
+        f"Species: {species_desc}{scene_block_en}{ctx_block}{loc_block_en}\n"
         f"{pose_block_en}"
         f"{shot_block_en}"
         f"{anatomy_guard_en}"
@@ -2570,7 +2698,8 @@ def build_scene_instruction_user(
         "The character matches the scene's scale: natural human height next to the anchor objects, "
         "roughly one third to one half of the frame height — never a giant. "
         "Do NOT add objects or locations that are absent from the scene description and the action. "
-        "Do not describe the character's appearance."
+        "Do not describe the character's appearance. "
+        f"{participants_block_en}"
     )
     demos = SCENE_INSTRUCTION_DEMOS[LANGUAGE_RU if language == LANGUAGE_RU else LANGUAGE_EN]
     if demos:

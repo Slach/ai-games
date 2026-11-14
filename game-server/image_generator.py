@@ -321,6 +321,7 @@ def _build_qwen_edit_21_workflow(
     *,
     species_category: str = "",
     pose_filename: str | None = None,
+    participant_filenames: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a Qwen-Image-2.1 instruction-edit workflow (unified t2i+edit ckpt).
 
@@ -428,6 +429,17 @@ def _build_qwen_edit_21_workflow(
             "inputs": {"image": pose_filename},
         }
         workflow["70"]["inputs"]["images.image_3"] = ["43", 0]
+    # Additional action participants as contiguous Pictures right after the
+    # fixed trio — same slot/node-id rules as :func:`_build_qwen_edit_21_workflow`
+    # (LoadImage ids from 64, below the multiref builders' 200+ range).
+    slot = 4 if pose_filename else 3
+    for offset, participant in enumerate(participant_filenames or []):
+        node_id = str(60 + slot + offset)
+        workflow[node_id] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": participant},
+        }
+        workflow["70"]["inputs"][f"images.image_{slot + offset}"] = [node_id, 0]
     return workflow
 
 
@@ -443,6 +455,7 @@ def _build_qwen_edit_21_viggle_turbo_workflow(
     *,
     species_category: str = "",
     pose_filename: str | None = None,
+    participant_filenames: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a Viggle Turbo instruction-edit workflow (6-step DMD student).
 
@@ -577,6 +590,20 @@ def _build_qwen_edit_21_viggle_turbo_workflow(
             "inputs": {"image": pose_filename},
         }
         workflow["70"]["inputs"]["images.image_3"] = ["43", 0]
+    # Additional action participants arrive as contiguous Pictures right after
+    # the fixed character/background/pose trio (Picture 3 is skipped when no
+    # pose was supplied — the autogrow slots must stay contiguous). LoadImage
+    # node ids start at 64: they must not cross the QwenImage21Cache node "45"
+    # (a LoadImage range hitting it silently overwrites the cache node) nor
+    # the fixed 41/42/43 trio.
+    slot = 4 if pose_filename else 3
+    for offset, participant in enumerate(participant_filenames or []):
+        node_id = str(60 + slot + offset)
+        workflow[node_id] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": participant},
+        }
+        workflow["70"]["inputs"][f"images.image_{slot + offset}"] = [node_id, 0]
     return workflow
 
 
@@ -2434,6 +2461,14 @@ _EDIT_BUILDERS = {
     "moss_edit": _build_moss_edit_workflow,
 }
 
+# Builders that stage additional action participants (Pictures 4..N+3 via the
+# TextEncodeQwenImage21 autogrow slots). Other edit builders have no slot
+# contract for them, so generate_character_in_scene drops the extras there.
+_PARTICIPANT_EDIT_BUILDERS = frozenset({
+    _build_qwen_edit_21_workflow,
+    _build_qwen_edit_21_viggle_turbo_workflow,
+})
+
 # Multi-reference (crew-bridge/outcome) scenes are Qwen-Image-2.1-family only
 # (TextEncodeQwenImage21 reference slots); the txt2img kind resolves to one of
 # these keys when that family is selected, any other key falls back to the
@@ -3358,6 +3393,7 @@ class ImageGenerator:
         kind: str | None,
         species_category: str = "",
         pose_filename: str | None = None,
+        participant_urls: list[str | None] | None = None,
     ) -> str | None:
         """Place a character into a scene via Qwen-Image-Edit-2511.
 
@@ -3365,6 +3401,12 @@ class ImageGenerator:
         Qwen-Image-Edit preserves the character's identity while following the
         instruction prompt. When a background image is supplied it is passed as
         a second reference so the character is composed into that environment.
+
+        ``participant_urls`` (other crew members taking part in the action)
+        arrive as additional reference pictures 4..N+3 — after the fixed
+        character/background/pose trio, so the instruction's numbering
+        contract stays stable regardless of participant count. Staged only by
+        builders that support the extra slots (Qwen-Image-2.1 family).
 
         Falls back to img2img (:meth:`generate_action_image_with_reference`)
         when Qwen-Image-Edit is unavailable or fails — e.g. no avatar, or the
@@ -3379,6 +3421,8 @@ class ImageGenerator:
             filename_prefix: Output filename prefix.
             width, height: Output dimensions.
             game_id, player_id, turn, kind: Logging context.
+            participant_urls: Avatar URLs of other action participants, in
+                picture order. None/unparseable entries are skipped.
 
         Returns:
             URL of the generated image, or None on failure.
@@ -3422,9 +3466,28 @@ class ImageGenerator:
                 kind=kind,
             )
 
+        participant_filenames = [
+            filename
+            for filename in (
+                self._extract_filename_from_url(url) if url else None
+                for url in (participant_urls or [])
+            )
+            if filename
+        ]
+
         edit_model_key = resolve_edit_model(kind)
         edit_cfg = get_edit_model_config(edit_model_key)
         edit_builder = _EDIT_BUILDERS[edit_cfg.builder]
+        builder_kwargs: dict[str, Any] = {}
+        if participant_filenames:
+            if edit_builder in _PARTICIPANT_EDIT_BUILDERS:
+                builder_kwargs["participant_filenames"] = participant_filenames
+            else:
+                logger.warning(
+                    "[QWEN_EDIT] Edit model %s cannot stage action participants; "
+                    "generating the actor alone",
+                    edit_model_key,
+                )
         workflow = edit_builder(
             instruction=instruction_prompt,
             character_filename=char_filename,
@@ -3436,12 +3499,14 @@ class ImageGenerator:
             cfg=edit_cfg,
             species_category=species_category,
             pose_filename=pose_filename,
+            **builder_kwargs,
         )
 
         ctx_game = game_id or "none"
         ctx_player = str(player_id) if player_id else ""
         ctx_turn = str(turn) if turn is not None else "0"
         log_kind = kind or "qwen_edit"
+        participants_log = "\n".join(participant_filenames) if participant_filenames else "(none)"
 
         # The edit path is identity-preserving. It can time out under GPU
         # contention (the ComfyUI queue backs up); before degrading to img2img
@@ -3457,6 +3522,7 @@ class ImageGenerator:
                     f"Attempt: {attempt}/{max_edit_attempts}\n\n"
                     f"--- INSTRUCTION ---\n{instruction_prompt}\n\n"
                     f"--- CHARACTER AVATAR ---\n{char_filename}\n\n"
+                    f"--- PARTICIPANT AVATARS ---\n{participants_log}\n\n"
                     f"--- BACKGROUND ---\n{bg_filename or '(none)'}\n\n"
                     f"--- POSE REFERENCE ---\n{pose_filename or '(none)'}\n\n"
                     f"--- WORKFLOW JSON ---\n{json.dumps(workflow, indent=2, ensure_ascii=False)}"

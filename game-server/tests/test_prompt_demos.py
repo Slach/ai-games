@@ -87,7 +87,10 @@ class PromptDemosTest(unittest.TestCase):
             LANGUAGE_RU, "Чинит реактор", "Кристаллическая форма",
             "engineering", "Корабль в опасности", "non_humanoid",
         )
-        self.assertTrue(user.endswith("Без описания внешности персонажа."))
+        # The participants block (GM feedback 2026-11-14) is appended after the
+        # appearance mandate; the demo block, when present, still comes last.
+        self.assertIn("Без описания внешности персонажа.", user)
+        self.assertTrue(user.rstrip().endswith("participants остаётся пустым массивом."))
 
     def test_pasted_ru_demo_blocks_are_live(self):
         # Blocks compiled by tools/prompt_optimizer and pasted into prompts.py

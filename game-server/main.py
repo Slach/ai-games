@@ -87,6 +87,8 @@ from database import (
     get_random_game_image,
     get_turn_background,
     get_location_background,
+    get_ship_style,
+    save_ship_style,
     get_role_by_key,
     get_role_key_for_player,
     deactivate_npc,
@@ -125,7 +127,7 @@ from database import (
 from game_rules import HULL_MAX, THREAT_MAX, WOUND_DEAD, _to_int, apply_mission_progress, apply_ship_status, apply_systems_offline, compute_loyalty_change, compute_outcome_type, compute_threat_tick, loyalty_band, mutiny_conditions, resolve_injury, select_npc_role_keys
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from game_server import create_game_server
+from game_server import NON_HUMANOID_SPECIES_CATEGORIES, create_game_server
 from game_concept import generate_game_concept, get_game_concept_lock
 from image_generator import (
     COMFYUI_BASE_URL,
@@ -134,6 +136,7 @@ from image_generator import (
     create_image_generator,
 )
 import pose_library
+import scene_comic
 from language import (
     LANGUAGE_EN,
     LANGUAGE_RU,
@@ -1116,6 +1119,9 @@ async def _generate_started_game_assets(game_id: str, language: str) -> None:
                     crew_refs = _collect_crew_avatar_refs(game_id, all_participants)
                     bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, crew_refs=crew_refs, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
                     bridge_prompt = bridge_result.get("bridge_prompt", "")
+                    ship_style = bridge_result.get("ship_style", "")
+                    if ship_style:
+                        save_ship_style(game_id, ship_style)
                     if bridge_prompt:
                         image_gen = create_image_generator()
                         bridge_url = await image_gen.generate_bridge_image(
@@ -2349,11 +2355,14 @@ def _previous_turn_location(game_id: str, current_turn: int) -> str:
 def _scene_image_for_turn(game_id: str, turn: int) -> str | None:
     """Briefing header image URL for a turn, or None.
 
-    Since 2026-11-11 the header image is the turn's SHARED background (one per
-    location): the most recent turn_background row at or before this turn.
-    Turns generated before the rework keep serving their legacy type="scene"
-    rows.
+    Since 2026-11-14 the header image is the scene-STAGE comic (one stitched
+    panel per crew member, each in their own room — GM feedback 2026-11-14).
+    Fallbacks: the legacy type="scene" rows, then the most recent
+    turn_background row at or before this turn (the shared location backdrop).
     """
+    comic = get_random_game_image(type="scene_comic", game_id=game_id, turn=turn)
+    if comic:
+        return comic
     legacy = get_random_game_image(type="scene", game_id=game_id, turn=turn)
     if legacy:
         return legacy
@@ -2399,53 +2408,71 @@ async def _ensure_bridge_stage_image(game_id: str, bridge_result: dict) -> None:
         logger.info(f"[BRIDGE] Stage image saved: {url}")
 
 
-async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
-    """Return the shared background ({"image_url", "prompt"}), generating it on first use.
+async def _ensure_location_background(
+    game_id: str,
+    turn: int,
+    location: dict,
+    *,
+    setting: str = "",
+    conflict: str = "",
+) -> dict | None:
+    """Return the backdrop ({"image_url", "prompt"}) for THIS location, generating on first use.
 
-    One empty stage per LOCATION: the turn's global circumstances carry a
-    stable location.id, and the backdrop is cached per (game, location_id) —
-    while the crew stays in the same place, every turn reuses the same
-    Picture 2, keeping the world consistent. Turns without a location (older
-    games) fall back to a per-turn cache. Every action / character / death
-    image is composed onto this same Picture 2. Persisted in game_images
-    (type="turn_background"); generation races are serialized per cache key.
+    One empty stage per LOCATION: the backdrop is cached per (game, location_id)
+    — while the crew stays in the same place, every turn reuses the same
+    Picture 2, keeping the world consistent. Every action / character image is
+    composed onto the Picture 2 of ITS OWN location (GM feedback 2026-11-14:
+    the action said medbay / reactor compartment while Picture 2 kept showing
+    the bridge). Persisted in game_images (type="turn_background"); generation
+    races are serialized per cache key.
 
-    When the location is aboard_ship and the game has a bridge image, the
-    backdrop is an EDIT of that bridge (their own ship's interior) instead of
-    an invented txt2img one.
+    Mode selection for aboard-ship locations:
+    - the crew's CURRENT turn location (same location.id as the turn's global
+      circumstances) → an EDIT of the ship's own empty bridge_stage (their
+      vessel's interior; fresh txt2img kept inventing "another ship's" bridge,
+      GM feedback 2026-11-13);
+    - a DIFFERENT compartment of the same ship → txt2img anchored to the
+      ship's design language (games.ship_style) — an edit of the bridge cannot
+      become another room.
     Returns None when the background cannot be produced (callers then pass
     no Picture 2 and the edit model imagines the scene from the instruction).
     """
-    turn_data = get_game_turn(turn, game_id)
-    try:
-        global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
-    except (json.JSONDecodeError, TypeError):
-        global_circ = {}
-    location = global_circ.get("location") or {}
     location_id = (location.get("id") or "").strip()
-    # aboard_ship (GM feedback 2026-11-13): the crew is inside their own vessel,
-    # so the backdrop is built FROM the ship's established interior — fresh
-    # txt2img kept inventing "another ship's" bridge every time. The EMPTY
-    # stage twin is the preferred edit source: the crew bridge splash carries
-    # the whole crew and an edit cannot remove them from its reference.
-    bridge_url = ""
-    if location.get("aboard_ship"):
-        bridge_url = (
-            get_random_game_image(type="bridge_stage", game_id=game_id, turn=None)
-            or get_random_game_image(type="bridge", game_id=game_id, turn=None)
-            or ""
-        )
 
     def _lookup() -> dict | None:
         if location_id:
-            existing = get_location_background(game_id, location_id)
-            if existing:
-                return existing
+            return get_location_background(game_id, location_id)
         return get_turn_background(game_id, turn)
 
     existing = _lookup()
     if existing:
         return existing
+
+    # aboard_ship mode: is this location the one the turn's global
+    # circumstances describe (the ship area whose interior is the bridge)?
+    turn_data = get_game_turn(turn, game_id)
+    try:
+        global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
+    except (json.JSONDecodeError, TypeError):
+        global_circ = {}
+    turn_location = global_circ.get("location") or {}
+    turn_loc_id = (turn_location.get("id") or "").strip()
+    same_place = (not location_id) or (not turn_loc_id) or location_id == turn_loc_id
+
+    bridge_url = ""
+    compartment = False
+    if location.get("aboard_ship"):
+        if same_place:
+            # The EMPTY stage twin is the preferred edit source: the crew
+            # bridge splash carries the whole crew and an edit cannot remove
+            # them from its reference.
+            bridge_url = (
+                get_random_game_image(type="bridge_stage", game_id=game_id, turn=None)
+                or get_random_game_image(type="bridge", game_id=game_id, turn=None)
+                or ""
+            )
+        else:
+            compartment = True
 
     cache_key = location_id or f"turn{turn}"
     lock = _turn_bg_locks.setdefault((game_id, cache_key), asyncio.Lock())
@@ -2454,8 +2481,9 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
         if existing:
             return existing
 
-        setting = global_circ.get("setting", "") or (turn_data.get("story", "") if turn_data else "")
-        conflict = global_circ.get("conflict", "")
+        setting = setting or global_circ.get("setting", "") or (turn_data.get("story", "") if turn_data else "")
+        conflict = conflict or global_circ.get("conflict", "")
+        ship_style = get_ship_style(game_id) if compartment else ""
 
         language = get_game_language(game_id)
         gm = create_game_server(language=language)
@@ -2471,6 +2499,8 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
                 location_name=location.get("name", ""),
                 location_description=location.get("description", ""),
                 edit_reference=bool(bridge_url),
+                compartment=compartment,
+                ship_style=ship_style,
             )
         except Exception:
             logger.warning(f"[TURN_BACKGROUND] Prompt LLM call failed for {game_id} turn {turn}", exc_info=True)
@@ -2482,6 +2512,16 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
                     "leaving every station unattended — a completely vacant room. Keep the "
                     f"architecture, consoles and layout exactly; {setting}. "
                     "Adjusted lighting and atmosphere, 4K."
+                )
+            elif compartment:
+                prompt = (
+                    "Cinematic medium-wide shot of one specific vacant compartment of THEIR "
+                    f"starship ({location.get('name', '')}: {location.get('description', '')}), "
+                    "completely empty, props matching the compartment's function, same design "
+                    "language as the rest of the ship. Standable deck surface in the lower half "
+                    "of the frame, 3-5 human-scale anchor objects, starship-grade props only, "
+                    "dramatic lighting with an explicit source, detailed, 4K. "
+                    "No characters, no people, no domestic windows."
                 )
             else:
                 prompt = (
@@ -2525,8 +2565,31 @@ async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
             type="turn_background", image_url=url, prompt=prompt, game_id=game_id,
             turn=turn, location_id=location_id or None,
         )
-        logger.info(f"[TURN_BACKGROUND] Generated for {game_id} turn {turn} (location={location_id or 'turn-keyed'}): {url}")
+        logger.info(f"[TURN_BACKGROUND] Generated for {game_id} turn {turn} (location={location_id or 'turn-keyed'}, compartment={compartment}): {url}")
         return {"image_url": url, "prompt": prompt}
+
+
+async def _ensure_turn_background(game_id: str, turn: int) -> dict | None:
+    """The turn location's backdrop (thin wrapper over _ensure_location_background)."""
+    turn_data = get_game_turn(turn, game_id)
+    try:
+        global_circ = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
+    except (json.JSONDecodeError, TypeError):
+        global_circ = {}
+    location = global_circ.get("location") or {}
+    return await _ensure_location_background(
+        game_id, turn, location,
+        setting=global_circ.get("setting", "") or (turn_data.get("story", "") if turn_data else ""),
+        conflict=global_circ.get("conflict", ""),
+    )
+
+
+# Where each crew member acted this turn: (game_id, turn, crew_key) →
+# location.id derived by the scene-instruction LLM. Feeds the scene-stage
+# comic's location grouping (co-located characters share one group picture).
+# In-memory by design: it only needs to live from image generation to the
+# briefing push of the same turn.
+_turn_crew_locations: dict[tuple[str, int, str], str] = {}
 
 
 async def _generate_chosen_action_image(
@@ -2584,24 +2647,25 @@ async def _generate_chosen_action_image(
         # toward a human in uniform. Species only.
         character_description = species if species and species not in ("Unknown", "Неизвестно") else ""
 
-        # Generate Qwen-Image-Edit instruction via LLM. Picture 2 is the turn's
-        # shared background; the instruction stages the action inside it using
-        # only the objects present in that scene.
-        turn_bg = await _ensure_turn_background(game_id, turn)
-        background_url = turn_bg["image_url"] if turn_bg else None
-        scene_desc = turn_bg["prompt"] if turn_bg else ""
+        # Generate Qwen-Image-Edit instruction via LLM. Picture 2 is the
+        # action's OWN location backdrop (derived from the action text — the
+        # crew splits across compartments), staged with the objects present
+        # in that scene.
         conflict = global_circ.get("conflict", "")
         scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
         species_category = profile.get("species_primary_key") or ""
+        turn_location = global_circ.get("location") or {}
         gm = None
         pose_filename = ""
+        scene_participants: list[str] = []
+        action_location: dict = {}
         try:
             gm = create_game_server(language=language)
             scene = await gm.generate_scene_instruction(
                 action_text=action_text,
                 species_desc=species_desc or species,
                 language=language,
-                scene_description=scene_desc,
+                scene_description="",
                 scene_context=scene_context,
                 species_category=species_category,
                 game_id=game_id,
@@ -2609,19 +2673,38 @@ async def _generate_chosen_action_image(
                 turn=turn,
                 kind="player_action",
                 pose_catalogue=_pose_catalogue_for(species_category),
+                turn_location=turn_location,
             )
             instruction = scene["instruction"]
             pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
-            logger.info(f"[ACTION_IMAGE] Scene instruction for {role} (pose={scene.get('pose_id') or '-'}): {instruction[:120]}...")
+            scene_participants = scene.get("participants", [])
+            action_location = scene.get("location") or turn_location
+            if action_location.get("id"):
+                _turn_crew_locations[(game_id, turn, str(player_id))] = action_location["id"]
+            logger.info(f"[ACTION_IMAGE] Scene instruction for {role} (pose={scene.get('pose_id') or '-'}, location={action_location.get('id') or '-'}): {instruction[:120]}...")
         except Exception as llm_err:
             logger.warning(f"[ACTION_IMAGE] Scene instruction failed for {role}: {llm_err}, using fallback")
             instruction = ""
+            action_location = turn_location
+            if action_location.get("id"):
+                _turn_crew_locations[(game_id, turn, str(player_id))] = action_location["id"]
 
         if not instruction:
             instruction = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
 
+        # Backdrop of the action's OWN location (cached per location id —
+        # a compartment action gets its compartment, not the turn's bridge).
+        turn_bg = await _ensure_location_background(
+            game_id, turn, action_location, setting=setting, conflict=conflict,
+        )
+        background_url = turn_bg["image_url"] if turn_bg else None
+        scene_desc = turn_bg["prompt"] if turn_bg else ""
+
         # Get player's avatar URL for reference
         avatar_url = profile.get("avatar_url") or None
+        participant_urls = await _resolve_participant_avatars(
+            game_id, avatar_url, scene_participants,
+        )
 
         image_gen = create_image_generator()
         chosen_action_url = await image_gen.generate_character_in_scene(
@@ -2638,6 +2721,7 @@ async def _generate_chosen_action_image(
             kind="player_action",
             species_category=species_category,
             pose_filename=pose_filename or None,
+            participant_urls=participant_urls,
         )
 
         if chosen_action_url:
@@ -2886,16 +2970,16 @@ async def _generate_npc_chosen_action_image(
 
         character_description = f"{npc_name}, the {role}"
 
-        # Generate Qwen-Image-Edit instruction via LLM (Picture 2 = the turn's
-        # shared background)
+        # Generate Qwen-Image-Edit instruction via LLM (Picture 2 = the action's
+        # OWN location backdrop, derived from the action text)
         npc_species = npc_profile.get("species", "") or ""
         instruction = ""
         conflict = global_circ.get("conflict", "")
         scene_context = f"Setting: {setting}. Situation: {conflict}" if conflict else f"Setting: {setting}"
-        turn_bg = await _ensure_turn_background(game_id, turn)
-        background_url = turn_bg["image_url"] if turn_bg else None
-        scene_desc = turn_bg["prompt"] if turn_bg else ""
         species_category = npc_profile.get("species", "") or ""
+        turn_location = global_circ.get("location") or {}
+        scene_participants: list[str] = []
+        action_location: dict = {}
         pose_filename = ""
         try:
             game_lang = get_game_language(game_id)
@@ -2904,7 +2988,7 @@ async def _generate_npc_chosen_action_image(
                 action_text=action_text,
                 species_desc=npc_species,
                 language=game_lang,
-                scene_description=scene_desc,
+                scene_description="",
                 scene_context=scene_context,
                 species_category=species_category,
                 game_id=game_id,
@@ -2912,15 +2996,31 @@ async def _generate_npc_chosen_action_image(
                 turn=turn,
                 kind="npc_action",
                 pose_catalogue=_pose_catalogue_for(species_category),
+                turn_location=turn_location,
             )
             instruction = scene["instruction"]
             pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
+            scene_participants = scene.get("participants", [])
+            action_location = scene.get("location") or turn_location
+            if action_location.get("id"):
+                _turn_crew_locations[(game_id, turn, npc_key)] = action_location["id"]
         except Exception as llm_err:
             logger.warning(f"[NPC_ACTION_IMAGE] Scene instruction failed for {npc_name}: {llm_err}")
             instruction = ""
+            action_location = turn_location
+            if action_location.get("id"):
+                _turn_crew_locations[(game_id, turn, npc_key)] = action_location["id"]
 
         if not instruction:
             instruction = f"Place the character from Picture 1 in the scene of Picture 2 performing this action: {action_text}. Cinematic sci-fi scene, dramatic lighting, space opera aesthetic, photorealistic, 4K."
+
+        turn_bg = await _ensure_location_background(
+            game_id, turn, action_location, setting=setting, conflict=conflict,
+        )
+        background_url = turn_bg["image_url"] if turn_bg else None
+        participant_urls = await _resolve_participant_avatars(
+            game_id, avatar_url, scene_participants,
+        )
 
         image_gen = create_image_generator()
         chosen_action_url = await image_gen.generate_character_in_scene(
@@ -2937,6 +3037,7 @@ async def _generate_npc_chosen_action_image(
             kind="npc_action",
             species_category=species_category,
             pose_filename=pose_filename or None,
+            participant_urls=participant_urls,
         )
 
         if chosen_action_url:
@@ -3682,6 +3783,16 @@ async def _analyze_turn_outcome(
                 outcome_turn_bg = await _ensure_turn_background(game_id, turn)
                 turn_bg_url = outcome_turn_bg["image_url"] if outcome_turn_bg else None
                 turn_bg_prompt = outcome_turn_bg["prompt"] if outcome_turn_bg else ""
+                # Co-located crew share one outcome panel (GM feedback
+                # 2026-11-14 v3): hand the LLM the turn's placement so it can
+                # group the panels by location.
+                try:
+                    outcome_gc = json.loads(
+                        (get_game_turn(turn, game_id) or {}).get("global_circumstances", "{}") or "{}"
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    outcome_gc = {}
+                crew_positions = outcome_gc.get("crew_positions") or []
                 image_prompt = ""
                 try:
                     prompt_result = await gm.generate_outcome_image_prompt(
@@ -3695,6 +3806,7 @@ async def _analyze_turn_outcome(
                         kind="outcome_image_prompt",
                         scene_description=turn_bg_prompt,
                         max_characters=max_staged,
+                        crew_positions=crew_positions,
                     )
                     image_prompt = prompt_result.get("image_prompt", "")
                 except Exception:
@@ -4365,6 +4477,9 @@ async def _run_language_change(game_id: str, language: str) -> None:
                 crew_refs = _collect_crew_avatar_refs(game_id, all_participants)
                 bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, crew_refs=crew_refs, game_id=game_id, player_id=None, turn=None, kind="bridge_image_prompt")
                 bridge_prompt = bridge_result.get("bridge_prompt", "")
+                ship_style = bridge_result.get("ship_style", "")
+                if ship_style:
+                    save_ship_style(game_id, ship_style)
                 if bridge_prompt:
                     image_gen = create_image_generator()
                     bridge_url = await image_gen.generate_bridge_image(
@@ -4430,14 +4545,17 @@ def _build_player_briefings_for_push(
     crew_dialogues: list[dict],
     turn_num: int,
     game_id: str,
+    scene_url: str | None = None,
 ) -> list[dict]:
     """Build per-player briefing dicts for push payload from stored briefings.
 
-    Fetches scene image (if available) from game_images table for this turn.
-    Also fetches player_name for each real player to include in the payload.
+    Fetches scene image (if available) from game_images table for this turn
+    (``scene_url`` overrides — the freshly built scene-stage comic). Also
+    fetches player_name for each real player to include in the payload.
     """
     # Fetch scene image for this turn (if generated and saved)
-    scene_url = _scene_image_for_turn(game_id, turn_num)
+    if scene_url is None:
+        scene_url = _scene_image_for_turn(game_id, turn_num)
     players_data = []
     for b in all_briefings:
         if b.get("is_npc"):
@@ -4467,6 +4585,239 @@ def _build_player_briefings_for_push(
             }
         )
     return players_data
+
+
+def _group_crew_by_location(entries: list[dict]) -> list[list[dict]]:
+    """Group crew entries by their derived location, preserving order.
+
+    Co-located characters share one scene-stage picture (GM feedback
+    2026-11-14 v3: "если несколько персонажей делают действие в одной
+    локации — объединить в одну картинку"). Entries without a location stay
+    singletons — an unknown room must never merge two strangers.
+    """
+    groups: list[list[dict]] = []
+    by_loc: dict[str, list[dict]] = {}
+    for entry in entries:
+        loc = entry.get("loc") or ""
+        if loc:
+            if loc in by_loc:
+                by_loc[loc].append(entry)
+                continue
+            by_loc[loc] = [entry]
+            groups.append(by_loc[loc])
+        else:
+            groups.append([entry])
+    return groups
+
+
+async def _build_scene_stage_url(
+    game_id: str,
+    turn_num: int,
+    all_briefings: list[dict],
+) -> str | None:
+    """Build the scene-STAGE comic: one row per location group.
+
+    The crew splits across compartments, and characters sharing a location
+    are combined into ONE wide group picture — the page never repeats the
+    same room panel after panel (GM feedback 2026-11-14 v3). Every group —
+    including a solo character (GM feedback 2026-11-14 v4: "его наверное
+    одной широкой картинкой можно сделать тоже") — is generated as a wide
+    strip in its group-size aspect (actor + co-located participants as
+    reference pictures); rows are stitched deterministically (no image
+    model), so no character can drop, duplicate or drift. If a group
+    generation fails, that row falls back to the existing individual
+    images.
+
+    The page is persisted (type="scene_comic") so poll clients serve it too.
+    Returns None when no panel is available (caller falls back to the shared
+    backdrop).
+    """
+    try:
+        pending = _pending_action_tasks.pop((turn_num, game_id), set())
+        if pending:
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning(f"[SCENE_COMIC] NPC action task failed: {r}")
+
+        language = get_game_language(game_id)
+        gm = create_game_server(language=language)
+        npc_rows = [
+            row for row in (get_all_briefings_for_turn(turn_num, game_id) or [])
+            if row.get("is_npc")
+        ]
+
+        # Crew entries in roster order: players first, then NPCs.
+        entries: list[dict] = []
+        for b in all_briefings:
+            if b.get("is_npc"):
+                continue
+            pid = b.get("player_id")
+            profile = get_player_profile(pid) if pid else None
+            if not profile or not b.get("character_image_url"):
+                continue
+            entries.append({
+                "key": str(pid),
+                "name": profile.get("player_name", "") or profile.get("role", "?"),
+                "avatar_url": profile.get("avatar_url"),
+                "species_desc": profile.get("species_description", "") or profile.get("species", ""),
+                "species_category": profile.get("species_primary_key") or "",
+                "image_prompt": b.get("image_prompt", ""),
+                "panel_url": b["character_image_url"],
+                "loc": _turn_crew_locations.get((game_id, turn_num, str(pid)), ""),
+            })
+        for row in npc_rows:
+            npc_key = row.get("npc_key")
+            if not npc_key or not row.get("chosen_action_url"):
+                continue
+            npc_profile = get_npc_profile(npc_key) or {}
+            avatar_desc = npc_profile.get("avatar_description", "") or ""
+            avatar_url = _extract_avatar_url(avatar_desc)
+            if not avatar_url:
+                continue
+            entries.append({
+                "key": npc_key,
+                "name": npc_profile.get("npc_name", "") or npc_profile.get("role", "?"),
+                "avatar_url": avatar_url,
+                "species_desc": npc_profile.get("species", ""),
+                "species_category": npc_profile.get("species", "") or "",
+                "image_prompt": row.get("image_prompt", ""),
+                "panel_url": row["chosen_action_url"],
+                "loc": _turn_crew_locations.get((game_id, turn_num, npc_key), ""),
+            })
+        if not entries:
+            return None
+
+        groups = _group_crew_by_location(entries)
+        logger.info(
+            f"[SCENE_COMIC] {len(entries)} crew -> {len(groups)} location group(s): "
+            f"{[len(g) for g in groups]}"
+        )
+
+        panel_urls: list[str] = []
+        for group in groups:
+            loc_id = group[0].get("loc") or ""
+            # In a mixed group prefer a humanoid actor: a non-humanoid actor's
+            # anatomy guard fills the instruction with physics-of-form verbs
+            # (floating, hovering...), which the edit model then spreads over
+            # the whole group — humans started hovering along with the sphere.
+            actor = next(
+                (e for e in group if e.get("species_category") not in NON_HUMANOID_SPECIES_CATEGORIES),
+                group[0],
+            )
+            others = [e for e in group if e is not actor]
+            setting = ""
+            turn_data = get_game_turn(turn_num, game_id)
+            try:
+                gc = json.loads(turn_data.get("global_circumstances", "{}")) if turn_data else {}
+            except (json.JSONDecodeError, TypeError):
+                gc = {}
+            setting = gc.get("setting", "") or (turn_data.get("story", "") if turn_data else "")
+
+            combined_action = actor["image_prompt"] or f"reacting to the situation in {setting}"
+            if actor["species_category"] in NON_HUMANOID_SPECIES_CATEGORIES:
+                # The anatomy guard's physics verbs invite mid-air poses —
+                # anchor the being to a concrete spot (GM feedback 2026-11-14:
+                # "начальник охраны подвешен в воздухе").
+                combined_action += (
+                    " The being is anchored to a concrete spot of the scene — "
+                    "resting its mass on the deck or hovering LOW right over its "
+                    "workstation — NOT hanging in mid-air."
+                )
+            if others:
+                def _entry_label(e: dict) -> str:
+                    base = e["image_prompt"] or "doing their part of the turn’s start situation"
+                    # A non-humanoid participant needs anatomy spelled out at
+                    # lock grade: a bare name reads as "another person" and
+                    # the edit model collapses the being into a small human
+                    # figure — or leaves it hanging in mid-air.
+                    species = (e.get("species_desc") or "").strip()
+                    if e.get("species_category") in NON_HUMANOID_SPECIES_CATEGORIES and species:
+                        return (
+                            f"{e['name']} — ATTENTION: this one is NOT a person, it is {species}; "
+                            f"render it EXACTLY as its own reference picture shows, NOT as a humanoid "
+                            f"figure; it acts through its own body plan, anchored to a concrete spot "
+                            f"of the scene — resting its mass on the deck or hovering LOW right over "
+                            f"its workstation, NOT hanging in mid-air between the others — {base}"
+                        )
+                    return f"{e['name']} — {base}"
+
+                others_text = "; ".join(_entry_label(e) for e in others)
+                combined_action = (
+                    f"{combined_action}. Also in this place nearby: {others_text} — "
+                    "every one of them busy with a DIFFERENT concrete object of this place "
+                    "(a console, a panel, a hatch, a table), each mid-action and clearly "
+                    "readable from the frame; nobody stands idle and nobody just faces the "
+                    "others talking."
+                )
+            width, height = scene_comic.group_dimensions(len(group))
+            panel_url = None
+            try:
+                scene = await gm.generate_scene_instruction(
+                    action_text=combined_action,
+                    species_desc=actor["species_desc"],
+                    language=language,
+                    scene_description="",
+                    scene_context=f"Setting: {setting}",
+                    species_category=actor["species_category"],
+                    game_id=game_id,
+                    player_id=actor["key"],
+                    turn=turn_num,
+                    kind="scene_group",
+                    pose_catalogue=_pose_catalogue_for(actor["species_category"]),
+                    turn_location={"id": loc_id, "name": loc_id, "description": "", "aboard_ship": True} if loc_id else None,
+                )
+                pose_filename = await _pose_filename_for(actor["species_category"], scene.get("pose_id", ""))
+                participant_urls = [e["avatar_url"] for e in others if e.get("avatar_url")]
+                group_location = {
+                    "id": loc_id,
+                    "aboard_ship": bool((gc.get("location") or {}).get("aboard_ship")),
+                } if loc_id else None
+                turn_bg = await _ensure_location_background(
+                    game_id, turn_num, group_location or {}, setting=setting,
+                ) if loc_id else None
+                image_gen = create_image_generator()
+                panel_url = await image_gen.generate_character_in_scene(
+                    instruction_prompt=scene["instruction"],
+                    character_avatar_url=actor.get("avatar_url"),
+                    background_url=turn_bg["image_url"] if turn_bg else None,
+                    character_description=actor["species_desc"],
+                    filename_prefix=f"{game_id}/scene_group_t{turn_num}_{loc_id or actor['key']}",
+                    width=width,
+                    height=height,
+                    game_id=game_id,
+                    player_id=actor["key"],
+                    turn=turn_num,
+                    kind="scene_group",
+                    species_category=actor["species_category"],
+                    pose_filename=pose_filename or None,
+                    participant_urls=participant_urls,
+                )
+            except Exception:
+                logger.warning(
+                    f"[SCENE_COMIC] group picture failed for location {loc_id or actor['key']}, "
+                    "falling back to individual panels", exc_info=True,
+                )
+            if panel_url:
+                panel_urls.append(panel_url)
+            else:
+                panel_urls.extend(e["panel_url"] for e in group)
+
+        if not panel_urls:
+            return None
+
+        url = await scene_comic.build_scene_comic(
+            panel_urls, comfyui_url=COMFYUI_BASE_URL, game_id=game_id, turn=turn_num,
+        )
+        if url:
+            save_game_image(
+                type="scene_comic", image_url=url, game_id=game_id,
+                turn=turn_num, prompt=f"scene stage: {len(panel_urls)} location group(s)",
+            )
+        return url
+    except Exception:
+        logger.error(f"[SCENE_COMIC] build failed for {game_id} turn {turn_num}", exc_info=True)
+        return None
 
 
 @app.post("/admin/generate-comic/{player_id}")
@@ -4723,15 +5074,70 @@ def _collect_crew_avatar_refs(
         else:
             url = npc_urls.get(p.get("npc_key"))
         if url:
+            species = ""
+            species_description = ""
+            species_category = ""
+            if p.get("type") == "player":
+                species = (profile or {}).get("species", "") or ""
+                species_description = (profile or {}).get("species_description", "") or ""
+                species_category = (profile or {}).get("species_primary_key", "") or ""
+            else:
+                npc_row = next(
+                    (n for n in npc_fetch if n["npc_key"] == p.get("npc_key")), None
+                )
+                species = (npc_row or {}).get("species", "") or ""
+                species_description = p.get("avatar_description", "") or ""
             refs.append(
                 {
                     "name": p.get("player_name") or p.get("npc_name") or p.get("role", "?"),
                     "role": p.get("role", "?"),
                     "appearance": p.get("avatar_description", "") or "",
                     "avatar_url": url,
+                    "species": species,
+                    "species_description": species_description,
+                    "species_category": species_category,
                 }
             )
     return refs[:10]
+
+
+async def _resolve_participant_avatars(
+    game_id: str,
+    actor_url: str | None,
+    participants: list[str],
+) -> list[str]:
+    """Avatar URLs of other crew members named in an action, in reference order.
+
+    Matches each free-text participant string (a name or a role, as the
+    scene-instruction LLM writes them) against the living roster by
+    case-insensitive substring on name or role. The actor is never returned.
+    Unmatched names are logged and skipped — a wrong guess would put a
+    stranger into the frame (GM feedback 2026-11-14: an action involving two
+    characters showed only one).
+    """
+    if not participants:
+        return []
+    crew = _collect_crew_avatar_refs(game_id)
+    resolved: list[str] = []
+    for name in participants[:6]:
+        needle = (name or "").strip().lower()
+        if not needle:
+            continue
+        match = next(
+            (
+                r for r in crew
+                if r["avatar_url"] != actor_url
+                and r["avatar_url"] not in resolved
+                and (needle in r["name"].lower() or needle in r["role"].lower()
+                     or r["name"].lower() in needle or r["role"].lower() in needle)
+            ),
+            None,
+        )
+        if match:
+            resolved.append(match["avatar_url"])
+        else:
+            logger.warning(f"[ACTION_IMAGE] participant '{name}' matched no crew member, skipped")
+    return resolved
 
 
 def _get_crew_members(game_id: str) -> list[dict[str, Any]]:
@@ -5170,6 +5576,9 @@ async def _original_start_game(request: StartGameRequest):
             crew_refs = _collect_crew_avatar_refs(game_id, all_participants)
             bridge_result = await gm.generate_bridge_image_prompt(mission_data or {}, all_participants, crew_refs=crew_refs, game_id=game_id, player_id=None, turn=_npc_turn, kind="bridge_image_prompt")
             bridge_prompt = bridge_result.get("bridge_prompt", "")
+            ship_style = bridge_result.get("ship_style", "")
+            if ship_style:
+                save_ship_style(game_id, ship_style)
             if bridge_prompt:
                 image_gen = create_image_generator()
                 bridge_url = await image_gen.generate_bridge_image(
@@ -5487,9 +5896,9 @@ async def _original_start_game(request: StartGameRequest):
         # image_prompt is the LLM-generated visual-only scene description
         # (pose/action/species, no name/role) for Qwen-Image-Edit conditioning.
         char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting}"
-        turn_bg = await _ensure_turn_background(game_id, turn_num)
-        background_url = turn_bg["image_url"] if turn_bg else None
-        scene_desc = turn_bg["prompt"] if turn_bg else ""
+        turn_location = global_circ.get("location") or {}
+        scene_participants: list[str] = []
+        char_location: dict = turn_location
         species_category = profile.get("species_primary_key") or ""
         pose_filename = ""
         try:
@@ -5497,7 +5906,7 @@ async def _original_start_game(request: StartGameRequest):
                 action_text=char_action,
                 species_desc=species_desc or species_type,
                 language=language,
-                scene_description=scene_desc,
+                scene_description="",
                 scene_context=f"Setting: {setting}",
                 species_category=species_category,
                 game_id=game_id,
@@ -5505,18 +5914,36 @@ async def _original_start_game(request: StartGameRequest):
                 turn=turn_num,
                 kind="character_scene",
                 pose_catalogue=_pose_catalogue_for(species_category),
+                turn_location=turn_location,
             )
             instruction = scene["instruction"]
             pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
+            scene_participants = scene.get("participants", [])
+            char_location = scene.get("location") or turn_location
+            if char_location.get("id"):
+                _turn_crew_locations[(game_id, turn_num, str(pid))] = char_location["id"]
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
             instruction = ""
+            char_location = turn_location
+            if char_location.get("id"):
+                _turn_crew_locations[(game_id, turn_num, str(pid))] = char_location["id"]
+
+        # The character's OWN room (the crew splits across compartments —
+        # GM feedback 2026-11-14).
+        turn_bg = await _ensure_location_background(
+            game_id, turn_num, char_location, setting=setting,
+        )
+        background_url = turn_bg["image_url"] if turn_bg else None
 
         if not instruction:
             instruction = f"Place the character from Picture 1 in the scene of Picture 2. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
+        participant_urls = await _resolve_participant_avatars(
+            game_id, avatar_url, scene_participants,
+        )
         # Avoid starting with the role title ("Scientific Officer") — it biases
         # text-to-image toward a human in uniform. Lead with species only.
         character_description = ""
@@ -5539,6 +5966,7 @@ async def _original_start_game(request: StartGameRequest):
             kind="character_scene",
             species_category=species_category,
             pose_filename=pose_filename or None,
+            participant_urls=participant_urls,
         )
         if url:
             save_game_image(
@@ -5639,7 +6067,8 @@ async def _original_start_game(request: StartGameRequest):
 
     # ── Push briefings to telegram-bot ─────────────────────────
     try:
-        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id)
+        scene_stage_url = await _build_scene_stage_url(game_id, turn_num, all_briefings)
+        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id, scene_url=scene_stage_url)
         if player_briefings:
             asyncio.create_task(
                 push_briefings(
@@ -6662,9 +7091,9 @@ async def _original_continue_game(
         # Qwen-Image-Edit instruction for placing this character in the scene.
         # image_prompt is the LLM-generated visual-only description (no name/role).
         char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting}"
-        turn_bg = await _ensure_turn_background(game_id, turn_num)
-        background_url = turn_bg["image_url"] if turn_bg else None
-        scene_desc = turn_bg["prompt"] if turn_bg else ""
+        turn_location = global_circ.get("location") or {}
+        scene_participants: list[str] = []
+        char_location: dict = turn_location
         species_category = profile.get("species_primary_key") or ""
         pose_filename = ""
         try:
@@ -6672,7 +7101,7 @@ async def _original_continue_game(
                 action_text=char_action,
                 species_desc=species_desc or species_type,
                 language=language,
-                scene_description=scene_desc,
+                scene_description="",
                 scene_context=f"Setting: {setting}",
                 species_category=species_category,
                 game_id=game_id,
@@ -6680,18 +7109,36 @@ async def _original_continue_game(
                 turn=turn_num,
                 kind="character_scene",
                 pose_catalogue=_pose_catalogue_for(species_category),
+                turn_location=turn_location,
             )
             instruction = scene["instruction"]
             pose_filename = await _pose_filename_for(species_category, scene.get("pose_id", ""))
+            scene_participants = scene.get("participants", [])
+            char_location = scene.get("location") or turn_location
+            if char_location.get("id"):
+                _turn_crew_locations[(game_id, turn_num, str(pid))] = char_location["id"]
         except Exception as e:
             logger.warning(f"[CHAR_IMAGE] Scene instruction failed for {role}: {e}")
             instruction = ""
+            char_location = turn_location
+            if char_location.get("id"):
+                _turn_crew_locations[(game_id, turn_num, str(pid))] = char_location["id"]
+
+        # The character's OWN room (the crew splits across compartments —
+        # GM feedback 2026-11-14).
+        turn_bg = await _ensure_location_background(
+            game_id, turn_num, char_location, setting=setting,
+        )
+        background_url = turn_bg["image_url"] if turn_bg else None
 
         if not instruction:
             instruction = f"Place the character from Picture 1 in the scene of Picture 2. {char_action}. Cinematic sci-fi portrait, upper body, dynamic lighting, 4K quality."
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
+        participant_urls = await _resolve_participant_avatars(
+            game_id, avatar_url, scene_participants,
+        )
         # Avoid starting with the role title ("Scientific Officer") — it biases
         # text-to-image toward a human in uniform. Lead with species only.
         character_description = ""
@@ -6714,6 +7161,7 @@ async def _original_continue_game(
             kind="character_scene",
             species_category=species_category,
             pose_filename=pose_filename or None,
+            participant_urls=participant_urls,
         )
         if url:
             save_game_image(
@@ -6770,7 +7218,8 @@ async def _original_continue_game(
         # Build the global intro narrative from global circumstances
         global_narrative = global_circ.get("narrative", "")
 
-        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id)
+        scene_stage_url = await _build_scene_stage_url(game_id, turn_num, all_briefings)
+        player_briefings = _build_player_briefings_for_push(all_briefings, crew_dialogues_list, turn_num, game_id, scene_url=scene_stage_url)
         if player_briefings:
             asyncio.create_task(
                 push_briefings(

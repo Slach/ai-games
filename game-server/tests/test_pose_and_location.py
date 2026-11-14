@@ -20,6 +20,20 @@ And the 2026-11-13 GM feedback fixes:
 - turn-background prompt: edit_reference mode (aboard-ship interior edit).
 - global-circumstances: location progression instruction + aboard_ship in
   the schema.
+
+And the 2026-11-14 GM feedback fixes:
+- scene instruction schema: per-action `location` (the backdrop is cached per
+  location id — an action in the reactor bay gets the reactor bay, not the
+  turn's bridge) and `participants` (every crew member taking part in an
+  action must appear in the frame).
+- scene instruction system prompt: the scene picture is authoritative for the
+  room — no invented furniture, seated = facing the operated console.
+- turn-background prompt: compartment mode (a different room of the SAME ship,
+  anchored to the ship's design language).
+- bridge schema: ship_style (design language shared by all rooms of the
+  vessel) + games.ship_style storage.
+- outcome comic: per-panel anatomy locks for non-humanoid species (a
+  lava-sphere crew member was rendered with a human mustache).
 """
 
 import os
@@ -194,6 +208,248 @@ class TestBridgeStageSchema(unittest.TestCase):
         self.assertIn("bridge_stage_prompt", schema["properties"])
         self.assertIn("bridge_stage_prompt", schema["required"])
         self.assertIn("VACANT", schema["properties"]["bridge_stage_prompt"]["description"])
+
+    def test_ship_style_required(self):
+        # GM feedback 2026-11-14 ("консистентно с остальными задниками"):
+        # every compartment backdrop of the ship is generated from this
+        # shared design language.
+        schema = game_server.BRIDGE_IMAGE_SCHEMA["json_schema"]["schema"]
+        self.assertIn("ship_style", schema["properties"])
+        self.assertIn("ship_style", schema["required"])
+
+
+class TestSceneInstructionLocationAndParticipants(unittest.TestCase):
+    ACTION = "Patch the coolant leak in the reactor bay."
+    SPECIES = "Human engineer."
+    TURN_LOCATION = {
+        "id": "witness_bridge",
+        "name": "Main bridge",
+        "description": "The ship's command deck",
+        "aboard_ship": True,
+    }
+
+    def test_schema_has_location_and_participants(self):
+        schema = game_server.scene_instruction_schema(["console_side"])
+        props = schema["json_schema"]["schema"]["properties"]
+        self.assertIn("location", props)
+        self.assertIn("participants", props)
+        self.assertIn("aboard_ship", props["location"]["properties"])
+        self.assertIn("location", schema["json_schema"]["schema"]["required"])
+        self.assertIn("participants", schema["json_schema"]["schema"]["required"])
+
+    def test_turn_location_block_en(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_EN, self.ACTION, self.SPECIES, "A bridge stage", "", "",
+            "- console_side: side view", turn_location=self.TURN_LOCATION,
+        )
+        self.assertIn("witness_bridge", prompt)
+        self.assertIn("EXACTLY the same location.id", prompt)
+        self.assertIn("reactor compartment", prompt)
+
+    def test_turn_location_block_ru(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_RU, self.ACTION, self.SPECIES, "Мостик", "", "",
+            "- console_side: боковой ракурс", turn_location=self.TURN_LOCATION,
+        )
+        self.assertIn("witness_bridge", prompt)
+        self.assertIn("РОВНО тот же location.id", prompt)
+
+    def test_no_location_block_without_turn_location(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_EN, self.ACTION, self.SPECIES, "A bridge stage", "", "",
+        )
+        self.assertNotIn("location.id", prompt)
+
+    def test_participants_block_en(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_EN, "Repair the conduit together with the engineer", self.SPECIES,
+            "A bridge stage", "", "", "", turn_location=self.TURN_LOCATION,
+        )
+        self.assertIn("PARTICIPANTS:", prompt)
+        self.assertIn("each additional character reference picture", prompt)
+
+    def test_participants_block_ru(self):
+        prompt = build_scene_instruction_user(
+            LANGUAGE_RU, "Вместе с инженером заваривает трещину", self.SPECIES,
+            "Мостик", "", "", "", turn_location=self.TURN_LOCATION,
+        )
+        self.assertIn("УЧАСТНИКИ:", prompt)
+
+
+class TestFurnitureMandate(unittest.TestCase):
+    # GM feedback 2026-11-14: the backdrop showed two seats and the character
+    # was seated in an invented third one, chair turned away from the console.
+    def test_furniture_mandate_en(self):
+        system = build_scene_instruction_system(LANGUAGE_EN)
+        self.assertIn("AUTHORITATIVE FOR THE ROOM", system)
+        self.assertIn("do NOT invent new furniture", system)
+        self.assertIn("body turned TOWARD the", system)
+
+    def test_furniture_mandate_ru(self):
+        system = build_scene_instruction_system(LANGUAGE_RU)
+        self.assertIn("ТОЛЬКО ИЗ PICTURE 2", system)
+        self.assertIn("НЕ выдумывай новую мебель", system)
+        self.assertIn("развёрнут К консоли", system)
+
+
+class TestCompartmentBackdrop(unittest.TestCase):
+    SETTING = "Ash ruins perimeter"
+    CONFLICT = "Patrols tighten"
+
+    def test_compartment_mode_en(self):
+        _, user = build_turn_background_prompts(
+            LANGUAGE_EN, self.SETTING, self.CONFLICT,
+            location_name="Reactor Bay",
+            location_description="Primary reactor column behind blast shielding",
+            compartment=True,
+            ship_style="brushed titanium walls, amber emergency lighting, curved console banks",
+        )
+        self.assertIn("ONE SPECIFIC COMPARTMENT", user)
+        self.assertIn("brushed titanium", user)
+        self.assertIn("Reactor Bay", user)
+        self.assertNotIn("EDIT instruction", user)
+
+    def test_compartment_mode_ru(self):
+        _, user = build_turn_background_prompts(
+            LANGUAGE_RU, "Периметр пепла", "Патрули сжимают кольцо",
+            location_name="Реакторный отсек",
+            compartment=True,
+        )
+        self.assertIn("КОНКРЕТНЫЙ ОТСЕК", user)
+        self.assertIn("Реакторный отсек", user)
+
+    def test_generic_stage_has_no_compartment_wording(self):
+        _, user = build_turn_background_prompts(LANGUAGE_EN, self.SETTING, self.CONFLICT)
+        self.assertNotIn("ONE SPECIFIC COMPARTMENT", user)
+
+    def test_edit_mode_has_no_compartment_wording(self):
+        _, user = build_turn_background_prompts(
+            LANGUAGE_EN, self.SETTING, self.CONFLICT, edit_reference=True,
+        )
+        self.assertNotIn("ONE SPECIFIC COMPARTMENT", user)
+
+
+class TestShipStyleDb(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        db.DB_PATH = Path(self._tmp.name)
+        db.init_db()
+
+    def tearDown(self):
+        os.unlink(self._tmp.name)
+
+    def test_ship_style_roundtrip(self):
+        db.create_game({"game_id": "g1", "name": "Test Ship"})
+        self.assertEqual(db.get_ship_style("g1"), "")
+        db.save_ship_style("g1", "brushed titanium, amber emergency lighting")
+        self.assertEqual(db.get_ship_style("g1"), "brushed titanium, amber emergency lighting")
+        self.assertEqual(db.get_ship_style("other"), "")
+
+
+class TestOutcomeAnatomyLock(unittest.TestCase):
+    """GM feedback 2026-11-14: the outcome comic gave the lava-sphere crew
+    member a human mustache and uniform — non-humanoid panels need explicit
+    anatomy locks, and invented traits must be forbidden."""
+
+    def test_lock_emitted_only_for_non_humanoids(self):
+        import asyncio
+        from unittest.mock import patch
+
+        crew = [
+            {
+                "name": "Сфера", "role": "Passenger",
+                "appearance": "a cracked magma sphere with thin tentacle arms",
+                "avatar_url": "http://x/sphere.png",
+                "species": "Сфера лавы", "species_description": "a sphere of living lava",
+                "species_category": "energy",
+            },
+            {
+                "name": "Ирина", "role": "Medic",
+                "appearance": "dark-haired woman in a medical uniform",
+                "avatar_url": "http://x/medic.png",
+                "species": "Human", "species_description": "human",
+                "species_category": "human",
+            },
+        ]
+
+        async def run() -> str:
+            gm = game_server.create_game_server(language=LANGUAGE_EN)
+            captured: dict[str, str] = {}
+
+            async def fake_call_llm(**kwargs):
+                captured["user"] = kwargs["user_prompt"]
+                return {"image_prompt": "test prompt"}
+
+            with patch.object(gm, "_call_llm", fake_call_llm):
+                await gm.generate_outcome_image_prompt(
+                    "The crew seals the breach.", "Hull at 80%", "Cautious hope",
+                    crew, game_id="g1", player_id=None, turn=4,
+                    kind="outcome_image_prompt",
+                )
+            return captured["user"]
+
+        user = asyncio.run(run())
+        self.assertEqual(user.count("ANATOMY LOCK"), 1, "lock only for the non-humanoid panel")
+        self.assertIn("a sphere of living lava", user)
+        self.assertIn("NO human face", user)
+        self.assertIn("human mustache", user, "the trait-invention ban must cite the failure")
+        self.assertIn("MUST be copied from THAT Picture's own", user)
+
+    def _capture_outcome_user(self, crew, **kwargs):
+        import asyncio
+        from unittest.mock import patch
+
+        async def run() -> str:
+            gm = game_server.create_game_server(language=LANGUAGE_EN)
+            captured: dict[str, str] = {}
+
+            async def fake_call_llm(**kw):
+                captured["user"] = kw["user_prompt"]
+                return {"image_prompt": "test prompt"}
+
+            with patch.object(gm, "_call_llm", fake_call_llm):
+                await gm.generate_outcome_image_prompt(
+                    "n", "s", "m", crew,
+                    game_id="g1", player_id=None, turn=4,
+                    kind="outcome_image_prompt", **kwargs,
+                )
+            return captured["user"]
+
+        return asyncio.run(run())
+
+    def test_crew_positions_group_panels(self):
+        # GM feedback 2026-11-14 v3: co-located crew share ONE wide panel.
+        crew = [
+            {"name": "Ирина", "role": "Medic", "appearance": "a medic",
+             "avatar_url": "http://x/1.png", "species_category": "human"},
+            {"name": "Слач", "role": "XO", "appearance": "an officer",
+             "avatar_url": "http://x/2.png", "species_category": "human"},
+        ]
+        user = self._capture_outcome_user(
+            crew,
+            crew_positions=[
+                {"role_key": "medic", "position": "reactor compartment, sealing the leak"},
+                {"role_key": "xo", "position": "bridge, coordinating"},
+            ],
+        )
+        self.assertIn("reactor compartment, sealing the leak", user)
+        self.assertIn("GROUPING RULE", user)
+        self.assertIn("share ONE wide panel", user)
+        self.assertIn("one panel per location group", user)
+        self.assertNotIn("exactly 2 panels", user)
+
+    def test_no_positions_keeps_per_character_panels(self):
+        crew = [
+            {"name": "Ирина", "role": "Medic", "appearance": "a medic",
+             "avatar_url": "http://x/1.png", "species_category": "human"},
+            {"name": "Слач", "role": "XO", "appearance": "an officer",
+             "avatar_url": "http://x/2.png", "species_category": "human"},
+        ]
+        user = self._capture_outcome_user(crew)
+        self.assertIn("exactly 2 panels", user)
+        self.assertIn("One panel per Picture", user)
+        self.assertNotIn("GROUPING RULE", user)
 
 
 class TestTurnBackgroundStaging(unittest.TestCase):
