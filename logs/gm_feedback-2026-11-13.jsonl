@@ -45,3 +45,5 @@
 {"ts": "2026-11-13T11:07:07", "game_id": "althef", "turn": 3, "stage": "action", "reason": "pose", "user_id": 281412419}
 {"ts": "2026-11-13T11:08:10", "game_id": "althef", "turn": 3, "stage": "action", "comment": "персонаж стоит правильно, но левая рука криво отображается, только та рука которая касается иллюминатора, там было про то что зажимает голову руками, второй рукой наверное можно было бы по другому сделать", "user_id": 281412419}
 {"ts": "2026-11-13T11:08:23", "game_id": "althef", "turn": 3, "stage": "outcome", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-13T14:14:17", "game_id": "althef", "turn": 4, "stage": "scene", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-13T14:16:07", "game_id": "althef", "turn": 4, "stage": "action", "verdict": "up", "user_id": 281412419}

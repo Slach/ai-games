@@ -1,0 +1,20 @@
+{"ts": "2026-11-14T01:31:34", "game_id": "althef", "turn": 4, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T01:31:52", "game_id": "althef", "turn": 4, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T01:31:59", "game_id": "althef", "turn": 4, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T01:32:36", "game_id": "althef", "turn": 4, "stage": "action", "comment": "задник точно надо генерировать под ситуацию но консистентно с остальными задниками, он с питолетом не обходит реакторный отсек", "user_id": 281412419}
+{"ts": "2026-11-14T01:33:15", "game_id": "althef", "turn": 4, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T01:33:20", "game_id": "althef", "turn": 4, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T01:34:14", "game_id": "althef", "turn": 4, "stage": "action", "comment": "если в действии участвуют ДВА персонажа, тогда они наверное как то должны быть оба, кроме того изначально на заднике хода два кресла, а персонажа усадили в третье...", "user_id": 281412419}
+{"ts": "2026-11-14T01:34:39", "game_id": "althef", "turn": 4, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T01:34:43", "game_id": "althef", "turn": 4, "stage": "action", "reason": "bg", "user_id": 281412419}
+{"ts": "2026-11-14T01:34:53", "game_id": "althef", "turn": 4, "stage": "action", "comment": "задник не медотсек, как написано в action", "user_id": 281412419}
+{"ts": "2026-11-14T01:35:16", "game_id": "althef", "turn": 4, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T01:35:28", "game_id": "althef", "turn": 4, "stage": "outcome", "reason": "other", "user_id": 281412419}
+{"ts": "2026-11-14T01:35:48", "game_id": "althef", "turn": 4, "stage": "outcome", "comment": "слева вверху персонаж приобрел гуманоидные черты, хотя это какой то шарик с лавой", "user_id": 281412419}
+{"ts": "2026-11-14T01:36:08", "game_id": "althef", "turn": 5, "stage": "scene", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T01:36:13", "game_id": "althef", "turn": 5, "stage": "scene", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T01:37:16", "game_id": "althef", "turn": 5, "stage": "scene", "comment": "думаю что если задник для хода, разный у разных персонажей (один в реакторном отсеке, другая в медицинском), то тут можно наверное показывать персонажей что они делают в соответсвии с началом хода как комикс (составной) или как альбом, реши сам что лушче", "user_id": 281412419}
+{"ts": "2026-11-14T01:37:26", "game_id": "althef", "turn": 5, "stage": "char", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T01:38:54", "game_id": "althef", "turn": 5, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T01:38:58", "game_id": "althef", "turn": 5, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T01:39:27", "game_id": "althef", "turn": 5, "stage": "action", "comment": "кресло повернуто не в ту сторону, и третье кресло тогда откуда...", "user_id": 281412419}
