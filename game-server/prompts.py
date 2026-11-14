@@ -2463,7 +2463,11 @@ def build_scene_instruction_system(language: str) -> str:
             "тот же отсек или другой) и participants (другие члены экипажа, участвующие в действии). "
             "Если participants непуст — каждый участник приходит дополнительной референс-картинкой "
             "после картинки персонажа и картинки сцены, и инструкция ОБЯЗАНА разместить КАЖДОГО из "
-            "них в сцене, выполняющим свою часть действия."
+            "них в сцене, выполняющим свою часть действия. "
+            "СОЛО-ПРАВИЛО: когда participants пуст, инструкция ОБЯЗАНА прямо сказать, что персонаж "
+            "В СЦЕНЕ ПОЛНОСТЬЮ ОДИН — ровно один человек, никаких двойников персонажа, никаких "
+            "фоновых людей и силуэтов (модель любит дорисовать второго «члена экипажа», которого "
+            "нет ни в действии, ни в референсах)."
         )
     return (
         "You are an expert at writing instructions for the Qwen-Image-Edit AI model. "
@@ -2496,7 +2500,11 @@ def build_scene_instruction_system(language: str) -> str:
         "same compartment or a different one) and participants (other crew members taking part in the "
         "action). When participants is non-empty, each participant arrives as an additional reference "
         "picture after the character and scene references, and the instruction MUST place EVERY one "
-        "of them in the scene, each performing their part of the action."
+        "of them in the scene, each performing their part of the action. "
+        "SOLO RULE: when participants is empty, the instruction MUST state that the character is "
+        "COMPLETELY ALONE — exactly one person in the scene, no doubles of them, no background "
+        "people or silhouettes (the model loves to invent a second 'crew member' who is in neither "
+        "the action nor the references)."
     )
 
 

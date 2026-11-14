@@ -43,8 +43,28 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# main.py hardcodes a daily /app/logs file handler at import time — redirect
+# it to a temp dir so the module loads on the host.
+import logging
+
+_orig_file_handler = logging.FileHandler
+
+
+class _TempFileHandler(logging.FileHandler):
+    def __init__(self, filename, *args, **kwargs):
+        if str(filename).startswith("/app/logs/"):
+            filename = os.path.join(tempfile.mkdtemp(), os.path.basename(filename))
+        super().__init__(filename, *args, **kwargs)
+
+
+logging.FileHandler = _TempFileHandler
+import main  # noqa: E402
+
+logging.FileHandler = _orig_file_handler
 
 import database as db  # noqa: E402
 import game_server  # noqa: E402
@@ -491,6 +511,47 @@ class TestOutcomeAnatomyLock(unittest.TestCase):
         user = self._capture_outcome_user(crew, scene_description="a bridge stage")
         self.assertIn("Picture 1 — the SCENE BACKGROUND", user)
         self.assertNotIn("LOCATION BACKDROPS", user)
+
+    def test_dead_crew_get_farewell_panels(self):
+        # GM feedback 2026-11-14: "Taras умер — надо его как-то показать" —
+        # the dead get their own farewell panel instead of silently vanishing.
+        crew = [
+            {"name": "Слач", "role": "XO", "appearance": "an officer",
+             "avatar_url": "http://x/1.png", "species_category": "human"},
+            {"name": "Тарас", "role": "Security", "appearance": "a magma sphere",
+             "avatar_url": "http://x/2.png", "species_category": "energy",
+             "died_this_turn": True, "dead_cause": "suffocated by the ancient mechanism"},
+        ]
+        user = self._capture_outcome_user(crew)
+        self.assertIn("Picture 2 — Тарас (Security): a magma sphere — **DIED THIS TURN**", user)
+        self.assertIn("suffocated by the ancient mechanism", user)
+        self.assertIn("FAREWELL PANELS: 1 character(s) are marked DIED THIS TURN", user)
+        self.assertIn("must NOT appear alive in any other panel", user)
+        self.assertIn("The living crew at this moment numbers exactly 1", user)
+
+
+class TestSceneInstructionSoloRule(unittest.TestCase):
+    """GM feedback 2026-11-14: a hallucinated second 'crew member' appeared in
+    a solo action image — the instruction must mandate exactly one person."""
+
+    def test_solo_rule_en(self):
+        system = build_scene_instruction_system(LANGUAGE_EN)
+        self.assertIn("SOLO RULE", system)
+        self.assertIn("COMPLETELY ALONE", system)
+        self.assertIn("no doubles", system)
+
+    def test_solo_rule_ru(self):
+        system = build_scene_instruction_system(LANGUAGE_RU)
+        self.assertIn("СОЛО-ПРАВИЛО", system)
+        self.assertIn("ПОЛНОСТЬЮ ОДИН", system)
+        self.assertIn("двойников", system)
+
+
+class TestCharShotVariation(unittest.TestCase):
+    def test_hint_cycles_by_turn(self):
+        self.assertNotEqual(main._char_shot_hint(6), main._char_shot_hint(7))
+        self.assertEqual(main._char_shot_hint(6), main._char_shot_hint(11))
+        self.assertIn("shot", main._char_shot_hint(6).lower())
 
 
 class TestTurnBackgroundStaging(unittest.TestCase):

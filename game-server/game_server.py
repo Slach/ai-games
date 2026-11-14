@@ -3242,8 +3242,12 @@ class GameServer:
                 "  (roughly one third to one half of their panel's height — never giants).\n"
             )
         if crew_refs:
+            dead_refs = [r for r in crew_refs if r.get("died_this_turn")]
+            n_living = len(crew_refs) - len(dead_refs)
             picture_lines = "\n".join(
-                f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}" for i, r in enumerate(crew_refs, start=first_picture)
+                f"Picture {i} — {r.get('name', '?')} ({r.get('role', '?')}): {r.get('appearance', '')}"
+                + (" — **DIED THIS TURN**" + (f" ({r.get('dead_cause')})" if r.get("dead_cause") else "") if r.get("died_this_turn") else "")
+                for i, r in enumerate(crew_refs, start=first_picture)
             )
             anatomy_locks = "\n".join(
                 f"- ANATOMY LOCK, the panel with Picture {i} ({r.get('name', '?')}): this character is NOT\n"
@@ -3274,12 +3278,22 @@ class GameServer:
                     "panel after panel in the same room).\n"
                     + ("- Each group's panel uses that group's LOCATION BACKDROP picture as its\n"
                        "  environment (match by the location named in the positions above).\n" if backdrops else "")
+                    + (f"- FAREWELL PANELS: {len(dead_refs)} character(s) DIED THIS TURN — each gets\n"
+                       "  their OWN farewell panel showing their final moment (the cause of death\n"
+                       "  from their DIED THIS TURN mark, or the crew standing over their body).\n"
+                       "  They must NOT appear alive in any other panel.\n" if dead_refs else "")
                     + "\n"
                 )
                 page_rule = (
                     f"The image_prompt MUST describe a COMIC PAGE — one panel per location group\n"
-                    "(GROUPING RULE above). The living crew at this moment numbers exactly "
-                    + str(n)
+                    "(GROUPING RULE above)"
+                    + (
+                        f" PLUS one farewell panel per dead character ({len(dead_refs)} farewell\n"
+                        "panel(s) — see FAREWELL PANELS above)"
+                        if dead_refs else ""
+                    )
+                    + ". The living crew at this moment numbers exactly "
+                    + str(n_living)
                     + " —\n"
                     "EVERY one of them appears EXACTLY once across the panels. Same uniform art\n"
                     "style; panels separated by thin white gutters.\n"
@@ -3303,7 +3317,7 @@ class GameServer:
                     layout = "a 2-column grid with one row per pair of crew members"
                 page_rule = (
                     f"The image_prompt MUST describe a COMIC PAGE of exactly {n} panels — {layout}.\n"
-                    "The living crew at this moment numbers exactly " + str(n) + ". Same uniform art\n"
+                    "The living crew at this moment numbers exactly " + str(n_living) + ". Same uniform art\n"
                     "style and location environment across all panels; panels separated by thin\n"
                     "white gutters.\n"
                     "COMPOSITION RULES:\n"
@@ -3312,7 +3326,10 @@ class GameServer:
                     f"  Picture N\"). Cover EVERY Picture {first_picture}..{first_picture + n - 1} —\n"
                     "  NO character may be skipped: a missing panel means that crew member vanishes\n"
                     "  from the turn's memory (GM feedback 2026-11-13: the medic was dropped).\n"
-                    "- Each Picture is used EXACTLY ONCE. Never render the same reference twice,\n"
+                    + (f"- FAREWELL PANELS: {len(dead_refs)} character(s) are marked DIED THIS TURN — their\n"
+                       "  panel shows their final moment (the cause from the mark, or the crew standing\n"
+                       "  over their body). They must NOT appear alive in any other panel.\n" if dead_refs else "")
+                    + "- Each Picture is used EXACTLY ONCE. Never render the same reference twice,\n"
                     "  never stage two characters from one Picture (duplicates ruin the image).\n"
                     "- Each panel: that character mid-action performing THEIR part of the outcome\n"
                     "  narrative (one concrete doing — working the console, walking to the compartment,\n"

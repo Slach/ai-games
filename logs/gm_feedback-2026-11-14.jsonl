@@ -54,3 +54,23 @@
 {"ts": "2026-11-14T06:45:40", "game_id": "althef", "turn": 6, "stage": "action", "comment": "стало лучше, но все равно, \"корабль\" в \"шахту\", это капец как нелогично если у нас начальник безопасности куда то выдвинулся сам там по узкому месту...", "user_id": 281412419}
 {"ts": "2026-11-14T07:03:34", "game_id": "althef", "turn": 6, "stage": "action", "verdict": "up", "user_id": 281412419}
 {"ts": "2026-11-14T07:17:49", "game_id": "althef", "turn": 6, "stage": "char", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T10:53:49", "game_id": "althef", "turn": 7, "stage": "scene", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T10:53:54", "game_id": "althef", "turn": 7, "stage": "scene", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-14T10:54:48", "game_id": "althef", "turn": 7, "stage": "scene", "comment": "крайне правый персонаж - рука кривая, персонажей всего 4 на картинке, хотя суммарно 3 игрока + 2 NPC, куда делся taras начальник безопасности?", "user_id": 281412419}
+{"ts": "2026-11-14T10:55:22", "game_id": "althef", "turn": 6, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T10:55:34", "game_id": "althef", "turn": 6, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T10:55:57", "game_id": "althef", "turn": 6, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T10:56:04", "game_id": "althef", "turn": 6, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-14T10:56:31", "game_id": "althef", "turn": 6, "stage": "action", "comment": "а что за второй персонаж? объясни... по описанию действия это непонятно, персонажа не узнаю", "user_id": 281412419}
+{"ts": "2026-11-14T10:56:55", "game_id": "althef", "turn": 6, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T10:56:59", "game_id": "althef", "turn": 6, "stage": "outcome", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-14T10:57:18", "game_id": "althef", "turn": 6, "stage": "outcome", "comment": "персонажей осталось три в живых? но Taras типа умер? надо его как то умершего показать...", "user_id": 281412419}
+{"ts": "2026-11-14T10:58:00", "game_id": "althef", "turn": 7, "stage": "char", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-14T10:58:07", "game_id": "althef", "turn": 7, "stage": "char", "reason": "other", "user_id": 281412419}
+{"ts": "2026-11-14T10:58:19", "game_id": "althef", "turn": 7, "stage": "char", "comment": "картинка практически такая же как на ходе 6, это ожидаемо?", "user_id": 281412419}
+{"ts": "2026-11-14T11:03:15", "game_id": "althef", "turn": 7, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T11:05:26", "game_id": "althef", "turn": 7, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T11:26:35", "game_id": "althef", "turn": 6, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T11:26:40", "game_id": "althef", "turn": 6, "stage": "outcome", "reason": "other", "user_id": 281412419}
+{"ts": "2026-11-14T11:27:18", "game_id": "althef", "turn": 6, "stage": "outcome", "comment": "слева вверху половина синего туловища торчит из \"ниоткуда\" точнее \"из пола\"", "user_id": 281412419}
+{"ts": "2026-11-14T11:27:39", "game_id": "althef", "turn": 7, "stage": "outcome", "verdict": "up", "user_id": 281412419}

@@ -2331,6 +2331,22 @@ async def _pose_filename_for(species_category: str, pose_id: str) -> str:
     return await pose_library.ensure_pose_uploaded(COMFYUI_BASE_URL, pose_id) or ""
 
 
+# Per-turn framing variation for turn-start character images: the same avatar
+# in the same room otherwise renders nearly identically turn after turn
+# (GM feedback 2026-11-14: "картинка практически такая же как на ходе 6").
+CHAR_SHOT_VARIATIONS = (
+    "a LOW-ANGLE WIDE shot, the character seen from below against the location's height",
+    "a CLOSE-UP from the side, waist-up, the worked-on object large in the foreground",
+    "a MEDIUM shot from behind a three-quarter turn, the character looking INTO the scene away from the camera",
+    "a DRAMATIC SIDE-LIT medium shot, strong shadows across the character",
+    "a HIGH-ANGLE shot looking slightly down at the character amid the location's objects",
+)
+
+
+def _char_shot_hint(turn: int) -> str:
+    return CHAR_SHOT_VARIATIONS[(turn - 1) % len(CHAR_SHOT_VARIATIONS)]
+
+
 def _previous_turn_location(game_id: str, current_turn: int) -> str:
     """'id — name — description' of the previous turn's location, or ''.
 
@@ -3770,6 +3786,43 @@ async def _analyze_turn_outcome(
                 # Include deactivated NPCs: a character that died this turn
                 # can still be the subject of the outcome scene.
                 crew_refs = _collect_crew_avatar_refs(game_id)
+                # Crew who died THIS turn get a farewell panel instead of
+                # silently vanishing from the outcome page (GM feedback
+                # 2026-11-14: "Taras умер — надо его как-то показать").
+                for dead in outcome.get("dead_crew_members", []) or []:
+                    if not isinstance(dead, dict):
+                        continue
+                    player_id_d, npc_key_d = _parse_entity_id(dead.get("entity_id"))
+                    dead_ref: dict[str, Any] | None = None
+                    if player_id_d is not None:
+                        p = get_player_profile(player_id_d)
+                        if p and p.get("avatar_url"):
+                            dead_ref = {
+                                "name": p.get("player_name") or str(player_id_d),
+                                "role": p.get("role", "?"),
+                                "appearance": _extract_avatar_prompt(p.get("avatar_description", "") or ""),
+                                "avatar_url": p["avatar_url"],
+                                "species": p.get("species", "") or "",
+                                "species_description": p.get("species_description", "") or "",
+                                "species_category": p.get("species_primary_key", "") or "",
+                            }
+                    elif npc_key_d:
+                        npc = get_npc_profile(npc_key_d)
+                        avatar_url = _extract_avatar_url((npc or {}).get("avatar_description", "") or "")
+                        if npc and avatar_url:
+                            dead_ref = {
+                                "name": npc.get("npc_name", "") or npc.get("role", "?"),
+                                "role": npc.get("role", "?"),
+                                "appearance": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
+                                "avatar_url": avatar_url,
+                                "species": npc.get("species", "") or "",
+                                "species_description": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
+                                "species_category": npc.get("species", "") or "",
+                            }
+                    if dead_ref:
+                        dead_ref["died_this_turn"] = True
+                        dead_ref["dead_cause"] = dead.get("cause", "")
+                        crew_refs.append(dead_ref)
                 # X = the LIVING crew at generation time (the helper now
                 # skips dead players and inactive NPCs). With the location
                 # backdrop as Picture 1 every avatar is another vision slot
@@ -3826,8 +3879,14 @@ async def _analyze_turn_outcome(
                             "description": (bg["prompt"] or "")[:220],
                         })
                 if backdrop_urls:
-                    # 10 reference pictures max: backdrops take the first slots.
-                    crew_refs = crew_refs[:10 - len(backdrop_urls)]
+                    # 10 reference pictures max: backdrops take the first
+                    # slots. Dead members are trimmed LAST — a farewell panel
+                    # must never be dropped in favour of a living one.
+                    max_total = 10 - len(backdrop_urls)
+                    if len(crew_refs) > max_total:
+                        dead_keep = [r for r in crew_refs if r.get("died_this_turn")]
+                        living_keep = [r for r in crew_refs if not r.get("died_this_turn")][:max_total - len(dead_keep)]
+                        crew_refs = living_keep + dead_keep
                 image_prompt = ""
                 try:
                     prompt_result = await gm.generate_outcome_image_prompt(
@@ -5941,7 +6000,10 @@ async def _original_start_game(request: StartGameRequest):
         # Qwen-Image-Edit instruction for placing this character in the scene.
         # image_prompt is the LLM-generated visual-only scene description
         # (pose/action/species, no name/role) for Qwen-Image-Edit conditioning.
-        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting}"
+        char_action = (
+            b.get("image_prompt", "")
+            or f"reacting to the situation in {setting}"
+        ) + f". Framing variation for THIS turn (do not repeat the previous turn's framing): {_char_shot_hint(turn_num)}"
         turn_location = global_circ.get("location") or {}
         scene_participants: list[str] = []
         char_location: dict = turn_location
@@ -7136,7 +7198,10 @@ async def _original_continue_game(
 
         # Qwen-Image-Edit instruction for placing this character in the scene.
         # image_prompt is the LLM-generated visual-only description (no name/role).
-        char_action = b.get("image_prompt", "") or f"reacting to the situation in {setting}"
+        char_action = (
+            b.get("image_prompt", "")
+            or f"reacting to the situation in {setting}"
+        ) + f". Framing variation for THIS turn (do not repeat the previous turn's framing): {_char_shot_hint(turn_num)}"
         turn_location = global_circ.get("location") or {}
         scene_participants: list[str] = []
         char_location: dict = turn_location

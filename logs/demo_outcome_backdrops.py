@@ -11,12 +11,15 @@ import sys
 
 sys.path.insert(0, "/app")
 
-from database import get_game_language, get_game_state, get_game_turn
+from database import get_game_language, get_game_state, get_game_turn, get_npc_profile, get_player_profile
 from game_server import create_game_server
 from image_generator import create_image_generator
 from main import (
     _collect_crew_avatar_refs,
     _ensure_location_background,
+    _extract_avatar_prompt,
+    _extract_avatar_url,
+    _parse_entity_id,
 )
 
 GAME = "althef"
@@ -24,7 +27,7 @@ GAME = "althef"
 
 async def main_async() -> None:
     state = get_game_state(GAME)
-    turn = state["turn"] - 1  # latest completed turn
+    turn = int(sys.argv[1]) if len(sys.argv) > 1 else state["turn"] - 1
     language = get_game_language(GAME)
     gm = create_game_server(language=language)
     gen = create_image_generator()
@@ -40,6 +43,42 @@ async def main_async() -> None:
         oc = {}
 
     crew_refs = _collect_crew_avatar_refs(GAME)
+    # Crew who died THIS turn get a farewell panel (same as the live flow).
+    for dead in oc.get("dead_crew_members", []) or []:
+        if not isinstance(dead, dict):
+            continue
+        player_id_d, npc_key_d = _parse_entity_id(dead.get("entity_id"))
+        dead_ref = None
+        if player_id_d is not None:
+            p = get_player_profile(player_id_d)
+            if p and p.get("avatar_url"):
+                dead_ref = {
+                    "name": p.get("player_name") or str(player_id_d),
+                    "role": p.get("role", "?"),
+                    "appearance": _extract_avatar_prompt(p.get("avatar_description", "") or ""),
+                    "avatar_url": p["avatar_url"],
+                    "species": p.get("species", "") or "",
+                    "species_description": p.get("species_description", "") or "",
+                    "species_category": p.get("species_primary_key", "") or "",
+                }
+        elif npc_key_d:
+            npc = get_npc_profile(npc_key_d)
+            avatar_url = _extract_avatar_url((npc or {}).get("avatar_description", "") or "")
+            if npc and avatar_url:
+                dead_ref = {
+                    "name": npc.get("npc_name", "") or npc.get("role", "?"),
+                    "role": npc.get("role", "?"),
+                    "appearance": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
+                    "avatar_url": avatar_url,
+                    "species": npc.get("species", "") or "",
+                    "species_description": _extract_avatar_prompt(npc.get("avatar_description", "") or ""),
+                    "species_category": npc.get("species", "") or "",
+                }
+        if dead_ref:
+            dead_ref["died_this_turn"] = True
+            dead_ref["dead_cause"] = dead.get("cause", "")
+            crew_refs.append(dead_ref)
+            print(f"dead this turn: {dead_ref['name']} ({dead.get('cause', '')[:60]})")
     crew_positions = gc.get("crew_positions") or []
     setting = gc.get("setting", "") or turn_data.get("story", "")
     conflict = gc.get("conflict", "")
