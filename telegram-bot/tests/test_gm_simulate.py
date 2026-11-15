@@ -274,5 +274,110 @@ class TurnLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(game_id, bot._simulate_running_games)
 
 
+class TestTurnFeedbackLoop(unittest.TestCase):
+    """The per-turn status message carries the same verdict keyboard as the
+    image stages, so the GM can rate a simulated turn and attach a text
+    comment through the regular pending-feedback flow."""
+
+    def test_turn_stage_uses_text_reasons(self):
+        self.assertIs(bot._feedback_reasons("turn"), bot.GM_TEXT_FEEDBACK_REASONS)
+        self.assertIsNot(bot._feedback_reasons("turn"), bot.GM_FEEDBACK_REASONS)
+
+    def test_turn_keyboard_builds_verdict_callback(self):
+        from aiogram.types import InlineKeyboardMarkup
+
+        kb = bot._turn_feedback_kb("althef", 7)
+        self.assertIsInstance(kb, InlineKeyboardMarkup)
+        buttons = [b.callback_data for row in kb.inline_keyboard for b in row]
+        self.assertEqual(
+            buttons,
+            [
+                "gmfb:v:althef:7:turn:up",
+                "gmfb:v:althef:7:turn:down",
+                "gmfb:v:althef:7:turn:meh",
+            ],
+        )
+
+
+class TestVerdictKeepsKeyboard(unittest.IsolatedAsyncioTestCase):
+    """Telegram drops the whole inline keyboard when editMessageText omits
+    reply_markup, so the ✅ marker edit must send the keyboard back —
+    otherwise the first verdict press wipes the remaining action rows
+    (GM feedback 2026-11-15: keyboard vanished after rating one action)."""
+
+    def _markup(self):
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        rows = [
+            [("1️⃣ 👍", "gmfb:v:althef:11:btx_p281412419_a1:up"),
+             ("1️⃣ 👎", "gmfb:v:althef:11:btx_p281412419_a1:down")],
+            [("2️⃣ 👍", "gmfb:v:althef:11:btx_p281412419_a2:up"),
+             ("2️⃣ 👎", "gmfb:v:althef:11:btx_p281412419_a2:down")],
+            [("📝 👍", "gmfb:v:althef:11:btx_p281412419_brf:up")],
+        ]
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t, callback_data=c) for t, c in row]
+            for row in rows
+        ])
+
+    def test_mark_stage_voted_prefixes_only_voted_stage(self):
+        marked = bot._mark_stage_voted(self._markup(), "althef", 11, "btx_p281412419_a1")
+        self.assertEqual(marked.inline_keyboard[0][0].text, "✅ 1️⃣ 👍")
+        self.assertEqual(marked.inline_keyboard[0][1].text, "✅ 1️⃣ 👎")
+        # The other action rows stay unmarked and pressable.
+        self.assertEqual(marked.inline_keyboard[1][0].text, "2️⃣ 👍")
+        self.assertEqual(marked.inline_keyboard[2][0].text, "📝 👍")
+        self.assertEqual(
+            marked.inline_keyboard[1][0].callback_data,
+            "gmfb:v:althef:11:btx_p281412419_a2:up",
+        )
+
+    def test_mark_stage_voted_second_stage(self):
+        marked = bot._mark_stage_voted(self._markup(), "althef", 11, "btx_p281412419_a2")
+        self.assertEqual(marked.inline_keyboard[0][0].text, "1️⃣ 👍")
+        self.assertEqual(marked.inline_keyboard[1][0].text, "✅ 2️⃣ 👍")
+
+    def test_mark_stage_voted_without_markup(self):
+        self.assertIsNone(bot._mark_stage_voted(None, "althef", 11, "btx_x"))
+
+    async def test_verdict_edit_passes_keyboard_back(self):
+        from aiogram import types
+
+        original = self._markup()
+        edits = []
+
+        class FakeMessage:
+            text = " Crew text review — Slach (Engineer)"
+            caption = None
+            reply_markup = original
+
+            async def edit_text(self, new_text, **kwargs):
+                edits.append((new_text, kwargs))
+
+        class FakeUser:
+            id = bot.GAME_MASTER_ID
+
+        class FakeCallback:
+            from_user = FakeUser()
+            data = "gmfb:v:althef:11:btx_p281412419_a1:up"
+            message = FakeMessage()
+
+            async def answer(self, *args, **kwargs):
+                pass
+
+        callback = FakeCallback()
+        with patch.object(bot, "_record_gm_feedback"):
+            await bot.gm_feedback_callback(callback)
+
+        self.assertEqual(len(edits), 1)
+        new_text, kwargs = edits[0]
+        self.assertTrue(new_text.endswith("✅ Записано: 👍"))
+        # Without reply_markup Telegram would strip the whole keyboard here.
+        marked = kwargs["reply_markup"]
+        self.assertEqual(marked.inline_keyboard[0][0].text, "✅ 1️⃣ 👍")
+        self.assertEqual(marked.inline_keyboard[1][0].text, "2️⃣ 👍")
+
+
 if __name__ == "__main__":
+
     unittest.main()

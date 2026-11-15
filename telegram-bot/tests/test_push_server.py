@@ -475,5 +475,34 @@ class OnboardingReadyHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data, {"error": "Missing player_id or game_id"})
 
 
+class SendLongMessageReplyMarkupTests(unittest.IsolatedAsyncioTestCase):
+    """The outcome narrative is rated SEPARATELY from the outcome image
+    (stage "otext"): its verdict keyboard rides on the LAST chunk of a
+    possibly-split long message."""
+
+    async def test_short_message_keeps_markup(self):
+        bot = _FakeBot()
+        marker = object()
+        await push_server._send_long_message(bot, 1, "short text", reply_markup=marker)
+        self.assertEqual(len(bot.messages), 1)
+        self.assertIs(bot.messages[0]["reply_markup"], marker)
+
+    async def test_markup_rides_on_last_chunk(self):
+        bot = _FakeBot()
+        marker = object()
+        long_text = "\n\n".join(["параграф " * 40] * 16)  # > 4096 chars
+        self.assertGreater(len(long_text), 4096)
+        await push_server._send_long_message(bot, 1, long_text, reply_markup=marker)
+        self.assertGreater(len(bot.messages), 1)
+        self.assertIsNone(bot.messages[0]["reply_markup"])
+        self.assertIs(bot.messages[-1]["reply_markup"], marker)
+
+    async def test_no_markup_by_default(self):
+        bot = _FakeBot()
+        await push_server._send_long_message(bot, 1, "параграф " * 600)
+        self.assertTrue(all(m["reply_markup"] is None for m in bot.messages))
+
+
 if __name__ == "__main__":
+
     unittest.main()

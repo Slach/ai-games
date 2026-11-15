@@ -13,3 +13,32 @@
 {"ts": "2026-11-15T06:11:14", "game_id": "althef", "turn": 10, "stage": "scene", "verdict": "up", "user_id": 281412419}
 {"ts": "2026-11-15T06:11:44", "game_id": "althef", "turn": 10, "stage": "char", "verdict": "up", "user_id": 281412419}
 {"ts": "2026-11-15T06:13:28", "game_id": "althef", "turn": 10, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T10:08:21", "game_id": "althef", "turn": 10, "stage": "action", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-15T10:08:28", "game_id": "althef", "turn": 10, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-15T10:09:07", "game_id": "althef", "turn": 10, "stage": "action", "comment": "персонаж стоит на переднем плане, а руку тянет к экрану назад, тогда уж надо было его дальше по комнате расположить чтобы поза естественнее была", "user_id": 281412419}
+{"ts": "2026-11-15T10:09:50", "game_id": "althef", "turn": 10, "stage": "action", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-15T10:10:00", "game_id": "althef", "turn": 10, "stage": "action", "reason": "other", "user_id": 281412419}
+{"ts": "2026-11-15T10:10:21", "game_id": "althef", "turn": 10, "stage": "action", "comment": "что за толпа на заднем плане? это явно не Слеш и не заложник", "user_id": 281412419}
+{"ts": "2026-11-15T10:11:01", "game_id": "althef", "turn": 10, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T10:11:06", "game_id": "althef", "turn": 10, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-15T10:14:30", "game_id": "althef", "turn": 10, "stage": "action", "comment": "поза абсолютно неестественная, ну и если ты через хроматидов с заложником идешь, то пусть это походка будет, явно не хватает ракурсов для аватаров\n\nдумаю что надо было генерировать отдельный аватар заложника до того как его использовать...", "user_id": 281412419}
+{"ts": "2026-11-15T10:15:13", "game_id": "althef", "turn": 10, "stage": "outcome", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T10:20:37", "game_id": "althef", "turn": 11, "stage": "scene", "verdict": "meh", "user_id": 281412419}
+{"ts": "2026-11-15T10:20:55", "game_id": "althef", "turn": 11, "stage": "scene", "comment": "они там все теперь чтоли в разных местах? но в целом стало чуть лушче", "user_id": 281412419}
+{"ts": "2026-11-15T10:21:27", "game_id": "althef", "turn": 11, "stage": "char", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T10:21:31", "game_id": "althef", "turn": 11, "stage": "char", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-15T10:21:40", "game_id": "althef", "turn": 11, "stage": "char", "comment": "зачем рука выгнута? неестественно", "user_id": 281412419}
+{"ts": "2026-11-15T10:24:00", "game_id": "althef", "turn": 11, "stage": "otext", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T10:25:18", "game_id": "althef", "turn": 11, "stage": "btx_p281412419_a1", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T10:38:02", "game_id": "althef", "turn": 11, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T10:38:11", "game_id": "althef", "turn": 11, "stage": "action", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T10:38:39", "game_id": "althef", "turn": 11, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T10:38:44", "game_id": "althef", "turn": 11, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-15T10:38:50", "game_id": "althef", "turn": 11, "stage": "action", "comment": "неестественно рука загнута", "user_id": 281412419}
+{"ts": "2026-11-15T10:39:38", "game_id": "althef", "turn": 11, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T10:39:44", "game_id": "althef", "turn": 11, "stage": "action", "reason": "style", "user_id": 281412419}
+{"ts": "2026-11-15T10:40:06", "game_id": "althef", "turn": 11, "stage": "action", "comment": "не хватило генерации чтоли... лицо смазалось и поза тела прорастает сквозь задник", "user_id": 281412419}
+{"ts": "2026-11-15T10:40:30", "game_id": "althef", "turn": 11, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T10:40:34", "game_id": "althef", "turn": 11, "stage": "outcome", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-15T10:41:02", "game_id": "althef", "turn": 11, "stage": "outcome", "comment": "итоговые положения персонажей вообще не соответсвуют тому что было выбрано в actions либо я чего то не понимаю", "user_id": 281412419}
+{"ts": "2026-11-15T10:41:45", "game_id": "althef", "turn": 11, "stage": "otext", "verdict": "up", "user_id": 281412419}

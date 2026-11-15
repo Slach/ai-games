@@ -4074,6 +4074,7 @@ async def _run_gm_simulation(
                             summary=escape_markdown(summary),
                         ),
                         parse_mode="Markdown",
+                        reply_markup=_turn_feedback_kb(game_id, playable),
                     )
                     return
                 if state["turn"] > next_turn:
@@ -4097,6 +4098,7 @@ async def _run_gm_simulation(
                     next_turn=next_turn + 1,
                 ),
                 parse_mode="Markdown",
+                reply_markup=_turn_feedback_kb(game_id, playable),
             )
 
         await message.answer(
@@ -4278,9 +4280,23 @@ GM_TEXT_FEEDBACK_REASONS = {
 
 def _feedback_reasons(stage: str) -> dict:
     """Text stages get text-quality reasons, image stages the scene set."""
-    if stage.startswith(("btx_", "otext")):
+    if stage == "turn" or stage.startswith(("btx_", "otext")):
         return GM_TEXT_FEEDBACK_REASONS
     return GM_FEEDBACK_REASONS
+
+
+def _turn_feedback_kb(game_id: str, turn: int):
+    """Verdict keyboard for a simulation per-turn status message.
+
+    Gives the text summary the same feedback loop as the image stages: the
+    GM rates the turn (👍/👎/🤔) and the follow-up text comment attaches via
+    the regular _gm_feedback_pending flow.
+    """
+    builder = InlineKeyboardBuilder()
+    for value, label in (("up", "👍"), ("down", "👎"), ("meh", "🤔")):
+        builder.button(text=label, callback_data=f"gmfb:v:{game_id}:{turn}:turn:{value}")
+    builder.adjust(3)
+    return builder.as_markup()
 
 
 def _record_gm_feedback(payload: dict) -> None:
@@ -4293,6 +4309,27 @@ def _record_gm_feedback(payload: dict) -> None:
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     logger.info("[GM_FEEDBACK] %s", row)
+
+
+def _mark_stage_voted(markup: types.InlineKeyboardMarkup | None, game_id: str, turn: int, stage: str):
+    """Keyboard with ✅ prefixed on every verdict button of the voted stage.
+
+    The remaining rows (other actions, briefing) stay pressable so the GM can
+    rate several entries from the same message with one keyboard.
+    """
+    if markup is None:
+        return None
+    prefix = f"gmfb:v:{game_id}:{turn}:{stage}:"
+    rows = [
+        [
+            types.InlineKeyboardButton(text=f"✅ {b.text}", callback_data=b.callback_data)
+            if (b.callback_data or "").startswith(prefix)
+            else b
+            for b in row
+        ]
+        for row in markup.inline_keyboard
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def gm_feedback_callback(callback: types.CallbackQuery):
@@ -4325,11 +4362,15 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
         icons = {"up": "👍", "down": "👎", "meh": "🤔"}
         _record_gm_feedback({"game_id": game_id, "turn": turn, "stage": stage, "verdict": value, "user_id": user_id})
         marker = f"\n\n✅ Записано: {icons.get(value, value)}"
+        # Telegram drops the whole inline keyboard when editMessageText omits
+        # reply_markup, so every marker edit must send the keyboard back —
+        # otherwise one verdict press wipes the remaining action rows.
+        markup = _mark_stage_voted(callback.message.reply_markup, game_id, turn, stage)
         if callback.message.text is not None:
             text = callback.message.text
             if marker not in text:
                 try:
-                    await callback.message.edit_text(text + marker)
+                    await callback.message.edit_text(text + marker, reply_markup=markup)
                 except Exception:
                     # Duplicate press / edit race is harmless: the verdict row
                     # is already appended and the text already carries a marker.
@@ -4338,7 +4379,7 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
             caption = callback.message.caption or ""
             if marker not in caption:
                 try:
-                    await callback.message.edit_caption(caption + marker)
+                    await callback.message.edit_caption(caption + marker, reply_markup=markup)
                 except Exception:
                     # Duplicate press / edit race is harmless: the verdict row is
                     # already appended and the caption already carries a marker.

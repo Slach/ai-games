@@ -713,15 +713,23 @@ async def _deliver_player_death(
         return False
 
 
-async def _send_long_message(bot: Bot, chat_id: int, text: str, max_len: int = 4096) -> None:
+async def _send_long_message(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    max_len: int = 4096,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     """Send a message, splitting at paragraph boundaries if it exceeds max_len.
 
     Telegram caps a single message at 4096 chars. A long outcome (narrative
     plus per-character sections) would otherwise fail with "message is too long".
+    ``reply_markup`` (e.g. a text-feedback verdict keyboard) is attached to the
+    LAST chunk — the vote rates the text after it has been read in full.
     """
     if len(text) <= max_len:
         await call_with_retry(
-            lambda: bot.send_message(chat_id=chat_id, text=text),
+            lambda: bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup),
             max_retries=3, base_delay=1.0, max_delay=10.0,
         )
         return
@@ -756,9 +764,10 @@ async def _send_long_message(bot: Bot, chat_id: int, text: str, max_len: int = 4
     if current:
         parts.append(current)
 
-    for part in parts:
+    for i, part in enumerate(parts):
+        markup = reply_markup if i == len(parts) - 1 else None
         await call_with_retry(
-            lambda p=part: bot.send_message(chat_id=chat_id, text=p),
+            lambda p=part, m=markup: bot.send_message(chat_id=chat_id, text=p, reply_markup=m),
             max_retries=3, base_delay=1.0, max_delay=10.0,
         )
 
@@ -1036,7 +1045,13 @@ async def _deliver_outcome(
                         )
                     , max_retries=3, base_delay=1.0, max_delay=10.0)
 
-            await _send_long_message(bot, player_id, outcome_message)
+            # The narrative text is rated SEPARATELY from the outcome image:
+            # image votes go to stage "outcome" (the photo above), text votes
+            # to stage "otext" (this message's verdict keyboard).
+            await _send_long_message(
+                bot, player_id, outcome_message,
+                reply_markup=feedback_markup_if_needed(player_id, game_id, turn, "otext"),
+            )
 
             last_sent_per_player[(player_id, game_id)] = turn
             if mark_outcome_sent_fn is not None:
