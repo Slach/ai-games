@@ -37,6 +37,7 @@ from language import (
     get_actions,
     get_bridge,
     get_current_turn,
+    get_gm_text_review,
     get_language_flag,
     get_language_name,
     get_notifications,
@@ -1196,6 +1197,135 @@ async def _deliver_gm_notification(
     return True
 
 
+# Telegram send_message hard limit; leave headroom for the verdict marker
+# that bot.py appends to the message text after a press.
+TEXT_REVIEW_MAX_LEN = 3800
+
+
+def _text_review_verdict_rows(
+    game_id: str, turn: int, stage: str, label: str
+) -> list[InlineKeyboardButton]:
+    """One keyboard row [label|👍|👎|🤔] for a gm_feedback text stage."""
+    return [
+        InlineKeyboardButton(text=label, callback_data=f"gmfb:n:{game_id}:{turn}:{stage}:0"),
+        InlineKeyboardButton(text="👍", callback_data=f"gmfb:v:{game_id}:{turn}:{stage}:up"),
+        InlineKeyboardButton(text="👎", callback_data=f"gmfb:v:{game_id}:{turn}:{stage}:down"),
+        InlineKeyboardButton(text="🤔", callback_data=f"gmfb:v:{game_id}:{turn}:{stage}:meh"),
+    ]
+
+
+async def _deliver_gm_text_review(payload: dict[str, Any], bot: Bot) -> bool:
+    """Deliver a /push/gm-text-review to GM + feedback subscribers.
+
+    One message per crew member (briefing + numbered action choices, one
+    verdict row per action plus a 📝 row for the briefing text) and one
+    message for the previous turn's outcome narrative. Hidden consequences
+    are already stripped game-server side; verdict presses land in
+    logs/gm_feedback-*.jsonl via the gm_feedback_callback in bot.py.
+    """
+    game_id = payload.get("game_id", "")
+    turn = payload.get("turn", 0)
+    language = payload.get("language", LANGUAGE_RU)
+    entries = payload.get("entries", [])
+    outcome_narrative = payload.get("outcome_narrative", "")
+    msgs = get_gm_text_review(language)
+
+    recipients = list(dict.fromkeys(
+        ([GAME_MASTER_ID] if GAME_MASTER_ID > 0 else []) + sorted(FEEDBACK_IDS)
+    ))
+    if not recipients or (not entries and not outcome_narrative):
+        return True
+
+    kind_labels = msgs["kind_labels"]
+    ok = True
+    for recipient in recipients:
+        try:
+            if outcome_narrative:
+                outcome_stage = "otext"
+                text = (
+                    msgs["outcome_header"].format(turn=turn - 1, game_id=game_id)
+                    + "\n\n"
+                    + _escape_md(outcome_narrative)
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    _text_review_verdict_rows(game_id, turn, outcome_stage, "📝"),
+                ])
+                await call_with_retry(
+                    lambda: bot.send_message(
+                        chat_id=recipient, text=text,
+                        reply_markup=keyboard, parse_mode="Markdown",
+                    )
+                , max_retries=3, base_delay=1.0, max_delay=10.0)
+                await asyncio.sleep(1.1)
+
+            for entry in entries:
+                slug = entry.get("slug", "")
+                npc_mark = msgs["npc_mark"] if entry.get("is_npc") else ""
+                header = msgs["crew_header"].format(
+                    name=_escape_md(str(entry.get("name", ""))),
+                    role=_escape_md(str(entry.get("role", ""))),
+                    npc_mark=npc_mark,
+                )
+                personal_title = entry.get("personal_title", "")
+                briefing_part = header
+                if personal_title:
+                    briefing_part += f"\n\n🎯 *{_escape_md(personal_title)}*"
+                briefing_part += f"\n\n{_escape_md(entry.get('briefing', ''))}"
+
+                actions = entry.get("actions", [])
+                selected_action_id = entry.get("selected_action_id")
+                action_lines = []
+                for i, action in enumerate(actions, start=1):
+                    kind = action.get("kind", "")
+                    kind_label = kind_labels.get(kind, kind)
+                    selected = msgs["selected_mark"] if action.get("id") == selected_action_id else ""
+                    action_lines.append(
+                        f"{i}\ufe0f\u20e3 [{kind_label}] {_escape_md(action.get('text', ''))}{selected}"
+                    )
+                actions_part = msgs["actions_header"] + "\n" + "\n".join(action_lines)
+
+                # Telegram caps one message at 4096 chars: split into a
+                # briefing message and an actions message when over budget.
+                if len(briefing_part) + len(actions_part) + 2 <= TEXT_REVIEW_MAX_LEN:
+                    texts = [briefing_part + "\n\n" + actions_part]
+                else:
+                    texts = [briefing_part, actions_part]
+
+                rows = [
+                    _text_review_verdict_rows(
+                        game_id, turn, f"btx_{slug}_a{i}", f"{i}\ufe0f\u20e3"
+                    )
+                    for i in range(1, len(actions) + 1)
+                ]
+                rows.append(_text_review_verdict_rows(
+                    game_id, turn, f"btx_{slug}_brf", msgs["briefing_button"]
+                ))
+                keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+
+                for j, part in enumerate(texts):
+                    await call_with_retry(
+                        lambda part=part, last=j == len(texts) - 1: bot.send_message(
+                            chat_id=recipient, text=part,
+                            reply_markup=keyboard if last else None,
+                            parse_mode="Markdown",
+                        )
+                    , max_retries=3, base_delay=1.0, max_delay=10.0)
+                    await asyncio.sleep(1.1)
+        except TelegramForbiddenError:
+            logger.warning(
+                "[PUSH_GM_TEXT] Recipient %d blocked the bot, skipping text review",
+                recipient,
+            )
+            ok = False
+        except Exception as e:
+            logger.error(
+                "[PUSH_GM_TEXT] Failed to deliver text review to %d: %s",
+                recipient, e, exc_info=True,
+            )
+            ok = False
+    return ok
+
+
 async def _deliver_language_changed(
     payload: dict[str, Any],
     bot: Bot,
@@ -1630,6 +1760,7 @@ _DELIVER_FNS = {
     "player_death": _deliver_player_death,
     "outcome": _deliver_outcome,
     "gm_notification": _deliver_gm_notification,
+    "gm_text_review": _deliver_gm_text_review,
     "game_over": _deliver_game_over,
     "game_summary": _deliver_game_summary,
     "onboarding": _deliver_onboarding_ready,
@@ -2074,6 +2205,39 @@ async def handle_gm_notification(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "queued": 1})
 
 
+async def handle_gm_text_review(request: web.Request) -> web.Response:
+    """Handle POST /push/gm-text-review — save to push_queue, return immediately."""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return web.json_response({"status": "error", "message": f"Invalid JSON: {e}"}, status=400)
+
+    game_id = payload.get("game_id")
+    turn = payload.get("turn")
+
+    if not game_id or turn is None:
+        return web.json_response(
+            {"status": "error", "message": "Missing game_id or turn"},
+            status=400,
+        )
+
+    insert_push_message(
+        player_id=GAME_MASTER_ID,
+        push_type="gm_text_review",
+        payload=json.dumps(payload, ensure_ascii=False),
+        turn=turn,
+        game_id=game_id,
+        db_path=DB_PATH,
+    )
+
+    logger.info(
+        "[PUSH_GM_TEXT] Queued text review for game %s, turn %s",
+        game_id,
+        turn,
+    )
+    return web.json_response({"status": "ok", "queued": 1})
+
+
 async def handle_push_game_over(request: web.Request) -> web.Response:
     """Handle POST /push/game-over — save to push_queue, return immediately."""
     try:
@@ -2363,6 +2527,7 @@ async def start_push_server(
     app.router.add_post("/push/game-over", handle_push_game_over)
     app.router.add_post("/push/game-summary", handle_push_game_summary)
     app.router.add_post("/push/gm-notification", handle_gm_notification)
+    app.router.add_post("/push/gm-text-review", handle_gm_text_review)
     app.router.add_post("/push/language-changed", handle_push_language_changed)
     app.router.add_post("/push/turn-reminder", handle_push_turn_reminder)
     app.router.add_post("/push/onboarding-ready", handle_push_onboarding_ready)

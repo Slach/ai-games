@@ -52,6 +52,10 @@ TELEGRAM_BOT_TURN_REMINDER_URL = os.getenv(
     "TELEGRAM_BOT_TURN_REMINDER_URL",
     "http://telegram-bot:9090/push/turn-reminder",
 )
+TELEGRAM_BOT_GM_TEXT_REVIEW_URL = os.getenv(
+    "TELEGRAM_BOT_GM_TEXT_REVIEW_URL",
+    "http://telegram-bot:9090/push/gm-text-review",
+)
 try:
     PUSH_MAX_RETRIES = int(os.getenv("PUSH_MAX_RETRIES", "7"))
 except (ValueError, TypeError):
@@ -346,6 +350,34 @@ async def push_gm_notification(
     }
     label = f"gm-notification game={game_id} turn={turn} status={status}"
     return await _post_with_retry(TELEGRAM_BOT_GM_NOTIFICATION_URL, payload, label)
+
+
+async def push_gm_text_review(
+    game_id: str,
+    turn: int,
+    entries: list[dict],
+    outcome_narrative: str,
+    *,
+    language: str,
+) -> bool:
+    """Push the turn's generated texts to the GM text-review flow.
+
+    Carries per-crew-member briefings with their action choices (hidden
+    consequences already stripped by the caller) plus the previous turn's
+    outcome narrative. The bot renders them with 👍/👎/🤔 verdict buttons
+    whose presses land in logs/gm_feedback-*.jsonl — the text counterpart
+    of the image feedback loop.
+    """
+    payload: dict = {
+        "game_id": game_id,
+        "turn": turn,
+        "entries": entries,
+        "language": language,
+    }
+    if outcome_narrative:
+        payload["outcome_narrative"] = outcome_narrative
+    label = f"gm-text-review game={game_id} turn={turn} entries={len(entries)}"
+    return await _post_with_retry(TELEGRAM_BOT_GM_TEXT_REVIEW_URL, payload, label)
 
 
 async def push_language_changed(

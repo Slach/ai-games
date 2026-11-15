@@ -91,3 +91,10 @@
 {"ts": "2026-11-14T15:00:15", "game_id": "althef", "turn": 8, "stage": "outcome", "verdict": "meh", "user_id": 281412419}
 {"ts": "2026-11-14T15:00:21", "game_id": "althef", "turn": 8, "stage": "outcome", "reason": "logic", "user_id": 281412419}
 {"ts": "2026-11-14T15:00:40", "game_id": "althef", "turn": 8, "stage": "outcome", "comment": "все почти как надо, но matvei как то криво что-то делает, не стыкуется это", "user_id": 281412419}
+{"ts": "2026-11-14T18:12:47", "game_id": "althef", "turn": 9, "stage": "scene", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-14T18:14:07", "game_id": "althef", "turn": 9, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T18:14:14", "game_id": "althef", "turn": 9, "stage": "action", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-14T18:14:31", "game_id": "althef", "turn": 9, "stage": "action", "comment": "руки вытянуты, в пустоту, поза неестественная савсем", "user_id": 281412419}
+{"ts": "2026-11-14T18:14:42", "game_id": "althef", "turn": 9, "stage": "char", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-14T18:14:46", "game_id": "althef", "turn": 9, "stage": "char", "reason": "pose", "user_id": 281412419}
+{"ts": "2026-11-14T18:15:00", "game_id": "althef", "turn": 9, "stage": "char", "comment": "голова повернута неестественно", "user_id": 281412419}

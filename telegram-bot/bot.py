@@ -3906,6 +3906,319 @@ async def cmd_gm_lang(message: types.Message):
         await message.answer(gm_msgs["set_language_error"].format(detail=e))
 
 
+# ============== GM multi-turn simulation (/gm_simulate) ==============
+
+# Games with a simulation loop currently running — guards against starting
+# a second /gm_simulate for the same game while one is in flight.
+_simulate_running_games: set[str] = set()
+# Strong references to running simulation tasks so they are not GC'd mid-loop.
+_simulate_tasks: set[asyncio.Task] = set()
+
+SIMULATE_DEFAULT_TURNS = 3
+SIMULATE_MAX_TURNS = 10
+# Per-turn wait for the next turn to appear in game state (turn generation
+# with LLM + ComfyUI stages regularly takes several minutes).
+SIMULATE_TURN_TIMEOUT_SECONDS = 600
+SIMULATE_POLL_INTERVAL_SECONDS = 15
+
+
+def parse_gm_simulate_args(text: str | None) -> tuple[str | None, int | None]:
+    """Parse '/gm_simulate <game_id> [N]'.
+
+    Returns (game_id, turns). (None, None) when the input is unusable
+    (missing game_id, non-numeric or non-positive N) — the caller shows
+    the usage text. N is capped at SIMULATE_MAX_TURNS.
+    """
+    parts = (text or "").split()
+    if len(parts) < 2 or not parts[1].strip():
+        return None, None
+    game_id = parts[1].strip()
+    turns = SIMULATE_DEFAULT_TURNS
+    if len(parts) >= 3:
+        try:
+            turns = int(parts[2])
+        except ValueError:
+            return None, None
+        if turns < 1:
+            return None, None
+    return game_id, min(turns, SIMULATE_MAX_TURNS)
+
+
+def summarize_turn_outcome(turn_data: dict | None, limit: int = 200) -> str:
+    """One-line summary of a turn: first ~200 chars of its outcome narrative."""
+    if not turn_data:
+        return ""
+    raw = turn_data.get("combined_outcome") or ""
+    if isinstance(raw, str):
+        try:
+            outcome = json.loads(raw) if raw.strip() else {}
+        except (json.JSONDecodeError, TypeError):
+            return " ".join(raw.split())[:limit]
+    elif isinstance(raw, dict):
+        outcome = raw
+    else:
+        return ""
+    if not isinstance(outcome, dict):
+        return ""
+    narrative = str(outcome.get("outcome_narrative", "") or "")
+    return " ".join(narrative.split())[:limit]
+
+
+def _ended_reason_label(status: str, gm_msgs: dict) -> str:
+    """Human-readable label for a terminal game status code."""
+    reason_map = {
+        "mission_complete": gm_msgs["ended_reason_mission_complete"],
+        "ship_destroyed": gm_msgs["ended_reason_ship_destroyed"],
+        "crew_wiped": gm_msgs["ended_reason_crew_wiped"],
+        "overwhelmed": gm_msgs["ended_reason_overwhelmed"],
+        "mutiny": gm_msgs["ended_reason_mutiny"],
+        "game_over": gm_msgs["ended_reason_game_over"],
+    }
+    return reason_map.get(status, status)
+
+
+async def _run_gm_simulation(
+    message: types.Message,
+    game_id: str,
+    turns: int,
+    game_lang: str,
+    gm_msgs: dict,
+) -> None:
+    """Run N turns fully automatically: auto-select every pending real
+    player's action, advance the turn through /admin/continue-game (the same
+    pipeline /gm_continue uses), wait for completion, report progress.
+
+    NPC actions are not auto-selected here: they are already chosen by the
+    LLM during turn generation (see the per-participant briefing loop in
+    game-server). Any failure reports to the GM chat and stops the loop.
+    """
+    playable = 0
+    try:
+        for _ in range(turns):
+            state = await api_request(
+                "GET", "/game/state", data=None, params={"game_id": game_id},
+                timeout_total=60, ignore_codes=(),
+            )
+            if not state:
+                raise RuntimeError(gm_msgs["no_api_response"])
+            if state["status"] != "active" or not state["ship_alive"]:
+                await message.answer(
+                    gm_msgs["simulate_game_ended"].format(
+                        game_id=game_id,
+                        turn=max(1, state["turn"] - 1),
+                        reason=_ended_reason_label(state["status"], gm_msgs),
+                        summary="",
+                    ),
+                    parse_mode="Markdown",
+                )
+                return
+
+            next_turn = state["turn"]  # the turn /admin/continue-game will generate
+            playable = max(1, next_turn - 1)  # the turn players act on
+
+            status = await api_request(
+                "GET", "/game/status", data=None, params={"game_id": game_id},
+                timeout_total=60, ignore_codes=(),
+            )
+            if not status:
+                raise RuntimeError(gm_msgs["no_api_response"])
+
+            for p in status.get("players", []):
+                if p.get("is_dead") or p.get("is_spectator") or p.get("has_chosen"):
+                    continue
+                await api_request(
+                    "POST",
+                    f"/game/auto-action/{p['player_id']}/{playable}",
+                    data=None,
+                    params={"language": game_lang, "game_id": game_id},
+                    timeout_total=SIMULATE_TURN_TIMEOUT_SECONDS,
+                    ignore_codes=(),
+                )
+
+            # Advance: close the playable turn (outcome analysis) and generate
+            # the next one. Returns immediately; generation runs in background.
+            result = await api_request(
+                "POST", "/admin/continue-game", data=None,
+                params={"game_id": game_id, "language": game_lang, "force_resend": "false"},
+                timeout_total=60, ignore_codes=(),
+            )
+            if not result or result.get("status") != "accepted":
+                raise RuntimeError(f"continue-game returned {result}")
+
+            # Wait for the pipeline to finish: game state advances past
+            # next_turn only after the new turn record is created (end of
+            # the generation flow).
+            deadline = time.monotonic() + SIMULATE_TURN_TIMEOUT_SECONDS
+            advanced = False
+            while time.monotonic() < deadline:
+                await asyncio.sleep(SIMULATE_POLL_INTERVAL_SECONDS)
+                state = await api_request(
+                    "GET", "/game/state", data=None, params={"game_id": game_id},
+                    timeout_total=60, ignore_codes=(),
+                )
+                if not state:
+                    raise RuntimeError(gm_msgs["no_api_response"])
+                if state["status"] != "active" or not state["ship_alive"]:
+                    # The playable turn's outcome ended the game — the state
+                    # intentionally stops advancing (see the advance guard in
+                    # game-server continue flow).
+                    turn_data = await api_request(
+                        "GET", f"/game/turn/{playable}", data=None,
+                        params={"game_id": game_id}, timeout_total=60, ignore_codes=(404,),
+                    )
+                    reason = _ended_reason_label(state["status"], gm_msgs)
+                    summary = summarize_turn_outcome(turn_data)
+                    await message.answer(
+                        gm_msgs["simulate_game_ended"].format(
+                            game_id=game_id, turn=playable, reason=reason,
+                            summary=escape_markdown(summary),
+                        ),
+                        parse_mode="Markdown",
+                    )
+                    return
+                if state["turn"] > next_turn:
+                    advanced = True
+                    break
+            if not advanced:
+                raise TimeoutError(
+                    f"turn {playable} did not complete within {SIMULATE_TURN_TIMEOUT_SECONDS}s"
+                )
+
+            turn_data = await api_request(
+                "GET", f"/game/turn/{playable}", data=None,
+                params={"game_id": game_id}, timeout_total=60, ignore_codes=(),
+            )
+            summary = summarize_turn_outcome(turn_data) or gm_msgs["no_data_label"]
+            logger.info(f"[GM_SIMULATE] {game_id}: turn {playable} done, next turn {next_turn + 1}")
+            await message.answer(
+                gm_msgs["simulate_turn_done"].format(
+                    turn=playable,
+                    summary=escape_markdown(summary),
+                    next_turn=next_turn + 1,
+                ),
+                parse_mode="Markdown",
+            )
+
+        await message.answer(
+            gm_msgs["simulate_done"].format(game_id=game_id, turns=turns),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"[GM_SIMULATE] Simulation of {game_id} failed at turn {playable}: {e}", exc_info=True)
+        try:
+            await message.answer(
+                gm_msgs["simulate_error"].format(
+                    game_id=game_id,
+                    turn=playable if playable else "—",
+                    error=e,
+                )
+            )
+        except Exception:
+            logger.error(f"[GM_SIMULATE] Failed to deliver simulation error for {game_id}", exc_info=True)
+    finally:
+        _simulate_running_games.discard(game_id)
+
+
+async def cmd_gm_simulate(message: types.Message):
+    """GM command: run N fully automated turns of a game.
+
+    Usage: /gm_simulate <game_id> [N]
+    Every turn all pending real players get their actions auto-selected
+    (via /game/auto-action), the turn advances through the same
+    /admin/continue-game pipeline /gm_continue uses, and stage images
+    arrive in this chat with the usual feedback buttons.
+    Only executable by the configured Game Master user.
+    """
+    if message.from_user is None:
+        return
+    player_id = message.from_user.id
+    logger.info("[HANDLER] cmd_gm_simulate")
+    player_lang = get_player_language(player_id)
+
+    if GAME_MASTER_ID <= 0 or player_id != GAME_MASTER_ID:
+        gm_msgs = lang.get_gm_commands(player_lang)
+        logger.warning(f"Unauthorized /gm_simulate attempt by user {player_id}")
+        await message.answer(gm_msgs["unauthorized"])
+        return
+
+    game_id, turns = parse_gm_simulate_args(message.text)
+    if not game_id:
+        gm_msgs = lang.get_gm_commands(player_lang)
+        await message.answer(gm_msgs["simulate_usage"])
+        return
+
+    # Unknown game → usage text.
+    try:
+        title = await api_request(
+            "GET", "/game/title", data=None, params={"game_id": game_id},
+            timeout_total=60, ignore_codes=(404,),
+        )
+    except Exception as e:
+        logger.error(f"Failed to look up game {game_id} for /gm_simulate: {e}", exc_info=True)
+        title = None
+    if not title:
+        gm_msgs = lang.get_gm_commands(player_lang)
+        await message.answer(gm_msgs["simulate_usage"])
+        return
+
+    game_lang = await get_game_language(game_id, fallback=player_lang)
+    gm_msgs = lang.get_gm_commands(game_lang)
+
+    state = None
+    try:
+        state = await api_request(
+            "GET", "/game/state", data=None, params={"game_id": game_id},
+            timeout_total=60, ignore_codes=(),
+        )
+        if not state:
+            raise RuntimeError(gm_msgs["no_api_response"])
+        if state["status"] != "active" or not state["ship_alive"]:
+            await message.answer(
+                gm_msgs["simulate_error"].format(
+                    game_id=game_id, turn=state["turn"],
+                    error=f"game status is '{state['status']}'",
+                )
+            )
+            return
+        playable = max(1, state["turn"] - 1)
+        turn_record = await api_request(
+            "GET", f"/game/turn/{playable}", data=None,
+            params={"game_id": game_id}, timeout_total=60, ignore_codes=(404,),
+        )
+        if not turn_record:
+            await message.answer(
+                gm_msgs["simulate_not_started"].format(turn=playable, game_id=game_id),
+                parse_mode="Markdown",
+            )
+            return
+        if game_id in _simulate_running_games:
+            await message.answer(
+                gm_msgs["simulate_already_running"].format(game_id=game_id),
+                parse_mode="Markdown",
+            )
+            return
+        _simulate_running_games.add(game_id)
+    except Exception as e:
+        logger.error(f"Failed to validate game {game_id} for /gm_simulate: {e}", exc_info=True)
+        await message.answer(
+            gm_msgs["simulate_error"].format(
+                game_id=game_id,
+                turn=state["turn"] if state else "—",
+                error=e,
+            )
+        )
+        return
+
+    await message.answer(
+        gm_msgs["simulate_started"].format(game_id=game_id, turns=turns, current_turn=playable),
+        parse_mode="Markdown",
+    )
+
+    task = asyncio.create_task(_run_gm_simulation(message, game_id, turns, game_lang, gm_msgs))
+    _simulate_tasks.add(task)
+    task.add_done_callback(_simulate_tasks.discard)
+
+
 async def handle_voice_message(message: types.Message):
     """Handle voice messages"""
     if message.from_user is None:
@@ -3934,7 +4247,7 @@ async def handle_voice_message(message: types.Message):
         logger.error(f"Failed to send voice message to API: {e}", exc_info=True)
 
 
-# --- GM image-review feedback (verdict buttons under review/simulation photos) ---
+# --- GM review feedback (verdict buttons under review photos and text-review messages) ---
 
 # Stages ("user_id:game_id:turn:stage" keys) awaiting an optional free-text
 # comment from the presser, with expiry timestamps. The next non-command text
@@ -3951,6 +4264,24 @@ GM_FEEDBACK_REASONS = {
     "other": "другое",
 }
 
+# Reasons for text stages (btx_* = briefing/action texts, otext = turn
+# outcome narrative) pushed by /push/gm-text-review.
+GM_TEXT_FEEDBACK_REASONS = {
+    "generic": "шаблон/повтор",
+    "ooc": "не по персонажу",
+    "boring": "скучно",
+    "plot": "сюжет/логика",
+    "spoiler": "спойлер последствия",
+    "other": "другое",
+}
+
+
+def _feedback_reasons(stage: str) -> dict:
+    """Text stages get text-quality reasons, image stages the scene set."""
+    if stage.startswith(("btx_", "otext")):
+        return GM_TEXT_FEEDBACK_REASONS
+    return GM_FEEDBACK_REASONS
+
 
 def _record_gm_feedback(payload: dict) -> None:
     """Append one feedback row to the shared daily gm_feedback JSONL log."""
@@ -3965,10 +4296,10 @@ def _record_gm_feedback(payload: dict) -> None:
 
 
 async def gm_feedback_callback(callback: types.CallbackQuery):
-    """Verdict (👍/👎/🤔) and reason buttons under image-review messages.
+    """Verdict (👍/👎/🤔) and reason buttons under image- and text-review messages.
 
     Pressable by the GM and by players listed in TELEGRAM_BOT_FEEDBACK_IDS
-    (playtest statistics). callback_data: gmfb:<v|r>:<game_id>:<turn>:<stage>:<value>
+    (playtest statistics). callback_data: gmfb:<v|r|n>:<game_id>:<turn>:<stage>:<value>
     """
     user_id = callback.from_user.id
     if not (user_id == GAME_MASTER_ID or user_id in FEEDBACK_IDS):
@@ -3985,24 +4316,39 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
         await callback.answer()
         return
 
+    if kind == "n":
+        # Number/label button of a text-review verdict row — decorative, no-op.
+        await callback.answer()
+        return
+
     if kind == "v":
         icons = {"up": "👍", "down": "👎", "meh": "🤔"}
         _record_gm_feedback({"game_id": game_id, "turn": turn, "stage": stage, "verdict": value, "user_id": user_id})
         marker = f"\n\n✅ Записано: {icons.get(value, value)}"
-        caption = callback.message.caption or ""
-        if marker not in caption:
-            try:
-                await callback.message.edit_caption(caption + marker)
-            except Exception:
-                # Duplicate press / edit race is harmless: the verdict row is
-                # already appended and the caption already carries a marker.
-                pass
+        if callback.message.text is not None:
+            text = callback.message.text
+            if marker not in text:
+                try:
+                    await callback.message.edit_text(text + marker)
+                except Exception:
+                    # Duplicate press / edit race is harmless: the verdict row
+                    # is already appended and the text already carries a marker.
+                    pass
+        else:
+            caption = callback.message.caption or ""
+            if marker not in caption:
+                try:
+                    await callback.message.edit_caption(caption + marker)
+                except Exception:
+                    # Duplicate press / edit race is harmless: the verdict row is
+                    # already appended and the caption already carries a marker.
+                    pass
         if value == "up":
             await callback.answer("Записано 👍")
             return
         _gm_feedback_pending[f"{user_id}:{game_id}:{turn}:{stage}"] = time.time() + 600
         builder = InlineKeyboardBuilder()
-        for code, label in GM_FEEDBACK_REASONS.items():
+        for code, label in _feedback_reasons(stage).items():
             builder.button(text=label, callback_data=f"gmfb:r:{game_id}:{turn}:{stage}:{code}")
         builder.adjust(3)
         await callback.message.answer("Что именно не так?", reply_markup=builder.as_markup())
@@ -4014,7 +4360,7 @@ async def gm_feedback_callback(callback: types.CallbackQuery):
         _gm_feedback_pending[f"{user_id}:{game_id}:{turn}:{stage}"] = time.time() + 600
         await callback.answer("Записано")
         await callback.message.edit_text(
-            f"Причина: {GM_FEEDBACK_REASONS.get(value, value)}\n"
+            f"Причина: {_feedback_reasons(stage).get(value, value)}\n"
             "Можно добавить коммент текстом — он прикрепится к этой стадии."
         )
 
@@ -4466,6 +4812,7 @@ async def main():
     dp.message.register(cmd_gm_restart, Command("gm_restart"))
     dp.message.register(cmd_gm_status, Command("gm_status"))
     dp.message.register(cmd_gm_lang, Command("gm_lang"))
+    dp.message.register(cmd_gm_simulate, Command("gm_simulate"))
     dp.message.register(handle_voice_message, F.content_type == types.ContentType.VOICE)
 
     # Custom schedule input (new-game creator) — before general text handlers

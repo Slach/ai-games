@@ -554,6 +554,39 @@ class TestCharShotVariation(unittest.TestCase):
         self.assertIn("shot", main._char_shot_hint(6).lower())
 
 
+class TestAppendSceneGuards(unittest.TestCase):
+    """GM feedback 2026-11-15: with participants empty the model still rendered
+    a second unrecognized figure, and a multi-character scene rendered the
+    character oversized. The guarantee is appended by CODE, not by the LLM —
+    and its vocabulary is character-neutral ("people"/"person" would pull
+    non-humanoid crew toward human shapes)."""
+
+    def test_solo_guard(self):
+        guarded = main._append_scene_guards("Place the character from Picture 1 at the console.", [])
+        self.assertIn("COMPLETELY ALONE", guarded)
+        self.assertIn("exactly ONE character", guarded)
+        self.assertIn("never oversized", guarded)
+        self.assertNotIn("person", guarded.lower())
+        self.assertNotIn("people", guarded.lower())
+        self.assertNotIn("human", guarded.lower())
+        self.assertTrue(guarded.startswith("Place the character from Picture 1"))
+
+    def test_participants_guard_names_each_one(self):
+        guarded = main._append_scene_guards(
+            "Place the characters together.",
+            [
+                {"url": "http://x/a.png", "label": "Ирина Ветрова (human medic)"},
+                {"url": "http://x/b.png", "label": "Спектр-14 (cybernetic being)"},
+            ],
+        )
+        self.assertIn("EXACTLY 3 characters are present", guarded)
+        self.assertIn("additional character reference #1 is Ирина Ветрова (human medic)", guarded)
+        self.assertIn("#2 is Спектр-14 (cybernetic being)", guarded)
+        self.assertIn("none oversized, none miniature", guarded)
+        self.assertNotIn("people", guarded.lower())
+        self.assertNotIn("person", guarded.lower())
+
+
 class TestTurnBackgroundStaging(unittest.TestCase):
     SETTING = "Орбита разрушенной станции, сектор 7-Delta"
     CONFLICT = "Дрон сканирует обломки"

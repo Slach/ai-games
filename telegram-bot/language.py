@@ -597,6 +597,14 @@ GM_COMMANDS = {
         "schedule_entry": "📅 Расписание: {schedule_label}\n🕐 Следующий ход: {next_run}",
         "invite_usage": "❌ Использование: /gm_invite <game_id>\n\nПример: /gm_invite abc123",
         "invite_failed": "❌ Не удалось сгенерировать инвайт. Попробуйте позже.",
+        "simulate_usage": "❌ Использование: /gm_simulate <game_id> [N]\n\nN — число ходов (1–10, по умолчанию 3). Все действия игроков выбираются автоматически, ходы генерируются один за другим.\n\nПример: /gm_simulate abc123 5",
+        "simulate_already_running": "⚠️ Симуляция игры `{game_id}` уже запущена — дождитесь завершения.",
+        "simulate_started": "🤖 Запущена симуляция игры `{game_id}`\n\n🎯 Ходов: {turns}\n📍 Текущий ход: {current_turn}\n\nСтатус по каждому ходу и все картинки этапов будут приходить в этот чат.",
+        "simulate_turn_done": "✅ Ход {turn} завершён: {summary}\n➡️ Следующий ход: {next_turn}",
+        "simulate_game_ended": "🏁 Игра `{game_id}` завершилась на ходу {turn} ({reason}).\n\n{summary}",
+        "simulate_done": "✅ Симуляция игры `{game_id}` завершена: выполнено ходов {turns}.",
+        "simulate_error": "❌ Симуляция игры `{game_id}` остановлена на ходу {turn}: {error}",
+        "simulate_not_started": "❌ Ход {turn} игры `{game_id}` ещё не сгенерирован — сначала выполните /gm_start {game_id}.",
     },
     LANGUAGE_EN: {
         "unauthorized": "⛔ You don't have permission to use this command.",
@@ -688,6 +696,14 @@ GM_COMMANDS = {
         "schedule_entry": "📅 Schedule: {schedule_label}\n🕐 Next run: {next_run}",
         "invite_usage": "❌ Usage: /gm_invite <game_id>\n\nExample: /gm_invite abc123",
         "invite_failed": "❌ Failed to generate invite link. Please try again later.",
+        "simulate_usage": "❌ Usage: /gm_simulate <game_id> [N]\n\nN = number of turns (1–10, default 3). All player actions are auto-selected and turns are generated back to back.\n\nExample: /gm_simulate abc123 5",
+        "simulate_already_running": "⚠️ Simulation for game `{game_id}` is already running — wait for it to finish.",
+        "simulate_started": "🤖 Simulation started for game `{game_id}`\n\n🎯 Turns to run: {turns}\n📍 Current turn: {current_turn}\n\nPer-turn status and all stage images will arrive in this chat.",
+        "simulate_turn_done": "✅ Turn {turn} done: {summary}\n➡️ Next turn: {next_turn}",
+        "simulate_game_ended": "🏁 Game `{game_id}` ended at turn {turn} ({reason}).\n\n{summary}",
+        "simulate_done": "✅ Simulation of game `{game_id}` complete: {turns} turns played.",
+        "simulate_error": "❌ Simulation of game `{game_id}` stopped at turn {turn}: {error}",
+        "simulate_not_started": "❌ Turn {turn} of game `{game_id}` hasn't been generated yet — run /gm_start {game_id} first.",
     },
 }
 
@@ -756,6 +772,45 @@ def get_gm_commands(language: str):
 def get_bridge(language: str):
     """Get bridge image messages for a specific language"""
     return BRIDGE.get(language, BRIDGE[LANGUAGE_RU])
+
+
+# GM text-review push (briefings + action choices + turn outcome narrative
+# with 👍/👎/🤔 verdict buttons; verdicts land in logs/gm_feedback-*.jsonl)
+GM_TEXT_REVIEW = {
+    LANGUAGE_RU: {
+        "outcome_header": "📝 *Итог хода {turn}* — игра `{game_id}`",
+        "crew_header": "🎭 *{name}* — {role}{npc_mark}",
+        "actions_header": "Действия:",
+        "kind_labels": {
+            "progress": "прогресс",
+            "injury": "ранение",
+            "fatal": "смерть",
+            "delay": "пауза",
+        },
+        "npc_mark": " 🤖",
+        "selected_mark": " ✅",
+        "briefing_button": "📝",
+    },
+    LANGUAGE_EN: {
+        "outcome_header": "📝 *Turn {turn} outcome* — game `{game_id}`",
+        "crew_header": "🎭 *{name}* — {role}{npc_mark}",
+        "actions_header": "Actions:",
+        "kind_labels": {
+            "progress": "progress",
+            "injury": "injury",
+            "fatal": "fatal",
+            "delay": "delay",
+        },
+        "npc_mark": " 🤖",
+        "selected_mark": " ✅",
+        "briefing_button": "📝",
+    },
+}
+
+
+def get_gm_text_review(language: str):
+    """Get GM text-review push strings for a specific language"""
+    return GM_TEXT_REVIEW.get(language, GM_TEXT_REVIEW[LANGUAGE_RU])
 
 
 # Push outcome messages

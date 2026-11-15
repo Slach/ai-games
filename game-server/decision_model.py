@@ -93,7 +93,9 @@ async def choose_action(
     payload = build_decision_payload(
         model, npc_name, npc_role, traits_str, loyalty, choices, dialogue_context
     )
-    request_log = json.dumps(payload, ensure_ascii=False, indent=2)
+    # "Model:" header mirrors the _call_llm log convention so the analyzer's
+    # extract_event_meta picks the model up for the generation_events row.
+    request_log = f"Model: {model}\n\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     ctx_game = game_id or "none"
     ctx_player = str(player_id) if player_id else ""
     ctx_turn = str(turn) if turn is not None else "0"

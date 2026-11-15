@@ -884,7 +884,7 @@ def _build_graph_uncached(game_id: str) -> dict | None:
                 return None
             if participant[0] == "npc":
                 role_key = participant[1]["role_key"]
-                if kind in ("npc_choice", "player_auto_choice"):
+                if kind in ("npc_choice", "npc_choice_systemone", "player_auto_choice"):
                     return f"choice:{gid}:{turn}:n:{role_key}" if f"choice:{gid}:{turn}:n:{role_key}" in nodes else None
                 if kind == "npc_action":
                     return f"actionimg:{gid}:{turn}:n:{role_key}" if f"actionimg:{gid}:{turn}:n:{role_key}" in nodes else None

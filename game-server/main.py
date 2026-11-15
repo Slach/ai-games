@@ -148,7 +148,7 @@ from language import (
     get_species_type_name,
     SPECIES_TAGS,
 )
-from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_game_summary, push_gm_notification, push_player_chosen_action, push_player_death, push_turn_reminder
+from push_client import push_briefings, push_language_changed, push_turn_outcome, push_game_over, push_game_summary, push_gm_notification, push_gm_text_review, push_player_chosen_action, push_player_death, push_turn_reminder
 from pydantic import BaseModel
 
 # Configure logging.
@@ -2714,9 +2714,11 @@ async def _generate_chosen_action_image(
 
         # Get player's avatar URL for reference
         avatar_url = profile.get("avatar_url") or None
-        participant_urls = await _resolve_participant_avatars(
+        participant_entries = await _resolve_participant_avatars(
             game_id, avatar_url, scene_participants,
         )
+        participant_urls = [e["url"] for e in participant_entries]
+        instruction = _append_scene_guards(instruction, participant_entries)
 
         image_gen = create_image_generator()
         chosen_action_url = await image_gen.generate_character_in_scene(
@@ -3029,9 +3031,11 @@ async def _generate_npc_chosen_action_image(
             game_id, turn, action_location, setting=setting, conflict=conflict,
         )
         background_url = turn_bg["image_url"] if turn_bg else None
-        participant_urls = await _resolve_participant_avatars(
+        participant_entries = await _resolve_participant_avatars(
             game_id, avatar_url, scene_participants,
         )
+        participant_urls = [e["url"] for e in participant_entries]
+        instruction = _append_scene_guards(instruction, participant_entries)
 
         image_gen = create_image_generator()
         chosen_action_url = await image_gen.generate_character_in_scene(
@@ -5204,8 +5208,8 @@ async def _resolve_participant_avatars(
     game_id: str,
     actor_url: str | None,
     participants: list[str],
-) -> list[str]:
-    """Avatar URLs of other crew members named in an action, in reference order.
+) -> list[dict[str, str]]:
+    """Other crew members named in an action, in reference order.
 
     Matches each free-text participant string (a name or a role, as the
     scene-instruction LLM writes them) against the living roster by
@@ -5213,11 +5217,16 @@ async def _resolve_participant_avatars(
     Unmatched names are logged and skipped — a wrong guess would put a
     stranger into the frame (GM feedback 2026-11-14: an action involving two
     characters showed only one).
+
+    Returns entries {"url", "label"} — the label names the participant AND
+    its species so the scene guard can enumerate exactly who the second and
+    further characters are without anthropomorphic vocabulary (GM feedback
+    2026-11-15: "people" in the guard pulls the render toward human shapes).
     """
     if not participants:
         return []
     crew = _collect_crew_avatar_refs(game_id)
-    resolved: list[str] = []
+    resolved: list[dict[str, str]] = []
     for name in participants[:6]:
         needle = (name or "").strip().lower()
         if not needle:
@@ -5233,10 +5242,48 @@ async def _resolve_participant_avatars(
             None,
         )
         if match:
-            resolved.append(match["avatar_url"])
+            species = (match.get("species_description") or "").strip()
+            label = f"{match['name']}"
+            if species:
+                label = f"{label} ({' '.join(species.split())[:100]})"
+            resolved.append({"url": match["avatar_url"], "label": label})
         else:
             logger.warning(f"[ACTION_IMAGE] participant '{name}' matched no crew member, skipped")
     return resolved
+
+
+def _append_scene_guards(instruction: str, participants: list[dict[str, str]]) -> str:
+    """Deterministic solo/scale guards appended to a scene instruction.
+
+    The scene-instruction LLM ignores prompt-level solo rules (GM feedback
+    2026-11-15: with ``participants: []`` it still rendered a second,
+    unrecognized figure; a multi-character scene rendered the character
+    oversized), so the guarantee is appended by CODE after the LLM's part.
+
+    Vocabulary is deliberately character-neutral ("character", "creature" —
+    never "people"/"person"): a humanoid word pulls non-humanoid crew toward
+    human shapes. With participants, each additional character is explicitly
+    named so the model knows exactly who the second and further figures are.
+    """
+    if participants:
+        labels = "; ".join(
+            f"additional character reference #{i + 1} is {p['label']}"
+            for i, p in enumerate(participants)
+        )
+        return instruction + (
+            f" EXACTLY {len(participants) + 1} characters are present in the scene — the "
+            f"character from Picture 1 and the additional character references; {labels}. "
+            "NO other character, creature or figure is present — no doubles of them. Each is "
+            "at its natural size relative to the room's objects (none oversized, none "
+            "miniature), each doing its own distinct task."
+        )
+    return instruction + (
+        " The character is COMPLETELY ALONE in this scene — exactly ONE character in the "
+        "whole frame (the one from Picture 1), at its natural size relative to the room's "
+        "objects (roughly one third to one half of the frame height, never oversized); do "
+        "NOT render any other character, creature, double of the character, background "
+        "figure or silhouette."
+    )
 
 
 def _get_crew_members(game_id: str) -> list[dict[str, Any]]:
@@ -5376,6 +5423,60 @@ async def _resume_interrupted_generations() -> None:
         logger.error("[GEN_JOB] Failed to resume interrupted generations", exc_info=True)
 
 
+def _build_gm_text_review_payload(game_id: str, turn: int, language: str) -> dict:
+    """Collect the turn's generated texts for the GM text-review push.
+
+    Entries carry briefings + action choices WITHOUT hidden consequences
+    (the review messages may go to feedback-subscriber players), plus the
+    previous turn's outcome narrative when one exists.
+    """
+    entries: list[dict] = []
+    for b in get_all_briefings_for_turn(turn, game_id) or []:
+        player_id = b.get("player_id")
+        npc_key = b.get("npc_key")
+        if player_id:
+            profile = get_player_profile(player_id) or {}
+            name = profile.get("player_name", "") or str(player_id)
+            role = profile.get("role", "")
+            slug = f"p{player_id}"
+        elif npc_key:
+            profile = get_npc_profile(npc_key) or {}
+            name = profile.get("npc_name", npc_key)
+            role = profile.get("role", "")
+            slug = npc_key.replace(f"_{game_id}", "").replace("npc_", "")
+        else:
+            continue
+        entries.append({
+            "slug": slug,
+            "player_id": player_id,
+            "npc_key": npc_key,
+            "is_npc": bool(b.get("is_npc")),
+            "name": name,
+            "role": role,
+            "personal_title": b.get("personal_title", ""),
+            "briefing": b.get("briefing", ""),
+            # consequence / consequence_result stay out — spoilers for the
+            # subscriber recipients; consequence_kind stays (leak signal).
+            "actions": [
+                {"id": c.get("id", ""), "kind": c.get("consequence_kind", ""), "text": c.get("text", c.get("description", ""))}
+                for c in (b.get("choices") or [])
+            ],
+            "selected_action_id": b.get("selected_action_id"),
+        })
+
+    payload: dict = {"entries": entries}
+    prev_turn = get_game_turn(turn - 1, game_id)
+    if prev_turn:
+        try:
+            outcome = json.loads(prev_turn.get("combined_outcome") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            outcome = {}
+        narrative = outcome.get("outcome_narrative", "") if isinstance(outcome, dict) else ""
+        if narrative:
+            payload["outcome_narrative"] = narrative
+    return payload
+
+
 async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
     """Run start-game in background, notify GM on completion."""
     try:
@@ -5394,6 +5495,15 @@ async def _background_start_wrapper(request: StartGameRequest, turn_num: int):
                 language=request.language,
                 duration_seconds=duration,
             )
+            review = _build_gm_text_review_payload(request.game_id, turn_num, request.language)
+            if review["entries"] or review.get("outcome_narrative"):
+                await push_gm_text_review(
+                    request.game_id,
+                    turn_num,
+                    review["entries"],
+                    review.get("outcome_narrative", ""),
+                    language=request.language,
+                )
     except Exception as e:
         logger.error(f"[BACKGROUND] Start game failed for {request.game_id}: {e}", exc_info=True)
         await push_gm_notification(
@@ -6040,9 +6150,11 @@ async def _original_start_game(request: StartGameRequest):
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
-        participant_urls = await _resolve_participant_avatars(
+        participant_entries = await _resolve_participant_avatars(
             game_id, avatar_url, scene_participants,
         )
+        participant_urls = [e["url"] for e in participant_entries]
+        instruction = _append_scene_guards(instruction, participant_entries)
         # Avoid starting with the role title ("Scientific Officer") — it biases
         # text-to-image toward a human in uniform. Lead with species only.
         character_description = ""
@@ -6652,6 +6764,15 @@ async def _background_continue_wrapper(
                 language=language,
                 duration_seconds=duration,
             )
+            review = _build_gm_text_review_payload(game_id, turn_num, language)
+            if review["entries"] or review.get("outcome_narrative"):
+                await push_gm_text_review(
+                    game_id,
+                    turn_num,
+                    review["entries"],
+                    review.get("outcome_narrative", ""),
+                    language=language,
+                )
         elif result and result.get("status") == "game_ended":
             logger.info(f"[BACKGROUND] Game {game_id} ended during turn {turn_num} generation; not notifying scheduler")
             await push_gm_notification(
@@ -7234,9 +7355,11 @@ async def _original_continue_game(
 
         image_gen = create_image_generator()
         avatar_url = profile.get("avatar_url") or None
-        participant_urls = await _resolve_participant_avatars(
+        participant_entries = await _resolve_participant_avatars(
             game_id, avatar_url, scene_participants,
         )
+        participant_urls = [e["url"] for e in participant_entries]
+        instruction = _append_scene_guards(instruction, participant_entries)
         # Avoid starting with the role title ("Scientific Officer") — it biases
         # text-to-image toward a human in uniform. Lead with species only.
         character_description = ""

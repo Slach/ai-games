@@ -1,0 +1,15 @@
+{"ts": "2026-11-15T01:06:24", "game_id": "althef", "turn": 9, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T01:06:35", "game_id": "althef", "turn": 9, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-15T01:06:50", "game_id": "althef", "turn": 9, "stage": "action", "comment": "второй персонаж явно не ветрова\nпервый персонаж непропорционально большой", "user_id": 281412419}
+{"ts": "2026-11-15T01:07:16", "game_id": "althef", "turn": 9, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T01:07:20", "game_id": "althef", "turn": 9, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-15T01:07:33", "game_id": "althef", "turn": 9, "stage": "action", "comment": "на экране ДВА научных офицера? что за хрень?", "user_id": 281412419}
+{"ts": "2026-11-15T01:08:04", "game_id": "althef", "turn": 9, "stage": "action", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T01:08:07", "game_id": "althef", "turn": 9, "stage": "action", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-15T01:08:50", "game_id": "althef", "turn": 9, "stage": "action", "comment": "персонаж сидящий спиной это заложник чтоли? опять непропорционально большое медицинский офицер", "user_id": 281412419}
+{"ts": "2026-11-15T01:09:47", "game_id": "althef", "turn": 9, "stage": "outcome", "verdict": "down", "user_id": 281412419}
+{"ts": "2026-11-15T01:09:50", "game_id": "althef", "turn": 9, "stage": "outcome", "reason": "logic", "user_id": 281412419}
+{"ts": "2026-11-15T01:10:20", "game_id": "althef", "turn": 9, "stage": "outcome", "comment": "задник поменялся, и на нижней строке два одинаковых персонажа медицинского офицера в разных позах", "user_id": 281412419}
+{"ts": "2026-11-15T06:11:14", "game_id": "althef", "turn": 10, "stage": "scene", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T06:11:44", "game_id": "althef", "turn": 10, "stage": "char", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T06:13:28", "game_id": "althef", "turn": 10, "stage": "action", "verdict": "up", "user_id": 281412419}

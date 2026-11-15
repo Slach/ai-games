@@ -3328,7 +3328,10 @@ class GameServer:
                     "- In a shared panel the co-located characters are staged side by side, each\n"
                     "  clearly visible (foreground or midground), each mid-action on THEIR part of\n"
                     "  the outcome narrative, seen from the side or three-quarter, face in profile,\n"
-                    "  gaze on their task. NOBODY looks at the camera.\n"
+                    "  gaze on their task. NOBODY looks at the camera. Each character appears ONCE\n"
+                    "  per panel — never the same person rendered twice in different poses within\n"
+                    "  one panel (GM feedback 2026-11-15: a medbay panel showed two identical\n"
+                    "  medics).\n"
                 )
             else:
                 positions_block = ""

@@ -222,6 +222,14 @@ def _seed(conn: sqlite3.Connection):
          "--- CHARACTER AVATAR ---\n%s/avatar_engineer_00001_.png\n--- WORKFLOW JSON ---\n{}" % GID,
          "URL: %s\nPrompt ID: p3" % COMFY.format(name="action_turn1_npc_engineer_00001_.png", gid=GID),
          COMFY.format(name="action_turn1_npc_engineer_00001_.png", gid=GID), "ok"),
+        # NPC decision-model call: new systemone kind must attach to the same
+        # choice node as the legacy generative npc_choice kind.
+        ("game_%s_player_%s_turn1_npc_choice_systemone_llm" % (GID, f"npc_engineer_{GID}"),
+         f"npc_engineer_{GID}", 1, "npc_choice_systemone", "player_action", "llm",
+         "2026-11-01T11:06:00", "2026-11-01T11:06:01",
+         "Model: ggml-org/lev\n\n{\"state\": \"Crew member: Mika, role: Engineer.\"}",
+         "{\"answers\": {\"action\": {\"type\": \"choice\", \"probabilities\": {\"run\": 0.7}, \"confidence\": 0.6}}}",
+         None, "ok"),
         # Legacy outcome image logged with a hardcoded turn=0; the real turn
         # survives in the outcome_turn{N} filename.
         ("game_%s_player_none_turn0_outcome_comfyui" % GID, "", 0, "outcome", "outcome", "comfyui",
@@ -353,6 +361,10 @@ class TestGraphBuilder(unittest.TestCase):
         # Choice badge carries consequence kind
         choice = next(n for n in graph["nodes"] if n["type"] == "choice" and n["meta"]["participant"] == "p111")
         self.assertIn("progress", choice["badges"])
+        # NPC decision-model event attaches to the NPC choice node like the
+        # legacy generative npc_choice kind does.
+        npc_choice = nodes[f"choice:{GID}:1:n:engineer"]
+        self.assertTrue(npc_choice["event_ids"], "npc_choice_systemone event not attached")
         # Auto marker from player_action_stats.is_auto (222 has no
         # player_actions row in this fixture).
         choice222 = nodes[f"choice:{GID}:1:p222"]
@@ -488,7 +500,7 @@ class TestGraphBuilder(unittest.TestCase):
         self.assertEqual(game["players"]["total"], 2)
         self.assertEqual(game["players"]["dead"], 1)
         self.assertEqual(game["npcs"], 1)
-        self.assertEqual(game["event_count"], 12)
+        self.assertEqual(game["event_count"], 13)
         self.assertEqual(game["mission"]["archetype"], "escort")
 
 
