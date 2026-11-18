@@ -76,6 +76,10 @@ RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/
 RUN git clone --depth 1 https://github.com/RealRebelAI/LLaDa-Image_ComfyUI.git /opt/ComfyUI/custom_nodes/LLaDa-Image_ComfyUI && \
     /opt/ComfyUI/.venv/bin/pip install diffusers accelerate
 
+# Prettifier (frontend-only UI extension: Alt+P re-layouts the node graph
+# Sugiyama-style; no Python deps, no requirements.txt)
+RUN git clone --depth 1 https://github.com/Teknix420/comfyui-prettifier.git /opt/ComfyUI/custom_nodes/comfyui-prettifier
+
 # Viggle Turbo nodes for Qwen-Image-2.1 (ViggleTurboSigmas + ViggleTurboLora,
 # from Viggle/Qwen-Image-2.1-viggle-turbo comfyui/). ViggleTurboSigmas builds
 # the 6-step sigma schedule with the resolution-dependent shift (no stock node

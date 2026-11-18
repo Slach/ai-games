@@ -42,3 +42,12 @@
 {"ts": "2026-11-15T10:40:34", "game_id": "althef", "turn": 11, "stage": "outcome", "reason": "logic", "user_id": 281412419}
 {"ts": "2026-11-15T10:41:02", "game_id": "althef", "turn": 11, "stage": "outcome", "comment": "итоговые положения персонажей вообще не соответсвуют тому что было выбрано в actions либо я чего то не понимаю", "user_id": 281412419}
 {"ts": "2026-11-15T10:41:45", "game_id": "althef", "turn": 11, "stage": "otext", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T14:14:11", "game_id": "althef", "turn": 12, "stage": "scene", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T14:14:23", "game_id": "althef", "turn": 12, "stage": "char", "verdict": "up", "user_id": 281412419}
+{"ts": "2026-11-15T14:40:14", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_a1", "verdict": "meh", "user_id": 703779807}
+{"ts": "2026-11-15T14:40:15", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_a2", "verdict": "down", "user_id": 703779807}
+{"ts": "2026-11-15T14:40:15", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_a2", "verdict": "meh", "user_id": 703779807}
+{"ts": "2026-11-15T14:40:16", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_a4", "verdict": "up", "user_id": 703779807}
+{"ts": "2026-11-15T14:40:18", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_brf", "verdict": "meh", "user_id": 703779807}
+{"ts": "2026-11-15T14:40:20", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_a5", "verdict": "up", "user_id": 703779807}
+{"ts": "2026-11-15T14:40:29", "game_id": "althef", "turn": 12, "stage": "btx_science_officer_a1", "reason": "other", "user_id": 703779807}
